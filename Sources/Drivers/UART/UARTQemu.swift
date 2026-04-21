@@ -1,0 +1,37 @@
+//
+//  Uart.swift
+//  ReixOS
+//
+//  Created by Eliomar Alejandro Rodriguez Ferrer on 19/04/2026.
+//
+
+@_silgen_name("cpu_nop")
+func cpu_nop()
+
+struct UARTQemu: SerialDriver, @unchecked Sendable {
+    
+    private let dataReg = UnsafeMutablePointer<UInt64>(bitPattern: 0x09000000) // Data Register
+    private let flagReg = UnsafePointer<UInt64>(bitPattern: 0x09000018)        // Flag Register
+    
+    private let txFullBit: UInt8 = 0x20 // Bit 5: Transmit FIFO Full
+    
+    func write(_ byte: UInt8) {
+        guard let dataReg = dataReg, let flagReg = flagReg else { return }
+        
+        while true {
+            let flags = flagReg.pointee
+            
+            if (flags & UInt64(txFullBit)) == 0 {
+                break
+            }
+            
+            cpu_nop()
+        }
+        
+        dataReg.pointee = UInt64(byte)
+    }
+    
+    func read() -> UInt8 {
+        return 10
+    }
+}
