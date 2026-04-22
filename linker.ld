@@ -29,4 +29,11 @@ SECTIONS
     }
     
     _kernel_end = .;
+    
+    .vectors : ALIGN(2048) {
+        _evt_start = .;
+        *(.vectors)
+        *(.vectors.*) 
+        _evt_end = .;
+    }
 }

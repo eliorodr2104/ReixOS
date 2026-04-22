@@ -21,6 +21,9 @@ public struct PhysicalPageManager {
             self.ramStart             = ram.start
             
             let ramEnd                = ram.start + ram.size
+            
+            // TODO: Add padding for EVT, this is allocated on Kernel end size 
+            
             let bitmapAddr: UInt64    = (kernelEndAddr + 0xFFF) & ~0xFFF
             
             let totalPages            = ram.size / 4096
@@ -31,7 +34,7 @@ public struct PhysicalPageManager {
             
             let framesMetadataAddress = (freeListsAddr + freeListsSize + 0xFFF) & ~0xFFF
             let framesMetadataSize    = totalPages * UInt64(MemoryLayout<FrameInfo>.stride)
-
+            
             let reservedEnd           = (framesMetadataAddress + framesMetadataSize + 0xFFF) & ~0xFFF
             
             self.framesMetadata       = UnsafeMutablePointer(bitPattern: UInt(framesMetadataAddress))

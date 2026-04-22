@@ -1,10 +1,3 @@
-#
-#  Makefile
-#  ReixOS
-#
-#  Created by Eliomar Alejandro Rodriguez Ferrer on 19/04/2026.
-#
-
 # --- Percorsi Strumenti ---
 LLVM_BIN    = /opt/homebrew/opt/llvm/bin
 LLD_BIN     = /opt/homebrew/opt/lld@20/bin
@@ -12,68 +5,63 @@ LLD_BIN     = /opt/homebrew/opt/lld@20/bin
 CLANG       = $(LLVM_BIN)/clang
 LD          = $(LLD_BIN)/ld.lld
 OBJCOPY     = $(LLVM_BIN)/llvm-objcopy
-
-# Punta direttamente al binario gestito da swiftly
 SWIFTC      = /Users/eliorodr2104/.swiftly/bin/swiftc
 
 # --- Configurazioni Target ---
-# Per il C e l'Assembly usiamo il target ELF standard
-C_TARGET     = aarch64-unknown-none-elf
-# Per Swift usiamo il target bare-metal di Apple per "sbloccare" la StdLib embedded
-SWIFT_TARGET = aarch64-none-none-elf
-
+TARGET      = aarch64-none-none-elf
 KERNEL_ADDR = 0x40080000
 
-# --- Flag di Compilazione ---
-C_FLAGS = -target $(C_TARGET) -ffreestanding -O2 -nostdlib -fno-stack-protector \
-          -ISources/Support/LibFDT
-
-# Flag Swift: Fondamentale l'uso del target Mach-O bare-metal
-SWIFT_FLAGS = -target $(SWIFT_TARGET) \
+# --- Flag ---
+C_FLAGS     = -target $(TARGET) -ffreestanding -O2 -nostdlib -fno-stack-protector -ISources/Support/LibFDT
+# Usiamo lo stesso target ELF per Swift per garantire compatibilità
+SWIFT_FLAGS = -target $(TARGET) \
               -enable-experimental-feature Embedded \
               -enable-experimental-feature Extern \
               -Xcc -ffreestanding \
               -wmo -Osize \
               -parse-as-library
 
-LD_FLAGS = -T linker.ld --nmagic --build-id=none
+LD_FLAGS    = -T linker.ld --nmagic --build-id=none
 
 # --- Sorgenti ---
 SWIFT_SOURCES := $(shell find Sources -name "*.swift")
 C_SOURCES     := $(shell find Sources -name "*.c")
-ASM_SOURCES   := Sources/Boot/boot.S Sources/Arch/aarch64/mem.S
+ASM_SOURCES   := $(shell find Sources -name "*.S")
 
-C_OBJS        := $(C_SOURCES:.c=.o)
-ASM_OBJS      := boot.o mem.o
+# Trasformiamo i nomi dei file sorgente in nomi di file oggetto
+C_OBJS   := $(C_SOURCES:.c=.o)
+ASM_OBJS := $(ASM_SOURCES:.S=.o)
+# Swift lo compiliamo in un unico blocco per l'Embedded mode
+SWIFT_OBJ := swift_kernel.o
 
-.PHONY: all build clean run
+.PHONY: all clean run
 
-all: build
+all: kernel.bin
 
-build: clean
-	@echo "--- Compiling Assembly ---"
-	$(CLANG) -target $(C_TARGET) -c Sources/Boot/boot.S -o boot.o
-	$(CLANG) -target $(C_TARGET) -c Sources/Arch/aarch64/mem.S -o mem.o
+# Regola per i file Assembly
+%.o: %.S
+	$(CLANG) -target $(TARGET) -c $< -o $@
 
-	@echo "--- Compiling C Files ---"
-	$(foreach file, $(C_SOURCES), $(CLANG) $(C_FLAGS) -c $(file) -o $(file:.c=.o);)
+# Regola per i file C
+%.o: %.c
+	$(CLANG) $(C_FLAGS) -c $< -o $@
 
-	@echo "--- Compiling Swift (Embedded) ---"
-	# Nota: Generiamo il file oggetto main.o
-	$(SWIFTC) $(SWIFT_FLAGS) -c $(SWIFT_SOURCES) -o main.o
+# Regola speciale per Swift (Embedded Swift lavora meglio con WMO)
+$(SWIFT_OBJ): $(SWIFT_SOURCES)
+	$(SWIFTC) $(SWIFT_FLAGS) -c $(SWIFT_SOURCES) -o $@
 
-	@echo "--- Linking ---"
-	# ld.lld è intelligente: unisce oggetti ELF (C/ASM) e Mach-O (Swift) convertendoli
-	$(LD) $(LD_FLAGS) -o kernel.elf $(ASM_OBJS) main.o $(C_OBJS)
-	
-	$(OBJCOPY) -O binary kernel.elf kernel.bin
-	@echo "--- Build Complete ---"
+# Linking finale
+kernel.elf: $(ASM_OBJS) $(C_OBJS) $(SWIFT_OBJ)
+	$(LD) $(LD_FLAGS) -o $@ $^
+
+kernel.bin: kernel.elf
+	$(OBJCOPY) -O binary $< $@
 
 clean:
-	rm -f *.o kernel.elf kernel.bin
+	rm -f kernel.elf kernel.bin $(SWIFT_OBJ)
 	find Sources -name "*.o" -delete
 
-run: build
+run: kernel.bin
 	qemu-system-aarch64 \
     -machine virt \
     -cpu cortex-a53 \

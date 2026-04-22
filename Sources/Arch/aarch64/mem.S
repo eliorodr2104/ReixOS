@@ -87,5 +87,5 @@ memcmp:
     mov x0, #0
     ret
 .Lcmp_diff:
-    sxtw x0, w3              // Estende il risultato della sottrazione
+    sxtw x0, w3              
     ret

@@ -19,6 +19,7 @@ public struct Kernel {
         
         
         do {
+            fatalError()
             try run()
             
         } catch { internalPanic(error) }
@@ -33,27 +34,15 @@ public struct Kernel {
         } catch { throw KernelError(error) }
     }
     
-    public static func panic(_ reason: String) {
-        kprint("!!! KERNEL PANIC !!!")
-        kprint(reason)
-        halt()
+    private static func internalPanic(_ error: KernelError) -> Never {
+        CPUArm64.panic("I needed create localized string for a test.")
     }
     
-    private static func internalPanic(_ error: KernelError) {
-        panic("I needed create localized string for a test.")
+    private static func internalPanic(_ error: AllocatorError) -> Never {
+        CPUArm64.panic(error.localizedDescription)
     }
     
-    private static func internalPanic(_ error: AllocatorError) {
-        panic(error.localizedDescription)
-    }
-    
-    private static func internalPanic(_ error: PPMError) {
-        panic(error.localizedDescription)
-    }
-    
-    private static func halt() {
-        while true {
-            // HLT -> Instruction ASM
-        }
+    private static func internalPanic(_ error: PPMError) -> Never {
+        CPUArm64.panic(error.localizedDescription)
     }
 }

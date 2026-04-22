@@ -34,11 +34,9 @@ _start:
 .L_drop_to_el1:
     msr     cptr_el2, xzr
     
-    // FONDAMENTALE: abilita AArch64 per EL1 (bit 31 = RW)
     mov     x0, #(1 << 31)
     msr     hcr_el2, x0
 
-    // SPSR: EL1h + tutte le interruzioni mascherate
     ldr     x0, =SPSR_VALUE
     msr     spsr_el2, x0
 
@@ -49,6 +47,9 @@ _start:
 .L_setup_stack:
     ldr     x0, =stack_top
     mov     sp, x0
+    
+    adr     x0, _evt_start
+    msr     vbar_el1, x0
 
     ldr     x0, =(CPACR_FPEN_EN)
     mrs     x0, cpacr_el1
@@ -61,26 +62,18 @@ _start:
 
 .L_bss_loop:
     cmp     x2, x3
-    b.hs    .L_jump_to_swift         // usa b.hs (unsigned) per indirizzi
+    b.hs    .L_jump_to_swift
+    
     str     xzr, [x2], #8
     b       .L_bss_loop
 
 .L_jump_to_swift:
-    mov     x0, x21                 // Ripristina DTB address → x0
+    mov     x0, x21                 // DTB address → x0
     bl      kernel_main
 
-.L_halt:
-    wfe
-    b       .L_halt
 
 .section .data
 .align 16
 kernel_stack_bottom:
 .skip 4096 * 4
 stack_top:
-
-.global cpu_nop
-cpu_nop:
-    nop
-    ret
-

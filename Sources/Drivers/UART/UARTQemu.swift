@@ -5,9 +5,6 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 19/04/2026.
 //
 
-@_silgen_name("cpu_nop")
-func cpu_nop()
-
 struct UARTQemu: SerialDriver, @unchecked Sendable {
     
     private let dataReg = UnsafeMutablePointer<UInt64>(bitPattern: 0x09000000) // Data Register
@@ -25,7 +22,7 @@ struct UARTQemu: SerialDriver, @unchecked Sendable {
                 break
             }
             
-            cpu_nop()
+            CPUArm64.nop()
         }
         
         dataReg.pointee = UInt64(byte)
