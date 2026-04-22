@@ -105,7 +105,7 @@ public struct PhysicalPageManager {
             
         } catch { throw .allocationFailed(reason: error) }
         
-        throw(.allocationFailed(reason: .fullMemory))
+        throw .allocationFailed(reason: .fullMemory)
     }
     
     

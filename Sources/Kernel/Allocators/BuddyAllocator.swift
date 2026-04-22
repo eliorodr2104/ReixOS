@@ -362,7 +362,7 @@ public struct BuddyAllocator: Allocator {
         kprint("=== BuddyAllocator Dump ===")
         
         kprint("startRam: 0x%x", startRam)
-        kprint("sizeRam : "); kprint(sizeRam, mode: .hex)
+        kprintf("sizeRam : "); kprint(sizeRam, mode: .hex)
         
         for order in 0...Self.maxOrder {
             let blockBytes = try blockSize(order)
