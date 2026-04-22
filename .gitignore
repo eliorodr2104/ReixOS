@@ -5,6 +5,8 @@
 ## User settings
 xcuserdata/
 
+*.DS_Store
+
 ## Obj-C/Swift specific
 *.hmap
 
@@ -12,6 +14,12 @@ xcuserdata/
 *.ipa
 *.dSYM.zip
 *.dSYM
+
+## C
+*.o
+*.bin
+*.elf
+*.dtb
 
 ## Playgrounds
 timeline.xctimeline
