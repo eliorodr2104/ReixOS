@@ -79,3 +79,5 @@ char* stringFormat(char* fmt, ...) {
 char* format1(char* fmt, uint64_t a) { return stringFormat(fmt, a); }
 char* format2(char* fmt, uint64_t a, uint64_t b) { return stringFormat(fmt, a, b); }
 char* format3(char* fmt, uint64_t a, uint64_t b, uint64_t c) { return stringFormat(fmt, a, b, c); }
+
+char* format4(char* fmt, uint64_t a, uint64_t b, uint64_t c, uint64_t d) { return stringFormat(fmt, a, b, c, d); }

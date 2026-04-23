@@ -7,6 +7,9 @@
 
 public struct Kernel {
     private static var ppm: PhysicalPageManager?
+    private static var vmm: VirtualMemoryManager?
+    public  static var internalPanicMessage: String?
+
     
     public static func boot(dtbAddress: PhysicalAddress) {
         
@@ -14,6 +17,12 @@ public struct Kernel {
             self.ppm = try PhysicalPageManager(
                 dtbRawAddress: dtbAddress
             )
+            
+            let manager = try VirtualMemoryManager(ppm: self.ppm!)
+            self.vmm = manager
+            
+            CPUArm64.enableMMU(table: manager.rootTable.address)
+            self.vmm?.isBootstrapping = false
             
         } catch { internalPanic(error) }
         
@@ -34,17 +43,17 @@ public struct Kernel {
     }
     
     private static func internalPanic(_ error: KernelError) {
-        CPUArm64.internalKernelPanicMessage = error.localizedDescription
+        internalPanicMessage = error.localizedDescription
         CPUArm64.triggerTrap()
     }
     
     private static func internalPanic(_ error: AllocatorError) {
-        CPUArm64.internalKernelPanicMessage = error.localizedDescription
+        internalPanicMessage = error.localizedDescription
         CPUArm64.triggerTrap()
     }
     
     private static func internalPanic(_ error: PPMError) {
-        CPUArm64.internalKernelPanicMessage = error.localizedDescription
+        internalPanicMessage = error.localizedDescription
         CPUArm64.triggerTrap()
     }
 }

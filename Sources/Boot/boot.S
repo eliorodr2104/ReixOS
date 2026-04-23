@@ -68,6 +68,8 @@ _start:
     b       .L_bss_loop
 
 .L_jump_to_swift:
+    mov     x29, #0
+    mov     x30, #0
     mov     x0, x21                 // DTB address → x0
     bl      kernel_main
 

@@ -110,7 +110,7 @@ public struct PhysicalPageManager {
     
     public func alloc(
         _ bytes: Int,
-        flag   : PageFlags = .none
+        flag   : PhysicalPageFlags = .none
     ) throws(PPMError) -> PhysicalPage {
         
         guard let allocator = self.allocator, framesMetadata != nil else {
@@ -136,14 +136,14 @@ public struct PhysicalPageManager {
     }
     
     
-    public func free(_ page: PhysicalPage) throws(PPMError) {
+    public func free(_ page: consuming PhysicalPage) throws(PPMError) {
         guard let allocator = allocator, framesMetadata != nil else {
             throw .metadataInconsistency
         }
         
         let indexMetadata = Int((page.address - ramStart) / 4096)
         var metadata = framesMetadata![indexMetadata]
-        let flag = PageFlags(rawValue: metadata.flags)
+        let flag = PhysicalPageFlags(rawValue: metadata.flags)
         
         guard metadata.refCount > 0 else {
             throw .invalidRefCount(Int(metadata.refCount))
@@ -175,7 +175,7 @@ public struct PhysicalPageManager {
     private func setRangeMetadata(
         from: PhysicalAddress,
         to  : PhysicalAddress,
-        flag: PageFlags
+        flag: PhysicalPageFlags
         
     ) {
         let start = Int((from - ramStart) / 4096)
@@ -232,7 +232,8 @@ public struct PhysicalPageManager {
         
         kprint("\nTest 3: Reference Counting Logic...")
         let page2 = try self.alloc(4096)
-        let idx2 = Int((page2.address - ramStart) / 4096)
+        let page2Address = page2.address
+        let idx2  = Int((page2.address - ramStart) / 4096)
         
         framesMetadata![idx2].refCount += 1
         kprintf("Manual retain: refCount is now %d\n", UInt64(framesMetadata![idx2].refCount))
@@ -245,7 +246,7 @@ public struct PhysicalPageManager {
             kprint("First free kept the page alive (Correct).")
         }
         
-        let page2Extra = PhysicalPage(address: page2.address, order: 0)
+        let page2Extra = PhysicalPage(address: page2Address, order: 0)
         try self.free(page2Extra)
         
         if framesMetadata![idx2].refCount != 0 {
@@ -255,7 +256,7 @@ public struct PhysicalPageManager {
         }
         
         kprint("\nTest 4: Memory Protection...")
-        let kernelPage = PhysicalPage(address: ramStart + 0x200000, order: 0) // Assumendo kernel a +2MB
+        let kernelPage = PhysicalPage(address: ramStart + 0x200000, order: 0)
         try self.free(kernelPage)
         
         kprint("Kernel protection check passed (Check debug logs if any).")

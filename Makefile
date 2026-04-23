@@ -12,14 +12,17 @@ TARGET      = aarch64-none-none-elf
 KERNEL_ADDR = 0x40080000
 
 # --- Flag ---
-C_FLAGS     = -target $(TARGET) -ffreestanding -O2 -nostdlib -fno-stack-protector -ISources/Support/LibFDT
+C_FLAGS     = -target $(TARGET) -ffreestanding -O2 -nostdlib -fno-stack-protector -ISources/Support/LibFDT -fno-omit-frame-pointer -g
 # Usiamo lo stesso target ELF per Swift per garantire compatibilità
 SWIFT_FLAGS = -target $(TARGET) \
               -enable-experimental-feature Embedded \
               -enable-experimental-feature Extern \
               -Xcc -ffreestanding \
+              -Xcc -fno-omit-frame-pointer \
+              -Xllvm -frame-pointer=all \
               -wmo -Osize \
-              -parse-as-library
+              -parse-as-library \
+              -g
 
 LD_FLAGS    = -T linker.ld --nmagic --build-id=none
 

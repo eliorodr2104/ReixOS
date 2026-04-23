@@ -30,6 +30,9 @@ func sprintf(_ fmt: UnsafePointer<Int8>, _ a: UInt64, _ b: UInt64) -> UnsafePoin
 @_extern(c, "format3")
 func sprintf(_ fmt: UnsafePointer<Int8>, _ a: UInt64, _ b: UInt64, _ c: UInt64) -> UnsafePointer<Int8>
 
+@_extern(c, "format4")
+func sprintf(_ fmt: UnsafePointer<Int8>, _ a: UInt64, _ b: UInt64, _ c: UInt64, _ d: UInt64) -> UnsafePointer<Int8>
+
 // MARK: - Helper Interni
 
 @_transparent
@@ -66,6 +69,12 @@ func kprintf(_ fmt: String, _ a: UInt64, _ b: UInt64) {
 func kprintf(_ fmt: String, _ a: UInt64, _ b: UInt64, _ c: UInt64) {
     fmt.withCString { ptr in printCString(sprintf(ptr, a, b, c)) }
 }
+
+@_transparent
+func kprintf(_ fmt: String, _ a: UInt64, _ b: UInt64, _ c: UInt64, _ d: UInt64) {
+    fmt.withCString { ptr in printCString(sprintf(ptr, a, b, c)) }
+}
+
 
 // Overload per Int32 (comodità)
 @_transparent
