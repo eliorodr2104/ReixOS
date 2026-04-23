@@ -57,12 +57,13 @@ enable_mmu:
     msr     ttbr1_el1, x0
     msr     ttbr0_el1, x0
 
+    dsb     sy
     isb
 
     mrs     x1, sctlr_el1
     orr     x1, x1, #0x1        // Bit 0: M (MMU Enable)
-    orr     x1, x1, #0x4        // Bit 2: C (Data Cache)
-    orr     x1, x1, #0x1000     // Bit 12: I (Instruction Cache)
+    //orr     x1, x1, #0x4        // Bit 2: C (Data Cache)
+    //orr     x1, x1, #0x1000     // Bit 12: I (Instruction Cache)
     msr     sctlr_el1, x1
 
     isb

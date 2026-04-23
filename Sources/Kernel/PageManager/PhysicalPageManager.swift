@@ -6,18 +6,22 @@
 //
 
 @_silgen_name("_kernel_start")
-private var _kernel_start: UInt8
+public var _kernel_start: UInt8
 
 @_silgen_name("_kernel_end")
-private var _kernel_end: UInt8
+public var _kernel_end: UInt8
 
 @_silgen_name("_evt_start")
-private var _evt_start: UInt8
+public var _evt_start: UInt8
 
 @_silgen_name("_evt_end")
-private var _evt_end: UInt8
+public var _evt_end: UInt8
+
+@_silgen_name("_kernel_total_end")
+public var _kernel_total_end: UInt8
 
 
+@frozen
 public struct PhysicalPageManager {
     private let allocator: BuddyAllocator?
     private var framesMetadata: UnsafeMutablePointer<FrameInfo>?
@@ -30,6 +34,7 @@ public struct PhysicalPageManager {
         let kernelStartAddr = withUnsafePointer(to: &_kernel_start) { UInt64(UInt(bitPattern: $0)) }
         let evtStartAddr    = withUnsafePointer(to: &_evt_start) { UInt64(UInt(bitPattern: $0)) }
         let evtEndAddr      = withUnsafePointer(to: &_evt_end) { UInt64(UInt(bitPattern: $0)) }
+        let kernelTotalEnd = withUnsafePointer(to: &_kernel_total_end) { UInt64(UInt(bitPattern: $0)) }
         
                 
         if let ram = getRAMInfo(at: dtbPointer) {
@@ -37,9 +42,7 @@ public struct PhysicalPageManager {
             
             let ramEnd                = ram.start + ram.size
             
-            // TODO: Add padding for EVT, this is allocated on Kernel end size 
-            // Old init bitmap of kernel end addrees
-            let bitmapAddr: UInt64    = (evtEndAddr + 0xFFF) & ~0xFFF
+            let bitmapAddr: UInt64    = (kernelTotalEnd + 0xFFF) & ~0xFFF
             
             let totalPages            = ram.size / 4096
             let bitmapBytes           = (totalPages + 7) / 8

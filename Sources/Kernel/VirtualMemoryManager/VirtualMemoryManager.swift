@@ -6,25 +6,40 @@
 //
 
 public struct VirtualMemoryManager {
-    let ppm             : PhysicalPageManager
-    public let rootTable: PageTable
+    private let ppmPtr   : UnsafeMutablePointer<PhysicalPageManager>
+    public  let rootTable: UnsafeMutablePointer<PageTableEntry>
     
-    public var isBootstrapping: Bool = true
-    
+    public var isBootstrapping : Bool = true
+    public var rootTableAddress: PhysicalAddress
+
     static let physicalOffset: UInt64 = 0xFFFF800000000000
+    static let pageSize      : UInt64 = 4096
+    static let pageAlignMask : UInt64 = pageSize - 1
     
-    
-    init(ppm: PhysicalPageManager) throws(PPMError) {
-        self.ppm = ppm
+    init(ppmPtr: UnsafeMutablePointer<PhysicalPageManager>) throws(PPMError) {
+        self.ppmPtr = ppmPtr
+        let page = try self.ppmPtr.pointee.alloc(4096)
         
-        let page = try self.ppm.alloc(4096)
-        self.rootTable = PageTable(
-            page  : page,
-            offset: 0
+        self.rootTableAddress = page.address
+        self.rootTable = UnsafeMutablePointer<PageTableEntry>(
+            bitPattern: UInt(self.rootTableAddress)
+        )!
+        self.rootTable.initialize(
+            repeating: PageTableEntry(rawValue: 0),
+            count: 512
         )
+                        
+        let ramStart: UInt64 = 0x40000000
+        let mapEnd  : UInt64 = 0x40000000 + (2 * 1024 * 1024)
         
-        try map(virtual: 0x40000000, physical: 0x40000000, flags: .valid)
-        try map(virtual: 0xFFFF800040000000, physical: 0x40000000, flags: .valid)
+        var addr = ramStart
+        while addr < mapEnd {
+            try map(virtual: addr, physical: addr, flags: .valid)
+            addr += Self.pageSize
+        }
+        
+        let kernelStart = withUnsafePointer(to: &_kernel_start) { UInt64(UInt(bitPattern: $0)) }
+        try map(virtual: Self.physicalOffset + kernelStart, physical: kernelStart, flags: .valid)
     }
     
     
@@ -33,37 +48,44 @@ public struct VirtualMemoryManager {
         physical: UInt64,
         flags   : VirtualPageFlags
     ) throws(PPMError) {
-        let intermediateIndices = virtual.indices
-        let l3Index             = Int((virtual >> 12) & 0x1FF)
         
-        var currentTablePtr = rootTable.table
-        for index in intermediateIndices {
-            var entry = currentTablePtr[index]
-            
-            if !entry.isPresent {
-                let newPage = try ppm.alloc(4096)
-                
-                let offset = isBootstrapping ? 0 : UInt(Self.physicalOffset)
-                let newTablePtr = UnsafeMutablePointer<PageTableEntry>(
-                    bitPattern: UInt(newPage.address) + offset
-                )!
-                newTablePtr.initialize(repeating: PageTableEntry(rawValue: 0), count: 512)
-                
-                entry.physicalAddress = newPage.address
-                entry.flags = [.valid, .page]
-                currentTablePtr[index] = entry
-            }
-            
-            let offset = isBootstrapping ? 0 : Self.physicalOffset
-            let nextTableAddr = entry.physicalAddress + offset
-            currentTablePtr = UnsafeMutablePointer<PageTableEntry>(bitPattern: UInt(nextTableAddr))!
-        }
+        var currentTablePtr = rootTable
+        currentTablePtr = try mapTable(currentTablePtr: currentTablePtr, virtual.l0)
+        currentTablePtr = try mapTable(currentTablePtr: currentTablePtr, virtual.l1)
+        currentTablePtr = try mapTable(currentTablePtr: currentTablePtr, virtual.l2)
         
-        var l3Entry = currentTablePtr[l3Index]
+        
+        var l3Entry = currentTablePtr[virtual.l3]
         l3Entry.physicalAddress = physical
         l3Entry.flags = flags.union([.valid, .page, .accessFlag])
         
-        currentTablePtr[l3Index] = l3Entry
+        currentTablePtr[virtual.l3] = l3Entry
         CPUArm64.flushTLB()
+    }
+    
+    private func mapTable(
+        currentTablePtr: UnsafeMutablePointer<PageTableEntry>,
+        _ index: Int
+    ) throws(PPMError) -> UnsafeMutablePointer<PageTableEntry> {
+        var entry = currentTablePtr[index]
+        
+        if !entry.isPresent {
+            let newPage = try ppmPtr.pointee.alloc(4096)
+            
+            let offset = isBootstrapping ? 0 : UInt(Self.physicalOffset)
+            let newTablePtr = UnsafeMutablePointer<PageTableEntry>(
+                bitPattern: UInt(newPage.address) + offset
+            )!
+            newTablePtr.initialize(repeating: PageTableEntry(rawValue: 0), count: 512)
+            
+            entry.physicalAddress = newPage.address
+            entry.flags = [.valid, .page]
+            currentTablePtr[index] = entry
+        }
+        
+        let offset = isBootstrapping ? 0 : Self.physicalOffset
+        let nextTableAddr = entry.physicalAddress + offset
+        
+        return UnsafeMutablePointer<PageTableEntry>(bitPattern: UInt(nextTableAddr))!
     }
 }

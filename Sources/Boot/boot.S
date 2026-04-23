@@ -72,10 +72,3 @@ _start:
     mov     x30, #0
     mov     x0, x21                 // DTB address → x0
     bl      kernel_main
-
-
-.section .data
-.align 16
-kernel_stack_bottom:
-.skip 4096 * 4
-stack_top:

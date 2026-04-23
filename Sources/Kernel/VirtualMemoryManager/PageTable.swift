@@ -5,7 +5,6 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 23/04/2026.
 //
 
-@frozen
 public struct PageTable {
     public let table  : UnsafeMutablePointer<PageTableEntry>
     public let address: PhysicalAddress
@@ -13,7 +12,7 @@ public struct PageTable {
     
     init(
         page  : consuming PhysicalPage,
-        offset: UInt64
+        offset: UInt64 = 0
     ) {
         self.address = page.address
         let virtualAddress = UInt(self.address) + UInt(offset)

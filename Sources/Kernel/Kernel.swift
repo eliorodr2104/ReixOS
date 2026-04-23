@@ -18,11 +18,11 @@ public struct Kernel {
                 dtbRawAddress: dtbAddress
             )
             
-            let manager = try VirtualMemoryManager(ppm: self.ppm!)
-            self.vmm = manager
-            
-            CPUArm64.enableMMU(table: manager.rootTable.address)
-            self.vmm?.isBootstrapping = false
+            self.vmm = try VirtualMemoryManager(ppmPtr: &ppm!)
+
+            kprint("Root Table Address: 0x%x", vmm!.rootTableAddress)
+            CPUArm64.enableMMU(table: self.vmm!.rootTableAddress) // TODO: Crash 
+//            self.vmm!.isBootstrapping = false
             
         } catch { internalPanic(error) }
         
@@ -36,10 +36,14 @@ public struct Kernel {
     
     private static func run() throws(KernelError) {
         
-        do {
-            try ppm?.testPPM()
-            
-        } catch { throw KernelError(error) }
+        kprintf("Kernel is running")
+        
+        CPUArm64.waitForInterrupt()
+        
+//        do {
+//            try ppm?.testPPM()
+//            
+//        } catch { throw KernelError(error) }
     }
     
     private static func internalPanic(_ error: KernelError) {

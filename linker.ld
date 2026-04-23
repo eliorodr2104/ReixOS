@@ -36,4 +36,12 @@ SECTIONS
         *(.vectors.*) 
         _evt_end = .;
     }
+    
+    
+    .stack (NOLOAD) : ALIGN(4096) {
+        __stack_bottom = .;
+        . += 0x10000; /* 64KB */
+        stack_top = .;
+    }
+    _kernel_total_end = .;
 }
