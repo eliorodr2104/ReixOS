@@ -31,12 +31,15 @@ public struct VirtualMemoryManager {
         let kernelStart = withUnsafePointer(to: &_kernel_start) { UInt64(UInt(bitPattern: $0)) }
         let evtEnd      = withUnsafePointer(to: &_evt_end)      { UInt64(UInt(bitPattern: $0)) }
         
-        var addr   = kernelStart & ~0xFFF          // page-align down
-        let mapEnd = (evtEnd + 0xFFF) & ~0xFFF     // page-align up
+        static let pageSize: UInt64 = 4096
+        static let pageAlignMask    = pageSize - 1
+        
+        var addr   = kernelStart & ~pageAlignMask          // page-align down
+        let mapEnd = (evtEnd + pageAlignMask) & ~pageAlignMask  // page-align up
         
         while addr < mapEnd {
             try map(virtual: addr, physical: addr, flags: .valid)
-            addr += 4096
+            addr += Self.pageSize
         }
         
         // Higher-half alias for the kernel start page (future higher-half transition).
