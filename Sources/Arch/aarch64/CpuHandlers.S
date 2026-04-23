@@ -11,6 +11,7 @@
 .global enable_interrupts
 .global nop
 .global wait_for_exception
+.global trigger_trap
 
 disable_interrupts:
     msr daifset, #3
@@ -31,3 +32,6 @@ nop:
 wait_for_exception:
     wfe
     b wait_for_exception
+
+trigger_trap:
+    brk #0

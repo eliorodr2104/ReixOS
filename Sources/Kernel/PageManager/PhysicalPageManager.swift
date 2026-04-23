@@ -5,6 +5,19 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 21/04/2026.
 //
 
+@_silgen_name("_kernel_start")
+private var _kernel_start: UInt8
+
+@_silgen_name("_kernel_end")
+private var _kernel_end: UInt8
+
+@_silgen_name("_evt_start")
+private var _evt_start: UInt8
+
+@_silgen_name("_evt_end")
+private var _evt_end: UInt8
+
+
 public struct PhysicalPageManager {
     private let allocator: BuddyAllocator?
     private var framesMetadata: UnsafeMutablePointer<FrameInfo>?
@@ -15,7 +28,9 @@ public struct PhysicalPageManager {
         let dtbPointer      = UnsafeRawPointer(bitPattern: Int(dtbRawAddress))
         let kernelEndAddr   = withUnsafePointer(to: &_kernel_end)   { UInt64(UInt(bitPattern: $0)) }
         let kernelStartAddr = withUnsafePointer(to: &_kernel_start) { UInt64(UInt(bitPattern: $0)) }
-
+        let evtStartAddr    = withUnsafePointer(to: &_evt_start) { UInt64(UInt(bitPattern: $0)) }
+        let evtEndAddr      = withUnsafePointer(to: &_evt_end) { UInt64(UInt(bitPattern: $0)) }
+        
                 
         if let ram = getRAMInfo(at: dtbPointer) {
             self.ramStart             = ram.start
@@ -23,8 +38,8 @@ public struct PhysicalPageManager {
             let ramEnd                = ram.start + ram.size
             
             // TODO: Add padding for EVT, this is allocated on Kernel end size 
-            
-            let bitmapAddr: UInt64    = (kernelEndAddr + 0xFFF) & ~0xFFF
+            // Old init bitmap of kernel end addrees
+            let bitmapAddr: UInt64    = (evtEndAddr + 0xFFF) & ~0xFFF
             
             let totalPages            = ram.size / 4096
             let bitmapBytes           = (totalPages + 7) / 8
@@ -51,6 +66,7 @@ public struct PhysicalPageManager {
                 freeListsAddress: freeListsAddr
             )
             
+            
             setRangeMetadata(
                 from: dtbStart,
                 to  : dtbEnd,
@@ -63,6 +79,14 @@ public struct PhysicalPageManager {
                 flag: .kernel
             )
             
+            setRangeMetadata(
+                from: evtStartAddr,
+                to  : evtEndAddr,
+                flag: .reserved
+            )
+            
+            
+            try freeSegment(from: kernelEndAddr, to: evtStartAddr)
                         
             if dtbEnd <= ram.start || dtbStart >= kernelStartAddr {
                 try freeSegment(from: ram.start, to: kernelStartAddr)
@@ -100,7 +124,7 @@ public struct PhysicalPageManager {
                 var metadata = framesMetadata![indexMetadata]
                 metadata.refCount  = 1
                 metadata.order     = frame.order
-                metadata.flags    |= flag.rawValue
+                metadata.flags     = flag.rawValue
                 framesMetadata![indexMetadata] = metadata
                 
                 return frame
@@ -138,6 +162,7 @@ public struct PhysicalPageManager {
         
         do {
             if metadata.refCount == 0 {
+                metadata.flags = 0
                 try allocator.free(page)
             }
             

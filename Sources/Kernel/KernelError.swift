@@ -19,4 +19,18 @@ public enum KernelError: Error {
     public init(_ error: PPMError) {
         self = .physicalMemoryManager(response: error)
     }
+    
+    public var localizedDescription: String {
+        switch self {
+            case .allocatorError(let response):
+                response.localizedDescription
+                
+            case .physicalMemoryManager(let response):
+                response.localizedDescription
+                
+            case .unknown(_):
+                "Kernel Error: Unknown error founded."
+        }
+        
+    }
 }

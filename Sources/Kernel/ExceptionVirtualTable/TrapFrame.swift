@@ -16,4 +16,5 @@ public struct TrapFrame {
     var elr : UInt64
     var spsr: UInt64
     var esr : UInt64
+    var far : UInt64
 }

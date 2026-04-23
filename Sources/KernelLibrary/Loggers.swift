@@ -128,8 +128,10 @@ func kprintf(_ val: UInt64, mode: Mode = .dec) {
     switch mode {
         case .hex:
             printHex64(val, prefix: true, padded: false)
+            
         case .dec:
             printDec64(val)
+            
         default:
             return
     }
@@ -151,7 +153,7 @@ private func printHex64(_ val: UInt64, prefix: Bool, padded: Bool) {
     
     var started = false
     for i in (0...15).reversed() {
-        let shift = UInt64(i * 4)
+        let shift  = UInt64(i * 4)
         let nibble = Int((val >> shift) & 0xF)
         
         if nibble != 0 || started || padded || i == 0 {

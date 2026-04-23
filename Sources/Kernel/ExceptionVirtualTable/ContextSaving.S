@@ -45,7 +45,7 @@ handler_invalid:
 
 save_context:
     // 256 Byte for all data
-    sub     sp, sp, #272
+    sub     sp, sp, #288
 
     // Save general registers
     stp     x0, x1,   [sp, #0]
@@ -69,15 +69,16 @@ save_context:
     mrs     x0, elr_el1
     mrs     x1, spsr_el1
     mrs     x2, esr_el1
+    mrs     x3, far_el1
     
     stp     x0, x1,   [sp, #248]
-    str     x2,       [sp, #264]
+    stp     x2, x3,   [sp, #264]
     
     mov     x0, sp
     bl      swift_exception_handler
 
     // RESTORE CONTEXT
-    ldr     x2,       [sp, #264]
+    ldp     x2, x3,   [sp, #264]
     ldp     x0, x1,   [sp, #248]
     
     msr     elr_el1, x0
