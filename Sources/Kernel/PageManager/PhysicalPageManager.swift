@@ -5,18 +5,6 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 21/04/2026.
 //
 
-@_silgen_name("_kernel_start")
-private var _kernel_start: UInt8
-
-@_silgen_name("_kernel_end")
-private var _kernel_end: UInt8
-
-@_silgen_name("_evt_start")
-private var _evt_start: UInt8
-
-@_silgen_name("_evt_end")
-private var _evt_end: UInt8
-
 
 public struct PhysicalPageManager {
     private let allocator: BuddyAllocator?

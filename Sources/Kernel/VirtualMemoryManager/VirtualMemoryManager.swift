@@ -23,8 +23,24 @@ public struct VirtualMemoryManager {
             offset: 0
         )
         
-        try map(virtual: 0x40000000, physical: 0x40000000, flags: .valid)
-        try map(virtual: 0xFFFF800040000000, physical: 0x40000000, flags: .valid)
+        // Identity-map the entire kernel + EVT region so the CPU can keep
+        // fetching instructions and accessing data after the MMU is enabled.
+        // Without this, only the single 4KB page at 0x40000000 would be
+        // mapped while the kernel itself lives at _kernel_start (0x40080000+),
+        // causing an immediate translation fault on the first post-MMU fetch.
+        let kernelStart = withUnsafePointer(to: &_kernel_start) { UInt64(UInt(bitPattern: $0)) }
+        let evtEnd      = withUnsafePointer(to: &_evt_end)      { UInt64(UInt(bitPattern: $0)) }
+        
+        var addr   = kernelStart & ~0xFFF          // page-align down
+        let mapEnd = (evtEnd + 0xFFF) & ~0xFFF     // page-align up
+        
+        while addr < mapEnd {
+            try map(virtual: addr, physical: addr, flags: .valid)
+            addr += 4096
+        }
+        
+        // Higher-half alias for the kernel start page (future higher-half transition).
+        try map(virtual: Self.physicalOffset + kernelStart, physical: kernelStart, flags: .valid)
     }
     
     
