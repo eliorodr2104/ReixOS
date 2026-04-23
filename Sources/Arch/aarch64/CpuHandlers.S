@@ -50,21 +50,32 @@ enable_mmu:
     ldr     x1, =0x00000000000004FF
     msr     mair_el1, x1
 
-
-    ldr     x1, =((16 << 0) | (16 << 16) | (0 << 14) | (2 << 30))
+    // Configurazione TCR_EL1 avanzata:
+    // SH0/SH1 = 11 (Inner Shareable)
+    // IRGN0/ORGN0 = 01 (Normal Memory, Write-Back Read-Allocate Write-Allocate Cacheable)
+    // IRGN1/ORGN1 = 01 (Normal Memory, Write-Back Read-Allocate Write-Allocate Cacheable)
+    ldr     x1, =((16 << 0)  | (16 << 16) | \
+                  (3 << 12)  | (3 << 28)  | \
+                  (1 << 8)   | (1 << 10)  | \
+                  (1 << 24)  | (1 << 26)  | \
+                  (0 << 14)  | (2 << 30))
     msr     tcr_el1, x1
 
     msr     ttbr1_el1, x0
     msr     ttbr0_el1, x0
 
+    // Invalida la TLB
+    tlbi    vmalle1
+    
+    // INVALIDA LA CACHE ISTRUZIONI AL PoU (Point of Unification)
+    ic      iallu
+    
     dsb     sy
     isb
 
     mrs     x1, sctlr_el1
-    orr     x1, x1, #0x1        // Bit 0: M (MMU Enable)
-    //orr     x1, x1, #0x4        // Bit 2: C (Data Cache)
-    //orr     x1, x1, #0x1000     // Bit 12: I (Instruction Cache)
+    ldr     x2, =0x1005 
+    orr     x1, x1, x2
     msr     sctlr_el1, x1
-
     isb
     ret

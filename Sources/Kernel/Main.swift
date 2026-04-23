@@ -7,7 +7,7 @@
 
 @_cdecl("kernel_main")
 public func kernelMain(dtbRawPtr: UInt64) {
-    kprint("Hello on ReixOS!")
+    kprint("\nHello on ReixOS!")
     
     Kernel.boot(dtbAddress: dtbRawPtr)
 }

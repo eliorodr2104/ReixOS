@@ -28,18 +28,23 @@ public struct VirtualMemoryManager {
             repeating: PageTableEntry(rawValue: 0),
             count: 512
         )
-                        
-        let ramStart: UInt64 = 0x40000000
-        let mapEnd  : UInt64 = 0x40000000 + (2 * 1024 * 1024)
         
-        var addr = ramStart
-        while addr < mapEnd {
+        // Otteniamo i limiti effettivi della RAM dal PPM
+        let startAddr = self.ppmPtr.pointee.ramStart
+        let ramSize   = self.ppmPtr.pointee.ramSize
+        let endAddr   = startAddr + ramSize
+        
+        var addr = startAddr & ~Self.pageAlignMask
+        
+        while addr < endAddr {
             try map(virtual: addr, physical: addr, flags: .valid)
+            try map(virtual: Self.physicalOffset + addr, physical: addr, flags: .valid)
             addr += Self.pageSize
         }
         
-        let kernelStart = withUnsafePointer(to: &_kernel_start) { UInt64(UInt(bitPattern: $0)) }
-        try map(virtual: Self.physicalOffset + kernelStart, physical: kernelStart, flags: .valid)
+        let uartBase: UInt64 = 0x09000000
+        try map(virtual: uartBase, physical: uartBase, flags: .valid)
+        try map(virtual: Self.physicalOffset + uartBase, physical: uartBase, flags: .valid)
     }
     
     
@@ -79,7 +84,7 @@ public struct VirtualMemoryManager {
             newTablePtr.initialize(repeating: PageTableEntry(rawValue: 0), count: 512)
             
             entry.physicalAddress = newPage.address
-            entry.flags = [.valid, .page]
+            entry.flags = [.valid, .page, .accessFlag]
             currentTablePtr[index] = entry
         }
         

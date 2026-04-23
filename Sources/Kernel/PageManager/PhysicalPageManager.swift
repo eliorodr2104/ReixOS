@@ -26,7 +26,8 @@ public struct PhysicalPageManager {
     private let allocator: BuddyAllocator?
     private var framesMetadata: UnsafeMutablePointer<FrameInfo>?
     
-    private let ramStart: UInt64
+    public let ramStart: UInt64
+    public let ramSize: UInt64
     
     init(dtbRawAddress: PhysicalAddress) throws(PPMError) {
         let dtbPointer      = UnsafeRawPointer(bitPattern: Int(dtbRawAddress))
@@ -39,6 +40,7 @@ public struct PhysicalPageManager {
                 
         if let ram = getRAMInfo(at: dtbPointer) {
             self.ramStart             = ram.start
+            self.ramSize              = ram.size
             
             let ramEnd                = ram.start + ram.size
             

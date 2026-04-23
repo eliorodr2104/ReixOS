@@ -22,10 +22,6 @@ public struct BuddyAllocator: Allocator {
         bitmapAddress   : PhysicalAddress,
         freeListsAddress: PhysicalAddress
     ) {
-        kprint("Start Ram addr:")
-        kprint(start)
-        kprint()
-        
         self.startRam   = start
         self.sizeRam    = size
         let totalPages  = size / UInt64(Self.pageSize)
