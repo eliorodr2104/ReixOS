@@ -21,6 +21,8 @@ public struct VirtualMemoryManager {
     static let physicalOffset: UInt64 = 0xFFFF800000000000
     static let pageSize      : UInt64 = 4096
     
+    static var asidCounter: ASID = 1
+    
     private func physToVirt<T>(_ phys: UInt64) -> UnsafeMutablePointer<T> {
         let offset = CPUArm64.isMMUEnabled() ? Self.physicalOffset : 0
         let virtAddr = phys + offset
@@ -96,7 +98,25 @@ public struct VirtualMemoryManager {
     }
     
     
-    func map(
+    public func createAddressSpace() throws(PPMError) -> AddressSpace {
+        // Not set a zero all data, because alloc return cleaned page
+        let page    = try ppmPtr.pointee.alloc(4096)
+        let address = page.address
+        let asid    = Self.asidCounter
+        
+        Self.asidCounter = Self.asidCounter &+ 1
+        if Self.asidCounter == 0 { Self.asidCounter = 1 }
+        
+        return AddressSpace(
+            rootTablePhysical: address,
+            asid             : asid    // Create random number
+        )
+    }
+    
+    
+    // MARK: - Internals Handlers
+    
+    private func map(
         virtual : VirtualAddress,
         physical: PhysicalAddress,
         type    : MemoryType,
