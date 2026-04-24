@@ -29,7 +29,13 @@ public struct CPUArm64 {
     public static func flushTLB()
     
     @_silgen_name("enable_mmu")
-    public static func enableMMU(table: PhysicalAddress)
+    public static func enableMMU(
+        lowTable : PhysicalAddress,
+        highTable: PhysicalAddress
+    )
+    
+    @_silgen_name("is_mmu_enabled")
+    public static func isMMUEnabled() -> Bool
     
     
     public static func panic(

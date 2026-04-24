@@ -14,6 +14,8 @@
 .global trigger_trap
 .global flush_tlb
 .global enable_mmu
+.global is_mmu_enabled
+
 
 disable_interrupts:
     msr daifset, #3
@@ -47,35 +49,39 @@ flush_tlb:
 
 
 enable_mmu:
-    ldr     x1, =0x00000000000004FF
-    msr     mair_el1, x1
+    // 1. Configurazione MAIR_EL1 (Immutata, 0x4FF è corretta)
+    ldr     x2, =0x00000000000004FF
+    msr     mair_el1, x2
 
-    // Configurazione TCR_EL1 avanzata:
-    // SH0/SH1 = 11 (Inner Shareable)
-    // IRGN0/ORGN0 = 01 (Normal Memory, Write-Back Read-Allocate Write-Allocate Cacheable)
-    // IRGN1/ORGN1 = 01 (Normal Memory, Write-Back Read-Allocate Write-Allocate Cacheable)
-    ldr     x1, =((16 << 0)  | (16 << 16) | \
+    // 2. Configurazione TCR_EL1 (Immutata, 48-bit VA, 4KB granule)
+    ldr     x2, =((16 << 0)  | (16 << 16) | \
                   (3 << 12)  | (3 << 28)  | \
                   (1 << 8)   | (1 << 10)  | \
                   (1 << 24)  | (1 << 26)  | \
                   (0 << 14)  | (2 << 30))
-    msr     tcr_el1, x1
+    msr     tcr_el1, x2
 
-    msr     ttbr1_el1, x0
-    msr     ttbr0_el1, x0
+    // 3. Caricamento dei registri radice (LA MODIFICA)
+    msr     ttbr0_el1, x0    // Tabella Identity (indirizzi bassi 0x00...)
+    msr     ttbr1_el1, x1    // Tabella Kernel   (indirizzi alti  0xFF...)
 
-    // Invalida la TLB
+    // 4. Sincronizzazione e Invalida TLB/Cache
     tlbi    vmalle1
-    
-    // INVALIDA LA CACHE ISTRUZIONI AL PoU (Point of Unification)
     ic      iallu
-    
     dsb     sy
     isb
 
-    mrs     x1, sctlr_el1
-    ldr     x2, =0x1005 
-    orr     x1, x1, x2
-    msr     sctlr_el1, x1
+    // 5. Attivazione MMU tramite SCTLR_EL1
+    mrs     x2, sctlr_el1
+    ldr     x3, =0x1005      // M=1 (MMU), A=1 (Alignment), C=1 (Cache), I=1 (Instr Cache)
+    orr     x2, x2, x3
+    msr     sctlr_el1, x2
+    
+    // Barriera finale per garantire che la MMU sia attiva prima del prossimo salto
     isb
+    ret
+
+is_mmu_enabled:
+    mrs     x0, sctlr_el1
+    and     x0, x0, #1
     ret

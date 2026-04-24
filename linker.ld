@@ -4,23 +4,29 @@ SECTIONS
     . = 0x40080000;
     _kernel_start = .;
     
-    .text : ALIGN(16) {
+    .text : ALIGN(4096) {
+        _text_start = .;
         KEEP(*(.text.boot))
         *(.text)
         *(.text.*)
+        _text_end = .;
     }
     
-    .rodata : ALIGN(16) {
+    .rodata : ALIGN(4096) {
+        _rodata_start = .;
         *(.rodata)
         *(.rodata.*)
+        _rodata_end = .;
     }
     
-    .data : ALIGN(16) {
-        *(.data) 
-        *(.data.*) 
+    .data : ALIGN(4096) {
+        _data_start = .;
+        *(.data)
+        *(.data.*)
+        _data_end = .;
     }
     
-    .bss : ALIGN(16) {
+    .bss : ALIGN(4096) {
         __bss_start = .;
         *(.bss) 
         *(.bss.*) 
@@ -30,13 +36,12 @@ SECTIONS
     
     _kernel_end = .;
     
-    .vectors : ALIGN(2048) {
+    .vectors : ALIGN(4096) {
         _evt_start = .;
         *(.vectors)
         *(.vectors.*) 
         _evt_end = .;
     }
-    
     
     .stack (NOLOAD) : ALIGN(4096) {
         __stack_bottom = .;

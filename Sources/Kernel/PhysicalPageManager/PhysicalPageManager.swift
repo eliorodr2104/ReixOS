@@ -5,38 +5,22 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 21/04/2026.
 //
 
-@_silgen_name("_kernel_start")
-public var _kernel_start: UInt8
-
-@_silgen_name("_kernel_end")
-public var _kernel_end: UInt8
-
-@_silgen_name("_evt_start")
-public var _evt_start: UInt8
-
-@_silgen_name("_evt_end")
-public var _evt_end: UInt8
-
-@_silgen_name("_kernel_total_end")
-public var _kernel_total_end: UInt8
-
 
 @frozen
 public struct PhysicalPageManager {
     private let allocator: BuddyAllocator?
-    private var framesMetadata: UnsafeMutablePointer<FrameInfo>?
+    public  var framesMetadata: UnsafeMutablePointer<FrameInfo>?
     
     public let ramStart: UInt64
     public let ramSize: UInt64
     
     init(dtbRawAddress: PhysicalAddress) throws(PPMError) {
         let dtbPointer      = UnsafeRawPointer(bitPattern: Int(dtbRawAddress))
-        let kernelEndAddr   = withUnsafePointer(to: &_kernel_end)   { UInt64(UInt(bitPattern: $0)) }
-        let kernelStartAddr = withUnsafePointer(to: &_kernel_start) { UInt64(UInt(bitPattern: $0)) }
-        let evtStartAddr    = withUnsafePointer(to: &_evt_start) { UInt64(UInt(bitPattern: $0)) }
-        let evtEndAddr      = withUnsafePointer(to: &_evt_end) { UInt64(UInt(bitPattern: $0)) }
-        let kernelTotalEnd = withUnsafePointer(to: &_kernel_total_end) { UInt64(UInt(bitPattern: $0)) }
-        
+        let kernelEndAddr   = getOfaddressWithSymbol(of: &_kernel_end)
+        let kernelStartAddr = getOfaddressWithSymbol(of: &_kernel_start)
+        let evtStartAddr    = getOfaddressWithSymbol(of: &_evt_start)
+        let evtEndAddr      = getOfaddressWithSymbol(of: &_evt_end)
+        let kernelTotalEnd  = getOfaddressWithSymbol(of: &_kernel_total_end)
                 
         if let ram = getRAMInfo(at: dtbPointer) {
             self.ramStart             = ram.start
@@ -114,8 +98,9 @@ public struct PhysicalPageManager {
 
     
     public func alloc(
-        _ bytes: Int,
-        flag   : PhysicalPageFlags = .none
+        _ bytes  : Int,
+        flag     : PhysicalPageFlags = .none,
+        heapShift: UInt8 = 0
     ) throws(PPMError) -> PhysicalPage {
         
         guard let allocator = self.allocator, framesMetadata != nil else {
@@ -130,6 +115,7 @@ public struct PhysicalPageManager {
                 metadata.refCount  = 1
                 metadata.order     = frame.order
                 metadata.flags     = flag.rawValue
+                metadata.heapShift = heapShift
                 framesMetadata![indexMetadata] = metadata
                 
                 return frame

@@ -7,90 +7,174 @@
 
 public struct VirtualMemoryManager {
     private let ppmPtr   : UnsafeMutablePointer<PhysicalPageManager>
-    public  let rootTable: UnsafeMutablePointer<PageTableEntry>
     
-    public var isBootstrapping : Bool = true
-    public var rootTableAddress: PhysicalAddress
-
+    
+    /// Root (TTBR1 - Address 0xFFFF...)
+    private let kernelRootTable  : UnsafeMutablePointer<PageTableEntry>
+    
+    /// Root Temp (TTBR0 - Address 0x0000...)
+    private let identityRootTable: UnsafeMutablePointer<PageTableEntry>
+    
+    private let kernelTableAddress  : PhysicalAddress
+    private let identityTableAddress: PhysicalAddress
+    
     static let physicalOffset: UInt64 = 0xFFFF800000000000
     static let pageSize      : UInt64 = 4096
-    static let pageAlignMask : UInt64 = pageSize - 1
+    
+    private func physToVirt<T>(_ phys: UInt64) -> UnsafeMutablePointer<T> {
+        let offset = CPUArm64.isMMUEnabled() ? Self.physicalOffset : 0
+        let virtAddr = phys + offset
+        return UnsafeMutablePointer<T>(bitPattern: UInt(virtAddr))!
+    }
     
     init(ppmPtr: UnsafeMutablePointer<PhysicalPageManager>) throws(PPMError) {
         self.ppmPtr = ppmPtr
-        let page = try self.ppmPtr.pointee.alloc(4096)
         
-        self.rootTableAddress = page.address
-        self.rootTable = UnsafeMutablePointer<PageTableEntry>(
-            bitPattern: UInt(self.rootTableAddress)
-        )!
-        self.rootTable.initialize(
-            repeating: PageTableEntry(rawValue: 0),
-            count: 512
-        )
+        self.kernelTableAddress = try self.ppmPtr.pointee.alloc(4096).address
+        self.identityTableAddress = try self.ppmPtr.pointee.alloc(4096).address
         
-        // Otteniamo i limiti effettivi della RAM dal PPM
-        let startAddr = self.ppmPtr.pointee.ramStart
-        let ramSize   = self.ppmPtr.pointee.ramSize
-        let endAddr   = startAddr + ramSize
+        self.kernelRootTable   = UnsafeMutablePointer<PageTableEntry>(bitPattern: UInt(kernelTableAddress))!
+        self.identityRootTable = UnsafeMutablePointer<PageTableEntry>(bitPattern: UInt(identityTableAddress))!
         
-        var addr = startAddr & ~Self.pageAlignMask
+        self.kernelRootTable.initialize(repeating: PageTableEntry(rawValue: 0), count: 512)
+        self.identityRootTable.initialize(repeating: PageTableEntry(rawValue: 0), count: 512)
         
-        while addr < endAddr {
-            try map(virtual: addr, physical: addr, flags: .valid)
-            try map(virtual: Self.physicalOffset + addr, physical: addr, flags: .valid)
-            addr += Self.pageSize
+        
+        let ramStart = PhysicalAddress(self.ppmPtr.pointee.ramStart)
+        let kernelStart = getOfaddressWithSymbol(of: &_kernel_start)
+        if ramStart < kernelStart {
+            var flags: VirtualPageFlags = [.present, .pxn]
+            try mapSection(startAddress: ramStart, endAddress: kernelStart, flags: flags)
         }
         
+        var flags: VirtualPageFlags = [.present, .readOnly]
+        try mapSection(
+            startAddress: kernelStart,
+            endAddress  : getOfaddressWithSymbol(of: &_text_end),
+            flags       : flags
+        )
+        
+        flags = [.present, .readOnly, .pxn]
+        try mapSection(
+            startAddress: getOfaddressWithSymbol(of: &_rodata_start),
+            endAddress  : getOfaddressWithSymbol(of: &_rodata_end),
+            flags       : flags
+        )
+        
+        flags = [.present, .pxn]
+        try mapSection(
+            startAddress: getOfaddressWithSymbol(of: &_data_start),
+            endAddress  : getOfaddressWithSymbol(of: &_kernel_end),
+            flags       : flags
+        )
+        
+        flags = [.present]
+        try mapSection(
+            startAddress: getOfaddressWithSymbol(of: &_evt_start),
+            endAddress  : getOfaddressWithSymbol(of: &_evt_end),
+            flags       : flags
+        )
+        
+        flags = [.present, .pxn]
+        let ramEnd = PhysicalAddress(self.ppmPtr.pointee.ramStart + self.ppmPtr.pointee.ramSize)
+        try mapSection(
+            startAddress: getOfaddressWithSymbol(of: &_evt_end),
+            endAddress  : ramEnd,
+            flags       : flags
+        )
+        
         let uartBase: UInt64 = 0x09000000
-        try map(virtual: uartBase, physical: uartBase, flags: .valid)
-        try map(virtual: Self.physicalOffset + uartBase, physical: uartBase, flags: .valid)
+        try map(virtual: uartBase, physical: uartBase, type: .device)
+        try map(virtual: Self.physicalOffset + uartBase, physical: uartBase, type: .device)
+        
+        CPUArm64.enableMMU(
+            lowTable : self.identityTableAddress,
+            highTable: self.kernelTableAddress
+        )
+        
+        CPUArm64.flushTLB()
     }
     
     
     func map(
-        virtual : UInt64,
-        physical: UInt64,
-        flags   : VirtualPageFlags
+        virtual : VirtualAddress,
+        physical: PhysicalAddress,
+        type    : MemoryType,
+        flags   : VirtualPageFlags = [.present]
     ) throws(PPMError) {
         
-        var currentTablePtr = rootTable
-        currentTablePtr = try mapTable(currentTablePtr: currentTablePtr, virtual.l0)
-        currentTablePtr = try mapTable(currentTablePtr: currentTablePtr, virtual.l1)
-        currentTablePtr = try mapTable(currentTablePtr: currentTablePtr, virtual.l2)
+        var currentTable = (virtual >= Self.physicalOffset)
+        ? kernelRootTable
+        : identityRootTable
+        
+        currentTable = try mapTable(current: currentTable, virtual.l0)
+        currentTable = try mapTable(current: currentTable, virtual.l1)
+        currentTable = try mapTable(current: currentTable, virtual.l2)
         
         
-        var l3Entry = currentTablePtr[virtual.l3]
-        l3Entry.physicalAddress = physical
-        l3Entry.flags = flags.union([.valid, .page, .accessFlag])
+        var entry = currentTable[virtual.l3]
+        entry.physicalAddress = physical
         
-        currentTablePtr[virtual.l3] = l3Entry
-        CPUArm64.flushTLB()
+        let attrs = type.attributes
+        entry.mairIndex    = attrs.mair
+        entry.shareability = attrs.share
+        
+        entry.flags = flags.union([.valid, .page, .accessFlag])
+        currentTable[virtual.l3] = entry
+        
+        if CPUArm64.isMMUEnabled() {
+            CPUArm64.flushTLB()
+        }
     }
     
     private func mapTable(
-        currentTablePtr: UnsafeMutablePointer<PageTableEntry>,
+        current: UnsafeMutablePointer<PageTableEntry>,
         _ index: Int
     ) throws(PPMError) -> UnsafeMutablePointer<PageTableEntry> {
-        var entry = currentTablePtr[index]
+        var entry = current[index]
         
         if !entry.isPresent {
             let newPage = try ppmPtr.pointee.alloc(4096)
             
-            let offset = isBootstrapping ? 0 : UInt(Self.physicalOffset)
-            let newTablePtr = UnsafeMutablePointer<PageTableEntry>(
-                bitPattern: UInt(newPage.address) + offset
-            )!
+            let newTablePtr: UnsafeMutablePointer<PageTableEntry> = physToVirt(newPage.address)
             newTablePtr.initialize(repeating: PageTableEntry(rawValue: 0), count: 512)
             
             entry.physicalAddress = newPage.address
-            entry.flags = [.valid, .page, .accessFlag]
-            currentTablePtr[index] = entry
+            entry.flags = [.valid, .page]
+            current[index] = entry
         }
         
-        let offset = isBootstrapping ? 0 : Self.physicalOffset
-        let nextTableAddr = entry.physicalAddress + offset
+        return physToVirt(entry.physicalAddress)
+    }
+    
+    
+    private func mapSection(
+        startAddress: PhysicalAddress,
+        endAddress  : PhysicalAddress,
+        type        : MemoryType       = .normal,
+        flags       : VirtualPageFlags = [.present]
+    ) throws(PPMError) {
         
-        return UnsafeMutablePointer<PageTableEntry>(bitPattern: UInt(nextTableAddr))!
+        let alignedStart = startAddress & ~(Self.pageSize - 1)
+        let alignedEnd   = (endAddress  +   Self.pageSize - 1) & ~(Self.pageSize - 1)
+        var currentAddr  = alignedStart
+        
+        while currentAddr < alignedEnd {
+            try map(
+                virtual : currentAddr,
+                physical: currentAddr,
+                type    : type,
+                flags   : flags
+            )
+            
+            try map(
+                virtual : Self.physicalOffset + currentAddr,
+                physical: currentAddr,
+                type    : type,
+                flags   : flags
+            )
+            
+            currentAddr += Self.pageSize
+        }
     }
 }
