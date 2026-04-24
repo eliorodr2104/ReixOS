@@ -43,7 +43,7 @@ public struct VirtualMemoryManager {
         let ramStart = PhysicalAddress(self.ppmPtr.pointee.ramStart)
         let kernelStart = getOfaddressWithSymbol(of: &_kernel_start)
         if ramStart < kernelStart {
-            var flags: VirtualPageFlags = [.present, .pxn]
+            let flags: VirtualPageFlags = [.present, .pxn]
             try mapSection(startAddress: ramStart, endAddress: kernelStart, flags: flags)
         }
         
@@ -68,7 +68,7 @@ public struct VirtualMemoryManager {
             flags       : flags
         )
         
-        flags = [.present]
+        flags = [.present, .readOnly]
         try mapSection(
             startAddress: getOfaddressWithSymbol(of: &_evt_start),
             endAddress  : getOfaddressWithSymbol(of: &_evt_end),
