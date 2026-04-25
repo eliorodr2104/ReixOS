@@ -21,12 +21,12 @@ public func exceptionVirtualTableHandler(
     switch exceptionClass {
         case 0x3C:
             let internalReason = Kernel.internalPanicMessage
-            CPUArm64.panic(internalReason, exc: .brk, fp: frame)
+            KernelCPU.panic(internalReason, exc: .brk, fp: frame)
             
         case 0x00:
-            CPUArm64.panic(exc: .udf, fp: frame)
+            KernelCPU.panic(exc: .udf, fp: frame)
             
         default:
-            CPUArm64.panic("EXC Unknown, Exception Class: ", fp: frame)
+            KernelCPU.panic("EXC Unknown, Exception Class: ", fp: frame)
     }
 }

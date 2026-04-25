@@ -5,7 +5,11 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 22/04/2026.
 //
 
-public enum KernelError: Error {
+protocol KernelFatal: Error {
+    var description: String { get }
+}
+
+public enum KernelError: KernelFatal {
     case allocatorError(response: AllocatorError)
     case physicalMemoryManager(response: PPMError)
     case unknown(Error)
@@ -20,13 +24,13 @@ public enum KernelError: Error {
         self = .physicalMemoryManager(response: error)
     }
     
-    public var localizedDescription: String {
+    public var description: String {
         switch self {
             case .allocatorError(let response):
                 response.localizedDescription
                 
             case .physicalMemoryManager(let response):
-                response.localizedDescription
+                response.description
                 
             case .unknown(_):
                 "Kernel Error: Unknown error founded."

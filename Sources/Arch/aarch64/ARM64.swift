@@ -5,25 +5,25 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 23/04/2026.
 //
 
-public struct CPUArm64 {
+public struct ARM64: CPUInterface {
     
     @_silgen_name("nop")
-    public static func nop()
+    private static func nop_asm()
     
     @_silgen_name("wait_for_exception")
     public static func waitForException()
     
     @_silgen_name("enable_interrupts")
-    public static func enableInterrupts()
+    private static func enable_interrupts()
     
     @_silgen_name("disable_interrupts")
-    public static func disableInterrupts()
+    private static func disable_interrupts()
     
     @_silgen_name("wait_for_interrupt")
     public static func waitForInterrupt()
     
     @_silgen_name("trigger_trap")
-    public static func triggerTrap()
+    private static func trigger_trap()
     
     @_silgen_name("flush_tlb")
     public static func flushTLB()
@@ -36,6 +36,23 @@ public struct CPUArm64 {
     
     @_silgen_name("is_mmu_enabled")
     public static func isMMUEnabled() -> Bool
+    
+    
+    static func enableInterrupts() {
+        enable_interrupts()
+    }
+    
+    static func disableInterrupts() {
+        enable_interrupts()
+    }
+    
+    static func triggerTrap() {
+        trigger_trap()
+    }
+    
+    static func nop() {
+        nop_asm()
+    }
     
     
     public static func panic(

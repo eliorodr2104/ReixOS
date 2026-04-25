@@ -9,7 +9,7 @@
 public struct FrameInfo {
     var refCount : UInt32
     var order    : UInt8
-    var flags    : UInt8
+    var flags    : PhysicalPageFlags
     var heapShift: UInt8 // Contains pow shift for size bucket
     
     private let _padding: UInt8 // Align to 8Bytes
@@ -17,7 +17,7 @@ public struct FrameInfo {
     init(
         refCount : UInt32,
         order    : UInt8,
-        flags    : UInt8,
+        flags    : PhysicalPageFlags,
         heapShift: UInt8 = 0 // Zero value is for not heap page
         
     ) {
@@ -31,7 +31,7 @@ public struct FrameInfo {
     init() {
         self.refCount  = 0
         self.order     = 0
-        self.flags     = 0
+        self.flags     = .none
         self.heapShift = 0
         self._padding  = 0
     }

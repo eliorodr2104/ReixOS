@@ -22,7 +22,7 @@ struct UARTQemu: SerialDriver, @unchecked Sendable {
                 break
             }
             
-            CPUArm64.nop()
+            KernelCPU.nop()
         }
         
         dataReg.pointee = UInt64(byte)

@@ -7,95 +7,13 @@
 
 
 @frozen
-public struct PhysicalPageManager {
-    private let allocator: BuddyAllocator?
+public struct PhysicalPageManager<A: Allocator> {
+    private let allocator: A?
     public  var framesMetadata: UnsafeMutablePointer<FrameInfo>?
     
     public let ramStart: UInt64
     public let ramSize: UInt64
     
-    init(dtbRawAddress: PhysicalAddress) throws(PPMError) {
-        let dtbPointer      = UnsafeRawPointer(bitPattern: Int(dtbRawAddress))
-        let kernelEndAddr   = getOfaddressWithSymbol(of: &_kernel_end)
-        let kernelStartAddr = getOfaddressWithSymbol(of: &_kernel_start)
-        let evtStartAddr    = getOfaddressWithSymbol(of: &_evt_start)
-        let evtEndAddr      = getOfaddressWithSymbol(of: &_evt_end)
-        let kernelTotalEnd  = getOfaddressWithSymbol(of: &_kernel_total_end)
-                
-        if let ram = getRAMInfo(at: dtbPointer) {
-            self.ramStart             = ram.start
-            self.ramSize              = ram.size
-            
-            let ramEnd                = ram.start + ram.size
-            
-            let bitmapAddr: UInt64    = (kernelTotalEnd + 0xFFF) & ~0xFFF
-            
-            let totalPages            = ram.size / 4096
-            let bitmapBytes           = (totalPages + 7) / 8
-            
-            let freeListsAddr         = (bitmapAddr + bitmapBytes + 0xFFF) & ~0xFFF
-            let freeListsSize: UInt64 = 12 * 8
-            
-            let framesMetadataAddress = (freeListsAddr + freeListsSize + 0xFFF) & ~0xFFF
-            let framesMetadataSize    = totalPages * UInt64(MemoryLayout<FrameInfo>.stride)
-            
-            let reservedEnd           = (framesMetadataAddress + framesMetadataSize + 0xFFF) & ~0xFFF
-            
-            self.framesMetadata       = UnsafeMutablePointer(bitPattern: UInt(framesMetadataAddress))
-            framesMetadata?.initialize(repeating: FrameInfo(refCount: 0, order: 0, flags: 0), count: Int(totalPages))
-            
-            // DTB page-aligned interval
-            let dtbStart = UInt64(dtbRawAddress) & ~0xFFF
-            let dtbEnd   = (UInt64(dtbRawAddress + ram.dtbSize) + 0xFFF) & ~0xFFF
-            
-            self.allocator = BuddyAllocator(
-                start           : ram.start,
-                size            : ram.size,
-                bitmapAddress   : bitmapAddr,
-                freeListsAddress: freeListsAddr
-            )
-            
-            
-            setRangeMetadata(
-                from: dtbStart,
-                to  : dtbEnd,
-                flag: .reserved
-            )
-            
-            setRangeMetadata(
-                from: kernelStartAddr,
-                to  : reservedEnd,
-                flag: .kernel
-            )
-            
-            setRangeMetadata(
-                from: evtStartAddr,
-                to  : evtEndAddr,
-                flag: .reserved
-            )
-            
-            
-            try freeSegment(from: kernelEndAddr, to: evtStartAddr)
-                        
-            if dtbEnd <= ram.start || dtbStart >= kernelStartAddr {
-                try freeSegment(from: ram.start, to: kernelStartAddr)
-                
-            } else {
-                try freeSegment(from: ram.start, to: dtbStart)
-                try freeSegment(from: dtbEnd, to: kernelStartAddr)
-            }
-                        
-            if dtbEnd <= reservedEnd || dtbStart >= ramEnd {
-                try freeSegment(from: reservedEnd, to: ramEnd)
-                
-            } else {
-                try freeSegment(from: reservedEnd, to: dtbStart)
-                try freeSegment(from: dtbEnd,   to: ramEnd)
-            }
-            
-        } else { throw(.initRamError) }
-    }
-
     
     public func alloc(
         _ bytes  : Int,
@@ -114,7 +32,7 @@ public struct PhysicalPageManager {
                 var metadata = framesMetadata![indexMetadata]
                 metadata.refCount  = 1
                 metadata.order     = frame.order
-                metadata.flags     = flag.rawValue
+                metadata.flags     = flag
                 metadata.heapShift = heapShift
                 framesMetadata![indexMetadata] = metadata
                 
@@ -134,7 +52,7 @@ public struct PhysicalPageManager {
         
         let indexMetadata = Int((page.address - ramStart) / 4096)
         var metadata = framesMetadata![indexMetadata]
-        let flag = PhysicalPageFlags(rawValue: metadata.flags)
+        let flag = metadata.flags
         
         guard metadata.refCount > 0 else {
             throw .invalidRefCount(Int(metadata.refCount))
@@ -153,7 +71,7 @@ public struct PhysicalPageManager {
         
         do {
             if metadata.refCount == 0 {
-                metadata.flags = 0
+                metadata.flags = .none
                 try allocator.free(page)
             }
             
@@ -176,7 +94,7 @@ public struct PhysicalPageManager {
             var frame = framesMetadata![i]
             
             frame.refCount  = 1
-            frame.flags    |= flag.rawValue
+            frame.flags     = flag
                 
             framesMetadata![i] = frame
         }
@@ -207,7 +125,7 @@ public struct PhysicalPageManager {
         
         kprint("\nTest 1: Basic Allocation...")
         let page1 = try self.alloc(4096)
-        kprint("Allocated page at: 0x%x\n", page1.address)
+        kprintf("Allocated page at: 0x%x\n", page1.address)
         
         let idx1 = Int((page1.address - ramStart) / 4096)
         if framesMetadata![idx1].refCount != 1 {
@@ -252,5 +170,91 @@ public struct PhysicalPageManager {
         
         kprint("Kernel protection check passed (Check debug logs if any).")
         kprint("\n--- PPM Test Suite Completed ---")
+    }
+}
+
+
+extension PhysicalPageManager where A == BuddyAllocator {
+    
+    init(dtbRawAddress: PhysicalAddress) throws(PPMError) {
+        let dtbPointer      = UnsafeRawPointer(bitPattern: Int(dtbRawAddress))
+        let kernelEndAddr   = getOfaddressWithSymbol(of: &_kernel_end)
+        let kernelStartAddr = getOfaddressWithSymbol(of: &_kernel_start)
+        let evtStartAddr    = getOfaddressWithSymbol(of: &_evt_start)
+        let evtEndAddr      = getOfaddressWithSymbol(of: &_evt_end)
+        let kernelTotalEnd  = getOfaddressWithSymbol(of: &_kernel_total_end)
+        
+        if let ram = getRAMInfo(at: dtbPointer) {
+            self.ramStart             = ram.start
+            self.ramSize              = ram.size
+            
+            let ramEnd                = ram.start + ram.size
+            
+            let bitmapAddr: UInt64    = (kernelTotalEnd + 0xFFF) & ~0xFFF
+            
+            let totalPages            = ram.size / 4096
+            let bitmapBytes           = (totalPages + 7) / 8
+            
+            let freeListsAddr         = (bitmapAddr + bitmapBytes + 0xFFF) & ~0xFFF
+            let freeListsSize: UInt64 = 12 * 8
+            
+            let framesMetadataAddress = (freeListsAddr + freeListsSize + 0xFFF) & ~0xFFF
+            let framesMetadataSize    = totalPages * UInt64(MemoryLayout<FrameInfo>.stride)
+            
+            let reservedEnd           = (framesMetadataAddress + framesMetadataSize + 0xFFF) & ~0xFFF
+            
+            self.framesMetadata       = UnsafeMutablePointer(bitPattern: UInt(framesMetadataAddress))
+            framesMetadata?.initialize(repeating: FrameInfo(refCount: 0, order: 0, flags: .none), count: Int(totalPages))
+            
+            // DTB page-aligned interval
+            let dtbStart = UInt64(dtbRawAddress) & ~0xFFF
+            let dtbEnd   = (UInt64(dtbRawAddress + ram.dtbSize) + 0xFFF) & ~0xFFF
+            
+            self.allocator = BuddyAllocator(
+                start           : ram.start,
+                size            : ram.size,
+                bitmapAddress   : bitmapAddr,
+                freeListsAddress: freeListsAddr
+            )
+            
+            
+            setRangeMetadata(
+                from: dtbStart,
+                to  : dtbEnd,
+                flag: .reserved
+            )
+            
+            setRangeMetadata(
+                from: kernelStartAddr,
+                to  : reservedEnd,
+                flag: .kernel
+            )
+            
+            setRangeMetadata(
+                from: evtStartAddr,
+                to  : evtEndAddr,
+                flag: .reserved
+            )
+            
+            
+            try freeSegment(from: kernelEndAddr, to: evtStartAddr)
+            
+            if dtbEnd <= ram.start || dtbStart >= kernelStartAddr {
+                try freeSegment(from: ram.start, to: kernelStartAddr)
+                
+            } else {
+                try freeSegment(from: ram.start, to: dtbStart)
+                try freeSegment(from: dtbEnd, to: kernelStartAddr)
+            }
+            
+            if dtbEnd <= reservedEnd || dtbStart >= ramEnd {
+                try freeSegment(from: reservedEnd, to: ramEnd)
+                
+            } else {
+                try freeSegment(from: reservedEnd, to: dtbStart)
+                try freeSegment(from: dtbEnd,   to: ramEnd)
+            }
+            
+        } else { throw(.initRamError) }
     }
 }

@@ -6,7 +6,7 @@
 //
 
 public struct KernelHeap {
-    private static var ppmPtr : UnsafeMutablePointer<PhysicalPageManager>? = nil
+    private static var ppmPtr : UnsafeMutablePointer<KernelPPM>? = nil
     private static var buckets: KernelBuckets = KernelBuckets()
     
     private static let physicalOffset: UInt64 = 0xFFFF800000000000
@@ -15,7 +15,7 @@ public struct KernelHeap {
     
     private init() {}
     
-    public static func initialize(ppmPtr: UnsafeMutablePointer<PhysicalPageManager>) {
+    public static func initialize(ppmPtr: UnsafeMutablePointer<KernelPPM>) {
         self.ppmPtr = ppmPtr
     }
     
@@ -75,7 +75,7 @@ public struct KernelHeap {
         let pageIndex = Int((UInt64(pageRoot) - ppm.pointee.ramStart) / 4096)
         let heapShift = ppm.pointee.framesMetadata![pageIndex].heapShift
         
-        if heapShift == 0 { CPUArm64.panic() }
+        if heapShift == 0 { KernelCPU.panic() }
         
         let indexBucket = Int(heapShift - 3)
         let oldHead     = buckets[indexBucket]

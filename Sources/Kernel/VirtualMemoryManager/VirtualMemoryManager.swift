@@ -6,7 +6,7 @@
 //
 
 public struct VirtualMemoryManager {
-    private let ppmPtr   : UnsafeMutablePointer<PhysicalPageManager>
+    private let ppmPtr   : UnsafeMutablePointer<KernelPPM>
     
     
     /// Root (TTBR1 - Address 0xFFFF...)
@@ -24,12 +24,12 @@ public struct VirtualMemoryManager {
     static var asidCounter: ASID = 1
     
     private func physToVirt<T>(_ phys: UInt64) -> UnsafeMutablePointer<T> {
-        let offset = CPUArm64.isMMUEnabled() ? Self.physicalOffset : 0
+        let offset = KernelCPU.isMMUEnabled() ? Self.physicalOffset : 0
         let virtAddr = phys + offset
         return UnsafeMutablePointer<T>(bitPattern: UInt(virtAddr))!
     }
     
-    init(ppmPtr: UnsafeMutablePointer<PhysicalPageManager>) throws(PPMError) {
+    init(ppmPtr: UnsafeMutablePointer<KernelPPM>) throws(PPMError) {
         self.ppmPtr = ppmPtr
         
         self.kernelTableAddress = try self.ppmPtr.pointee.alloc(4096).address
@@ -89,12 +89,12 @@ public struct VirtualMemoryManager {
         try map(virtual: uartBase, physical: uartBase, type: .device)
         try map(virtual: Self.physicalOffset + uartBase, physical: uartBase, type: .device)
         
-        CPUArm64.enableMMU(
+        KernelCPU.enableMMU(
             lowTable : self.identityTableAddress,
             highTable: self.kernelTableAddress
         )
         
-        CPUArm64.flushTLB()
+        KernelCPU.flushTLB()
     }
     
     
@@ -142,8 +142,8 @@ public struct VirtualMemoryManager {
         entry.flags = flags.union([.valid, .page, .accessFlag])
         currentTable[virtual.l3] = entry
         
-        if CPUArm64.isMMUEnabled() {
-            CPUArm64.flushTLB()
+        if KernelCPU.isMMUEnabled() {
+            KernelCPU.flushTLB()
         }
     }
     

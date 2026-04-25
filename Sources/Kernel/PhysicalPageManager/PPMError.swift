@@ -5,7 +5,7 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 22/04/2026.
 //
 
-public enum PPMError: Error {
+public enum PPMError: KernelFatal {
     case allocationFailed(reason: AllocatorError)
     case metadataInconsistency
     case invalidFlags
@@ -14,7 +14,7 @@ public enum PPMError: Error {
     case invalidRefCount(_ count: Int)
     case pageOrderMismatch(expected: UInt8, provided: UInt8)
     
-    public var localizedDescription: String {
+    public var description: String {
         switch self {
             case .allocationFailed(let reason):
                 "PPM Error: Allocation failed. Reason: \(reason.localizedDescription)"
