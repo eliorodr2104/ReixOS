@@ -23,7 +23,7 @@ public struct VirtualMemoryManager {
     
     static var asidCounter: ASID = 1
     
-    private func physToVirt<T>(_ phys: UInt64) -> UnsafeMutablePointer<T> {
+    public func physToVirt<T>(_ phys: UInt64) -> UnsafeMutablePointer<T> {
         let offset = KernelCPU.isMMUEnabled() ? Self.physicalOffset : 0
         let virtAddr = phys + offset
         return UnsafeMutablePointer<T>(bitPattern: UInt(virtAddr))!
@@ -86,8 +86,8 @@ public struct VirtualMemoryManager {
         )
         
         let uartBase: UInt64 = 0x09000000
-        try map(virtual: uartBase, physical: uartBase, type: .device)
-        try map(virtual: Self.physicalOffset + uartBase, physical: uartBase, type: .device)
+        try map(table: identityRootTable, virtual: uartBase, physical: uartBase, type: .device)
+        try map(table: kernelRootTable, virtual: Self.physicalOffset + uartBase, physical: uartBase, type: .device)
         
         KernelCPU.enableMMU(
             lowTable : self.identityTableAddress,
@@ -100,16 +100,32 @@ public struct VirtualMemoryManager {
     
     public func createAddressSpace() throws(PPMError) -> AddressSpace {
         // Not set a zero all data, because alloc return cleaned page
-        let page    = try ppmPtr.pointee.alloc(4096)
-        let address = page.address
-        let asid    = Self.asidCounter
+        let page = try ppmPtr.pointee.alloc(4096)
+        let asid = Self.asidCounter
         
         Self.asidCounter = Self.asidCounter &+ 1
         if Self.asidCounter == 0 { Self.asidCounter = 1 }
         
         return AddressSpace(
-            rootTablePhysical: address,
-            asid             : asid    // Create random number
+            rootTablePhysical: page.address,
+            asid             : asid
+        )
+    }
+    
+    public func mapUserPage(
+        addressSpace: borrowing AddressSpace,
+        virtual     : VirtualAddress,
+        physical    : PhysicalAddress,
+        flags       : VirtualPageFlags
+    ) throws(PPMError) {
+        let tablePointer: UnsafeMutablePointer<PageTableEntry> = physToVirt(addressSpace.rootTablePhysical)
+        
+        try map(
+            table   : tablePointer,
+            virtual : virtual,
+            physical: physical,
+            type    : .normal,
+            flags   : flags
         )
     }
     
@@ -117,16 +133,14 @@ public struct VirtualMemoryManager {
     // MARK: - Internals Handlers
     
     private func map(
+        table   : UnsafeMutablePointer<PageTableEntry>,
         virtual : VirtualAddress,
         physical: PhysicalAddress,
         type    : MemoryType,
         flags   : VirtualPageFlags = [.present]
     ) throws(PPMError) {
         
-        var currentTable = (virtual >= Self.physicalOffset)
-        ? kernelRootTable
-        : identityRootTable
-        
+        var currentTable = table
         currentTable = try mapTable(current: currentTable, virtual.l0)
         currentTable = try mapTable(current: currentTable, virtual.l1)
         currentTable = try mapTable(current: currentTable, virtual.l2)
@@ -179,8 +193,13 @@ public struct VirtualMemoryManager {
         let alignedEnd   = (endAddress  +   Self.pageSize - 1) & ~(Self.pageSize - 1)
         var currentAddr  = alignedStart
         
+//        (virtual >= Self.physicalOffset)
+//        ? kernelRootTable
+//        : identityRootTable
+        
         while currentAddr < alignedEnd {
             try map(
+                table   : identityRootTable,
                 virtual : currentAddr,
                 physical: currentAddr,
                 type    : type,
@@ -188,6 +207,7 @@ public struct VirtualMemoryManager {
             )
             
             try map(
+                table   : kernelRootTable,
                 virtual : Self.physicalOffset + currentAddr,
                 physical: currentAddr,
                 type    : type,

@@ -14,7 +14,7 @@ public struct Process: ~Copyable {
     public var status      : ProcessStatus                    // Current status
     public var addressSpace: AddressSpace                     // Virtual memory space
     public var priority    : UInt8                            // 0 ... 5 for ex
-    public var processType : ProcessType                      // User | Kernel
+    public var type        : ProcessType                      // User | Kernel
     public var context     : UnsafeMutablePointer<TrapFrame>? // Used on Contex-Switch
     public var kernelStack : UnsafeMutableRawPointer?         // Use kmalloc()
     
