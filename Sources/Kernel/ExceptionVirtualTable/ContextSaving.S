@@ -23,18 +23,30 @@ _evt_start:
     ventry fiq_invalid
     ventry serror_invalid
 
-    // Group 3 & 4 (User mode) - Per ora invalidi
-    .rept 8
+    // Group 3: Lower EL using AArch64 (User Mode 64-bit)
+    ventry sync_handler_el0    // Syscall (svc), Page Faults user, ecc.
+    ventry irq_handler_el0     // Timer hardware & IO!
+    ventry fiq_invalid
+    ventry serror_invalid
+
+    // Group 4: Lower EL using AArch32 (Not supported)
     ventry handler_invalid
-    .endr
+    ventry handler_invalid
+    ventry handler_invalid
+    ventry handler_invalid
 
 // --- Handler Implementations ---
 
 sync_handler_el1:
-    b save_context
+sync_handler_el0:
+    mov     x1, #1       // 1 = Sync
+    b       save_context
 
 irq_handler_el1:
-    b save_context
+irq_handler_el0:
+    mov     x1, #0       // 0 = IRQ
+    b       save_context
+    
 
 sync_invalid:
 irq_invalid:
@@ -42,6 +54,7 @@ fiq_invalid:
 serror_invalid:
 handler_invalid:
     b . // TODO: Manage this error
+
 
 save_context:
     // 256 Byte for all data
@@ -70,19 +83,24 @@ save_context:
     mrs     x1, spsr_el1
     mrs     x2, esr_el1
     mrs     x3, far_el1
+    mrs     x4, sp_el0
+    
     
     stp     x0, x1,   [sp, #248]
     stp     x2, x3,   [sp, #264]
+    str     x4,       [sp, #280]
     
     mov     x0, sp
     bl      swift_exception_handler
 
     // RESTORE CONTEXT
-    ldp     x2, x3,   [sp, #264]
     ldp     x0, x1,   [sp, #248]
+    ldp     x2, x3,   [sp, #264]
+    ldr     x4,       [sp, #280]
     
-    msr     elr_el1, x0
+    msr     elr_el1,  x0
     msr     spsr_el1, x1
+    msr     sp_el0,   x4
     
     ldp     x0, x1,   [sp, #0]
     ldp     x2, x3,   [sp, #16]

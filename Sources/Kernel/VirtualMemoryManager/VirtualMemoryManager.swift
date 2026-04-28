@@ -79,8 +79,12 @@ public struct VirtualMemoryManager {
         
         flags = [.present, .pxn]
         let ramEnd = PhysicalAddress(self.ppmPtr.pointee.ramStart + self.ppmPtr.pointee.ramSize)
+        
+        let evtEndRaw    = getOfaddressWithSymbol(of: &_evt_end)
+        let safeRamStart = (evtEndRaw + (Self.pageSize - 1)) & ~(Self.pageSize - 1)
+        
         try mapSection(
-            startAddress: getOfaddressWithSymbol(of: &_evt_end),
+            startAddress: safeRamStart,
             endAddress  : ramEnd,
             flags       : flags
         )
@@ -88,6 +92,37 @@ public struct VirtualMemoryManager {
         let uartBase: UInt64 = 0x09000000
         try map(table: identityRootTable, virtual: uartBase, physical: uartBase, type: .device)
         try map(table: kernelRootTable, virtual: Self.physicalOffset + uartBase, physical: uartBase, type: .device)
+        
+        let gicDistributorBase : UInt64 = 0x08000000
+        let gicCpuInterfaceBase: UInt64 = 0x08010000
+        
+        try map(
+            table   : identityRootTable,
+            virtual : gicDistributorBase,
+            physical: gicDistributorBase,
+            type    : .device
+        )
+        
+        try map(
+            table   : kernelRootTable,
+            virtual : Self.physicalOffset + gicDistributorBase,
+            physical: gicDistributorBase,
+            type    : .device
+        )
+        
+        try map(
+            table   : identityRootTable,
+            virtual : gicCpuInterfaceBase,
+            physical: gicCpuInterfaceBase,
+            type    : .device
+        )
+        
+        try map(
+            table   : kernelRootTable,
+            virtual : Self.physicalOffset + gicCpuInterfaceBase,
+            physical: gicCpuInterfaceBase,
+            type    : .device
+        )
         
         KernelCPU.enableMMU(
             lowTable : self.identityTableAddress,

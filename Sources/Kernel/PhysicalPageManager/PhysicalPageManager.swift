@@ -177,12 +177,9 @@ public struct PhysicalPageManager<A: Allocator> {
 extension PhysicalPageManager where A == BuddyAllocator {
     
     init(dtbRawAddress: PhysicalAddress) throws(PPMError) {
-        let dtbPointer      = UnsafeRawPointer(bitPattern: Int(dtbRawAddress))
-        let kernelEndAddr   = getOfaddressWithSymbol(of: &_kernel_end)
-        let kernelStartAddr = getOfaddressWithSymbol(of: &_kernel_start)
-        let evtStartAddr    = getOfaddressWithSymbol(of: &_evt_start)
-        let evtEndAddr      = getOfaddressWithSymbol(of: &_evt_end)
-        let kernelTotalEnd  = getOfaddressWithSymbol(of: &_kernel_total_end)
+        let dtbPointer     = UnsafeRawPointer(bitPattern: Int(dtbRawAddress))
+        let evtEndAddr     = getOfaddressWithSymbol(of: &_evt_end)
+        let kernelTotalEnd = getOfaddressWithSymbol(of: &_kernel_total_end)
         
         if let ram = getRAMInfo(at: dtbPointer) {
             self.ramStart             = ram.start
@@ -206,9 +203,13 @@ extension PhysicalPageManager where A == BuddyAllocator {
             self.framesMetadata       = UnsafeMutablePointer(bitPattern: UInt(framesMetadataAddress))
             framesMetadata?.initialize(repeating: FrameInfo(refCount: 0, order: 0, flags: .none), count: Int(totalPages))
             
-            // DTB page-aligned interval
-            let dtbStart = UInt64(dtbRawAddress) & ~0xFFF
-            let dtbEnd   = (UInt64(dtbRawAddress + ram.dtbSize) + 0xFFF) & ~0xFFF
+            let dtbEnd = (UInt64(dtbRawAddress + ram.dtbSize) + 0xFFF) & ~0xFFF
+            
+            var absoluteSafeStart = reservedEnd
+            if evtEndAddr > absoluteSafeStart { absoluteSafeStart = evtEndAddr }
+            if dtbEnd > absoluteSafeStart { absoluteSafeStart = dtbEnd }
+            
+            absoluteSafeStart = (absoluteSafeStart + 0xFFF) & ~0xFFF
             
             self.allocator = BuddyAllocator(
                 start           : ram.start,
@@ -217,44 +218,16 @@ extension PhysicalPageManager where A == BuddyAllocator {
                 freeListsAddress: freeListsAddr
             )
             
-            
             setRangeMetadata(
-                from: dtbStart,
-                to  : dtbEnd,
+                from: ram.start,
+                to  : absoluteSafeStart,
                 flag: .reserved
             )
             
-            setRangeMetadata(
-                from: kernelStartAddr,
-                to  : reservedEnd,
-                flag: .kernel
-            )
+            try freeSegment(from: absoluteSafeStart, to: ramEnd)
             
-            setRangeMetadata(
-                from: evtStartAddr,
-                to  : evtEndAddr,
-                flag: .reserved
-            )
-            
-            
-            try freeSegment(from: kernelEndAddr, to: evtStartAddr)
-            
-            if dtbEnd <= ram.start || dtbStart >= kernelStartAddr {
-                try freeSegment(from: ram.start, to: kernelStartAddr)
-                
-            } else {
-                try freeSegment(from: ram.start, to: dtbStart)
-                try freeSegment(from: dtbEnd, to: kernelStartAddr)
-            }
-            
-            if dtbEnd <= reservedEnd || dtbStart >= ramEnd {
-                try freeSegment(from: reservedEnd, to: ramEnd)
-                
-            } else {
-                try freeSegment(from: reservedEnd, to: dtbStart)
-                try freeSegment(from: dtbEnd,   to: ramEnd)
-            }
-            
-        } else { throw(.initRamError) }
+        } else {
+            throw(.initRamError)
+        }
     }
 }

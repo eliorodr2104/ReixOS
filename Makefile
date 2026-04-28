@@ -70,4 +70,5 @@ run: kernel.bin
     -cpu cortex-a53 \
     -nographic \
     -d int \
+    -machine virt,gic-version=2 \
     -kernel kernel.bin

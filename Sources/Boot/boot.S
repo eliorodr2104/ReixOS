@@ -49,6 +49,8 @@ _start:
     mov     sp, x0
     
     adr     x0, _evt_start
+    ldr     x1, =0xFFFF800000000000
+    add     x0, x0, x1
     msr     vbar_el1, x0
 
     ldr     x0, =(CPACR_FPEN_EN)

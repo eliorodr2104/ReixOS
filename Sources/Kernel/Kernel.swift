@@ -17,15 +17,25 @@ public struct Kernel {
             self.ppm = try PhysicalPageManager<BuddyAllocator>(
                 dtbRawAddress: dtbAddress
             )
-            kprint("\nInit PPM!")
+//            kprint("\nInit PPM!")
             
             
             self.vmm = try VirtualMemoryManager(ppmPtr: &ppm!)
             kprint("Init VMM!")
             
+            
+            GIC.initialize()
+            kprint("Init GIC!")
+            
+            
             KernelHeap.initialize(ppmPtr: &ppm!)
-//            
-            try testKernelHeap()
+            ProcessManager.initialize(vmm: &vmm!, ppm: &ppm!)
+            
+            enable_core_timer()
+            
+            try testProcessLaunch()
+            
+//            try testKernelHeap()
             
         } catch { internalPanic(error) }
         
@@ -53,7 +63,27 @@ public struct Kernel {
         KernelCPU.triggerTrap()
     }
     
-    public static func testKernelHeap() throws(PPMError) {
+    private static func testProcessLaunch() throws (PPMError) {
+        let firstProcess = try ProcessManager.spawnProcess()
+        
+        kprintf("Process PID: %d", firstProcess.pid)
+        kprint("Test launch process")
+        
+        let trapFramePtr  = firstProcess.context!
+        let rootTablePhys = firstProcess.addressSpace.rootTablePhysical
+        let kStackTop     = UInt64(UInt(bitPattern: firstProcess.kernelStack!)) + 4096
+        
+        jump_to_user_mode(
+            trapFrame     : trapFramePtr,
+            rootTable     : rootTablePhys,
+            kernelStackTop: kStackTop
+        )
+        
+        // Test print
+        kprint("ERRORE: CPU is in Kernel mode.")
+    }
+    
+    private static func testKernelHeap() throws(PPMError) {
         
         guard let ptr1 = try KernelHeap.kmalloc(42) else {
             KernelCPU.panic()

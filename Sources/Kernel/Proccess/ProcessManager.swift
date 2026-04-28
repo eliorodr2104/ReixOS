@@ -12,6 +12,16 @@ public struct ProcessManager {
     private static var vmm: UnsafeMutablePointer<VirtualMemoryManager>?
     private static var ppm: UnsafeMutablePointer<KernelPPM>?
     
+    private init() {}
+    
+    public static func initialize(
+        vmm: UnsafeMutablePointer<VirtualMemoryManager>,
+        ppm: UnsafeMutablePointer<KernelPPM>
+    ) {
+        self.vmm = vmm
+        self.ppm = ppm
+    }
+    
     public static func spawnProcess() throws(PPMError) -> Process {
         guard let vmm = self.vmm, let ppm = self.ppm else { throw .allocationFailed(reason: .fullMemory) }
         
@@ -26,7 +36,7 @@ public struct ProcessManager {
             physical    : codePageSection.address,
             flags       : [.present, .userAccess, .pxn]
         )
-        
+//        
         try vmm.pointee.mapUserPage(
             addressSpace: addressSpace,
             virtual     : 0x0000007FFFFFFFF0,
@@ -35,33 +45,33 @@ public struct ProcessManager {
         )
         
         // Write bare metal code ASM for testing
-        var codePagePointer: UnsafeMutablePointer<UInt64> = vmm.pointee.physToVirt(codePageSection.address)
+        let codePagePointer: UnsafeMutablePointer<UInt32> = vmm.pointee.physToVirt(codePageSection.address)
         codePagePointer.pointee = 0x14000000
         
         let trapSize = MemoryLayout<TrapFrame>.stride
-        guard let trapRaw = try KernelHeap.kmalloc(UInt(trapSize)) else {
+        // kprintf("Trap size: %d Byte", UInt64(trapSize))
+        guard let trapRaw  = try KernelHeap.kmalloc(UInt(trapSize)) else {
             throw .allocationFailed(reason: .fullMemory)
         }
-        
+
         let trapFramePtr = trapRaw.bindMemory(to: TrapFrame.self, capacity: 1)
         
-        trapFramePtr.pointee.elr  = 0x00400000
-        trapFramePtr.pointee.spsr = 0x0
-        // trapFramePtr.pointee.sp_el0 = 0x0000007FFFFFFFF0 + 4096 // add sp_el0 to TrapFrame
+        trapFramePtr.pointee.elr   = 0x00400000 // Set pc to start code
+        trapFramePtr.pointee.spsr  = 0x0        // Set CPU in User Mode
+        trapFramePtr.pointee.spel0 = 0x0000007FFFFFFFF0 + 4096 // Top User Stack
         
         let kStackRaw = try KernelHeap.kmalloc(4096)!
-        let pid = Self.pidCounter
+        let pid       = Self.pidCounter
         Self.pidCounter += 1
         
         return Process(
-            pid: pid,
-            status: .ready,
+            pid         : pid,
+            status      : .ready,
             addressSpace: addressSpace,
-            priority: 1,
-            type: .user,
-            context: trapFramePtr,
-            kernelStack: kStackRaw
+            priority    : 1,
+            type        : .user,
+            context     : trapFramePtr,
+            kernelStack : kStackRaw
         )
     }
-    
 }
