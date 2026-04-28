@@ -16,9 +16,10 @@ public struct KernelHeap {
         self.ppmPtr = ppmPtr
     }
     
+    // Create Errors for Heap
     public static func kmalloc(_ size: UInt) throws(PPMError) -> UnsafeMutableRawPointer? {
         guard let ppm = self.ppmPtr,
-              size <= UInt(pageSize) && size >= 8 else { return nil }
+              size <= UInt(pageSize) && size > 0 else { return nil }
         
         let sizeNormalized = normalizedToPowerOfTwo(size)
         let shift          = UInt8(sizeNormalized.trailingZeroBitCount)

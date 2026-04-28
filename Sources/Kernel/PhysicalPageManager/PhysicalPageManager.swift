@@ -8,7 +8,7 @@
 
 @frozen
 public struct PhysicalPageManager<A: Allocator> {
-    private let allocator: A?
+    private let allocator: A
     public  var framesMetadata: UnsafeMutablePointer<FrameInfo>?
     
     public let ramStart: UInt64
@@ -21,32 +21,30 @@ public struct PhysicalPageManager<A: Allocator> {
         heapShift: UInt8 = 0
     ) throws(PPMError) -> PhysicalPage {
         
-        guard let allocator = self.allocator, framesMetadata != nil else {
+        guard framesMetadata != nil else {
             throw .metadataInconsistency
         }
         
         do {
-            if let frame = try allocator.alloc(bytes) {
-                let indexMetadata = Int((frame.address - ramStart) / 4096)
-                
-                var metadata = framesMetadata![indexMetadata]
-                metadata.refCount  = 1
-                metadata.order     = frame.order
-                metadata.flags     = flag
-                metadata.heapShift = heapShift
-                framesMetadata![indexMetadata] = metadata
-                
-                return frame
-            }
+            let frame         = try allocator.alloc(bytes)
+            let indexMetadata = Int((frame.address - ramStart) / 4096)
+            
+            var metadata = framesMetadata![indexMetadata]
+            metadata.refCount  = 1
+            metadata.order     = frame.order
+            metadata.flags     = flag
+            metadata.heapShift = heapShift
+            framesMetadata![indexMetadata] = metadata
+            
+            return frame
             
         } catch { throw .allocationFailed(reason: error) }
         
-        throw .allocationFailed(reason: .fullMemory)
     }
     
     
     public func free(_ page: consuming PhysicalPage) throws(PPMError) {
-        guard let allocator = allocator, framesMetadata != nil else {
+        guard framesMetadata != nil else {
             throw .metadataInconsistency
         }
         
@@ -62,9 +60,10 @@ public struct PhysicalPageManager<A: Allocator> {
             throw .pageOrderMismatch(expected: page.order, provided: metadata.order)
         }
         
-        guard flag != .kernel, flag != .reserved else {
+        guard !flag.contains(.kernel), !flag.contains(.reserved) else {
             throw .protectedMemoryViolation
         }
+
         
         metadata.refCount -= 1
         framesMetadata![indexMetadata] = metadata
@@ -107,13 +106,11 @@ public struct PhysicalPageManager<A: Allocator> {
     ) throws(PPMError) {
         let s = (a + 0xFFF) & ~0xFFF
         let e = b & ~0xFFF
+        
         if s < e {
-            guard let allocator = self.allocator else {
-                throw .metadataInconsistency
-            }
-            
             do {
                 try allocator.addFreeRange(from: s, to: e)
+                
             } catch { throw .allocationFailed(reason: error) }
         }
     }
@@ -181,53 +178,54 @@ extension PhysicalPageManager where A == BuddyAllocator {
         let evtEndAddr     = getOfaddressWithSymbol(of: &_evt_end)
         let kernelTotalEnd = getOfaddressWithSymbol(of: &_kernel_total_end)
         
-        if let ram = getRAMInfo(at: dtbPointer) {
-            self.ramStart             = ram.start
-            self.ramSize              = ram.size
-            
-            let ramEnd                = ram.start + ram.size
-            
-            let bitmapAddr: UInt64    = (kernelTotalEnd + 0xFFF) & ~0xFFF
-            
-            let totalPages            = ram.size / 4096
-            let bitmapBytes           = (totalPages + 7) / 8
-            
-            let freeListsAddr         = (bitmapAddr + bitmapBytes + 0xFFF) & ~0xFFF
-            let freeListsSize: UInt64 = 12 * 8
-            
-            let framesMetadataAddress = (freeListsAddr + freeListsSize + 0xFFF) & ~0xFFF
-            let framesMetadataSize    = totalPages * UInt64(MemoryLayout<FrameInfo>.stride)
-            
-            let reservedEnd           = (framesMetadataAddress + framesMetadataSize + 0xFFF) & ~0xFFF
-            
-            self.framesMetadata       = UnsafeMutablePointer(bitPattern: UInt(framesMetadataAddress))
-            framesMetadata?.initialize(repeating: FrameInfo(refCount: 0, order: 0, flags: .none), count: Int(totalPages))
-            
-            let dtbEnd = (UInt64(dtbRawAddress + ram.dtbSize) + 0xFFF) & ~0xFFF
-            
-            var absoluteSafeStart = reservedEnd
-            if evtEndAddr > absoluteSafeStart { absoluteSafeStart = evtEndAddr }
-            if dtbEnd > absoluteSafeStart { absoluteSafeStart = dtbEnd }
-            
-            absoluteSafeStart = (absoluteSafeStart + 0xFFF) & ~0xFFF
-            
-            self.allocator = BuddyAllocator(
-                start           : ram.start,
-                size            : ram.size,
-                bitmapAddress   : bitmapAddr,
-                freeListsAddress: freeListsAddr
-            )
-            
-            setRangeMetadata(
-                from: ram.start,
-                to  : absoluteSafeStart,
-                flag: .reserved
-            )
-            
-            try freeSegment(from: absoluteSafeStart, to: ramEnd)
-            
-        } else {
-            throw(.initRamError)
+        guard let platformInfo = getPlatformInfo(at: dtbPointer) else {
+            kprint("Error!")
+            while true {}
         }
+        
+        self.ramStart             = platformInfo.ram.base
+        self.ramSize              = platformInfo.ram.size
+        
+        let ramEnd                = platformInfo.ram.base + platformInfo.ram.size
+        
+        let bitmapAddr: UInt64    = (kernelTotalEnd + 0xFFF) & ~0xFFF
+        
+        let totalPages            = platformInfo.ram.size / 4096
+        let bitmapBytes           = (totalPages + 7) / 8
+        
+        let freeListsAddr         = (bitmapAddr + bitmapBytes + 0xFFF) & ~0xFFF
+        let freeListsSize: UInt64 = 12 * 8
+        
+        let framesMetadataAddress = (freeListsAddr + freeListsSize + 0xFFF) & ~0xFFF
+        let framesMetadataSize    = totalPages * UInt64(MemoryLayout<FrameInfo>.stride)
+        
+        let reservedEnd           = (framesMetadataAddress + framesMetadataSize + 0xFFF) & ~0xFFF
+        
+        self.framesMetadata       = UnsafeMutablePointer(bitPattern: UInt(framesMetadataAddress))
+        framesMetadata?.initialize(repeating: FrameInfo(refCount: 0, order: 0, flags: .none), count: Int(totalPages))
+        
+        let dtbEnd = (UInt64(dtbRawAddress + UInt64(platformInfo.dtbSize)) + 0xFFF) & ~0xFFF
+        
+        var absoluteSafeStart = reservedEnd
+        if evtEndAddr > absoluteSafeStart { absoluteSafeStart = evtEndAddr }
+        if dtbEnd > absoluteSafeStart { absoluteSafeStart = dtbEnd }
+        
+        absoluteSafeStart = (absoluteSafeStart + 0xFFF) & ~0xFFF
+        
+        self.allocator = BuddyAllocator(
+            start           : platformInfo.ram.base,
+            size            : platformInfo.ram.size,
+            bitmapAddress   : bitmapAddr,
+            freeListsAddress: freeListsAddr
+        )
+        
+        setRangeMetadata(
+            from: platformInfo.ram.base,
+            to  : absoluteSafeStart,
+            flag: .reserved
+        )
+        
+        try freeSegment(from: absoluteSafeStart, to: ramEnd)
+        
     }
 }

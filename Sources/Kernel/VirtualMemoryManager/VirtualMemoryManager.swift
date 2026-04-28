@@ -6,7 +6,7 @@
 //
 
 public struct VirtualMemoryManager {
-    private let ppmPtr   : UnsafeMutablePointer<KernelPPM>
+    private let ppmPtr: UnsafeMutablePointer<KernelPPM>
     
     
     /// Root (TTBR1 - Address 0xFFFF...)
@@ -30,13 +30,17 @@ public struct VirtualMemoryManager {
     }
     
     init(ppmPtr: UnsafeMutablePointer<KernelPPM>) throws(PPMError) {
-        self.ppmPtr = ppmPtr
-        
-        self.kernelTableAddress = try self.ppmPtr.pointee.alloc(4096).address
+        self.ppmPtr               = ppmPtr
+        self.kernelTableAddress   = try self.ppmPtr.pointee.alloc(4096).address
         self.identityTableAddress = try self.ppmPtr.pointee.alloc(4096).address
         
-        self.kernelRootTable   = UnsafeMutablePointer<PageTableEntry>(bitPattern: UInt(kernelTableAddress))!
-        self.identityRootTable = UnsafeMutablePointer<PageTableEntry>(bitPattern: UInt(identityTableAddress))!
+        self.kernelRootTable = UnsafeMutablePointer<PageTableEntry>(
+            bitPattern: UInt(kernelTableAddress)
+        )!
+        
+        self.identityRootTable = UnsafeMutablePointer<PageTableEntry>(
+            bitPattern: UInt(identityTableAddress)
+        )!
         
         self.kernelRootTable.initialize(repeating: PageTableEntry(rawValue: 0), count: 512)
         self.identityRootTable.initialize(repeating: PageTableEntry(rawValue: 0), count: 512)
@@ -139,7 +143,10 @@ public struct VirtualMemoryManager {
         let asid = Self.asidCounter
         
         Self.asidCounter = Self.asidCounter &+ 1
-        if Self.asidCounter == 0 { Self.asidCounter = 1 }
+        if Self.asidCounter == 0 {
+            Self.asidCounter = 1
+            KernelCPU.flushTLB()
+        }
         
         return AddressSpace(
             rootTablePhysical: page.address,

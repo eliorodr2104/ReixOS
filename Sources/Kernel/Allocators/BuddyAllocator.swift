@@ -35,8 +35,8 @@ public struct BuddyAllocator: Allocator {
     }
     
     
-    public func alloc(_ bytes: Int) throws(AllocatorError) -> PhysicalPage? {
-        let bSize = try blockSize(Self.maxOrder - 1)
+    public func alloc(_ bytes: Int) throws(AllocatorError) -> PhysicalPage {
+        let bSize = try blockSize(Self.maxOrder)
         guard bytes >= 0, bytes <= bSize else { throw(.bytesNotValid(bytes)) }
         
         let pageSize    = Int(Self.pageSize)

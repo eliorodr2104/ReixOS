@@ -33,7 +33,7 @@ public struct Logger<Driver: SerialDriver> {
     }
     
     func kprintf(_ fmt: String, _ a: UInt64, _ b: UInt64, _ c: UInt64, _ d: UInt64) {
-        fmt.withCString { ptr in printCString(sprintf(ptr, a, b, c)) }
+        fmt.withCString { ptr in printCString(sprintf(ptr, a, b, c, d)) }
         driver.write(10)
     }
     

@@ -7,6 +7,7 @@
 
 struct UARTQemu: SerialDriver, @unchecked Sendable {
     
+    // Get DR & FR to DTB
     private let dataReg = UnsafeMutablePointer<UInt64>(bitPattern: 0x09000000) // Data Register
     private let flagReg = UnsafePointer<UInt64>(bitPattern: 0x09000018)        // Flag Register
     

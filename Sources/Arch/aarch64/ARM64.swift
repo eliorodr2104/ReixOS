@@ -43,7 +43,7 @@ public struct ARM64: CPUInterface {
     }
     
     static func disableInterrupts() {
-        enable_interrupts()
+        disable_interrupts()
     }
     
     static func triggerTrap() {

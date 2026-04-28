@@ -13,43 +13,46 @@ public struct Kernel {
     
     public static func boot(dtbAddress: PhysicalAddress) {
         
-        do {
-            self.ppm = try PhysicalPageManager<BuddyAllocator>(
-                dtbRawAddress: dtbAddress
-            )
-//            kprint("\nInit PPM!")
+//        do {
+//            self.ppm = try PhysicalPageManager<BuddyAllocator>(
+//                dtbRawAddress: dtbAddress
+//            )
+            kprint("\nInit PPM!")
+        
+        let dtbPointer = UnsafeRawPointer(bitPattern: Int(dtbAddress))
+        let platformInfo = getPlatformInfo(at: dtbPointer)
             
             
-            self.vmm = try VirtualMemoryManager(ppmPtr: &ppm!)
-            kprint("Init VMM!")
-            
-            
-            GIC.initialize()
-            kprint("Init GIC!")
-            
-            
-            KernelHeap.initialize(ppmPtr: &ppm!)
-            ProcessManager.initialize(vmm: &vmm!, ppm: &ppm!)
-            
-            enable_core_timer()
-            
-            try testProcessLaunch()
+//            self.vmm = try VirtualMemoryManager(ppmPtr: &ppm!)
+//            kprint("Init VMM!")
+//            
+//            
+//            GIC.initialize()
+//            kprint("Init GIC!")
+//            
+//            
+//            KernelHeap.initialize(ppmPtr: &ppm!)
+//            ProcessManager.initialize(vmm: &vmm!, ppm: &ppm!)
+//            
+//            enable_core_timer()
+//            
+//            try testProcessLaunch()
             
 //            try testKernelHeap()
             
-        } catch { internalPanic(error) }
+//        } catch { internalPanic(error) }
         
         
-        do {
-            try run()
-            
-        } catch { internalPanic(error) }
+//        do {
+//            try run()
+//            
+//        } catch { internalPanic(error) }
     }
     
     
     private static func run() throws(KernelError) {
         
-        kprint("\nKernel is running")
+//        kprint("\nKernel is running")
         KernelCPU.waitForInterrupt()
         
 //        do {

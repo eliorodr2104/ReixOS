@@ -6,7 +6,7 @@
 //
 
 public protocol Allocator {
-    func alloc(_ bytes: Int) throws(AllocatorError) -> PhysicalPage?
+    func alloc(_ bytes: Int) throws(AllocatorError) -> PhysicalPage
     func free(_ page: consuming PhysicalPage) throws(AllocatorError)
     
     func addFreeRange(

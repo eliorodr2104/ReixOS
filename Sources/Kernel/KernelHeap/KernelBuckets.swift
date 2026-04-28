@@ -15,18 +15,24 @@ public struct KernelBuckets {
     ) = (nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
     
     public subscript(index: Int) -> UnsafeMutableRawPointer? {
-        mutating get {
-            withUnsafeMutablePointer(to: &storage) { ptr in
-                ptr.withMemoryRebound(to: Optional<UnsafeMutableRawPointer>.self, capacity: 10) { arrayPtr in
-                    return arrayPtr[index]
-                }
+        
+        get {
+            precondition(index >= 0 && index < 10, "Index out of bounds")
+
+            return withUnsafePointer(to: storage) { ptr in
+                let rawPtr = UnsafeRawPointer(ptr)
+                let elementPtr = rawPtr.assumingMemoryBound(to: (UnsafeMutableRawPointer?).self)
+                return elementPtr[index]
             }
         }
+        
         mutating set {
+            precondition(index >= 0 && index < 10, "Index out of bounds")
+            
             withUnsafeMutablePointer(to: &storage) { ptr in
-                ptr.withMemoryRebound(to: Optional<UnsafeMutableRawPointer>.self, capacity: 10) { arrayPtr in
-                    arrayPtr[index] = newValue
-                }
+                let rawPtr = UnsafeMutableRawPointer(ptr)
+                let elementPtr = rawPtr.assumingMemoryBound(to: (UnsafeMutableRawPointer?).self)
+                elementPtr[index] = newValue
             }
         }
     }
