@@ -7,26 +7,35 @@
 
 struct UARTQemu: SerialDriver, @unchecked Sendable {
     
-    // Get DR & FR to DTB
-    private let dataReg = UnsafeMutablePointer<UInt64>(bitPattern: 0x09000000) // Data Register
-    private let flagReg = UnsafePointer<UInt64>(bitPattern: 0x09000018)        // Flag Register
+    private let drOffset: UInt64 = 0x00
+    private let frOffset: UInt64 = 0x18
     
-    private let txFullBit: UInt8 = 0x20 // Bit 5: Transmit FIFO Full
+    private let txFullBit: UInt32 = 0x20 // Bit 5: Transmit FIFO Full
+
+    
+    // Get DR & FR to DTB
+    private var dataReg: UnsafeMutablePointer<UInt32> {
+        UnsafeMutablePointer<UInt32>(bitPattern: UInt(Kernel.platformInfo.uart.baseAddr + drOffset))!
+        
+    } // Data Register
+    
+    private var flagReg: UnsafePointer<UInt32> {
+        UnsafePointer<UInt32>(bitPattern: UInt(Kernel.platformInfo.uart.baseAddr + frOffset))!
+    } // Flag Register
+    
     
     func write(_ byte: UInt8) {
-        guard let dataReg = dataReg, let flagReg = flagReg else { return }
-        
         while true {
             let flags = flagReg.pointee
             
-            if (flags & UInt64(txFullBit)) == 0 {
+            if (flags & txFullBit) == 0 {
                 break
             }
             
             KernelCPU.nop()
         }
         
-        dataReg.pointee = UInt64(byte)
+        dataReg.pointee = UInt32(byte)
     }
     
     func read() -> UInt8 {

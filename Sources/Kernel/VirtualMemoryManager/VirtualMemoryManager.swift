@@ -68,37 +68,29 @@ public struct VirtualMemoryManager {
         )
         
         flags = [.present, .pxn]
+        let kernelEnd = getOfaddressWithSymbol(of: &_kernel_end)
         try mapSection(
             startAddress: getOfaddressWithSymbol(of: &_data_start),
-            endAddress  : getOfaddressWithSymbol(of: &_kernel_end),
-            flags       : flags
-        )
-        
-        flags = [.present, .readOnly]
-        try mapSection(
-            startAddress: getOfaddressWithSymbol(of: &_evt_start),
-            endAddress  : getOfaddressWithSymbol(of: &_evt_end),
+            endAddress  : kernelEnd,
             flags       : flags
         )
         
         flags = [.present, .pxn]
         let ramEnd = PhysicalAddress(self.ppmPtr.pointee.ramStart + self.ppmPtr.pointee.ramSize)
         
-        let evtEndRaw    = getOfaddressWithSymbol(of: &_evt_end)
-        let safeRamStart = (evtEndRaw + (Self.pageSize - 1)) & ~(Self.pageSize - 1)
-        
+        let safeRamStart = (kernelEnd + (Self.pageSize - 1)) & ~(Self.pageSize - 1)
         try mapSection(
             startAddress: safeRamStart,
             endAddress  : ramEnd,
             flags       : flags
         )
         
-        let uartBase: UInt64 = 0x09000000
+        let uartBase = Kernel.platformInfo.uart.baseAddr
         try map(table: identityRootTable, virtual: uartBase, physical: uartBase, type: .device)
         try map(table: kernelRootTable, virtual: Self.physicalOffset + uartBase, physical: uartBase, type: .device)
         
-        let gicDistributorBase : UInt64 = 0x08000000
-        let gicCpuInterfaceBase: UInt64 = 0x08010000
+        let gicDistributorBase  = Kernel.platformInfo.gic.gicdBase
+        let gicCpuInterfaceBase = Kernel.platformInfo.gic.giccBase
         
         try map(
             table   : identityRootTable,
@@ -134,6 +126,8 @@ public struct VirtualMemoryManager {
         )
         
         KernelCPU.flushTLB()
+        
+        KernelCPU.jumpToHighHalf(offset: Self.physicalOffset)
     }
     
     

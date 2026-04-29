@@ -173,28 +173,18 @@ public struct PhysicalPageManager<A: Allocator> {
 
 extension PhysicalPageManager where A == BuddyAllocator {
     
-    init(dtbRawAddress: PhysicalAddress) throws(PPMError) {
-        let dtbPointer     = UnsafeRawPointer(bitPattern: Int(dtbRawAddress))
+    init() throws(PPMError) {
         let evtEndAddr     = getOfaddressWithSymbol(of: &_evt_end)
         let kernelTotalEnd = getOfaddressWithSymbol(of: &_kernel_total_end)
         
-        var platformInfo = PlatformInfo()
-        guard let platformInfo = getPlatformInfo(
-            &platformInfo,
-            at: dtbPointer
-        ) else {
-            kprint("Error!")
-            while true {}
-        }
+        self.ramStart             = Kernel.platformInfo.ram.base
+        self.ramSize              = Kernel.platformInfo.ram.size
         
-        self.ramStart             = platformInfo.ram.base
-        self.ramSize              = platformInfo.ram.size
-        
-        let ramEnd                = platformInfo.ram.base + platformInfo.ram.size
+        let ramEnd                = Kernel.platformInfo.ram.base + Kernel.platformInfo.ram.size
         
         let bitmapAddr: UInt64    = (kernelTotalEnd + 0xFFF) & ~0xFFF
         
-        let totalPages            = platformInfo.ram.size / 4096
+        let totalPages            = Kernel.platformInfo.ram.size / 4096
         let bitmapBytes           = (totalPages + 7) / 8
         
         let freeListsAddr         = (bitmapAddr + bitmapBytes + 0xFFF) & ~0xFFF
@@ -208,7 +198,7 @@ extension PhysicalPageManager where A == BuddyAllocator {
         self.framesMetadata       = UnsafeMutablePointer(bitPattern: UInt(framesMetadataAddress))
         framesMetadata?.initialize(repeating: FrameInfo(refCount: 0, order: 0, flags: .none), count: Int(totalPages))
         
-        let dtbEnd = (UInt64(dtbRawAddress + UInt64(platformInfo.dtbSize)) + 0xFFF) & ~0xFFF
+        let dtbEnd = (UInt64(Kernel.platformInfo.dtbBase + UInt64(Kernel.platformInfo.dtbSize)) + 0xFFF) & ~0xFFF
         
         var absoluteSafeStart = reservedEnd
         if evtEndAddr > absoluteSafeStart { absoluteSafeStart = evtEndAddr }
@@ -217,14 +207,14 @@ extension PhysicalPageManager where A == BuddyAllocator {
         absoluteSafeStart = (absoluteSafeStart + 0xFFF) & ~0xFFF
         
         self.allocator = BuddyAllocator(
-            start           : platformInfo.ram.base,
-            size            : platformInfo.ram.size,
+            start           : Kernel.platformInfo.ram.base,
+            size            : Kernel.platformInfo.ram.size,
             bitmapAddress   : bitmapAddr,
             freeListsAddress: freeListsAddr
         )
         
         setRangeMetadata(
-            from: platformInfo.ram.base,
+            from: Kernel.platformInfo.ram.base,
             to  : absoluteSafeStart,
             flag: .reserved
         )

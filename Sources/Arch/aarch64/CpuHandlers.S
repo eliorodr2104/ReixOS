@@ -15,6 +15,8 @@
 .global flush_tlb
 .global enable_mmu
 .global is_mmu_enabled
+.global jump_to_high_half
+.global set_vbar
 
 
 disable_interrupts:
@@ -48,40 +50,63 @@ flush_tlb:
     ret
 
 
+.global enable_mmu
 enable_mmu:
-    // 1. Configurazione MAIR_EL1 (Immutata, 0x4FF è corretta)
-    ldr     x2, =0x00000000000004FF
+    // x0 = Puntatore TTBR0 (Identity / User)
+    // x1 = Puntatore TTBR1 (Kernel High Half)
+
+    // 1. Carica le tabelle base
+    msr     ttbr0_el1, x0
+    msr     ttbr1_el1, x1
+
+    // 2. MAIR_EL1 (Memoria Normale vs Periferiche)
+    // 0xFF in Index 0 = Normal Memory (Cacheable, Write-Back)
+    ldr     x2, =0x00000000000000FF
     msr     mair_el1, x2
 
-    // 2. Configurazione TCR_EL1 (Immutata, 48-bit VA, 4KB granule)
-    ldr     x2, =((16 << 0)  | (16 << 16) | \
-                  (3 << 12)  | (3 << 28)  | \
-                  (1 << 8)   | (1 << 10)  | \
-                  (1 << 24)  | (1 << 26)  | \
-                  (0 << 14)  | (2 << 30))
+    // 3. TCR_EL1 (Page Table Walker DEVE leggere la Cache!)
+    // Questo è il numero magico per 48-bit VA e Cache Coherency
+    ldr     x2, =0x32B5503510
     msr     tcr_el1, x2
 
-    // 3. Caricamento dei registri radice (LA MODIFICA)
-    msr     ttbr0_el1, x0    // Tabella Identity (indirizzi bassi 0x00...)
-    msr     ttbr1_el1, x1    // Tabella Kernel   (indirizzi alti  0xFF...)
+    // 4. Sblocca FP/SIMD per Swift (altrimenti Swift crasherà)
+    mrs     x2, cpacr_el1
+    orr     x2, x2, #(3 << 20)
+    msr     cpacr_el1, x2
 
-    // 4. Sincronizzazione e Invalida TLB/Cache
-    tlbi    vmalle1
-    ic      iallu
-    dsb     sy
-    isb
+    isb     // Sincronizza i registri prima di accendere il motore
 
-    // 5. Attivazione MMU tramite SCTLR_EL1
+    // 5. IL GRANDE INTERRUTTORE (SCTLR_EL1)
     mrs     x2, sctlr_el1
-    ldr     x3, =0x1005      // M=1 (MMU), A=1 (Alignment), C=1 (Cache), I=1 (Instr Cache)
-    orr     x2, x2, x3
+    orr     x2, x2, #1          // Bit 0: Attiva la MMU
+    orr     x2, x2, #(1 << 2)   // Bit 2: Attiva la DATA CACHE (Critico!)
+    orr     x2, x2, #(1 << 12)  // Bit 12: Attiva la INSTRUCTION CACHE
     msr     sctlr_el1, x2
-    
-    // Barriera finale per garantire che la MMU sia attiva prima del prossimo salto
+
     isb
     ret
 
 is_mmu_enabled:
     mrs     x0, sctlr_el1
     and     x0, x0, #1
+    ret
+
+
+jump_to_high_half:
+    mov     x1, sp
+    add     x1, x1, x0
+    mov     sp, x1
+
+    add     x30, x30, x0
+
+    adr     x1, .L_trampoline_target
+    add     x1, x1, x0
+    
+    br      x1
+
+.L_trampoline_target:
+    ret
+
+set_vbar:
+    msr vbar_el1, x0
     ret

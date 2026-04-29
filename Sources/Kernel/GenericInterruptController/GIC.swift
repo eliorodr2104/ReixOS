@@ -6,36 +6,51 @@
 //
 
 public struct GIC {
-    static let GICD_BASE: UInt64 = VirtualMemoryManager.physicalOffset + 0x08000000 // Distributor
-    static let GICC_BASE: UInt64 = VirtualMemoryManager.physicalOffset + 0x08010000 // CPU Interface
     
-    public static func initialize() {
-        let gicdCtlr      = UnsafeMutablePointer<UInt32>(bitPattern: UInt(GICD_BASE))!
-        let gicdIsenabler = UnsafeMutablePointer<UInt32>(bitPattern: UInt(GICD_BASE + 0x0100))! // Enable Register
+    private static var gicd: UnsafeMutablePointer<UInt32>! // Distributor
+    private static var gicc: UnsafeMutablePointer<UInt32>! // CPU Interface
+    
+    public static func initialize(dBase: UInt64, cBase: UInt64) {
+        self.gicd = UnsafeMutablePointer<UInt32>(bitPattern: UInt(dBase))
+        self.gicc = UnsafeMutablePointer<UInt32>(bitPattern: UInt(cBase))
         
-        let giccCtlr      = UnsafeMutablePointer<UInt32>(bitPattern: UInt(GICC_BASE))!
-        let giccPmr       = UnsafeMutablePointer<UInt32>(bitPattern: UInt(GICC_BASE + 0x0004))! // Priority Mask
+        // Confi Distributor (GICD)
+        // Offset 0x000: GICD_CTLR (Control Register)
+        writeRegister(ptr: gicd, offset: 0x000, value: 1)
         
-        // Start distributor
-        gicdCtlr.pointee = 1
+        // Offset 0x100: GICD_ISENABLER0 (Interrupt Set-Enable Registers)
+        // Start l'ID 27 (Virtual Timer)
+        enableInterrupt(id: 27)
         
-        // Enable interrupt ID 30 (Generic timer)
-        gicdIsenabler.pointee = (1 << 30)
+        // Config CPU Interface (GICC)
+        // Offset 0x004: GICC_PMR (Priority Mask)
+        writeRegister(ptr: gicc, offset: 0x004, value: 0xFF)
         
-        // 0xFF is 'use all interrupt'
-        giccPmr.pointee = 0xFF
+        // Offset 0x000: GICC_CTLR (Control Register)
+        writeRegister(ptr: gicc, offset: 0x000, value: 1)
+    }
+    
+    public static func enableInterrupt(id: UInt32) {
+        let registerIndex = id / 32
+        let bit           = id % 32
+        let offset        = 0x100 + (UInt64(registerIndex) * 4)
         
-        // Start CPU Interface
-        giccCtlr.pointee = 1
+        writeRegister(ptr: gicd, offset: offset, value: (1 << bit))
     }
     
     public static func acknowledgeInterrupt() -> UInt32 {
-        let giccIar = UnsafeMutablePointer<UInt32>(bitPattern: UInt(GICC_BASE + 0x000C))!
-        return giccIar.pointee & 0x3FF
+        let iar = gicc.advanced(by: 0x000C / 4).pointee
+        let interruptID = iar & 0x3FF
+                
+        return interruptID
     }
     
     public static func endOfInterrupt(id: UInt32) {
-        let giccEoir = UnsafeMutablePointer<UInt32>(bitPattern: UInt(GICC_BASE + 0x0010))!
-        giccEoir.pointee = id
+        gicc.advanced(by: 0x0010 / 4).pointee = id
+    }
+    
+    
+    private static func writeRegister(ptr: UnsafeMutablePointer<UInt32>, offset: UInt64, value: UInt32) {
+        ptr.advanced(by: Int(offset / 4)).pointee = value
     }
 }

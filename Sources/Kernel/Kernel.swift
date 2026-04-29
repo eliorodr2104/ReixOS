@@ -9,32 +9,42 @@ public struct Kernel {
     private static var ppm: KernelPPM?
     private static var vmm: VirtualMemoryManager?
     public  static var internalPanicMessage: String?
+    public  static var platformInfo = PlatformInfo()
 
     
-    public static func boot(dtbAddress: PhysicalAddress) {
+    public static func boot(dtbRawAddress: PhysicalAddress) {
         
         do {
-            self.ppm = try PhysicalPageManager<BuddyAllocator>(
-                dtbRawAddress: dtbAddress
-            )
+            let dtbPointer = UnsafeRawPointer(bitPattern: Int(dtbRawAddress))
+            if getPlatformInfo(
+                &platformInfo,
+                at: dtbPointer
+            ) == -1 {
+                kprint("Error!")
+                KernelCPU.waitForInterrupt()
+            }
+            kprint("\nHello on ReixOS!")
+
+            self.ppm = try PhysicalPageManager<BuddyAllocator>()
             kprint("\nInit PPM!")
             
             self.vmm = try VirtualMemoryManager(ppmPtr: &ppm!)
+            let virtualVBAR = getOfaddressWithSymbol(of: &_evt_start) + VirtualMemoryManager.physicalOffset
+            KernelCPU.setVBAR(virtualVBAR)
             kprint("Init VMM!")
-            
-            GIC.initialize()
-            kprint("Init GIC!")
-            
+        
             KernelHeap.initialize(ppmPtr: &ppm!)
             kprint("Debug Heap init!")
+            
+            let virtualOffset = VirtualMemoryManager.physicalOffset
+            GIC.initialize(dBase: platformInfo.gic.gicdBase + virtualOffset, cBase: platformInfo.gic.giccBase + virtualOffset)
+            kprint("Init GIC!")
             
             ProcessManager.initialize(vmm: &vmm!, ppm: &ppm!)
             kprint("Process Manager init!")
 
-//            enable_core_timer() // Crash
-            
-//            try testProcessLaunch()
-//            
+            enable_core_timer()
+                        
 //            try testKernelHeap()
             
         } catch { internalPanic(error) }
@@ -48,8 +58,15 @@ public struct Kernel {
     
     private static func run() throws(KernelError) {
         
-//        kprint("\nKernel is running")
-        KernelCPU.waitForInterrupt()
+        kprint("\nKernel is running")
+        
+        do {
+            try testProcessLaunch() // Crash when Timer is On
+        } catch { throw KernelError(error) }
+        
+        while true {
+            KernelCPU.waitForInterrupt()
+        }
         
 //        do {
 //            try ppm?.testPPM()

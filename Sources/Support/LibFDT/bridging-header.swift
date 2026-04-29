@@ -59,8 +59,8 @@ func _c_parse_platform_info(
 public func getPlatformInfo(
     _ info: inout PlatformInfo,
     at address: UnsafeRawPointer?
-) -> PlatformInfo? {
-    guard let address = address else { return nil }
+) -> Int32? {
+    guard let address = address else { return -1 }
     
     var result: Int32 = -1
     
@@ -69,5 +69,5 @@ public func getPlatformInfo(
         result = _c_parse_platform_info(address, rawOutPointer)
     }
     
-    return result == 0 ? info : nil
+    return result
 }

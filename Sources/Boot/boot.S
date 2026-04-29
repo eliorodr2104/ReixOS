@@ -36,6 +36,11 @@ _start:
 
 .L_drop_to_el1:
     msr     cptr_el2, xzr
+    
+    mov     x0, #0x3
+    msr     cnthctl_el2, x0
+    
+    msr     cntvoff_el2, xzr
 
     mov     x0, #(1 << 31)
     msr     hcr_el2, x0
@@ -54,7 +59,10 @@ _start:
 
     adr     x0, _evt_start
     msr     vbar_el1, x0
-
+    
+    mrs     x0, cntkctl_el1
+    orr     x0, x0, #0x3
+    msr     cntkctl_el1, x0
 
     mrs     x0, cpacr_el1
     orr     x0, x0, #(3 << 20)

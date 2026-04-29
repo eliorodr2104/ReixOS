@@ -14,7 +14,8 @@
 #define FDT_NOP        0x00000004
 #define FDT_END        0x00000009
 
-// ── Header FDT ───────────────────────────────────────────────────────────────
+#define MAX_DEPTH 16
+
 struct fdt_header {
     uint32_t magic;
     uint32_t totalsize;
@@ -29,26 +30,21 @@ struct fdt_header {
 };
 
 // ── Utility ──────────────────────────────────────────────────────────────────
+// Usiamo target("general-regs-only") per evitare l'eccezione SIMD/NEON EL1
+__attribute__((target("general-regs-only")))
 static inline uint32_t fdt32_to_cpu(uint32_t val) {
     return __builtin_bswap32(val);
 }
 
+__attribute__((target("general-regs-only")))
 static inline int streq(const char *a, const char *b) {
-    while (*a && *b) {
-        if (*a != *b) return 0;
-        a++; b++;
-    }
-    return (*a == '\0' && *b == '\0');
+    if (!a || !b) return 0;
+    while (*a && *b && (*a == *b)) { a++; b++; }
+    return (*a == *b);
 }
 
-static inline int starts_with(const char *s, const char *pfx) {
-    while (*pfx) {
-        if (*s++ != *pfx++) return 0;
-    }
-    return 1;
-}
-
-static inline uint64_t read_be_cells(const uint32_t *cells, uint32_t n) {
+__attribute__((target("general-regs-only")))
+static uint64_t read_be_cells(const uint32_t *cells, uint32_t n) {
     uint64_t v = 0;
     for (uint32_t i = 0; i < n; i++) {
         v = (v << 32) | fdt32_to_cpu(cells[i]);
@@ -57,222 +53,159 @@ static inline uint64_t read_be_cells(const uint32_t *cells, uint32_t n) {
 }
 
 // ── Principal Func ───────────────────────────────────────────────────────
+__attribute__((target("general-regs-only")))
 int parse_platform_info(const void *fdt_ptr, PlatformInfo *out) {
     if (!fdt_ptr || !out) return -10;
+    
+    out->uart.type = 0; // UART_UNKNOWN
+    out->uart.base_addr = 0;
+    out->cpu_count = 0;
     
     const uint8_t *fdt = (const uint8_t *)fdt_ptr;
     const struct fdt_header *h = (const struct fdt_header *)fdt;
     
-    // ── Header Control ────────────────────────────────────────────────────
     if (fdt32_to_cpu(h->magic) != 0xd00dfeedU) return -1;
     
-    uint32_t totalsize       = fdt32_to_cpu(h->totalsize);
-    uint32_t off_dt_struct   = fdt32_to_cpu(h->off_dt_struct);
-    uint32_t off_dt_strings  = fdt32_to_cpu(h->off_dt_strings);
-    uint32_t size_dt_struct  = fdt32_to_cpu(h->size_dt_struct);
-    uint32_t size_dt_strings = fdt32_to_cpu(h->size_dt_strings);
-    
-    if (totalsize < sizeof(struct fdt_header))             return -11;
-    if (off_dt_struct  >= totalsize)                       return -12;
-    if (off_dt_strings >= totalsize)                       return -12;
-    if ((uint64_t)off_dt_struct  + size_dt_struct  > totalsize) return -13;
-    if ((uint64_t)off_dt_strings + size_dt_strings > totalsize) return -14;
+    uint32_t totalsize   = fdt32_to_cpu(h->totalsize);
+    uint32_t off_struct  = fdt32_to_cpu(h->off_dt_struct);
+    uint32_t off_strings = fdt32_to_cpu(h->off_dt_strings);
+    uint32_t size_struct = fdt32_to_cpu(h->size_dt_struct);
     
     out->dtb_base = (uint64_t)(uintptr_t)fdt_ptr;
     out->dtb_size = totalsize;
     
-    // ── Section ptr ────────────────────────────────────────────────
-    const uint8_t  *struct_start = fdt + off_dt_struct;
-    const uint8_t  *struct_end   = struct_start + size_dt_struct;
-    const char     *str_table    = (const char *)(fdt + off_dt_strings);
-    const uint32_t *p            = (const uint32_t *)struct_start;
+    const uint8_t *struct_end = fdt + off_struct + size_struct;
+    const char *str_table     = (const char *)(fdt + off_strings);
+    const uint32_t *p         = (const uint32_t *)(fdt + off_struct);
     
-    // Valori di default per addr/size cells (spec DTB: 2/1)
-    uint32_t root_addr_cells = 2, root_size_cells = 1;
-    uint32_t mem_addr_cells  = 2, mem_size_cells  = 1;
+    // Stack per ereditare correttamente #address-cells dai genitori
+    uint32_t ac[MAX_DEPTH];
+    uint32_t sc[MAX_DEPTH];
+    for (int i = 0; i < MAX_DEPTH; i++) { ac[i] = 2; sc[i] = 1; }
     
     int depth = 0;
     
-    int in_root   = 0;
-    int in_memory = 0;
-    int in_chosen = 0;
-    int in_cpus   = 0;
+    // Buffer per le proprietà del nodo corrente (risolve il problema dell'ordine)
+    int is_uart_node = 0;
+    int is_gic_node  = 0;
+    int is_mem_node  = 0;
     
-    int uart_depth = 0;
-    int gic_depth  = 0;
+    const uint32_t *cur_reg = 0;
+    uint32_t cur_reg_len = 0;
+    const uint32_t *cur_intr = 0;
+    uint32_t cur_intr_len = 0;
     
-    // ── Loop principale ───────────────────────────────────────────────────────
     while ((const uint8_t *)p + 4 <= struct_end) {
         uint32_t tag = fdt32_to_cpu(*p++);
         
-        // ── FDT_NOP ───────────────────────────────────────────────────────────
-        if (tag == FDT_NOP) {
-            continue;
-            
-            // ── FDT_BEGIN_NODE ────────────────────────────────────────────────────
-        } else if (tag == FDT_BEGIN_NODE) {
-            const char    *name = (const char *)p;
-            const uint8_t *scan = (const uint8_t *)p;
-            
-            while (scan < struct_end && *scan != '\0') scan++;
-            if (scan >= struct_end) return -20;
-            
-            size_t name_len = (size_t)(scan - (const uint8_t *)p) + 1; // include '\0'
-            p += (name_len + 3) / 4;
+        if (tag == FDT_BEGIN_NODE) {
+            const char *name = (const char *)p;
+            size_t nlen = 0;
+            while (((const char *)p)[nlen] != '\0') nlen++;
+            p += (nlen + 1 + 3) / 4;
             
             depth++;
             
-            if (depth == 1) {
-                in_root   = 1;
-                in_memory = 0;
-                in_chosen = 0;
-                in_cpus   = 0;
-                
-            } else if (depth == 2) {
-                in_root   = 0;
-                in_memory = starts_with(name, "memory");
-                in_chosen = streq(name, "chosen");
-                in_cpus   = streq(name, "cpus");
-                
-                if (starts_with(name, "serial") || starts_with(name, "uart"))
-                    uart_depth = depth;
-                else if (starts_with(name, "intc") || starts_with(name, "interrupt-controller"))
-                    gic_depth = depth;
-                
-            } else {
-                if (in_cpus && starts_with(name, "cpu@"))
-                    out->cpu_count++;
-                
-                if (starts_with(name, "serial") || starts_with(name, "uart"))
-                    uart_depth = depth;
-                else if (starts_with(name, "intc") || starts_with(name, "interrupt-controller"))
-                    gic_depth = depth;
+            // Ereditiamo il layout delle celle dal padre
+            if (depth > 0 && depth < MAX_DEPTH) {
+                ac[depth] = ac[depth - 1];
+                sc[depth] = sc[depth - 1];
             }
             
-            // ── FDT_END_NODE ──────────────────────────────────────────────────────
+            // Reset dello stato per il nuovo nodo
+            is_uart_node = 0;
+            is_gic_node  = 0;
+            is_mem_node  = (depth == 2 && name[0] == 'm' && name[1] == 'e');
+            cur_reg = 0; cur_reg_len = 0;
+            cur_intr = 0; cur_intr_len = 0;
+            
+            if (depth == 3 && name[0] == 'c' && name[1] == 'p' && name[2] == 'u' && name[3] == '@') {
+                out->cpu_count++;
+            }
+            
         } else if (tag == FDT_END_NODE) {
-            if (uart_depth == depth) uart_depth = 0;
-            if (gic_depth  == depth) gic_depth  = 0;
-            
             depth--;
+            if (depth == 0) break;
             
-            if (depth < 0)  return -21;
-            if (depth == 0) {
-                in_root = 0; in_memory = 0; in_chosen = 0; in_cpus = 0;
-                
-            } else if (depth == 1) {
-                in_memory = 0;
-                in_chosen = 0;
-                in_cpus   = 0;
-                in_root   = 1;
+        } else if (tag == FDT_PROP) {
+            uint32_t len = fdt32_to_cpu(*p++);
+            uint32_t nameoff = fdt32_to_cpu(*p++);
+            const char *prop_name = str_table + nameoff;
+            const uint32_t *prop_data = p;
+            p += (len + 3) / 4;
+            
+            // Aggiorna le celle per i *figli* di questo nodo
+            if (streq(prop_name, "#address-cells")) {
+                if (depth < MAX_DEPTH) ac[depth] = fdt32_to_cpu(*prop_data);
+            } else if (streq(prop_name, "#size-cells")) {
+                if (depth < MAX_DEPTH) sc[depth] = fdt32_to_cpu(*prop_data);
             }
             
-            // ── FDT_PROP ──────────────────────────────────────────────────────────
-        } else if (tag == FDT_PROP) {
-            if ((const uint8_t *)p + 8 > struct_end) return -22;
+            // Estrae dati se arrivano PRIMA di 'compatible'
+            else if (streq(prop_name, "reg")) {
+                cur_reg = prop_data;
+                cur_reg_len = len;
+            } else if (streq(prop_name, "interrupts")) {
+                cur_intr = prop_data;
+                cur_intr_len = len;
+            } else if (streq(prop_name, "bootargs")) {
+                out->bootargs = (const char *)prop_data;
+            }
             
-            uint32_t len     = fdt32_to_cpu(*p++);
-            uint32_t nameoff = fdt32_to_cpu(*p++);
-            
-            if (nameoff >= size_dt_strings) return -23;
-            const char     *prop_name = str_table + nameoff;
-            
-            uint32_t aligned_len = (len + 3u) & ~3u;
-            if (aligned_len < len) return -24;                          // overflow
-            if ((const uint8_t *)p + aligned_len > struct_end) return -24;
-            
-            const uint32_t *prop_data = p;
-            
-            if (in_root && streq(prop_name, "#address-cells")) {
-                if (len >= 4) {
-                    root_addr_cells = fdt32_to_cpu(*prop_data);
-                    mem_addr_cells  = root_addr_cells;
-                }
+            // Identificazione periferiche
+            if (streq(prop_name, "compatible")) {
+                const char *compat = (const char *)prop_data;
+                uint32_t left = len;
                 
-            } else if (in_root && streq(prop_name, "#size-cells")) {
-                if (len >= 4) {
-                    root_size_cells = fdt32_to_cpu(*prop_data);
-                    mem_size_cells  = root_size_cells;
-                }
-                
-            } else if (in_memory && streq(prop_name, "reg")) {
-                uint32_t cells_needed = mem_addr_cells + mem_size_cells;
-                if (cells_needed >= 1 && len >= cells_needed * 4) {
-                    out->ram.base = read_be_cells(prop_data, mem_addr_cells);
-                    out->ram.size = read_be_cells(prop_data + mem_addr_cells, mem_size_cells);
-                }
-                
-            } else if (in_chosen) {
-                if (streq(prop_name, "bootargs"))
-                    out->bootargs = (const char *)prop_data;
-                
-                else if (streq(prop_name, "stdout-path"))
-                    out->stdout_path = (const char *)prop_data;
-                
-                // ── UART ──────────────────────────────────────────────────────────
-            } else if (uart_depth > 0) {
-                if (streq(prop_name, "compatible")) {
-                    const char *compat     = (const char *)prop_data;
-                    uint32_t    bytes_left = len;
-                    
-                    while (bytes_left > 0 && out->uart.type == UART_UNKNOWN) {
-                        if (streq(compat, "arm,pl011") || streq(compat, "arm,primecell"))
-                            out->uart.type = UART_ARM_PL011;
-                        else if (streq(compat, "ns16550a") || streq(compat, "ns8250"))
-                            out->uart.type = UART_NS16550A;
-                        else if (streq(compat, "snps,dw-apb-uart"))
-                            out->uart.type = UART_SNPS_DW_APB;
-                        else if (streq(compat, "brcm,bcm2835-aux-uart"))
-                            out->uart.type = UART_BCM2835_AUX;
-                        else if (streq(compat, "sifive,uart0"))
-                            out->uart.type = UART_SIFIVE;
-                        else if (streq(compat, "xlnx,xps-uartlite"))
-                            out->uart.type = UART_XILINX_UARTLITE;
-                        
-                        // Avanza alla prossima stringa nella lista
-                        size_t slen = 0;
-                        while (slen < bytes_left && compat[slen] != '\0') slen++;
-                        slen++; // include '\0'
-                        
-                        if (slen > bytes_left) break;
-                        bytes_left -= (uint32_t)slen;
-                        compat     += slen;
+                while (left > 0) {
+                    if (streq(compat, "arm,pl011") || streq(compat, "arm,primecell")) {
+                        out->uart.type = UART_ARM_PL011;
+                        is_uart_node = 1;
+                    } else if (streq(compat, "ns16550a") || streq(compat, "snps,dw-apb-uart")) {
+                        out->uart.type = UART_NS16550A;
+                        is_uart_node = 1;
+                    } else if (streq(compat, "arm,gic-400") || streq(compat, "arm,cortex-a15-gic")) {
+                        is_gic_node = 1;
                     }
                     
-                } else if (streq(prop_name, "reg") && out->uart.base_addr == 0) {
-                    if (len >= mem_addr_cells * 4)
-                        out->uart.base_addr = read_be_cells(prop_data, mem_addr_cells);
-                    
-                } else if (streq(prop_name, "clock-frequency") && len == 4) {
-                    out->uart.clock_freq = fdt32_to_cpu(*prop_data);
-                    
-                } else if (streq(prop_name, "interrupts") && len >= 8 && out->uart.irq == 0) {
-                    uint32_t irq_type = fdt32_to_cpu(prop_data[0]);
-                    uint32_t irq_num  = fdt32_to_cpu(prop_data[1]);
-                    out->uart.irq = irq_num + (irq_type == 0 ? 32u : 16u);
-                }
-                
-                // ── GIC / Interrupt Controller ────────────────────────────────────
-            } else if (gic_depth > 0) {
-                if (streq(prop_name, "reg") && out->gic.gicd_base == 0) {
-                    // Layout atteso: [gicd_base, gicd_size, gicc_base, gicc_size]
-                    uint32_t stride = mem_addr_cells + mem_size_cells;
-                    if (len >= stride * 4)
-                        out->gic.gicd_base = read_be_cells(prop_data, mem_addr_cells);
-                    
-                    if (len >= stride * 2 * 4)
-                        out->gic.gicc_base = read_be_cells(prop_data + stride, mem_addr_cells);
+                    size_t slen = 0;
+                    while (slen < left && compat[slen] != '\0') slen++;
+                    slen++; // include '\0'
+                    if (slen > left) break;
+                    compat += slen;
+                    left -= (uint32_t)slen;
                 }
             }
             
-            p += aligned_len / 4;
+            // --- FASE DI PROCESSAMENTO DATI ---
+            // Le celle di 'reg' sono definite dal nodo PADRE (depth - 1)
+            uint32_t p_ac = (depth > 0 && depth < MAX_DEPTH) ? ac[depth - 1] : 2;
+            uint32_t p_sc = (depth > 0 && depth < MAX_DEPTH) ? sc[depth - 1] : 1;
             
-            // ── FDT_END ───────────────────────────────────────────────────────────
+            if (is_uart_node) {
+                if (cur_reg && cur_reg_len >= p_ac * 4) {
+                    out->uart.base_addr = read_be_cells(cur_reg, p_ac);
+                }
+                if (cur_intr && cur_intr_len >= 8) {
+                    out->uart.irq = fdt32_to_cpu(cur_intr[1]) + 32;
+                }
+            }
+            else if (is_gic_node && cur_reg) {
+                uint32_t stride = p_ac + p_sc;
+                if (cur_reg_len >= stride * 4)
+                    out->gic.gicd_base = read_be_cells(cur_reg, p_ac);
+                if (cur_reg_len >= stride * 2 * 4)
+                    out->gic.gicc_base = read_be_cells(cur_reg + stride, p_ac);
+            }
+            else if (is_mem_node && cur_reg && cur_reg_len >= (p_ac + p_sc) * 4) {
+                out->ram.base = read_be_cells(cur_reg, p_ac);
+                out->ram.size = read_be_cells(cur_reg + p_ac, p_sc);
+            }
+            
+        } else if (tag == FDT_NOP) {
+            continue;
         } else if (tag == FDT_END) {
             break;
-            
-        } else {
-            return -25; // tag sconosciuto
         }
     }
     

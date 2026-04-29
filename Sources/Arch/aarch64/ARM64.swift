@@ -37,6 +37,12 @@ public struct ARM64: CPUInterface {
     @_silgen_name("is_mmu_enabled")
     public static func isMMUEnabled() -> Bool
     
+    @_silgen_name("jump_to_high_half")
+    public static func jumpToHighHalf(offset: UInt64)
+    
+    @_silgen_name("set_vbar")
+    public static func setVBAR(_ address: VirtualAddress)
+    
     
     static func enableInterrupts() {
         enable_interrupts()

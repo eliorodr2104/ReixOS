@@ -1,5 +1,5 @@
 //
-//  platform_info.h
+//  fdt_parser.h
 //  ReixOS
 //
 

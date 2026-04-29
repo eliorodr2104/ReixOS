@@ -6,9 +6,14 @@ SECTIONS
     
     .text : ALIGN(4096) {
         _text_start = .;
-        KEEP(*(.text.boot))
-        *(.text)
-        *(.text.*)
+        *(.text.boot)
+        
+        . = ALIGN(2048);
+        _evt_start = .;
+        *(.vectors)
+        _evt_end = .;
+        
+        *(.text*)
         _text_end = .;
     }
     
@@ -35,13 +40,6 @@ SECTIONS
     }
     
     _kernel_end = .;
-    
-    .vectors : ALIGN(4096) {
-        _evt_start = .;
-        *(.vectors)
-        *(.vectors.*) 
-        _evt_end = .;
-    }
     
     .stack (NOLOAD) : ALIGN(4096) {
         __stack_bottom = .;
