@@ -25,8 +25,8 @@ typedef struct {
 } MemRegion;
 
 typedef struct {
-    UartType type;
     uint64_t base_addr;
+    UartType type;
     uint32_t irq;
     uint32_t clock_freq;
 } UartInfo;
@@ -38,17 +38,18 @@ typedef struct {
 
 typedef struct {
     uint64_t dtb_base;
-    uint32_t dtb_size;
-    
-    MemRegion ram;
-    
-    UartInfo uart;
-    GicInfo gic;
-    
-    uint32_t cpu_count;
     
     const char* bootargs;
     const char* stdout_path;
+    
+    uint32_t dtb_size;
+    uint32_t cpu_count;
+    
+    MemRegion ram;
+        
+    UartInfo uart;
+    GicInfo gic;
+    
 } PlatformInfo;
 
 int parse_platform_info(const void* fdt_ptr, PlatformInfo* out);

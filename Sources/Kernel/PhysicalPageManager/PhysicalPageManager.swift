@@ -178,7 +178,11 @@ extension PhysicalPageManager where A == BuddyAllocator {
         let evtEndAddr     = getOfaddressWithSymbol(of: &_evt_end)
         let kernelTotalEnd = getOfaddressWithSymbol(of: &_kernel_total_end)
         
-        guard let platformInfo = getPlatformInfo(at: dtbPointer) else {
+        var platformInfo = PlatformInfo()
+        guard let platformInfo = getPlatformInfo(
+            &platformInfo,
+            at: dtbPointer
+        ) else {
             kprint("Error!")
             while true {}
         }

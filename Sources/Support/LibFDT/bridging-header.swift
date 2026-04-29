@@ -13,16 +13,6 @@ public struct MemRegion {
     public init() {}
 }
 
-@frozen
-public struct UartInfo {
-    public var type: UInt32 = 0
-    public var _pad: UInt32 = 0
-    public var baseAddr: UInt64 = 0
-    public var irq: UInt32 = 0
-    public var clockFreq: UInt32 = 0
-    
-    public init() {}
-}
 
 @frozen
 public struct GicInfo {
@@ -32,23 +22,32 @@ public struct GicInfo {
     public init() {}
 }
 
+
+@frozen
+public struct UartInfo {
+    public var baseAddr : UInt64 = 0
+    public var type     : UInt32 = 0
+    public var irq      : UInt32 = 0
+    public var clockFreq: UInt32 = 0
+    
+    public init() {}
+}
+
+
 @frozen
 public struct PlatformInfo {
-    public var dtbBase: UInt64 = 0
-    public var dtbSize: UInt32 = 0
-    public var _pad1: UInt32 = 0     // <-- PADDING per allineare 'ram' (che inizia con UInt64)
+    public var dtbBase   : UInt64    = 0  // 8 byte
     
-    public var ram: MemRegion = MemRegion()
+    public var bootargs  : UnsafeRawPointer? = nil // 8 byte
+    public var stdoutPath: UnsafeRawPointer? = nil // 8 byte
     
-    public var uart: UartInfo = UartInfo()
-    public var gic: GicInfo = GicInfo()
+    public var dtbSize   : UInt32    = 0  // 4 byte
+    public var cpuCount  : UInt32    = 0  // 4 byte
     
-    public var cpuCount: UInt32 = 0
-    public var _pad2: UInt32 = 0     // <-- PADDING per allineare i puntatori successivi
+    public var ram       : MemRegion = MemRegion() // 16 byte
     
-    // I pointer in 64-bit sono 8 byte
-    public var bootargs: UnsafeRawPointer? = nil
-    public var stdoutPath: UnsafeRawPointer? = nil
+    public var uart      : UartInfo  = UartInfo()  // 24 byte
+    public var gic       : GicInfo   = GicInfo()   // 16 byhe
 }
 
 @_extern(c, "parse_platform_info")
@@ -57,10 +56,12 @@ func _c_parse_platform_info(
     _ out: UnsafeMutableRawPointer
 ) -> Int32
 
-public func getPlatformInfo(at address: UnsafeRawPointer?) -> PlatformInfo? {
+public func getPlatformInfo(
+    _ info: inout PlatformInfo,
+    at address: UnsafeRawPointer?
+) -> PlatformInfo? {
     guard let address = address else { return nil }
     
-    var info = PlatformInfo()
     var result: Int32 = -1
     
     withUnsafeMutablePointer(to: &info) { ptrMem in

@@ -27,11 +27,11 @@ SECTIONS
     }
     
     .bss : ALIGN(4096) {
-        _bss_start = .;
+        __bss_start = .;
         *(.bss) 
         *(.bss.*) 
         . = ALIGN(16);
-        _bss_end = .;
+        __bss_end = .;
     }
     
     _kernel_end = .;

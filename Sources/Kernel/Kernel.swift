@@ -13,40 +13,36 @@ public struct Kernel {
     
     public static func boot(dtbAddress: PhysicalAddress) {
         
-//        do {
-//            self.ppm = try PhysicalPageManager<BuddyAllocator>(
-//                dtbRawAddress: dtbAddress
-//            )
+        do {
+            self.ppm = try PhysicalPageManager<BuddyAllocator>(
+                dtbRawAddress: dtbAddress
+            )
             kprint("\nInit PPM!")
-        
-        let dtbPointer = UnsafeRawPointer(bitPattern: Int(dtbAddress))
-        let platformInfo = getPlatformInfo(at: dtbPointer)
             
+            self.vmm = try VirtualMemoryManager(ppmPtr: &ppm!)
+            kprint("Init VMM!")
             
-//            self.vmm = try VirtualMemoryManager(ppmPtr: &ppm!)
-//            kprint("Init VMM!")
-//            
-//            
-//            GIC.initialize()
-//            kprint("Init GIC!")
-//            
-//            
-//            KernelHeap.initialize(ppmPtr: &ppm!)
-//            ProcessManager.initialize(vmm: &vmm!, ppm: &ppm!)
-//            
-//            enable_core_timer()
-//            
+            GIC.initialize()
+            kprint("Init GIC!")
+            
+            KernelHeap.initialize(ppmPtr: &ppm!)
+            kprint("Debug Heap init!")
+            
+            ProcessManager.initialize(vmm: &vmm!, ppm: &ppm!)
+            kprint("Process Manager init!")
+
+//            enable_core_timer() // Crash
+            
 //            try testProcessLaunch()
-            
+//            
 //            try testKernelHeap()
             
-//        } catch { internalPanic(error) }
+        } catch { internalPanic(error) }
         
         
-//        do {
-//            try run()
-//            
-//        } catch { internalPanic(error) }
+        do {
+            try run()
+        } catch { internalPanic(error) }
     }
     
     

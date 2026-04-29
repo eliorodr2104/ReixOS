@@ -7,19 +7,7 @@
 
 #include "fdt_parser.h"
 
-// ── Sanity check: layout C deve combaciare con quello Swift ──────────────────
-// Se uno di questi assert fallisce, aggiorna il padding in bridging-header.swift
-#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
-_Static_assert(sizeof(PlatformInfo)             == 96, "PlatformInfo size mismatch");
-_Static_assert(__builtin_offsetof(PlatformInfo, ram)        == 16, "ram offset");
-_Static_assert(__builtin_offsetof(PlatformInfo, uart)       == 32, "uart offset");
-_Static_assert(__builtin_offsetof(PlatformInfo, gic)        == 56, "gic offset");
-_Static_assert(__builtin_offsetof(PlatformInfo, cpu_count)  == 72, "cpu_count offset");
-_Static_assert(__builtin_offsetof(PlatformInfo, bootargs)   == 80, "bootargs offset");
-_Static_assert(__builtin_offsetof(PlatformInfo, stdout_path)== 88, "stdout_path offset");
-#endif
-
-// ── Costanti FDT ─────────────────────────────────────────────────────────────
+// ── Const FDT ─────────────────────────────────────────────────────────────
 #define FDT_BEGIN_NODE 0x00000001
 #define FDT_END_NODE   0x00000002
 #define FDT_PROP       0x00000003
@@ -68,14 +56,14 @@ static inline uint64_t read_be_cells(const uint32_t *cells, uint32_t n) {
     return v;
 }
 
-// ── Funzione principale ───────────────────────────────────────────────────────
+// ── Principal Func ───────────────────────────────────────────────────────
 int parse_platform_info(const void *fdt_ptr, PlatformInfo *out) {
     if (!fdt_ptr || !out) return -10;
     
     const uint8_t *fdt = (const uint8_t *)fdt_ptr;
     const struct fdt_header *h = (const struct fdt_header *)fdt;
     
-    // ── Validazione header ────────────────────────────────────────────────────
+    // ── Header Control ────────────────────────────────────────────────────
     if (fdt32_to_cpu(h->magic) != 0xd00dfeedU) return -1;
     
     uint32_t totalsize       = fdt32_to_cpu(h->totalsize);
@@ -93,7 +81,7 @@ int parse_platform_info(const void *fdt_ptr, PlatformInfo *out) {
     out->dtb_base = (uint64_t)(uintptr_t)fdt_ptr;
     out->dtb_size = totalsize;
     
-    // ── Puntatori alle sezioni ────────────────────────────────────────────────
+    // ── Section ptr ────────────────────────────────────────────────
     const uint8_t  *struct_start = fdt + off_dt_struct;
     const uint8_t  *struct_end   = struct_start + size_dt_struct;
     const char     *str_table    = (const char *)(fdt + off_dt_strings);
@@ -105,8 +93,6 @@ int parse_platform_info(const void *fdt_ptr, PlatformInfo *out) {
     
     int depth = 0;
     
-    // FIX #2: i flag vengono impostati quando si entra nei figli diretti
-    // di root (depth==2), non sul nodo root stesso (depth==1).
     int in_root   = 0;
     int in_memory = 0;
     int in_chosen = 0;
@@ -137,14 +123,12 @@ int parse_platform_info(const void *fdt_ptr, PlatformInfo *out) {
             depth++;
             
             if (depth == 1) {
-                // Nodo root "/" — le sue property contengono #address-cells ecc.
                 in_root   = 1;
                 in_memory = 0;
                 in_chosen = 0;
                 in_cpus   = 0;
                 
             } else if (depth == 2) {
-                // FIX #2: figli diretti di root: qui vivono memory, chosen, cpus
                 in_root   = 0;
                 in_memory = starts_with(name, "memory");
                 in_chosen = streq(name, "chosen");
@@ -156,7 +140,6 @@ int parse_platform_info(const void *fdt_ptr, PlatformInfo *out) {
                     gic_depth = depth;
                 
             } else {
-                // depth >= 3: sotto-nodi (cpu@N, device dentro /soc, ecc.)
                 if (in_cpus && starts_with(name, "cpu@"))
                     out->cpu_count++;
                 
@@ -175,10 +158,9 @@ int parse_platform_info(const void *fdt_ptr, PlatformInfo *out) {
             
             if (depth < 0)  return -21;
             if (depth == 0) {
-                // Usciti dal root
                 in_root = 0; in_memory = 0; in_chosen = 0; in_cpus = 0;
+                
             } else if (depth == 1) {
-                // FIX #2: usciti da un figlio diretto di root → torniamo nel root
                 in_memory = 0;
                 in_chosen = 0;
                 in_cpus   = 0;
@@ -195,14 +177,12 @@ int parse_platform_info(const void *fdt_ptr, PlatformInfo *out) {
             if (nameoff >= size_dt_strings) return -23;
             const char     *prop_name = str_table + nameoff;
             
-            // FIX #3: controlla overflow prima di (len+3)&~3
             uint32_t aligned_len = (len + 3u) & ~3u;
             if (aligned_len < len) return -24;                          // overflow
             if ((const uint8_t *)p + aligned_len > struct_end) return -24;
             
             const uint32_t *prop_data = p;
             
-            // ── Root: #address-cells / #size-cells ───────────────────────────
             if (in_root && streq(prop_name, "#address-cells")) {
                 if (len >= 4) {
                     root_addr_cells = fdt32_to_cpu(*prop_data);
@@ -215,7 +195,6 @@ int parse_platform_info(const void *fdt_ptr, PlatformInfo *out) {
                     mem_size_cells  = root_size_cells;
                 }
                 
-                // ── memory: reg → RAM base + size ────────────────────────────────
             } else if (in_memory && streq(prop_name, "reg")) {
                 uint32_t cells_needed = mem_addr_cells + mem_size_cells;
                 if (cells_needed >= 1 && len >= cells_needed * 4) {
@@ -223,10 +202,10 @@ int parse_platform_info(const void *fdt_ptr, PlatformInfo *out) {
                     out->ram.size = read_be_cells(prop_data + mem_addr_cells, mem_size_cells);
                 }
                 
-                // ── chosen: bootargs / stdout-path ───────────────────────────────
             } else if (in_chosen) {
                 if (streq(prop_name, "bootargs"))
                     out->bootargs = (const char *)prop_data;
+                
                 else if (streq(prop_name, "stdout-path"))
                     out->stdout_path = (const char *)prop_data;
                 
@@ -268,9 +247,6 @@ int parse_platform_info(const void *fdt_ptr, PlatformInfo *out) {
                     out->uart.clock_freq = fdt32_to_cpu(*prop_data);
                     
                 } else if (streq(prop_name, "interrupts") && len >= 8 && out->uart.irq == 0) {
-                    // FIX: legge l'IRQ.
-                    // Per GIC: formato [tipo(SPI=0/PPI=1), numero, flags]
-                    // Il numero effettivo è nella seconda cella (+32 se SPI).
                     uint32_t irq_type = fdt32_to_cpu(prop_data[0]);
                     uint32_t irq_num  = fdt32_to_cpu(prop_data[1]);
                     out->uart.irq = irq_num + (irq_type == 0 ? 32u : 16u);

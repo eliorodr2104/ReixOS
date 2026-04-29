@@ -89,6 +89,7 @@ save_context:
     stp     x0, x1,   [sp, #248]
     stp     x2, x3,   [sp, #264]
     str     x4,       [sp, #280]
+    ldr     x1,       [sp, #8]
     
     mov     x0, sp
     bl      swift_exception_handler
