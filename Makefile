@@ -12,7 +12,7 @@ TARGET      = aarch64-none-none-elf
 KERNEL_ADDR = 0x40080000
 
 # --- Flag ---
-C_FLAGS     = -target $(TARGET) -ffreestanding -O2 -nostdlib -fno-stack-protector -ISources/Support/LibFDT -fno-omit-frame-pointer -g
+C_FLAGS     = -target $(TARGET) -ffreestanding -O2 -nostdlib -fno-stack-protector -ISources/ReixKernel/Platform/DeviceTree -fno-omit-frame-pointer -g
 # Usiamo lo stesso target ELF per Swift per garantire compatibilità
 SWIFT_FLAGS = -target $(TARGET) \
               -enable-experimental-feature Embedded \
@@ -64,11 +64,11 @@ clean:
 	rm -f kernel.elf kernel.bin $(SWIFT_OBJ)
 	find Sources -name "*.o" -delete
 
+# -d int 
 run: kernel.bin
 	qemu-system-aarch64 \
     -machine virt \
     -cpu cortex-a53 \
     -nographic \
-    -d int \
     -machine virt,gic-version=2 \
     -kernel kernel.bin
