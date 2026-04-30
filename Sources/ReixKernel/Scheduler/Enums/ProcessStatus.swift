@@ -7,6 +7,7 @@
 
 
 public enum ProcessStatus {
+    case new
     case ready
     case running
     case waiting

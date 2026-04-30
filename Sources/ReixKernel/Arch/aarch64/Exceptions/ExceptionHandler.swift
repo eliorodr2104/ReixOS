@@ -21,13 +21,27 @@ public func exceptionVirtualTableHandler(
     switch exceptionType {
         case .irq:
             let interruptID = GIC.acknowledgeInterrupt()
-            
             if interruptID == 27 {
-                ProcessManager.preemptCurrent(framePointer: framePointer)
+                guard let isChangedProcess = Kernel.scheduler?.onTick() else { return }
+                                
+                if let current = Kernel.scheduler?.currentProcess {
+                    current.pointee.context?.pointee = framePointer.pointee
+                }
+                
                 AArch64VirtualTimer.arm()
+                GIC.endOfInterrupt(id: interruptID)
+                
+                if isChangedProcess {
+                    if let nextProcess = Kernel.scheduler?.selectNextTask() {
+                        kprint("PID:")
+                        kprint(nextProcess.pointee.pid)
+                        kprint()
+                        
+                        framePointer.pointee = nextProcess.pointee.context!.pointee
+                    }
+                }
             }
             
-            GIC.endOfInterrupt(id: interruptID)
             
         case .sync:
             let frame = framePointer.pointee

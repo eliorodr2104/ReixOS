@@ -8,9 +8,6 @@
 public struct ProcessManager {
     
     private static var pidCounter: PID = 0
-    private static var currentPid: PID?
-    private static var currentContext: UnsafeMutablePointer<Arch.TrapFrame>?
-    private static var schedulerTicks: UInt64 = 0
     
     private static var vmm: UnsafeMutablePointer<VirtualMemoryManager>?
     private static var ppm: UnsafeMutablePointer<KernelPPM>?
@@ -24,30 +21,8 @@ public struct ProcessManager {
         self.vmm = vmm
         self.ppm = ppm
     }
-
-    public static func setCurrent(
-        pid    : PID,
-        context: UnsafeMutablePointer<Arch.TrapFrame>
-    ) {
-        self.currentPid = pid
-        self.currentContext = context
-        self.schedulerTicks = 0
-    }
-
-    public static func preemptCurrent(
-        framePointer: UnsafeMutablePointer<Arch.TrapFrame>
-    ) {
-        guard let currentContext = self.currentContext else { return }
-
-        currentContext.pointee = framePointer.pointee
-        schedulerTicks &+= 1
-
-        if schedulerTicks % 100 == 0 {
-            kprint("[PREEMPT]")
-        }
-    }
     
-    public static func spawnProcess() throws(PPMError) -> Process {
+    public static func spawnProcess() throws(PPMError) -> UnsafeMutablePointer<Process> {
         guard let vmm = self.vmm, let ppm = self.ppm else {
             throw .allocationFailed(reason: .fullMemory) // Change to real error
         }
@@ -93,15 +68,25 @@ public struct ProcessManager {
         let pid = Self.pidCounter
         Self.pidCounter += 1
         
-        return Process(
-            pid         : pid,
-            status      : .ready,
-            addressSpace: addressSpace,
-            priority    : 1,
-            type        : .user,
-            context     : trapFramePtr,
-            kernelStack : kStackTop,
-            kernelStackAllocation: kStackRaw
+        let processSize = MemoryLayout<Process>.stride
+        guard let rawProcessMemory = try KernelHeap.kmalloc(UInt(processSize)) else {
+            throw .allocationFailed(reason: .fullMemory)
+        }
+        let processPtr = rawProcessMemory.bindMemory(to: Process.self, capacity: 1)
+        
+        processPtr.initialize(
+            to: Process(
+                pid         : pid,
+                status      : .new,
+                addressSpace: addressSpace,
+                priority    : 1,
+                type        : .user,
+                context     : trapFramePtr,
+                kernelStack : kStackTop,
+                kernelStackAllocation: kStackRaw
+            )
         )
+        
+        return processPtr
     }
 }

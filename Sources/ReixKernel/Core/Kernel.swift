@@ -8,6 +8,9 @@
 public struct Kernel {
     private static var ppm: KernelPPM?
     private static var vmm: VirtualMemoryManager?
+    
+    public  static var scheduler: KernelScheduler?
+    
     public  static var internalPanicMessage: String?
     public  static var platformInfo = PlatformInfo()
 
@@ -46,6 +49,8 @@ public struct Kernel {
             kprint("Process Manager init!")
 
             AArch64VirtualTimer.arm()
+            
+            scheduler = try RoundRobin()
                         
 //            try testKernelHeap()
             
@@ -82,19 +87,23 @@ public struct Kernel {
     }
     
     private static func testProcessLaunch() throws (PPMError) {
-        let firstProcess = try ProcessManager.spawnProcess()
+        let firstProcess  = try ProcessManager.spawnProcess()
+        let secondProcess = try ProcessManager.spawnProcess()
         
-        kprintf("Process PID: %d", firstProcess.pid)
+        kprintf("Process PID: %d", firstProcess.pointee.pid)
         kprint("Test launch process")
         
-        let trapFramePtr  = firstProcess.context!
-        let rootTablePhys = firstProcess.addressSpace.rootTablePhysical
-        let kStackTop     = UInt64(UInt(bitPattern: firstProcess.kernelStack!))
+        let trapFramePtr  = firstProcess.pointee.context!
+        let rootTablePhys = firstProcess.pointee.addressSpace.rootTablePhysical
+        let kStackTop     = UInt64(UInt(bitPattern: firstProcess.pointee.kernelStack!))
 
-        ProcessManager.setCurrent(
-            pid    : firstProcess.pid,
-            context: trapFramePtr
-        )
+//        ProcessManager.setCurrent(
+//            pid    : firstProcess.pointee.pid,
+//            context: trapFramePtr
+//        )
+        
+        scheduler?.addTask(secondProcess)
+        scheduler?.currentProcess = firstProcess
         
         jump_to_user_mode(
             trapFrame     : trapFramePtr,
@@ -103,7 +112,7 @@ public struct Kernel {
         )
         
         // Test print
-        kprint("ERRORE: CPU is in Kernel mode.")
+//        kprint("ERRORE: CPU is in Kernel mode.")
     }
     
     private static func testKernelHeap() throws(PPMError) {
