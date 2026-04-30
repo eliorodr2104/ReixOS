@@ -14,6 +14,8 @@
 .global trigger_trap
 .global jump_to_high_half
 .global set_vbar
+.global set_current_process
+.global get_current_process
 
 
 disable_interrupts:
@@ -56,4 +58,12 @@ jump_to_high_half:
 
 set_vbar:
     msr vbar_el1, x0
+    ret
+
+set_current_process:
+    msr tpidr_el1, x0
+    ret
+
+get_current_process:
+    mrs x0, tpidr_el1
     ret

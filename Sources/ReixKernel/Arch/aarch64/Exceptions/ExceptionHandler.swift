@@ -22,17 +22,21 @@ public func exceptionVirtualTableHandler(
         case .irq:
             let interruptID = GIC.acknowledgeInterrupt()
             if interruptID == 27 {
-                guard let isChangedProcess = Kernel.scheduler?.onTick() else { return }
-                                
-                if let current = Kernel.scheduler?.currentProcess {
-                    current.pointee.context?.pointee = framePointer.pointee
+                
+                let processAddress = Arch.CPU.getCurrentProcess()
+                if processAddress != 0 {
+                    let current = UnsafeMutablePointer<Process>(bitPattern: UInt(processAddress))
+                    
+                    if let c = current {
+                        c.pointee.context?.pointee = framePointer.pointee
+                    }
                 }
                 
                 AArch64VirtualTimer.arm()
                 GIC.endOfInterrupt(id: interruptID)
                 
-                if isChangedProcess {
-                    if let nextProcess = Kernel.scheduler?.selectNextTask() {
+                if Kernel.scheduler.onTick() {
+                    if let nextProcess = Kernel.scheduler.selectNextTask() {
                         kprint("PID:")
                         kprint(nextProcess.pointee.pid)
                         kprint()

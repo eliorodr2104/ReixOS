@@ -9,7 +9,7 @@ public struct Kernel {
     private static var ppm: KernelPPM?
     private static var vmm: VirtualMemoryManager?
     
-    public  static var scheduler: KernelScheduler?
+    public  static var scheduler: KernelScheduler = RoundRobin()
     
     public  static var internalPanicMessage: String?
     public  static var platformInfo = PlatformInfo()
@@ -49,9 +49,7 @@ public struct Kernel {
             kprint("Process Manager init!")
 
             AArch64VirtualTimer.arm()
-            
-            scheduler = try RoundRobin()
-                        
+                                    
 //            try testKernelHeap()
             
         } catch { internalPanic(error) }
@@ -102,8 +100,8 @@ public struct Kernel {
 //            context: trapFramePtr
 //        )
         
-        scheduler?.addTask(secondProcess)
-        scheduler?.currentProcess = firstProcess
+        scheduler.addTask(secondProcess)
+        Arch.CPU.setCurrentProcess(VirtualAddress(UInt(bitPattern: firstProcess)))
         
         jump_to_user_mode(
             trapFrame     : trapFramePtr,
@@ -111,8 +109,6 @@ public struct Kernel {
             kernelStackTop: kStackTop
         )
         
-        // Test print
-//        kprint("ERRORE: CPU is in Kernel mode.")
     }
     
     private static func testKernelHeap() throws(PPMError) {

@@ -28,6 +28,12 @@ public struct AArch64CPU: CPUInterface {
     @_silgen_name("set_vbar")
     public static func setVBAR(_ address: VirtualAddress)
     
+    @_silgen_name("set_current_process")
+    public static func setCurrentProcess(_ address: VirtualAddress)
+    
+    @_silgen_name("get_current_process")
+    public static func getCurrentProcess() -> VirtualAddress
+    
     
     public static func enableInterrupts() {
         enable_interrupts()

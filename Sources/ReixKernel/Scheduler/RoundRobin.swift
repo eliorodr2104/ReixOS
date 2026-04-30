@@ -7,25 +7,10 @@
 
 public struct RoundRobin: SchedulerInterface {
     
-    private let fifo: UnsafeMutablePointer<LinkedList>
-    
-    public  var currentProcess: UnsafeMutablePointer<Process>?
-    
+    private static var fifo: LinkedList = LinkedList(head: nil, tail: nil)
+        
     private var currentTicks: UInt = 0 // Tick
     private let quantum     : UInt = 100 // One tick is 10ms
-    
-    init() throws(PPMError) {
-        let sizeFIFO = UInt(MemoryLayout<LinkedList>.stride)
-        let page = try KernelHeap.kmalloc(sizeFIFO)
-        
-        guard let fifoPtr = page?.bindMemory(to: LinkedList.self, capacity: 1) else {
-            throw .allocationFailed(reason: .fullMemory)
-        }
-            
-        self.fifo = fifoPtr
-        self.fifo.initialize(to: LinkedList(head: nil, tail: nil))
-    }
-    
     
     public func addTask(_ process: UnsafeMutablePointer<Process>) {
         guard process.pointee.status == .new else {
@@ -33,7 +18,7 @@ public struct RoundRobin: SchedulerInterface {
         }
         
         process.pointee.status = .ready
-        fifo.pointee.pushBack(process)
+        Self.fifo.pushBack(process)
     }
     
     public func removeTask(_ processID: PID) {
@@ -41,19 +26,22 @@ public struct RoundRobin: SchedulerInterface {
     }
     
     public mutating func selectNextTask() -> UnsafeMutablePointer<Process>? {
-        if let current = currentProcess {
-            fifo.pointee.pushBack(current)
+        let currentAddr = Arch.CPU.getCurrentProcess()
+        
+        if let currentPtr = UnsafeMutablePointer<Process>(bitPattern: UInt(currentAddr)) {
+            Self.fifo.pushBack(currentPtr)
         }
                 
-        if let next = fifo.pointee.popFront() {
-            currentProcess = next
+        if let next = Self.fifo.popFront() {
+            let nextAddr = VirtualAddress(UInt(bitPattern: next))
+            Arch.CPU.setCurrentProcess(nextAddr)
             
-        } else {
-            currentProcess = nil
+            currentTicks = 0
+            return next
         }
         
-        self.currentTicks = 0
-        return currentProcess
+        Arch.CPU.setCurrentProcess(0)
+        return nil
     }
     
     public mutating func onTick() -> Bool {
