@@ -52,6 +52,15 @@ public func exceptionVirtualTableHandler(
             let exceptionClass = (frame.esr >> 26) & 0b111111
             
             switch exceptionClass {
+                case 0x15:
+                    kprint("System call")
+                    let syscallID = frame.x8
+                    
+                    if let type = SyscallNumber(rawValue: syscallID) {
+                        SyscallHandler.handle(type: type, frame: framePointer)
+                    }
+                    
+                    
                 case 0x3C:
                     let internalReason = Kernel.internalPanicMessage
                     Arch.CPU.panic(internalReason, exc: .brk, fp: frame)

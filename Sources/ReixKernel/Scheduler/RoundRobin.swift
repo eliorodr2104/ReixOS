@@ -51,6 +51,14 @@ public struct RoundRobin: SchedulerInterface {
         return currentTicks >= quantum
     }
     
+    public mutating func yield() -> UnsafeMutablePointer<AArch64TrapFrame>? {
+        if let nextProcess = selectNextTask() {
+            return nextProcess.pointee.context
+        }
+        
+        return nil
+    }
+    
     public func notifyTaskBlocked(_ processID: PID) {
         
     }

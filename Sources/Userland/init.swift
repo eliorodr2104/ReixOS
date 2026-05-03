@@ -7,9 +7,7 @@
 
 @_cdecl("_start")
 public func main() {
-    var counter: UInt64 = 0
-
-    while true {
-        counter += 1
-    }
+    
+    System.print("Hi, this is init process!")
+    System.exit(code: 0)
 }

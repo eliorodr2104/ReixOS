@@ -9,45 +9,39 @@ SWIFTC      = /Users/eliorodr2104/.swiftly/bin/swiftc
 TARGET      = aarch64-none-none-elf
 USER_DIR    = Sources/Userland
 
-USER_STUBS_SRC := $(USER_DIR)/user_stubs.c
-USER_STUBS_OBJ := $(USER_DIR)/user_stubs.o
+# --- Directory Syscall (Tua struttura) ---
+SYSCALL_DIR      = Sources/ReixKernel/Syscall
+SYSCALL_ARCH_DIR = Sources/ReixKernel/Arch/aarch64/Syscall
 
 # --- Flag ---
 C_FLAGS     = -target $(TARGET) -ffreestanding -O2 -nostdlib -fno-stack-protector -ISources/ReixKernel/Platform/DeviceTree -g
 SWIFT_FLAGS = -target $(TARGET) -enable-experimental-feature Embedded -enable-experimental-feature Extern -I ./Sources/ReixKernel/Platform/ElfParser -wmo -Osize -parse-as-library -g
 
-# --- Sorgenti Kernel (Escludiamo Userland) ---
-SWIFT_SOURCES := $(shell find Sources -name "*.swift" -not -path "$(USER_DIR)/*")
-C_SOURCES     := $(shell find Sources -name "*.c" -not -path "$(USER_DIR)/*")
-ASM_SOURCES   := $(shell find Sources -name "*.S" -not -path "$(USER_DIR)/*")
+# --- Individuazione Dinamica Sorgenti Kernel ---
+# Escludiamo solo la Userland per il binario del Kernel
+KERNEL_SWIFT_SRCS := $(shell find Sources -name "*.swift" -not -path "$(USER_DIR)/*")
+KERNEL_C_SRCS     := $(shell find Sources -name "*.c" -not -path "$(USER_DIR)/*")
+KERNEL_ASM_SRCS   := $(shell find Sources -name "*.S" -not -path "$(USER_DIR)/*")
 
-C_OBJS   := $(C_SOURCES:.c=.o)
-ASM_OBJS := $(ASM_SOURCES:.S=.o)
-SWIFT_OBJ := swift_kernel.o
+KERNEL_OBJS := $(KERNEL_C_SRCS:.c=.o) $(KERNEL_ASM_SRCS:.S=.o)
+SWIFT_KERNEL_OBJ := swift_kernel.o
 
-# --- Sorgenti Userland (Ogni file un ELF) ---
-USER_SRCS  := $(wildcard $(USER_DIR)/*.swift)
-USER_ELFS  := $(patsubst $(USER_DIR)/%.swift, $(USER_DIR)/%.elf, $(USER_SRCS))
+# --- Individuazione Dinamica Sorgenti per Userland (Libreria di Sistema) ---
+# Tutti i file .swift in Syscall e Syscall/Arch (esposti all'utente)
+USER_LIB_SWIFT := $(wildcard $(SYSCALL_DIR)/*.swift) $(wildcard $(SYSCALL_ARCH_DIR)/*.swift)
+# Tutti i file .S in Syscall/Arch (gli stub ASM con SVC)
+USER_LIB_ASM   := $(wildcard $(SYSCALL_ARCH_DIR)/*.S)
+USER_LIB_OBJS  := $(USER_LIB_ASM:.S=.o)
 
+# Sorgenti delle App Userland (ogni .swift diventa un ELF)
+USER_APPS_SRCS := $(wildcard $(USER_DIR)/*.swift)
+USER_APPS_ELFS := $(patsubst $(USER_DIR)/%.swift, $(USER_DIR)/%.elf, $(USER_APPS_SRCS))
+USER_STUBS_OBJ := $(USER_DIR)/user_stubs.o
+
+# --- Regole Principali ---
 .PHONY: all clean run userland
 
 all: initrd.tar kernel.bin
-
-# --- Compilazione Userland ---
-# Compiliamo ogni .swift in Userland come un ELF indipendente
-$(USER_STUBS_OBJ): $(USER_STUBS_SRC)
-	$(CLANG) $(C_FLAGS) -c $< -o $@
-
-$(USER_DIR)/%.elf: $(USER_DIR)/%.swift $(USER_STUBS_OBJ)
-	$(SWIFTC) $(SWIFT_FLAGS) -c $< -o $(@:.elf=.o)
-	$(LD) -T user.ld -o $@ $(@:.elf=.o) $(USER_STUBS_OBJ)
-	rm $(@:.elf=.o)
-
-userland: $(USER_ELFS)
-
-# --- Creazione Initrd ---
-initrd.tar: $(USER_ELFS)
-	tar -cf $@ -C $(USER_DIR) $(notdir $(USER_ELFS))
 
 # --- Compilazione Kernel ---
 %.o: %.S
@@ -56,17 +50,40 @@ initrd.tar: $(USER_ELFS)
 %.o: %.c
 	$(CLANG) $(C_FLAGS) -c $< -o $@
 
-$(SWIFT_OBJ): $(SWIFT_SOURCES)
-	$(SWIFTC) $(SWIFT_FLAGS) -c $(SWIFT_SOURCES) -o $@
+$(SWIFT_KERNEL_OBJ): $(KERNEL_SWIFT_SRCS)
+	$(SWIFTC) $(SWIFT_FLAGS) -c $(KERNEL_SWIFT_SRCS) -o $@
 
-kernel.elf: $(ASM_OBJS) $(C_OBJS) $(SWIFT_OBJ)
+kernel.elf: $(KERNEL_OBJS) $(SWIFT_KERNEL_OBJ)
 	$(LD) -T linker.ld --nmagic -o $@ $^
 
 kernel.bin: kernel.elf
 	$(OBJCOPY) -O binary $< $@
 
+# --- Compilazione Userland (Dinamica) ---
+
+# Compiliamo lo stub C della Userland
+$(USER_STUBS_OBJ): $(USER_DIR)/user_stubs.c
+	$(CLANG) $(C_FLAGS) -c $< -o $@
+
+# Regola generica per ogni ELF in Userland
+# Ogni app viene compilata insieme a TUTTI i file Swift di sistema e linkata agli oggetti ASM
+$(USER_DIR)/%.elf: $(USER_DIR)/%.swift $(USER_STUBS_OBJ) $(USER_LIB_OBJS)
+	@echo "Compilazione Userland ELF: $@"
+	# Compila l'app + i file Swift della libreria Syscall
+	$(SWIFTC) $(SWIFT_FLAGS) -c $< $(USER_LIB_SWIFT) -o $(@:.elf=.o)
+	# Linka l'oggetto ottenuto con gli stub C e gli oggetti ASM (SVC)
+	$(LD) -T user.ld -o $@ $(@:.elf=.o) $(USER_STUBS_OBJ) $(USER_LIB_OBJS)
+	rm $(@:.elf=.o)
+
+userland: $(USER_APPS_ELFS)
+
+# --- Initrd ---
+initrd.tar: $(USER_APPS_ELFS)
+	tar -cf $@ -C $(USER_DIR) $(notdir $(USER_APPS_ELFS))
+
+# --- Utility ---
 clean:
-	rm -f kernel.elf kernel.bin initrd.tar $(SWIFT_OBJ)
+	rm -f kernel.elf kernel.bin initrd.tar $(SWIFT_KERNEL_OBJ)
 	find Sources -name "*.o" -delete
 	find Sources -name "*.elf" -delete
 
