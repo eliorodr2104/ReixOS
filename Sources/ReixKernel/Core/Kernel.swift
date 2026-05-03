@@ -66,7 +66,7 @@ public struct Kernel {
         kprint("\nKernel is running")
         
         do {
-            try testProcessLaunch() // Crash when Timer is On
+            try testProcessLaunch()
         } catch { throw KernelError(error) }
         
         while true {
@@ -85,8 +85,8 @@ public struct Kernel {
     }
     
     private static func testProcessLaunch() throws (PPMError) {
-        let firstProcess  = try ProcessManager.spawnProcess()
-        let secondProcess = try ProcessManager.spawnProcess()
+        let firstProcess  = try ProcessManager.spawnProcess(filename: "init.elf")
+        let secondProcess = try ProcessManager.spawnProcess(filename: "test2.elf")
         
         kprintf("Process PID: %d", firstProcess.pointee.pid)
         kprint("Test launch process")
@@ -95,10 +95,6 @@ public struct Kernel {
         let rootTablePhys = firstProcess.pointee.addressSpace.rootTablePhysical
         let kStackTop     = UInt64(UInt(bitPattern: firstProcess.pointee.kernelStack!))
 
-//        ProcessManager.setCurrent(
-//            pid    : firstProcess.pointee.pid,
-//            context: trapFramePtr
-//        )
         
         scheduler.addTask(secondProcess)
         Arch.CPU.setCurrentProcess(VirtualAddress(UInt(bitPattern: firstProcess)))

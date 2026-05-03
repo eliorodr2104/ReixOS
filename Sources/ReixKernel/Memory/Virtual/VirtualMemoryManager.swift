@@ -75,6 +75,15 @@ public struct VirtualMemoryManager {
             flags       : flags
         )
         
+        let initrdBase = Kernel.platformInfo.initrdStart
+        let initrdEnd  = Kernel.platformInfo.initrdEnd
+        try mapSection(
+            startAddress: initrdBase,
+            endAddress: initrdEnd,
+            type: .normal,
+            flags: [.present, .readOnly, .pxn]
+        )
+        
         flags = [.present, .pxn]
         let ramEnd = PhysicalAddress(self.ppmPtr.pointee.ramStart + self.ppmPtr.pointee.ramSize)
         
@@ -91,7 +100,6 @@ public struct VirtualMemoryManager {
         
         let gicDistributorBase  = Kernel.platformInfo.gic.gicdBase
         let gicCpuInterfaceBase = Kernel.platformInfo.gic.giccBase
-        
         try map(
             table   : identityRootTable,
             virtual : gicDistributorBase,

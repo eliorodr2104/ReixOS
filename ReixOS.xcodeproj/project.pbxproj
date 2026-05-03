@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXFileReference section */
+		1F33E1FE2FA7A92600D61F01 /* user.ld */ = {isa = PBXFileReference; lastKnownFileType = text; path = user.ld; sourceTree = "<group>"; };
 		1F52448C2F95364400E5E2C8 /* linker.ld */ = {isa = PBXFileReference; lastKnownFileType = text; path = linker.ld; sourceTree = "<group>"; };
 		1F52448D2F95369500E5E2C8 /* Makefile */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.make; path = Makefile; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -23,6 +24,7 @@
 		1F52447C2F95352500E5E2C8 = {
 			isa = PBXGroup;
 			children = (
+				1F33E1FE2FA7A92600D61F01 /* user.ld */,
 				1F52448D2F95369500E5E2C8 /* Makefile */,
 				1F52448C2F95364400E5E2C8 /* linker.ld */,
 				1F5244872F95357500E5E2C8 /* Sources */,

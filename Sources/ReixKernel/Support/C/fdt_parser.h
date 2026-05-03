@@ -38,6 +38,8 @@ typedef struct {
 
 typedef struct {
     uint64_t dtb_base;
+    uint64_t initrd_start;
+    uint64_t initrd_end;
     
     const char* bootargs;
     const char* stdout_path;

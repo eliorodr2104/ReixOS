@@ -57,9 +57,12 @@ __attribute__((target("general-regs-only")))
 int parse_platform_info(const void *fdt_ptr, PlatformInfo *out) {
     if (!fdt_ptr || !out) return -10;
     
-    out->uart.type = 0; // UART_UNKNOWN
+    // Inizializzazione output
+    out->uart.type = 0;
     out->uart.base_addr = 0;
     out->cpu_count = 0;
+    out->initrd_start = 0;
+    out->initrd_end = 0;
     
     const uint8_t *fdt = (const uint8_t *)fdt_ptr;
     const struct fdt_header *h = (const struct fdt_header *)fdt;
@@ -85,10 +88,11 @@ int parse_platform_info(const void *fdt_ptr, PlatformInfo *out) {
     
     int depth = 0;
     
-    // Buffer per le proprietà del nodo corrente (risolve il problema dell'ordine)
-    int is_uart_node = 0;
-    int is_gic_node  = 0;
-    int is_mem_node  = 0;
+    // Flag di stato del nodo corrente
+    int is_uart_node   = 0;
+    int is_gic_node    = 0;
+    int is_mem_node    = 0;
+    int is_chosen_node = 0;
     
     const uint32_t *cur_reg = 0;
     uint32_t cur_reg_len = 0;
@@ -106,16 +110,18 @@ int parse_platform_info(const void *fdt_ptr, PlatformInfo *out) {
             
             depth++;
             
-            // Ereditiamo il layout delle celle dal padre
+            // Ereditiamo il layout delle celle dal padre per il nuovo livello
             if (depth > 0 && depth < MAX_DEPTH) {
                 ac[depth] = ac[depth - 1];
                 sc[depth] = sc[depth - 1];
             }
             
-            // Reset dello stato per il nuovo nodo
-            is_uart_node = 0;
-            is_gic_node  = 0;
-            is_mem_node  = (depth == 2 && name[0] == 'm' && name[1] == 'e');
+            // Identificazione del nodo
+            is_chosen_node = streq(name, "chosen");
+            is_uart_node   = 0;
+            is_gic_node    = 0;
+            is_mem_node    = (depth == 2 && name[0] == 'm' && name[1] == 'e'); // nodo "memory"
+            
             cur_reg = 0; cur_reg_len = 0;
             cur_intr = 0; cur_intr_len = 0;
             
@@ -126,6 +132,11 @@ int parse_platform_info(const void *fdt_ptr, PlatformInfo *out) {
         } else if (tag == FDT_END_NODE) {
             depth--;
             if (depth == 0) break;
+            // Quando chiudiamo un nodo, resettiamo i flag di tipo
+            is_chosen_node = 0;
+            is_uart_node = 0;
+            is_mem_node = 0;
+            is_gic_node = 0;
             
         } else if (tag == FDT_PROP) {
             uint32_t len = fdt32_to_cpu(*p++);
@@ -134,14 +145,20 @@ int parse_platform_info(const void *fdt_ptr, PlatformInfo *out) {
             const uint32_t *prop_data = p;
             p += (len + 3) / 4;
             
-            // Aggiorna le celle per i *figli* di questo nodo
+            // --- CALCOLO CELLE GENITORE ---
+            // IMPORTANTE: Le proprietà di questo nodo (reg, initrd) usano
+            // le celle definite dal PADRE (depth - 1).
+            uint32_t p_ac = (depth > 0 && depth < MAX_DEPTH) ? ac[depth - 1] : 2;
+            uint32_t p_sc = (depth > 0 && depth < MAX_DEPTH) ? sc[depth - 1] : 1;
+            
+            // Aggiorna le celle per i FUTURI figli di questo nodo
             if (streq(prop_name, "#address-cells")) {
                 if (depth < MAX_DEPTH) ac[depth] = fdt32_to_cpu(*prop_data);
             } else if (streq(prop_name, "#size-cells")) {
                 if (depth < MAX_DEPTH) sc[depth] = fdt32_to_cpu(*prop_data);
             }
             
-            // Estrae dati se arrivano PRIMA di 'compatible'
+            // Estrazione dati generici
             else if (streq(prop_name, "reg")) {
                 cur_reg = prop_data;
                 cur_reg_len = len;
@@ -152,7 +169,16 @@ int parse_platform_info(const void *fdt_ptr, PlatformInfo *out) {
                 out->bootargs = (const char *)prop_data;
             }
             
-            // Identificazione periferiche
+            // --- GESTIONE CHOSEN (INITRD) ---
+            if (is_chosen_node) {
+                if (streq(prop_name, "linux,initrd-start")) {
+                    out->initrd_start = read_be_cells(prop_data, p_ac);
+                } else if (streq(prop_name, "linux,initrd-end")) {
+                    out->initrd_end = read_be_cells(prop_data, p_ac);
+                }
+            }
+            
+            // Identificazione periferiche tramite 'compatible'
             if (streq(prop_name, "compatible")) {
                 const char *compat = (const char *)prop_data;
                 uint32_t left = len;
@@ -177,11 +203,7 @@ int parse_platform_info(const void *fdt_ptr, PlatformInfo *out) {
                 }
             }
             
-            // --- FASE DI PROCESSAMENTO DATI ---
-            // Le celle di 'reg' sono definite dal nodo PADRE (depth - 1)
-            uint32_t p_ac = (depth > 0 && depth < MAX_DEPTH) ? ac[depth - 1] : 2;
-            uint32_t p_sc = (depth > 0 && depth < MAX_DEPTH) ? sc[depth - 1] : 1;
-            
+            // --- PROCESSAMENTO PERIFERICHE IDENTIFICATE ---
             if (is_uart_node) {
                 if (cur_reg && cur_reg_len >= p_ac * 4) {
                     out->uart.base_addr = read_be_cells(cur_reg, p_ac);

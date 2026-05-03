@@ -8,7 +8,9 @@
 
 @frozen
 public struct PlatformInfo {
-    public var dtbBase   : UInt64    = 0  // 8 byte
+    public var dtbBase    : UInt64    = 0  // 8 byte
+    public var initrdStart: UInt64    = 0  // 8 byte
+    public var initrdEnd  : UInt64    = 0  // 8 byte
     
     public var bootargs  : UnsafeRawPointer? = nil // 8 byte
     public var stdoutPath: UnsafeRawPointer? = nil // 8 byte
