@@ -67,7 +67,7 @@ $(USER_STUBS_OBJ): $(USER_DIR)/user_stubs.c
 
 # Regola generica per ogni ELF in Userland
 # Ogni app viene compilata insieme a TUTTI i file Swift di sistema e linkata agli oggetti ASM
-$(USER_DIR)/%.elf: $(USER_DIR)/%.swift $(USER_STUBS_OBJ) $(USER_LIB_OBJS)
+$(USER_DIR)/%.elf: $(USER_DIR)/%.swift $(USER_LIB_SWIFT) $(USER_STUBS_OBJ) $(USER_LIB_OBJS)
 	@echo "Compilazione Userland ELF: $@"
 	# Compila l'app + i file Swift della libreria Syscall
 	$(SWIFTC) $(SWIFT_FLAGS) -c $< $(USER_LIB_SWIFT) -o $(@:.elf=.o)

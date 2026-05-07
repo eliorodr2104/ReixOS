@@ -41,6 +41,7 @@ public func exceptionVirtualTableHandler(
                         kprint(nextProcess.pointee.pid)
                         kprint()
                         
+                        Arch.MMU.switchUserAddressSpace(nextProcess.pointee.addressSpace.rootTablePhysical)
                         framePointer.pointee = nextProcess.pointee.context!.pointee
                     }
                 }
@@ -55,9 +56,17 @@ public func exceptionVirtualTableHandler(
                 case 0x15:
                     kprint("System call")
                     let syscallID = frame.x8
-                    
-                    if let type = SyscallNumber(rawValue: syscallID) {
-                        SyscallHandler.handle(type: type, frame: framePointer)
+
+                    switch syscallID {
+                        case SyscallNumber.exit.rawValue:
+                            SyscallHandler.handleExit(frame: framePointer)
+                        case SyscallNumber.yield.rawValue:
+                            SyscallHandler.handleYield(frame: framePointer)
+                        case SyscallNumber.debugPrint.rawValue:
+                            SyscallHandler.handleDebugPrint(frame: framePointer)
+                        default:
+                            kprint("Unknown syscall")
+                            kprint(syscallID)
                     }
                     
                     

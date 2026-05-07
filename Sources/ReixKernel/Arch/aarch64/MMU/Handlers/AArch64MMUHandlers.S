@@ -9,6 +9,7 @@
 .global enable_mmu
 .global is_mmu_enabled
 .global flush_tlb
+.global switch_user_address_space
 
 enable_mmu:
     ldr     x2, =0x00000000000004FF
@@ -46,5 +47,12 @@ flush_tlb:
     dsb ishst     
     tlbi vmalle1is
     dsb ish
+    isb
+    ret
+
+switch_user_address_space:
+    msr     ttbr0_el1, x0
+    tlbi    vmalle1is
+    dsb     ish
     isb
     ret

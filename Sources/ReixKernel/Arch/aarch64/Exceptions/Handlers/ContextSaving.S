@@ -41,14 +41,14 @@ sync_handler_el1:
 sync_handler_el0:
     sub     sp, sp, #288
     stp     x0, x1,   [sp, #0]
-    mov     x1, #1       // 1 = Sync
+    mov     x0, #1       // 1 = Sync
     b       save_context_after_x0_x1
 
 irq_handler_el1:
 irq_handler_el0:
     sub     sp, sp, #288
     stp     x0, x1,   [sp, #0]
-    mov     x1, #0       // 0 = IRQ
+    mov     x0, #0       // 0 = IRQ
     b       save_context_after_x0_x1
     
 
@@ -79,6 +79,8 @@ save_context_after_x0_x1:
     stp     x28, x29, [sp, #224]
     str     x30,      [sp, #240]
 
+    mov     x5, x0
+
     // Save critical system register
     mrs     x0, elr_el1
     mrs     x1, spsr_el1
@@ -90,7 +92,7 @@ save_context_after_x0_x1:
     stp     x0, x1,   [sp, #248]
     stp     x2, x3,   [sp, #264]
     str     x4,       [sp, #280]
-    ldr     x1,       [sp, #8]
+    mov     x1,       x5
     
     mov     x0, sp
     bl      swift_exception_handler

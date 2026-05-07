@@ -20,5 +20,8 @@ public struct AArch64MMU {
     
     @_silgen_name("flush_tlb")
     public static func flushTLB()
+
+    @_silgen_name("switch_user_address_space")
+    public static func switchUserAddressSpace(_ rootTable: PhysicalAddress)
     
 }

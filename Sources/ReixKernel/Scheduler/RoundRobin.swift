@@ -29,12 +29,16 @@ public struct RoundRobin: SchedulerInterface {
         let currentAddr = Arch.CPU.getCurrentProcess()
         
         if let currentPtr = UnsafeMutablePointer<Process>(bitPattern: UInt(currentAddr)) {
-            Self.fifo.pushBack(currentPtr)
+            if currentPtr.pointee.status == .running {
+                currentPtr.pointee.status = .ready
+                Self.fifo.pushBack(currentPtr)
+            }
         }
                 
         if let next = Self.fifo.popFront() {
             let nextAddr = VirtualAddress(UInt(bitPattern: next))
             Arch.CPU.setCurrentProcess(nextAddr)
+            next.pointee.status = .running
             
             currentTicks = 0
             return next

@@ -77,6 +77,11 @@ public struct Logger<Driver: SerialDriver> {
     func kprint(_ val: UInt64) {
         printDec64(val)
     }
+
+    @_transparent
+    func kputc(_ val: UInt8) {
+        driver.write(val)
+    }
     
     
     @_transparent

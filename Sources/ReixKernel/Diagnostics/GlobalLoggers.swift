@@ -20,6 +20,10 @@ public func kprint(_ val: UInt64) {
     _logger.kprint(val)
 }
 
+public func kputc(_ val: UInt8) {
+    _logger.kputc(val)
+}
+
 
 public func kprintf(_ fmt: String, _ a: UInt64) {
     _logger.kprintf(fmt, a)
@@ -36,4 +40,3 @@ public func kprintf(_ fmt: String, _ a: UInt64, _ b: UInt64, _ c: UInt64) {
 public func kprintf(_ fmt: String, _ a: UInt64, _ b: UInt64, _ c: UInt64, _ d: UInt64) {
     _logger.kprintf(fmt, a, b, c, d)
 }
-

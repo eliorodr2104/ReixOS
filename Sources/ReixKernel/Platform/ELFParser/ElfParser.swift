@@ -9,6 +9,7 @@ import CElf
 
 public struct ElfParser {
     private static let PT_LOAD: UInt32 = 1
+    private static let pageSize: UInt64 = 4096
     
     private init() {}
     
@@ -24,37 +25,61 @@ public struct ElfParser {
             throw .allocationFailed(reason: .fullMemory)
         }
         
+        var loadBase: UInt64 = UInt64.max
+        var loadEnd : UInt64 = 0
+
         var phdrAddr = elfAddress + ehdr.pointee.e_phoff
         for _ in 0..<ehdr.pointee.e_phnum {
             let phdr = UnsafePointer<Elf64_Phdr_t>(bitPattern: UInt(phdrAddr))!
             
             if phdr.pointee.p_type == PT_LOAD {
-                let pagesNeeded = (phdr.pointee.p_memsz + 4095) / 4096
-                let physicalSection = try ppm.pointee.alloc(Int(pagesNeeded * 4096))
-                
-                try vmm.pointee.mapUserPage(
-                    addressSpace: addressSpace,
-                    virtual     : phdr.pointee.p_vaddr,
-                    physical    : physicalSection.address,
-                    flags       : [.present, .userAccess, .pxn]
-                )
-                
-                let dest: UnsafeMutablePointer<UInt8> = vmm.pointee.physToVirt(physicalSection.address)
-                let source = UnsafePointer<UInt8>(bitPattern: UInt(elfAddress + phdr.pointee.p_offset))!
-                
-                // Copy p_filesz
-                for i in 0..<Int(phdr.pointee.p_filesz) {
-                    dest.advanced(by: i).pointee = source.advanced(by: i).pointee
-                }
-                
-                // 4. Zero-fill (BSS)
-                if phdr.pointee.p_memsz > phdr.pointee.p_filesz {
-                    for i in Int(phdr.pointee.p_filesz)..<Int(phdr.pointee.p_memsz) {
-                        dest.advanced(by: i).pointee = 0
-                    }
-                }
+                let segmentStart = phdr.pointee.p_vaddr & ~(Self.pageSize - 1)
+                let segmentEnd = (phdr.pointee.p_vaddr + phdr.pointee.p_memsz + Self.pageSize - 1) & ~(Self.pageSize - 1)
+
+                if segmentStart < loadBase { loadBase = segmentStart }
+                if segmentEnd > loadEnd { loadEnd = segmentEnd }
             }
             
+            phdrAddr += UInt64(ehdr.pointee.e_phentsize)
+        }
+
+        guard loadBase != UInt64.max, loadEnd > loadBase else {
+            throw .allocationFailed(reason: .fullMemory)
+        }
+
+        let imageSize = loadEnd - loadBase
+        let physicalImage = try ppm.pointee.alloc(Int(imageSize))
+        let imageDest: UnsafeMutablePointer<UInt8> = vmm.pointee.physToVirt(physicalImage.address)
+
+        for i in 0..<Int(imageSize) {
+            imageDest.advanced(by: i).pointee = 0
+        }
+
+        var mappedOffset: UInt64 = 0
+        while mappedOffset < imageSize {
+            try vmm.pointee.mapUserPage(
+                addressSpace: addressSpace,
+                virtual     : loadBase + mappedOffset,
+                physical    : physicalImage.address + mappedOffset,
+                flags       : [.present, .userAccess, .pxn]
+            )
+
+            mappedOffset += Self.pageSize
+        }
+
+        phdrAddr = elfAddress + ehdr.pointee.e_phoff
+        for _ in 0..<ehdr.pointee.e_phnum {
+            let phdr = UnsafePointer<Elf64_Phdr_t>(bitPattern: UInt(phdrAddr))!
+
+            if phdr.pointee.p_type == PT_LOAD {
+                let destOffset = Int(phdr.pointee.p_vaddr - loadBase)
+                let source = UnsafePointer<UInt8>(bitPattern: UInt(elfAddress + phdr.pointee.p_offset))!
+
+                for i in 0..<Int(phdr.pointee.p_filesz) {
+                    imageDest.advanced(by: destOffset + i).pointee = source.advanced(by: i).pointee
+                }
+            }
+
             phdrAddr += UInt64(ehdr.pointee.e_phentsize)
         }
         

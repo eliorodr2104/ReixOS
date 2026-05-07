@@ -97,6 +97,7 @@ public struct Kernel {
 
         
         scheduler.addTask(secondProcess)
+        firstProcess.pointee.status = .running
         Arch.CPU.setCurrentProcess(VirtualAddress(UInt(bitPattern: firstProcess)))
         
         jump_to_user_mode(

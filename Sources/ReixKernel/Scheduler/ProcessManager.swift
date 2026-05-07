@@ -61,6 +61,7 @@ public struct ProcessManager {
         }
         
         let trapFramePtr = trapRaw.bindMemory(to: Arch.TrapFrame.self, capacity: 1)
+        trapFramePtr.initialize(to: Arch.TrapFrame())
         trapFramePtr.pointee.elr   = entryPoint
         trapFramePtr.pointee.spsr  = 0x0
         trapFramePtr.pointee.spel0 = userStackTop + 4096

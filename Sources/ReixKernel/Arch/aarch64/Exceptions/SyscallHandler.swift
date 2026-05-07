@@ -7,6 +7,54 @@
 
 
 public struct SyscallHandler {
+
+    public static func handleExit(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
+        let currentAddr = Arch.CPU.getCurrentProcess()
+        if let current = UnsafeMutablePointer<Process>(bitPattern: UInt(currentAddr)) {
+            current.pointee.context?.pointee = frame.pointee
+            current.pointee.status = .terminated
+        }
+
+        if let trapFrame = Kernel.scheduler.yield() {
+            let nextAddr = Arch.CPU.getCurrentProcess()
+            if let next = UnsafeMutablePointer<Process>(bitPattern: UInt(nextAddr)) {
+                Arch.MMU.switchUserAddressSpace(next.pointee.addressSpace.rootTablePhysical)
+            }
+            frame.pointee = trapFrame.pointee
+        } else {
+            Arch.CPU.setCurrentProcess(0)
+            while true {
+                Arch.CPU.waitForInterrupt()
+            }
+        }
+    }
+
+    public static func handleYield(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
+        let currentAddr = Arch.CPU.getCurrentProcess()
+        if let current = UnsafeMutablePointer<Process>(bitPattern: UInt(currentAddr)) {
+            current.pointee.context?.pointee = frame.pointee
+        }
+
+        if let trapFrame = Kernel.scheduler.yield() {
+            let nextAddr = Arch.CPU.getCurrentProcess()
+            if let next = UnsafeMutablePointer<Process>(bitPattern: UInt(nextAddr)) {
+                Arch.MMU.switchUserAddressSpace(next.pointee.addressSpace.rootTablePhysical)
+            }
+            frame.pointee = trapFrame.pointee
+        }
+    }
+
+    public static func handleDebugPrint(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
+        let userBufferAddr = frame.pointee.x0
+        let length         = frame.pointee.x1
+
+        if let ptr = UnsafePointer<UInt8>(bitPattern: UInt(userBufferAddr)) {
+            for i in 0..<Int(length) {
+                kputc(ptr.advanced(by: i).pointee)
+            }
+            kprint()
+        }
+    }
     
     public static func handle(
         type: SyscallNumber,
@@ -14,26 +62,13 @@ public struct SyscallHandler {
     ) {
         switch type {
             case .exit:
-                let exitCode = UInt64(frame.pointee.x0)
-                kprint("Process exited with code: ")
-                kprint(exitCode)
-                // Kernel.processManager.terminateCurrent()
+                handleExit(frame: frame)
 
             case .yield:
-                if let trapFrame = Kernel.scheduler.yield() {
-                    frame.pointee = trapFrame.pointee
-                }
+                handleYield(frame: frame)
 
             case .debugPrint:
-                let userBufferAddr = frame.pointee.x0
-                let length         = frame.pointee.x1
-                
-                if let ptr = UnsafePointer<UInt8>(bitPattern: UInt(userBufferAddr)) {
-                    let buffer = UnsafeBufferPointer(start: ptr, count: Int(length))
-                    
-                    let s = String(decoding: buffer, as: UTF8.self)
-                    kprint(s)
-                }
+                handleDebugPrint(frame: frame)
         }
     }
 }
