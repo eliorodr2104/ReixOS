@@ -24,6 +24,8 @@ At this stage, the foundational subsystems are in place:
 * Exception Vector Table (EVT)
 * Basic Kernel Heap
 
+Note: the kernel image is currently linked in the lower virtual-address range; user address spaces keep EL1-only mappings of the kernel image so kernel diagnostics (panic/logging) can still dereference static data while `TTBR0_EL1` points to a user page table.
+
 ## Getting Started
 
 To build and run ReixOS, you don't need a complex custom toolchain. You just need a recent **Swift Toolchain with Embedded Swift support**. 
