@@ -20,10 +20,11 @@ public struct SyscallHandler {
             do {
                 Arch.CPU.setCurrentProcess(0)
                 try ProcessManager.releaseAddressSpace(oldProcess)
-                oldProcess.pointee.exitCode = UInt32(frame.pointee.x0)                
-                try Kernel.scheduler.removeTask(oldProcess.pointee.pid)
                 
             } catch { Arch.CPU.panic("Failed to destroy exiting process") }
+            
+            oldProcess.pointee.exitCode = UInt32(frame.pointee.x0)
+            Kernel.scheduler.removeTask(oldProcess)
         }
         
         // Change Process
@@ -37,9 +38,7 @@ public struct SyscallHandler {
             
         } else {
             Arch.CPU.setCurrentProcess(0)
-            while true {
-                Arch.CPU.waitForInterrupt()
-            }
+            while true { Arch.CPU.waitForInterrupt() }
         }
         
 //        if oldProcess != nil {
@@ -56,9 +55,11 @@ public struct SyscallHandler {
 
         if let trapFrame = Kernel.scheduler.yield() {
             let nextAddr = Arch.CPU.getCurrentProcess()
+            
             if let next = UnsafeMutablePointer<Process>(bitPattern: UInt(nextAddr)) {
                 Arch.MMU.switchUserAddressSpace(next.pointee.addressSpace.rootTablePhysical.address)
             }
+            
             frame.pointee = trapFrame.pointee
         }
     }
@@ -71,23 +72,24 @@ public struct SyscallHandler {
             for i in 0..<Int(length) {
                 kputc(ptr.advanced(by: i).pointee)
             }
+            
             kprint()
         }
     }
     
-    public static func handle(
-        type: SyscallNumber,
-        frame: UnsafeMutablePointer<Arch.TrapFrame>
-    ) {
-        switch type {
-            case .exit:
-                handleExit(frame: frame)
-
-            case .yield:
-                handleYield(frame: frame)
-
-            case .debugPrint:
-                handleDebugPrint(frame: frame)
-        }
-    }
+//    public static func handle(
+//        type: SyscallNumber,
+//        frame: UnsafeMutablePointer<Arch.TrapFrame>
+//    ) {
+//        switch type {
+//            case .exit:
+//                handleExit(frame: frame)
+//
+//            case .yield:
+//                handleYield(frame: frame)
+//
+//            case .debugPrint:
+//                handleDebugPrint(frame: frame)
+//        }
+//    }
 }

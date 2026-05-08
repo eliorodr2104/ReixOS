@@ -51,7 +51,7 @@ public struct AArch64CPU: CPUInterface {
         nop_asm()
     }
     
-    
+    @inline(__always)
     public static func panic(
         _   reason      : String?    = nil,
         exc exception   : Exception? = nil,

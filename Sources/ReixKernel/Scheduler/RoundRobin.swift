@@ -11,23 +11,19 @@ public struct RoundRobin: SchedulerInterface {
     private var waiting   : LinkedList = LinkedList(head: nil, tail: nil)
     private var terminated: LinkedList = LinkedList(head: nil, tail: nil)
             
-    private var currentTicks: UInt = 0 // Tick
+    private var currentTicks: UInt = 0   // Tick
     private let quantum     : UInt = 100 // One tick is 10ms
     
-    public mutating func addTask(_ process: UnsafeMutablePointer<Process>) {
+    public mutating func addTask(_ process: UnsafeMutablePointer<Process>) throws(SchedulerError) {
         guard process.pointee.status == .new else {
-            return
+            throw .notNewerProcess
         }
         
         process.pointee.status = .ready
         self.ready.pushBack(process)
     }
     
-    public mutating func removeTask(_ pid: PID) throws(PPMError) {
-        guard let process = ready.remove(pid: pid) else {
-            return
-        }
-        
+    public mutating func removeTask(_ process: UnsafeMutablePointer<Process>) {
         terminated.pushBack(process)
     }
     
@@ -66,6 +62,33 @@ public struct RoundRobin: SchedulerInterface {
         }
         
         return nil
+    }
+    
+    public mutating func block(_ pid: PID) throws(SchedulerError) {
+        let currentAddr = Arch.CPU.getCurrentProcess()
+        guard let process = UnsafeMutablePointer<Process>(bitPattern: UInt(currentAddr)) else {
+            throw .processNotExist
+        }
+        
+        process.pointee.status = .waiting
+        waiting.pushBack(process)
+        
+        if let next = ready.popFront() {
+            let nextAddr = VirtualAddress(UInt(bitPattern: next))
+            Arch.CPU.setCurrentProcess(nextAddr)
+            next.pointee.status = .running
+            
+            currentTicks = 0
+        } else { Arch.CPU.setCurrentProcess(0) }
+    }
+    
+    public mutating func wakeUp(_ pid: PID) throws(SchedulerError) {
+        guard let process = waiting.remove(pid: pid) else {
+            throw .processNotExist
+        }
+        
+        process.pointee.status = .ready
+        ready.pushBack(process)
     }
     
     public func notifyTaskBlocked(_ processID: PID) {

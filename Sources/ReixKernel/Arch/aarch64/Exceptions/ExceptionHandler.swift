@@ -58,10 +58,13 @@ public func exceptionVirtualTableHandler(
                     switch syscallID {
                         case SyscallNumber.exit.rawValue:
                             SyscallHandler.handleExit(frame: framePointer)
+                            
                         case SyscallNumber.yield.rawValue:
                             SyscallHandler.handleYield(frame: framePointer)
+                            
                         case SyscallNumber.debugPrint.rawValue:
                             SyscallHandler.handleDebugPrint(frame: framePointer)
+                            
                         default:
                             kprint("Unknown syscall")
                             kprint(syscallID)

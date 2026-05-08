@@ -44,7 +44,7 @@ public struct Kernel {
                 cBase: platformInfo.gic.giccBase + virtualOffset
             )
             kprint("Init GIC!")
-            
+                                    
             ProcessManager.initialize(vmm: &vmm!, ppm: &ppm!)
             kprint("Process Manager init!")
 
@@ -94,13 +94,18 @@ public struct Kernel {
         let trapFramePtr  = firstProcess.pointee.context!
         let kStackTop     = UInt64(UInt(bitPattern: firstProcess.pointee.kernelStack!))
         
-        scheduler.addTask(secondProcess)
+        do {
+            try scheduler.addTask(secondProcess)
+            
+        } catch {
+            Arch.CPU.panic(error.localizedDescription)
+        }
+        
         firstProcess.pointee.status = .running
         Arch.CPU.setCurrentProcess(
             VirtualAddress(UInt(bitPattern: firstProcess))
         )
-        
-        
+                
         jump_to_user_mode(
             trapFrame     : trapFramePtr,
             rootTable     : firstProcess.pointee.addressSpace.rootTablePhysical.address,
