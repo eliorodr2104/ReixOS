@@ -9,18 +9,30 @@
 public struct SyscallHandler {
 
     public static func handleExit(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
+                
         let currentAddr = Arch.CPU.getCurrentProcess()
         if let current = UnsafeMutablePointer<Process>(bitPattern: UInt(currentAddr)) {
             current.pointee.context?.pointee = frame.pointee
             current.pointee.status = .terminated
+            
+            do {
+                Arch.CPU.setCurrentProcess(0)
+                try ProcessManager.destroyProcess(current)
+                
+            } catch {
+                Arch.CPU.panic("Failed to destroy exiting process")
+            }
         }
-
+        
+        // Change Process
         if let trapFrame = Kernel.scheduler.yield() {
             let nextAddr = Arch.CPU.getCurrentProcess()
             if let next = UnsafeMutablePointer<Process>(bitPattern: UInt(nextAddr)) {
-                Arch.MMU.switchUserAddressSpace(next.pointee.addressSpace.rootTablePhysical)
+                Arch.MMU.switchUserAddressSpace(next.pointee.addressSpace.rootTablePhysical.address)
             }
+            
             frame.pointee = trapFrame.pointee
+            
         } else {
             Arch.CPU.setCurrentProcess(0)
             while true {
@@ -38,7 +50,7 @@ public struct SyscallHandler {
         if let trapFrame = Kernel.scheduler.yield() {
             let nextAddr = Arch.CPU.getCurrentProcess()
             if let next = UnsafeMutablePointer<Process>(bitPattern: UInt(nextAddr)) {
-                Arch.MMU.switchUserAddressSpace(next.pointee.addressSpace.rootTablePhysical)
+                Arch.MMU.switchUserAddressSpace(next.pointee.addressSpace.rootTablePhysical.address)
             }
             frame.pointee = trapFrame.pointee
         }

@@ -85,57 +85,27 @@ public struct Kernel {
     }
     
     private static func testProcessLaunch() throws (PPMError) {
-        let firstProcess  = try ProcessManager.spawnProcess(filename: "init.elf")
-        let secondProcess = try ProcessManager.spawnProcess(filename: "test2.elf")
+        let firstProcess  = try ProcessManager.spawnProcess(filename: "idle.elf")
+        let secondProcess = try ProcessManager.spawnProcess(filename: "init.elf")
         
         kprintf("Process PID: %d", firstProcess.pointee.pid)
         kprint("Test launch process")
         
         let trapFramePtr  = firstProcess.pointee.context!
-        let rootTablePhys = firstProcess.pointee.addressSpace.rootTablePhysical
         let kStackTop     = UInt64(UInt(bitPattern: firstProcess.pointee.kernelStack!))
-
         
         scheduler.addTask(secondProcess)
         firstProcess.pointee.status = .running
-        Arch.CPU.setCurrentProcess(VirtualAddress(UInt(bitPattern: firstProcess)))
+        Arch.CPU.setCurrentProcess(
+            VirtualAddress(UInt(bitPattern: firstProcess))
+        )
+        
         
         jump_to_user_mode(
             trapFrame     : trapFramePtr,
-            rootTable     : rootTablePhys,
+            rootTable     : firstProcess.pointee.addressSpace.rootTablePhysical.address,
             kernelStackTop: kStackTop
         )
         
-    }
-    
-    private static func testKernelHeap() throws(PPMError) {
-        
-        guard let ptr1 = try KernelHeap.kmalloc(42) else {
-            Arch.CPU.panic()
-        }
-        
-        let typedPtr1 = ptr1.assumingMemoryBound(to: UInt64.self)
-        typedPtr1.pointee = 0xDEADBEEF_CAFEBABE
-        
-        guard let ptr2 = try KernelHeap.kmalloc(64) else {
-            Arch.CPU.panic()
-        }
-        
-        if ptr1 == ptr2 {
-            Arch.CPU.panic()
-        }
-        
-        KernelHeap.kfree(ptr1)
-        
-        guard let ptr3 = try KernelHeap.kmalloc(64) else {
-            Arch.CPU.panic()
-        }
-        
-        if ptr3 != ptr1 {
-            Arch.CPU.panic()
-        }
-        
-        KernelHeap.kfree(ptr2)
-        KernelHeap.kfree(ptr3)
     }
 }

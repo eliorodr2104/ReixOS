@@ -61,8 +61,9 @@ public struct AArch64PageTableEntry {
     
     public static func tableDescriptor(address: UInt64) -> AArch64PageTableEntry {
         var entry = AArch64PageTableEntry(rawValue: 0)
+        
         entry.physicalAddress = address
-        entry.flags = [.valid, .page]
+        entry.flags           = [.valid, .page]
         
         return entry
     }

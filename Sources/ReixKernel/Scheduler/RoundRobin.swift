@@ -21,8 +21,12 @@ public struct RoundRobin: SchedulerInterface {
         Self.fifo.pushBack(process)
     }
     
-    public func removeTask(_ processID: PID) {
+    public func removeTask(_ pid: PID) throws(PPMError) {
+        guard let process = Self.fifo.remove(pid: pid) else {
+            return
+        }
         
+        try ProcessManager.destroyProcess(process)
     }
     
     public mutating func selectNextTask() -> UnsafeMutablePointer<Process>? {
@@ -51,7 +55,6 @@ public struct RoundRobin: SchedulerInterface {
     public mutating func onTick() -> Bool {
         currentTicks &+= 1
         
-        if currentTicks == 100 { kprint("Tick") }
         return currentTicks >= quantum
     }
     

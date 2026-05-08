@@ -45,4 +45,33 @@ public struct LinkedList {
         processToReturn.pointee.nextProcess = nil
         return processToReturn
     }
+    
+    public mutating func remove(pid: PID) -> UnsafeMutablePointer<Process>? {
+        var previous: UnsafeMutablePointer<Process>? = nil
+        var current = head
+        
+        while let process = current {
+            let next = process.pointee.nextProcess
+
+            if process.pointee.pid == pid {
+                if let previous = previous {
+                    previous.pointee.nextProcess = next
+                } else {
+                    head = next
+                }
+
+                if tail == process {
+                    tail = previous
+                }
+
+                process.pointee.nextProcess = nil
+                return process
+            }
+
+            previous = process
+            current = next
+        }
+        
+        return nil
+    }
 }

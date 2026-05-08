@@ -9,5 +9,8 @@
 public func main() {
     
     System.print("Hi, this is init process!")
-    System.exit(code: 0)
+    System.exit(code: 1)
+//    while true {
+//        
+//    }
 }

@@ -11,7 +11,7 @@ public struct ProcessManager {
     
     private static var vmm: UnsafeMutablePointer<VirtualMemoryManager>?
     private static var ppm: UnsafeMutablePointer<KernelPPM>?
-    
+        
     private init() {}
     
     public static func initialize(
@@ -36,10 +36,8 @@ public struct ProcessManager {
             throw .allocationFailed(reason: .fullMemory)
         }
         
-        
-        
         let addressSpace = try vmm.pointee.createAddressSpace()
-        let entryPoint = try ElfParser.loadSegments(
+        let elf          = try ElfParser.loadSegments(
             elfAddress  : elfRawAddress,
             addressSpace: addressSpace,
             vmm         : vmm,
@@ -60,9 +58,12 @@ public struct ProcessManager {
             throw .allocationFailed(reason: .fullMemory)
         }
         
-        let trapFramePtr = trapRaw.bindMemory(to: Arch.TrapFrame.self, capacity: 1)
+        let trapFramePtr = trapRaw.bindMemory(
+            to: Arch.TrapFrame.self,
+            capacity: 1
+        )
         trapFramePtr.initialize(to: Arch.TrapFrame())
-        trapFramePtr.pointee.elr   = entryPoint
+        trapFramePtr.pointee.elr   = elf.entryPoint
         trapFramePtr.pointee.spsr  = 0x0
         trapFramePtr.pointee.spel0 = userStackTop + 4096
         
@@ -82,29 +83,75 @@ public struct ProcessManager {
             throw .allocationFailed(reason: .fullMemory)
         }
         
-        let processPtr = rawProcessMemory.bindMemory(to: Process.self, capacity: 1)
+        let processPtr = rawProcessMemory.bindMemory(
+            to: Process.self,
+            capacity: 1
+        )
         processPtr.initialize(to: Process(
-            pid: pid,
-            status: .new,
-            addressSpace: addressSpace,
-            priority: 1,
-            type: .user,
-            context: trapFramePtr,
-            kernelStack : kStackTop,
-            kernelStackAllocation: kStackRaw
+            pid                  : pid,
+            status               : .new,
+            addressSpace         : addressSpace,
+            priority             : 1,
+            type                 : .user,
+            context              : trapFramePtr,
+            kernelStack          : kStackTop,
+            kernelStackAllocation: kStackRaw,
+            userStack            : userStackSection,
+            elfImage             : elf.image,
+            elfLoadBase          : elf.loadBase,
+            elfLoadEnd           : elf.loadEnd
         ))
-        
-        //        processPtr.initialize(to: Process(
-        //            pid: 0,
-        //            status: .new,
-        //            addressSpace: AddressSpace(rootTablePhysical: 0, asid: 0),
-        //            priority: 1,
-        //            type: .user,
-        //            context: nil,
-        //            kernelStack : nil,
-        //            kernelStackAllocation: nil
-        //        ))
-        
+                
         return processPtr
+    }
+    
+    public static func destroyProcess(_ process: UnsafeMutablePointer<Process>) throws(PPMError) {
+        guard let vmm = self.vmm, let ppm = self.ppm else {
+            throw .allocationFailed(reason: .fullMemory)
+        }
+                
+        let userStackTop: UInt64 = 0x0000007FFFFFE000
+        try vmm.pointee.unmapUserPage(
+            addressSpace: process.pointee.addressSpace,
+            virtual: userStackTop
+        )
+
+        if let userStack = process.pointee.userStack {
+            try ppm.pointee.free(userStack)
+            process.pointee.userStack = nil
+        }
+
+        var elfVirtual = process.pointee.elfLoadBase
+        while elfVirtual < process.pointee.elfLoadEnd {
+            try vmm.pointee.unmapUserPage(
+                addressSpace: process.pointee.addressSpace,
+                virtual: elfVirtual
+            )
+            elfVirtual += VirtualMemoryManager.pageSize
+        }
+
+        if let elfImage = process.pointee.elfImage {
+            try ppm.pointee.free(elfImage)
+            process.pointee.elfImage = nil
+        }
+        
+        if let trapFrame = process.pointee.context {
+            KernelHeap.kfree(UnsafeMutableRawPointer(trapFrame))
+            process.pointee.context = nil
+        }
+        
+        if let stackAddress = process.pointee.kernelStackAllocation {
+            KernelHeap.kfree(UnsafeMutableRawPointer(stackAddress))
+            process.pointee.kernelStackAllocation = nil
+            process.pointee.kernelStack = nil
+        }
+        
+        try vmm.pointee.destroyAddressSpace(
+            addressSpace: process.pointee.addressSpace
+        )
+        
+        // Crash
+        process.deinitialize(count: 1)
+        KernelHeap.kfree(UnsafeMutableRawPointer(process))
     }
 }

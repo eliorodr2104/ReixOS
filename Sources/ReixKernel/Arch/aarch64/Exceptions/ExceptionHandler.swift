@@ -37,11 +37,10 @@ public func exceptionVirtualTableHandler(
                 
                 if Kernel.scheduler.onTick() {
                     if let nextProcess = Kernel.scheduler.selectNextTask() {
-                        kprint("PID:")
-                        kprint(nextProcess.pointee.pid)
-                        kprint()
                         
-                        Arch.MMU.switchUserAddressSpace(nextProcess.pointee.addressSpace.rootTablePhysical)
+                        Arch.MMU.switchUserAddressSpace(
+                            nextProcess.pointee.addressSpace.rootTablePhysical.address
+                        )
                         framePointer.pointee = nextProcess.pointee.context!.pointee
                     }
                 }

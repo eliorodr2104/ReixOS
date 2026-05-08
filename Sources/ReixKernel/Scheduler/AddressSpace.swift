@@ -8,15 +8,15 @@
 public typealias ASID = UInt16
 
 @frozen
-public struct AddressSpace: ~Copyable {
-    public let rootTablePhysical: PhysicalAddress
+public struct AddressSpace {
+    public let rootTablePhysical: PhysicalPage
     public let asid             : ASID
     
     // Implement VMA
     // let vma      : UnsafeMutablePointer<VMA>
     
     init(
-        rootTablePhysical: PhysicalAddress,
+        rootTablePhysical: consuming PhysicalPage,
         asid             : ASID
     ) {
         self.rootTablePhysical = rootTablePhysical

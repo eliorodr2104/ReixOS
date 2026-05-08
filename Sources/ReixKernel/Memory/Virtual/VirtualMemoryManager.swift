@@ -31,8 +31,11 @@ public struct VirtualMemoryManager {
     
     init(ppmPtr: UnsafeMutablePointer<KernelPPM>) throws(PPMError) {
         self.ppmPtr               = ppmPtr
-        self.kernelTableAddress   = try self.ppmPtr.pointee.alloc(4096).address
-        self.identityTableAddress = try self.ppmPtr.pointee.alloc(4096).address
+        let pageKernelTable       = try self.ppmPtr.pointee.alloc(4096)
+        self.kernelTableAddress   = pageKernelTable.address
+        
+        let pageIdentityTable     = try self.ppmPtr.pointee.alloc(4096)
+        self.identityTableAddress = pageIdentityTable.address
         
         self.kernelRootTable = UnsafeMutablePointer<PageTableEntry>(
             bitPattern: UInt(kernelTableAddress)
@@ -42,8 +45,15 @@ public struct VirtualMemoryManager {
             bitPattern: UInt(identityTableAddress)
         )!
         
-        self.kernelRootTable.initialize(repeating: PageTableEntry(rawValue: 0), count: 512)
-        self.identityRootTable.initialize(repeating: PageTableEntry(rawValue: 0), count: 512)
+        
+        self.kernelRootTable.initialize(
+            repeating: PageTableEntry(rawValue: 0),
+            count    : 512
+        )
+        self.identityRootTable.initialize(
+            repeating: PageTableEntry(rawValue: 0),
+            count    : 512
+        )
         
         
         let ramStart = PhysicalAddress(self.ppmPtr.pointee.ramStart)
@@ -152,10 +162,23 @@ public struct VirtualMemoryManager {
         }
         
         return AddressSpace(
-            rootTablePhysical: page.address,
+            rootTablePhysical: page,
             asid             : asid
         )
     }
+    
+    public func destroyAddressSpace(
+        addressSpace: consuming AddressSpace
+    ) throws(PPMError) {
+        let rootTable: UnsafeMutablePointer<PageTableEntry> = physToVirt(addressSpace.rootTablePhysical.address)
+        
+//        Crash Kernel
+//        try destroyPageTable(table: rootTable, order: addressSpace.rootTablePhysical.order, level: 0)
+        try ppmPtr.pointee.freeOwnedKernelPage(addressSpace.rootTablePhysical)
+        
+        Arch.MMU.flushTLB()
+    }
+    
     
     public func mapUserPage(
         addressSpace: borrowing AddressSpace,
@@ -163,7 +186,7 @@ public struct VirtualMemoryManager {
         physical    : PhysicalAddress,
         flags       : VirtualPageFlags
     ) throws(PPMError) {
-        let tablePointer: UnsafeMutablePointer<PageTableEntry> = physToVirt(addressSpace.rootTablePhysical)
+        let tablePointer: UnsafeMutablePointer<PageTableEntry> = physToVirt(addressSpace.rootTablePhysical.address)
         
         try map(
             table   : tablePointer,
@@ -174,15 +197,32 @@ public struct VirtualMemoryManager {
         )
     }
     
+    public func unmapUserPage(
+        addressSpace: borrowing AddressSpace,
+        virtual     : VirtualAddress
+    ) throws(PPMError) {
+        let tablePointer: UnsafeMutablePointer<PageTableEntry> = physToVirt(addressSpace.rootTablePhysical.address)
+        guard let leafTable = lookupLeafTable(table: tablePointer, virtual: virtual) else {
+            return
+        }
+
+        leafTable[virtual.l3] = PageTableEntry(rawValue: 0)
+
+        if Arch.MMU.isMMUEnabled() {
+            Arch.MMU.flushTLB()
+        }
+    }
+    
     
     // MARK: - Internals Handlers
     
     private func map(
-        table   : UnsafeMutablePointer<PageTableEntry>,
-        virtual : VirtualAddress,
-        physical: PhysicalAddress,
-        type    : MemoryType,
-        flags   : VirtualPageFlags = [.present]
+        table       : UnsafeMutablePointer<PageTableEntry>,
+        virtual     : VirtualAddress,
+        physical    : PhysicalAddress,
+        type        : MemoryType,
+        flags       : VirtualPageFlags = [.present],
+        defaultFlags: VirtualPageFlags = [.valid, .page, .accessFlag]
     ) throws(PPMError) {
         
         var currentTable = table
@@ -197,10 +237,9 @@ public struct VirtualMemoryManager {
         let attrs = type.attributes
         entry.mairIndex    = attrs.mair
         entry.shareability = attrs.share
+        entry.flags        = flags.union(defaultFlags)
         
-        entry.flags = flags.union([.valid, .page, .accessFlag])
         currentTable[virtual.l3] = entry
-        
         if Arch.MMU.isMMUEnabled() {
             Arch.MMU.flushTLB()
         }
@@ -224,6 +263,43 @@ public struct VirtualMemoryManager {
         }
         
         return physToVirt(entry.physicalAddress)
+    }
+
+    private func lookupLeafTable(
+        table  : UnsafeMutablePointer<PageTableEntry>,
+        virtual: VirtualAddress
+    ) -> UnsafeMutablePointer<PageTableEntry>? {
+        var currentTable = table
+        let indexes = [virtual.l0, virtual.l1, virtual.l2]
+
+        for index in indexes {
+            let entry = currentTable[index]
+            guard entry.isPresent else { return nil }
+            currentTable = physToVirt(entry.physicalAddress)
+        }
+
+        return currentTable
+    }
+
+    private func destroyPageTable(
+        table: UnsafeMutablePointer<PageTableEntry>,
+        order: UInt8,
+        level: UInt8
+    ) throws(PPMError) {
+        guard level < 3 else { return }
+
+        for index in 0..<512 {
+            let entry = table[index]
+            guard entry.isPresent else { continue }
+
+            let childAddress = entry.physicalAddress
+            let childTable: UnsafeMutablePointer<PageTableEntry> = physToVirt(childAddress)
+            
+            try destroyPageTable(table: childTable, order: order, level: level + 1)
+            
+            try ppmPtr.pointee.freeOwnedKernelPage(PhysicalPage(address: childAddress, order: order))
+            table[index].rawValue = 0
+        }
     }
     
     
@@ -259,6 +335,83 @@ public struct VirtualMemoryManager {
         }
     }
 
+    
+    private func unmapKernelIdentitySpace(
+        table: UnsafeMutablePointer<PageTableEntry>
+    ) throws(PPMError) {
+        let ramStart = PhysicalAddress(self.ppmPtr.pointee.ramStart)
+        let kernelStart = getOfaddressWithSymbol(of: &_kernel_start)
+        
+        if ramStart < kernelStart {
+            try mapUserRootSection(
+                table       : table,
+                startAddress: ramStart,
+                endAddress  : kernelStart,
+                flags       : []
+            )
+        }
+        
+        try mapUserRootSection(
+            table       : table,
+            startAddress: kernelStart,
+            endAddress  : getOfaddressWithSymbol(of: &_text_end),
+            flags       : []
+        )
+        
+        try mapUserRootSection(
+            table       : table,
+            startAddress: getOfaddressWithSymbol(of: &_rodata_start),
+            endAddress  : getOfaddressWithSymbol(of: &_rodata_end),
+            flags       : []
+        )
+        
+        let kernelEnd = getOfaddressWithSymbol(of: &_kernel_end)
+        try mapUserRootSection(
+            table       : table,
+            startAddress: getOfaddressWithSymbol(of: &_data_start),
+            endAddress  : kernelEnd,
+            flags       : []
+        )
+        
+        let ramEnd = PhysicalAddress(self.ppmPtr.pointee.ramStart + self.ppmPtr.pointee.ramSize)
+        let safeRamStart = (kernelEnd + (Self.pageSize - 1)) & ~(Self.pageSize - 1)
+        try mapUserRootSection(
+            table       : table,
+            startAddress: safeRamStart,
+            endAddress  : ramEnd,
+            flags       : []
+        )
+        
+        let uartBase = Kernel.platformInfo.uart.baseAddr
+        try map(
+            table       : table,
+            virtual     : uartBase,
+            physical    : uartBase,
+            type        : .normal,
+            flags       : [],
+            defaultFlags: []
+        )
+        
+        let gicDistributorBase  = Kernel.platformInfo.gic.gicdBase
+        let gicCpuInterfaceBase = Kernel.platformInfo.gic.giccBase
+        try map(
+            table   : table,
+            virtual : gicDistributorBase,
+            physical: gicDistributorBase,
+            type    : .normal,
+            flags   : [],
+            defaultFlags: []
+        )
+        try map(
+            table   : table,
+            virtual : gicCpuInterfaceBase,
+            physical: gicCpuInterfaceBase,
+            type    : .normal,
+            flags   : [],
+            defaultFlags: []
+        )
+    }
+    
     private func mapKernelIdentitySpace(
         table: UnsafeMutablePointer<PageTableEntry>
     ) throws(PPMError) {
@@ -313,6 +466,7 @@ public struct VirtualMemoryManager {
         try map(table: table, virtual: gicDistributorBase, physical: gicDistributorBase, type: .device)
         try map(table: table, virtual: gicCpuInterfaceBase, physical: gicCpuInterfaceBase, type: .device)
     }
+    
 
     private func mapIdentitySection(
         table       : UnsafeMutablePointer<PageTableEntry>,
@@ -334,6 +488,31 @@ public struct VirtualMemoryManager {
                 flags   : flags
             )
 
+            currentAddr += Self.pageSize
+        }
+    }
+    
+    private func mapUserRootSection(
+        table       : UnsafeMutablePointer<PageTableEntry>,
+        startAddress: PhysicalAddress,
+        endAddress  : PhysicalAddress,
+        type        : MemoryType       = .normal,
+        flags       : VirtualPageFlags = [.present]
+    ) throws(PPMError) {
+        let alignedStart = startAddress & ~(Self.pageSize - 1)
+        let alignedEnd   = (endAddress + Self.pageSize - 1) & ~(Self.pageSize - 1)
+        var currentAddr  = alignedStart
+        
+        while currentAddr < alignedEnd {
+            try map(
+                table       : table,
+                virtual     : currentAddr,
+                physical    : currentAddr,
+                type        : type,
+                flags       : flags,
+                defaultFlags: []
+            )
+            
             currentAddr += Self.pageSize
         }
     }

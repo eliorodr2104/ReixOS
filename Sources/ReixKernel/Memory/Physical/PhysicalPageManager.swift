@@ -42,6 +42,17 @@ public struct PhysicalPageManager<A: Allocator> {
     
     
     public func free(_ page: consuming PhysicalPage) throws(PPMError) {
+        try free(page, allowProtected: false)
+    }
+
+    public func freeOwnedKernelPage(_ page: consuming PhysicalPage) throws(PPMError) {
+        try free(page, allowProtected: true)
+    }
+
+    private func free(
+        _ page        : consuming PhysicalPage,
+        allowProtected: Bool
+    ) throws(PPMError) {
         guard framesMetadata != nil else {
             throw .metadataInconsistency
         }
@@ -58,19 +69,26 @@ public struct PhysicalPageManager<A: Allocator> {
             throw .pageOrderMismatch(expected: page.order, provided: metadata.order)
         }
         
-        guard !flag.contains(.kernel), !flag.contains(.reserved) else {
-            throw .protectedMemoryViolation
+        if allowProtected {
+            guard !flag.contains(.reserved) else {
+                throw .protectedMemoryViolation
+            }
+            
+        } else {
+            guard !flag.contains(.kernel), !flag.contains(.reserved) else {
+                throw .protectedMemoryViolation
+            }
         }
 
-        
         metadata.refCount -= 1
-        framesMetadata![indexMetadata] = metadata
         
         do {
             if metadata.refCount == 0 {
                 metadata.flags = .none
                 try allocator.free(page)
             }
+
+            framesMetadata![indexMetadata] = metadata
             
         } catch { throw .allocationFailed(reason: error) }
     }

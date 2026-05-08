@@ -7,7 +7,7 @@
 
 public protocol SchedulerInterface {
     func addTask(_ process: borrowing UnsafeMutablePointer<Process>)
-    func removeTask(_ processID: PID)
+    func removeTask(_ pid: PID) throws(PPMError)
     
     mutating func selectNextTask() -> UnsafeMutablePointer<Process>?
     

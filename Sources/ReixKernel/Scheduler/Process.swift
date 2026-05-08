@@ -18,11 +18,10 @@ public struct Process: ~Copyable {
     public var context     : UnsafeMutablePointer<Arch.TrapFrame>? // Used on Contex-Switch
     public var kernelStack : UnsafeMutableRawPointer?              // Stack top
     public var kernelStackAllocation: UnsafeMutableRawPointer?
+    public var userStack   : PhysicalPage?
+    public var elfImage    : PhysicalPage?
+    public var elfLoadBase : UInt64
+    public var elfLoadEnd  : UInt64
     public var nextProcess : UnsafeMutablePointer<Process>?
     
-    deinit {
-        if let stack = self.kernelStackAllocation {
-            KernelHeap.kfree(stack)
-        }
-    }
 }

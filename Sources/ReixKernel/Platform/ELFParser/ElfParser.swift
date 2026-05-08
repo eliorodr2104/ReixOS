@@ -12,13 +12,20 @@ public struct ElfParser {
     private static let pageSize: UInt64 = 4096
     
     private init() {}
+
+    public struct LoadedELF {
+        public let entryPoint: UInt64
+        public let image     : PhysicalPage
+        public let loadBase  : UInt64
+        public let loadEnd   : UInt64
+    }
     
     public static func loadSegments(
         elfAddress  : UInt64,
         addressSpace: borrowing AddressSpace,
         vmm         : UnsafeMutablePointer<VirtualMemoryManager>,
         ppm         : UnsafeMutablePointer<PhysicalPageManager<BuddyAllocator>>,
-    ) throws(PPMError) -> UInt64 {
+    ) throws(PPMError) -> LoadedELF {
         let ehdr = UnsafePointer<Elf64_Ehdr_t>(bitPattern: UInt(elfAddress))!
         
         guard ehdr.pointee.e_ident.0 == 0x7F && ehdr.pointee.e_ident.1 == 0x45 else {
@@ -83,6 +90,11 @@ public struct ElfParser {
             phdrAddr += UInt64(ehdr.pointee.e_phentsize)
         }
         
-        return ehdr.pointee.e_entry
+        return LoadedELF(
+            entryPoint: ehdr.pointee.e_entry,
+            image     : physicalImage,
+            loadBase  : loadBase,
+            loadEnd   : loadEnd
+        )
     }
 }
