@@ -37,13 +37,11 @@ public struct VirtualMemoryManager {
         let pageIdentityTable     = try self.ppmPtr.pointee.alloc(4096)
         self.identityTableAddress = pageIdentityTable.address
         
-        self.kernelRootTable = UnsafeMutablePointer<PageTableEntry>(
-            bitPattern: UInt(kernelTableAddress)
-        )!
-        
-        self.identityRootTable = UnsafeMutablePointer<PageTableEntry>(
-            bitPattern: UInt(identityTableAddress)
-        )!
+        let kernelRootTablePtr: UnsafeMutablePointer<PageTableEntry> = physToVirt(kernelTableAddress)
+        let identityRootTablePtr: UnsafeMutablePointer<PageTableEntry> = physToVirt(identityTableAddress)
+
+        self.kernelRootTable = kernelRootTablePtr
+        self.identityRootTable = identityRootTablePtr
         
         
         self.kernelRootTable.initialize(
@@ -57,7 +55,7 @@ public struct VirtualMemoryManager {
         
         
         let ramStart = PhysicalAddress(self.ppmPtr.pointee.ramStart)
-        let kernelStart = getOfaddressWithSymbol(of: &_kernel_start)
+        let kernelStart = getKernelPhysicalAddressWithSymbol(of: &_kernel_start)
         if ramStart < kernelStart {
             let flags: VirtualPageFlags = [.present, .pxn]
             try mapSection(startAddress: ramStart, endAddress: kernelStart, flags: flags)
@@ -66,21 +64,21 @@ public struct VirtualMemoryManager {
         var flags: VirtualPageFlags = [.present, .readOnly]
         try mapSection(
             startAddress: kernelStart,
-            endAddress  : getOfaddressWithSymbol(of: &_text_end),
+            endAddress  : getKernelPhysicalAddressWithSymbol(of: &_text_end),
             flags       : flags
         )
         
         flags = [.present, .readOnly, .pxn]
         try mapSection(
-            startAddress: getOfaddressWithSymbol(of: &_rodata_start),
-            endAddress  : getOfaddressWithSymbol(of: &_rodata_end),
+            startAddress: getKernelPhysicalAddressWithSymbol(of: &_rodata_start),
+            endAddress  : getKernelPhysicalAddressWithSymbol(of: &_rodata_end),
             flags       : flags
         )
         
         flags = [.present, .pxn]
-        let kernelEnd = getOfaddressWithSymbol(of: &_kernel_end)
+        let kernelEnd = getKernelPhysicalAddressWithSymbol(of: &_kernel_end)
         try mapSection(
-            startAddress: getOfaddressWithSymbol(of: &_data_start),
+            startAddress: getKernelPhysicalAddressWithSymbol(of: &_data_start),
             endAddress  : kernelEnd,
             flags       : flags
         )
@@ -105,29 +103,14 @@ public struct VirtualMemoryManager {
         )
         
         let uartBase = Kernel.platformInfo.uart.baseAddr
-        try map(table: identityRootTable, virtual: uartBase, physical: uartBase, type: .device)
         try map(table: kernelRootTable, virtual: Self.physicalOffset + uartBase, physical: uartBase, type: .device)
         
         let gicDistributorBase  = Kernel.platformInfo.gic.gicdBase
         let gicCpuInterfaceBase = Kernel.platformInfo.gic.giccBase
         try map(
-            table   : identityRootTable,
-            virtual : gicDistributorBase,
-            physical: gicDistributorBase,
-            type    : .device
-        )
-        
-        try map(
             table   : kernelRootTable,
             virtual : Self.physicalOffset + gicDistributorBase,
             physical: gicDistributorBase,
-            type    : .device
-        )
-        
-        try map(
-            table   : identityRootTable,
-            virtual : gicCpuInterfaceBase,
-            physical: gicCpuInterfaceBase,
             type    : .device
         )
         
@@ -151,7 +134,6 @@ public struct VirtualMemoryManager {
         let page = try ppmPtr.pointee.alloc(4096, flag: .kernel)
         let rootTable: UnsafeMutablePointer<PageTableEntry> = physToVirt(page.address)
         rootTable.initialize(repeating: PageTableEntry(rawValue: 0), count: 512)
-        try mapKernelIdentitySpace(table: rootTable)
 
         let asid = Self.asidCounter
         
@@ -289,14 +271,6 @@ public struct VirtualMemoryManager {
         
         while currentAddr < alignedEnd {
             try map(
-                table   : identityRootTable,
-                virtual : currentAddr,
-                physical: currentAddr,
-                type    : type,
-                flags   : flags
-            )
-            
-            try map(
                 table   : kernelRootTable,
                 virtual : Self.physicalOffset + currentAddr,
                 physical: currentAddr,
@@ -309,118 +283,6 @@ public struct VirtualMemoryManager {
     }
 
     
-    private func unmapKernelIdentitySpace(
-        table: UnsafeMutablePointer<PageTableEntry>
-    ) throws(PPMError) {
-        let kernelStart = getOfaddressWithSymbol(of: &_kernel_start)
-
-        try mapUserRootSection(
-            table       : table,
-            startAddress: kernelStart,
-            endAddress  : getOfaddressWithSymbol(of: &_text_end),
-            flags       : []
-        )
-        
-        try mapUserRootSection(
-            table       : table,
-            startAddress: getOfaddressWithSymbol(of: &_rodata_start),
-            endAddress  : getOfaddressWithSymbol(of: &_rodata_end),
-            flags       : []
-        )
-        
-        let kernelEnd = getOfaddressWithSymbol(of: &_kernel_end)
-        try mapUserRootSection(
-            table       : table,
-            startAddress: getOfaddressWithSymbol(of: &_data_start),
-            endAddress  : kernelEnd,
-            flags       : []
-        )
-
-        let initrdBase = Kernel.platformInfo.initrdStart
-        let initrdEnd  = Kernel.platformInfo.initrdEnd
-        try mapUserRootSection(
-            table       : table,
-            startAddress: initrdBase,
-            endAddress  : initrdEnd,
-            flags       : []
-        )
-        
-        let uartBase = Kernel.platformInfo.uart.baseAddr
-        try map(
-            table       : table,
-            virtual     : uartBase,
-            physical    : uartBase,
-            type        : .normal,
-            flags       : [],
-            defaultFlags: []
-        )
-        
-        let gicDistributorBase  = Kernel.platformInfo.gic.gicdBase
-        let gicCpuInterfaceBase = Kernel.platformInfo.gic.giccBase
-        try map(
-            table   : table,
-            virtual : gicDistributorBase,
-            physical: gicDistributorBase,
-            type    : .normal,
-            flags   : [],
-            defaultFlags: []
-        )
-        try map(
-            table   : table,
-            virtual : gicCpuInterfaceBase,
-            physical: gicCpuInterfaceBase,
-            type    : .normal,
-            flags   : [],
-            defaultFlags: []
-        )
-    }
-    
-    private func mapKernelIdentitySpace(
-        table: UnsafeMutablePointer<PageTableEntry>
-    ) throws(PPMError) {
-        let kernelStart = getOfaddressWithSymbol(of: &_kernel_start)
-
-        try mapIdentitySection(
-            table       : table,
-            startAddress: kernelStart,
-            endAddress  : getOfaddressWithSymbol(of: &_text_end),
-            flags       : [.present, .readOnly]
-        )
-
-        try mapIdentitySection(
-            table       : table,
-            startAddress: getOfaddressWithSymbol(of: &_rodata_start),
-            endAddress  : getOfaddressWithSymbol(of: &_rodata_end),
-            flags       : [.present, .readOnly, .pxn]
-        )
-
-        let kernelEnd = getOfaddressWithSymbol(of: &_kernel_end)
-        try mapIdentitySection(
-            table       : table,
-            startAddress: getOfaddressWithSymbol(of: &_data_start),
-            endAddress  : kernelEnd,
-            flags       : [.present, .pxn]
-        )
-
-        let initrdBase = Kernel.platformInfo.initrdStart
-        let initrdEnd  = Kernel.platformInfo.initrdEnd
-        try mapIdentitySection(
-            table       : table,
-            startAddress: initrdBase,
-            endAddress  : initrdEnd,
-            flags       : [.present, .readOnly, .pxn]
-        )
-
-        let uartBase = Kernel.platformInfo.uart.baseAddr
-        try map(table: table, virtual: uartBase, physical: uartBase, type: .device)
-
-        let gicDistributorBase  = Kernel.platformInfo.gic.gicdBase
-        let gicCpuInterfaceBase = Kernel.platformInfo.gic.giccBase
-        try map(table: table, virtual: gicDistributorBase, physical: gicDistributorBase, type: .device)
-        try map(table: table, virtual: gicCpuInterfaceBase, physical: gicCpuInterfaceBase, type: .device)
-    }
-    
-
     private func mapIdentitySection(
         table       : UnsafeMutablePointer<PageTableEntry>,
         startAddress: PhysicalAddress,

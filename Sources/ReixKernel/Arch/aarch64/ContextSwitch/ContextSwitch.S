@@ -9,13 +9,7 @@ jump_to_user_mode:
     // x0 = Puntatore al TrapFrame
     // x1 = Indirizzo RootTable Utente
     // x2 = Indirizzo Cima del Kernel Stack
-    
-    adr     x3, safe_high_half
-    ldr     x4, =0xFFFF800000000000
-    add     x3, x3, x4
-    br      x3
 
-safe_high_half:
     msr     daifset, #3
     msr     ttbr0_el1, x1
     tlbi    vmalle1is

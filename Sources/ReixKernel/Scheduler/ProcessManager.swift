@@ -30,7 +30,7 @@ public struct ProcessManager {
         let cPtr = UnsafeRawPointer(filename.utf8Start).assumingMemoryBound(to: CChar.self)
         let elfRawAddress = parseTar(
             filename  : cPtr,
-            tarAddress: Kernel.platformInfo.initrdStart
+            tarAddress: kernelPhysicalToVirtual(Kernel.platformInfo.initrdStart)
         )
         guard elfRawAddress != 0 else {
             throw .allocationFailed(reason: .fullMemory)

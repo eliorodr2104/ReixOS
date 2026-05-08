@@ -29,7 +29,7 @@ public struct Kernel {
             
             self.vmm = try VirtualMemoryManager(ppmPtr: &ppm!)
             
-            let virtualVBAR = getOfaddressWithSymbol(of: &_evt_start) + VirtualMemoryManager.physicalOffset
+            let virtualVBAR = getOfaddressWithSymbol(of: &_evt_start)
             Arch.CPU.setVBAR(virtualVBAR)
             
             self.ppm?.applyFramesMetadataVirtualOffset(VirtualMemoryManager.physicalOffset)

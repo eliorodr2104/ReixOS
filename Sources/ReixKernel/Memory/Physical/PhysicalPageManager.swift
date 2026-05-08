@@ -197,8 +197,8 @@ public struct PhysicalPageManager<A: Allocator> {
 extension PhysicalPageManager where A == BuddyAllocator {
     
     init() throws(PPMError) {
-        let evtEndAddr     = getOfaddressWithSymbol(of: &_evt_end)
-        let kernelTotalEnd = getOfaddressWithSymbol(of: &_kernel_total_end)
+        let evtEndAddr     = getKernelPhysicalAddressWithSymbol(of: &_evt_end)
+        let kernelTotalEnd = getKernelPhysicalAddressWithSymbol(of: &_kernel_total_end)
         
         self.ramStart             = Kernel.platformInfo.ram.base
         self.ramSize              = Kernel.platformInfo.ram.size

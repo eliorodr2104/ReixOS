@@ -50,8 +50,25 @@ public var _evt_end: UInt8
 @_silgen_name("_kernel_total_end")
 public var _kernel_total_end: UInt8
 
-public func getOfaddressWithSymbol(of symbol: inout UInt8) -> PhysicalAddress {
-    return withUnsafePointer(to: &symbol) {
+public let KernelVirtualOffset: UInt64 = 0xFFFF800000000000
+
+public func getOfaddressWithSymbol(of symbol: inout UInt8) -> VirtualAddress {
+    withUnsafePointer(to: &symbol) {
         UInt64(UInt(bitPattern: $0))
     }
+}
+
+@inline(__always)
+public func kernelVirtualToPhysical(_ addr: VirtualAddress) -> PhysicalAddress {
+    addr >= KernelVirtualOffset ? (addr - KernelVirtualOffset) : addr
+}
+
+@inline(__always)
+public func kernelPhysicalToVirtual(_ addr: PhysicalAddress) -> VirtualAddress {
+    addr + KernelVirtualOffset
+}
+
+@inline(__always)
+public func getKernelPhysicalAddressWithSymbol(of symbol: inout UInt8) -> PhysicalAddress {
+    kernelVirtualToPhysical(getOfaddressWithSymbol(of: &symbol))
 }
