@@ -312,18 +312,8 @@ public struct VirtualMemoryManager {
     private func unmapKernelIdentitySpace(
         table: UnsafeMutablePointer<PageTableEntry>
     ) throws(PPMError) {
-        let ramStart = PhysicalAddress(self.ppmPtr.pointee.ramStart)
         let kernelStart = getOfaddressWithSymbol(of: &_kernel_start)
-        
-        if ramStart < kernelStart {
-            try mapUserRootSection(
-                table       : table,
-                startAddress: ramStart,
-                endAddress  : kernelStart,
-                flags       : []
-            )
-        }
-        
+
         try mapUserRootSection(
             table       : table,
             startAddress: kernelStart,
@@ -345,13 +335,13 @@ public struct VirtualMemoryManager {
             endAddress  : kernelEnd,
             flags       : []
         )
-        
-        let ramEnd = PhysicalAddress(self.ppmPtr.pointee.ramStart + self.ppmPtr.pointee.ramSize)
-        let safeRamStart = (kernelEnd + (Self.pageSize - 1)) & ~(Self.pageSize - 1)
+
+        let initrdBase = Kernel.platformInfo.initrdStart
+        let initrdEnd  = Kernel.platformInfo.initrdEnd
         try mapUserRootSection(
             table       : table,
-            startAddress: safeRamStart,
-            endAddress  : ramEnd,
+            startAddress: initrdBase,
+            endAddress  : initrdEnd,
             flags       : []
         )
         
@@ -388,17 +378,7 @@ public struct VirtualMemoryManager {
     private func mapKernelIdentitySpace(
         table: UnsafeMutablePointer<PageTableEntry>
     ) throws(PPMError) {
-        let ramStart = PhysicalAddress(self.ppmPtr.pointee.ramStart)
         let kernelStart = getOfaddressWithSymbol(of: &_kernel_start)
-
-        if ramStart < kernelStart {
-            try mapIdentitySection(
-                table       : table,
-                startAddress: ramStart,
-                endAddress  : kernelStart,
-                flags       : [.present, .pxn]
-            )
-        }
 
         try mapIdentitySection(
             table       : table,
@@ -422,13 +402,13 @@ public struct VirtualMemoryManager {
             flags       : [.present, .pxn]
         )
 
-        let ramEnd = PhysicalAddress(self.ppmPtr.pointee.ramStart + self.ppmPtr.pointee.ramSize)
-        let safeRamStart = (kernelEnd + (Self.pageSize - 1)) & ~(Self.pageSize - 1)
+        let initrdBase = Kernel.platformInfo.initrdStart
+        let initrdEnd  = Kernel.platformInfo.initrdEnd
         try mapIdentitySection(
             table       : table,
-            startAddress: safeRamStart,
-            endAddress  : ramEnd,
-            flags       : [.present, .pxn]
+            startAddress: initrdBase,
+            endAddress  : initrdEnd,
+            flags       : [.present, .readOnly, .pxn]
         )
 
         let uartBase = Kernel.platformInfo.uart.baseAddr
