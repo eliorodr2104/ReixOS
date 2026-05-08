@@ -8,20 +8,22 @@
 
 public struct SyscallHandler {
 
-    public static func handleExit(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
+    public static func handleExit(
+        frame: UnsafeMutablePointer<Arch.TrapFrame>
+    ) {
                 
         let currentAddr = Arch.CPU.getCurrentProcess()
-        if let current = UnsafeMutablePointer<Process>(bitPattern: UInt(currentAddr)) {
-            current.pointee.context?.pointee = frame.pointee
-            current.pointee.status = .terminated
+        if let oldProcess = UnsafeMutablePointer<Process>(bitPattern: UInt(currentAddr)) {
+            oldProcess.pointee.context?.pointee = frame.pointee
+            oldProcess.pointee.status           = .terminated
             
             do {
                 Arch.CPU.setCurrentProcess(0)
-                try ProcessManager.destroyProcess(current)
+                try ProcessManager.releaseAddressSpace(oldProcess)
+                oldProcess.pointee.exitCode = UInt32(frame.pointee.x0)                
+                try Kernel.scheduler.removeTask(oldProcess.pointee.pid)
                 
-            } catch {
-                Arch.CPU.panic("Failed to destroy exiting process")
-            }
+            } catch { Arch.CPU.panic("Failed to destroy exiting process") }
         }
         
         // Change Process
@@ -39,6 +41,11 @@ public struct SyscallHandler {
                 Arch.CPU.waitForInterrupt()
             }
         }
+        
+//        if oldProcess != nil {
+//            oldProcess!.deinitialize(count: 1)
+//            KernelHeap.kfree(UnsafeMutableRawPointer(oldProcess!))
+//        }
     }
 
     public static func handleYield(frame: UnsafeMutablePointer<Arch.TrapFrame>) {

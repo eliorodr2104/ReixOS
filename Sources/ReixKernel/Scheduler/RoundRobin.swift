@@ -7,26 +7,28 @@
 
 public struct RoundRobin: SchedulerInterface {
     
-    private static var fifo: LinkedList = LinkedList(head: nil, tail: nil)
-        
+    private var ready     : LinkedList = LinkedList(head: nil, tail: nil)
+    private var waiting   : LinkedList = LinkedList(head: nil, tail: nil)
+    private var terminated: LinkedList = LinkedList(head: nil, tail: nil)
+            
     private var currentTicks: UInt = 0 // Tick
     private let quantum     : UInt = 100 // One tick is 10ms
     
-    public func addTask(_ process: UnsafeMutablePointer<Process>) {
+    public mutating func addTask(_ process: UnsafeMutablePointer<Process>) {
         guard process.pointee.status == .new else {
             return
         }
         
         process.pointee.status = .ready
-        Self.fifo.pushBack(process)
+        self.ready.pushBack(process)
     }
     
-    public func removeTask(_ pid: PID) throws(PPMError) {
-        guard let process = Self.fifo.remove(pid: pid) else {
+    public mutating func removeTask(_ pid: PID) throws(PPMError) {
+        guard let process = ready.remove(pid: pid) else {
             return
         }
         
-        try ProcessManager.destroyProcess(process)
+        terminated.pushBack(process)
     }
     
     public mutating func selectNextTask() -> UnsafeMutablePointer<Process>? {
@@ -35,11 +37,11 @@ public struct RoundRobin: SchedulerInterface {
         if let currentPtr = UnsafeMutablePointer<Process>(bitPattern: UInt(currentAddr)) {
             if currentPtr.pointee.status == .running {
                 currentPtr.pointee.status = .ready
-                Self.fifo.pushBack(currentPtr)
+                ready.pushBack(currentPtr)
             }
         }
                 
-        if let next = Self.fifo.popFront() {
+        if let next = ready.popFront() {
             let nextAddr = VirtualAddress(UInt(bitPattern: next))
             Arch.CPU.setCurrentProcess(nextAddr)
             next.pointee.status = .running

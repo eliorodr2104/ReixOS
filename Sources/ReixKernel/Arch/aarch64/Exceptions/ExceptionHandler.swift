@@ -53,7 +53,6 @@ public func exceptionVirtualTableHandler(
             
             switch exceptionClass {
                 case 0x15:
-                    kprint("System call")
                     let syscallID = frame.x8
 
                     switch syscallID {

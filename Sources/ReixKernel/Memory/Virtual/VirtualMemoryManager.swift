@@ -170,12 +170,7 @@ public struct VirtualMemoryManager {
     public func destroyAddressSpace(
         addressSpace: consuming AddressSpace
     ) throws(PPMError) {
-        let rootTable: UnsafeMutablePointer<PageTableEntry> = physToVirt(addressSpace.rootTablePhysical.address)
-        
-//        Crash Kernel
-//        try destroyPageTable(table: rootTable, order: addressSpace.rootTablePhysical.order, level: 0)
         try ppmPtr.pointee.freeOwnedKernelPage(addressSpace.rootTablePhysical)
-        
         Arch.MMU.flushTLB()
     }
     
@@ -280,28 +275,6 @@ public struct VirtualMemoryManager {
 
         return currentTable
     }
-
-    private func destroyPageTable(
-        table: UnsafeMutablePointer<PageTableEntry>,
-        order: UInt8,
-        level: UInt8
-    ) throws(PPMError) {
-        guard level < 3 else { return }
-
-        for index in 0..<512 {
-            let entry = table[index]
-            guard entry.isPresent else { continue }
-
-            let childAddress = entry.physicalAddress
-            let childTable: UnsafeMutablePointer<PageTableEntry> = physToVirt(childAddress)
-            
-            try destroyPageTable(table: childTable, order: order, level: level + 1)
-            
-            try ppmPtr.pointee.freeOwnedKernelPage(PhysicalPage(address: childAddress, order: order))
-            table[index].rawValue = 0
-        }
-    }
-    
     
     private func mapSection(
         startAddress: PhysicalAddress,

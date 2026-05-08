@@ -12,6 +12,7 @@ public struct Process: ~Copyable {
     
     public let pid         : PID                                   // Process ID
     public var status      : ProcessStatus                         // Current status
+    public var exitCode    : UInt32?
     public var addressSpace: AddressSpace                          // Virtual memory space
     public var priority    : UInt8                                 // 0 ... 5 for ex
     public var type        : ProcessType                           // User | Kernel

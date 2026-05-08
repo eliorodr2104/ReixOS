@@ -105,7 +105,7 @@ public struct ProcessManager {
         return processPtr
     }
     
-    public static func destroyProcess(_ process: UnsafeMutablePointer<Process>) throws(PPMError) {
+    public static func releaseAddressSpace(_ process: UnsafeMutablePointer<Process>) throws(PPMError) {
         guard let vmm = self.vmm, let ppm = self.ppm else {
             throw .allocationFailed(reason: .fullMemory)
         }
@@ -149,9 +149,5 @@ public struct ProcessManager {
         try vmm.pointee.destroyAddressSpace(
             addressSpace: process.pointee.addressSpace
         )
-        
-        // Crash
-        process.deinitialize(count: 1)
-        KernelHeap.kfree(UnsafeMutableRawPointer(process))
     }
 }
