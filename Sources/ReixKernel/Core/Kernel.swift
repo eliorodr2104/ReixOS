@@ -49,6 +49,7 @@ public struct Kernel {
             kprint("Process Manager init!")
 
             AArch64VirtualTimer.arm()
+
                                     
 //            try testKernelHeap()
             
@@ -84,7 +85,7 @@ public struct Kernel {
         Arch.CPU.triggerTrap()
     }
     
-    private static func testProcessLaunch() throws (PPMError) {
+    private static func testProcessLaunch() throws (ProcessManagerError) {
         let firstProcess  = try ProcessManager.spawnProcess(filename: "idle.elf")
         let secondProcess = try ProcessManager.spawnProcess(filename: "init.elf")
         
@@ -97,15 +98,14 @@ public struct Kernel {
         do {
             try scheduler.addTask(secondProcess)
             
-        } catch {
-            Arch.CPU.panic(error.localizedDescription)
-        }
+        } catch { Arch.CPU.panic(error.localizedDescription) }
         
         firstProcess.pointee.status = .running
         Arch.CPU.setCurrentProcess(
             VirtualAddress(UInt(bitPattern: firstProcess))
         )
-                
+        
+        
         jump_to_user_mode(
             trapFrame     : trapFramePtr,
             rootTable     : firstProcess.pointee.addressSpace.rootTablePhysical.address,

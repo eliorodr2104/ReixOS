@@ -12,25 +12,20 @@ public struct ElfParser {
     private static let pageSize: UInt64 = 4096
     
     private init() {}
-
-    public struct LoadedELF {
-        public let entryPoint: UInt64
-        public let image     : PhysicalPage
-        public let loadBase  : UInt64
-        public let loadEnd   : UInt64
-    }
     
     public static func loadSegments(
         elfAddress  : UInt64,
         addressSpace: borrowing AddressSpace,
         vmm         : UnsafeMutablePointer<VirtualMemoryManager>,
         ppm         : UnsafeMutablePointer<PhysicalPageManager<BuddyAllocator>>,
-    ) throws(PPMError) -> LoadedELF {
+    ) throws(ElfError) -> LoadedELF {
         let ehdr = UnsafePointer<Elf64_Ehdr_t>(bitPattern: UInt(elfAddress))!
         
-        guard ehdr.pointee.e_ident.0 == 0x7F && ehdr.pointee.e_ident.1 == 0x45 else {
-            throw .allocationFailed(reason: .fullMemory)
-        }
+        guard ehdr.pointee.e_ident.0 == 0x7F,
+              ehdr.pointee.e_ident.1 == 0x45, // 'E'
+              ehdr.pointee.e_ident.2 == 0x4C, // 'L'
+              ehdr.pointee.e_ident.3 == 0x46  // 'F'
+        else { throw .invalidMagicNumber }
         
         var loadBase: UInt64 = UInt64.max
         var loadEnd : UInt64 = 0
@@ -51,28 +46,32 @@ public struct ElfParser {
         }
 
         guard loadBase != UInt64.max, loadEnd > loadBase else {
-            throw .allocationFailed(reason: .fullMemory)
+            throw .noLoadableSegments
         }
 
         let imageSize = loadEnd - loadBase
-        let physicalImage = try ppm.pointee.alloc(Int(imageSize))
+        
+        var physicalImage: PhysicalPage
+        do {
+            physicalImage = try ppm.pointee.alloc(Int(imageSize))
+        } catch { throw .allocationFailed(error) }
+        
         let imageDest: UnsafeMutablePointer<UInt8> = vmm.pointee.physToVirt(physicalImage.address)
-
-        for i in 0..<Int(imageSize) {
-            imageDest.advanced(by: i).pointee = 0
-        }
+        imageDest.initialize(repeating: 0, count: Int(imageSize))
 
         var mappedOffset: UInt64 = 0
-        while mappedOffset < imageSize {
-            try vmm.pointee.mapUserPage(
-                addressSpace: addressSpace,
-                virtual     : loadBase + mappedOffset,
-                physical    : physicalImage.address + mappedOffset,
-                flags       : [.present, .userAccess, .pxn]
-            )
+        do {
+            while mappedOffset < imageSize {
+                try vmm.pointee.mapUserPage(
+                    addressSpace: addressSpace,
+                    virtual     : loadBase + mappedOffset,
+                    physical    : physicalImage.address + mappedOffset,
+                    flags       : [.present, .userAccess, .pxn]
+                )
 
-            mappedOffset += Self.pageSize
-        }
+                mappedOffset += Self.pageSize
+            }
+        } catch { throw .mappingFailed(error) }
 
         phdrAddr = elfAddress + ehdr.pointee.e_phoff
         for _ in 0..<ehdr.pointee.e_phnum {

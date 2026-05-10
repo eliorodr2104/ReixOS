@@ -13,7 +13,7 @@ public enum PPMError: KernelFatal {
     case initRamError
     case invalidRefCount(_ count: Int)
     case pageOrderMismatch(expected: UInt8, provided: UInt8)
-    
+        
     public var description: String {
         switch self {
             case .allocationFailed(let reason):

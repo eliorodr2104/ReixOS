@@ -11,6 +11,7 @@ public struct SyscallHandler {
     public static func handleExit(
         frame: UnsafeMutablePointer<Arch.TrapFrame>
     ) {
+//        Arch.CPU.panic("Error panic")
                 
         let currentAddr = Arch.CPU.getCurrentProcess()
         if let oldProcess = UnsafeMutablePointer<Process>(bitPattern: UInt(currentAddr)) {

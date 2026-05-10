@@ -22,9 +22,9 @@ public struct ProcessManager {
         self.ppm = ppm
     }
     
-    public static func spawnProcess(filename: StaticString) throws(PPMError) -> UnsafeMutablePointer<Process> {
+    public static func spawnProcess(filename: StaticString) throws(ProcessManagerError) -> UnsafeMutablePointer<Process> {
         guard let vmm = self.vmm, let ppm = self.ppm else {
-            throw .allocationFailed(reason: .fullMemory)
+            throw .managerNotValid
         }
         
         let cPtr = UnsafeRawPointer(filename.utf8Start).assumingMemoryBound(to: CChar.self)
@@ -32,30 +32,42 @@ public struct ProcessManager {
             filename  : cPtr,
             tarAddress: Kernel.platformInfo.initrdStart
         )
-        guard elfRawAddress != 0 else {
-            throw .allocationFailed(reason: .fullMemory)
-        }
+        guard elfRawAddress != 0 else { throw .programAddressNotValid }
         
-        let addressSpace = try vmm.pointee.createAddressSpace()
-        let elf          = try ElfParser.loadSegments(
-            elfAddress  : elfRawAddress,
-            addressSpace: addressSpace,
-            vmm         : vmm,
-            ppm         : ppm
-        )
+        var addressSpace: AddressSpace
+        do {
+            addressSpace = try vmm.pointee.createAddressSpace()
+        } catch { throw .creationProcessFailed(error) }
         
-        let userStackSection = try ppm.pointee.alloc(4096)
+        var elf: LoadedELF
+        do {
+            elf = try ElfParser.loadSegments(
+                elfAddress  : elfRawAddress,
+                addressSpace: addressSpace,
+                vmm         : vmm,
+                ppm         : ppm
+            )
+        } catch { throw .elfParsingFailed(error) }
+        
+        var userStackSection: PhysicalPage
+        do {
+            userStackSection = try ppm.pointee.alloc(4096)
+        } catch { throw .allocationPageFailed(error) }
+        
+        
         let userStackTop: UInt64 = 0x0000007FFFFFE000
-        try vmm.pointee.mapUserPage(
-            addressSpace: addressSpace,
-            virtual: userStackTop,
-            physical: userStackSection.address,
-            flags: [.present, .userAccess, .pxn, .uxn]
-        )
+        do {
+            try vmm.pointee.mapUserPage(
+                addressSpace: addressSpace,
+                virtual: userStackTop,
+                physical: userStackSection.address,
+                flags: [.present, .userAccess, .pxn, .uxn]
+            )
+        } catch { throw .mappingFailed(error) }
         
         let trapSize = MemoryLayout<Arch.TrapFrame>.stride
-        guard let trapRaw  = try KernelHeap.kmalloc(UInt(trapSize)) else {
-            throw .allocationFailed(reason: .fullMemory)
+        guard let trapRaw = try? KernelHeap.kmalloc(UInt(trapSize)) else {
+            throw .heapAllocationFailed
         }
         
         let trapFramePtr = trapRaw.bindMemory(
@@ -72,15 +84,15 @@ public struct ProcessManager {
         Self.pidCounter += 1
         
         
-        guard let kStackRaw = try KernelHeap.kmalloc(4096) else {
-            throw .allocationFailed(reason: .fullMemory)
+        guard let kStackRaw = try? KernelHeap.kmalloc(4096) else {
+            throw .heapAllocationFailed
         }
         let kStackTop = kStackRaw.advanced(by: 4096)
         
         
         let processSize = MemoryLayout<Process>.stride
-        guard let rawProcessMemory = try KernelHeap.kmalloc(UInt(processSize)) else {
-            throw .allocationFailed(reason: .fullMemory)
+        guard let rawProcessMemory = try? KernelHeap.kmalloc(UInt(processSize)) else {
+            throw .heapAllocationFailed
         }
         
         let processPtr = rawProcessMemory.bindMemory(

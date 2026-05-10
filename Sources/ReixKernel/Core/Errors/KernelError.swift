@@ -12,6 +12,7 @@ protocol KernelFatal: Error {
 public enum KernelError: KernelFatal {
     case allocatorError(response: AllocatorError)
     case physicalMemoryManager(response: PPMError)
+    case processManager(ProcessManagerError)
     case unknown(Error)
     
     @inline(__always)
@@ -24,6 +25,11 @@ public enum KernelError: KernelFatal {
         self = .physicalMemoryManager(response: error)
     }
     
+    @inline(__always)
+    public init(_ error: ProcessManagerError) {
+        self = .processManager(error)
+    }
+    
     public var description: String {
         switch self {
             case .allocatorError(let response):
@@ -31,6 +37,9 @@ public enum KernelError: KernelFatal {
                 
             case .physicalMemoryManager(let response):
                 response.description
+                
+            case .processManager(let _):
+                "" // Need Add localized string
                 
             case .unknown(_):
                 "Kernel Error: Unknown error founded."
