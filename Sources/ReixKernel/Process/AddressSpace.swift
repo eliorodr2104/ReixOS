@@ -12,9 +12,6 @@ public struct AddressSpace {
     public let rootTablePhysical: PhysicalPage
     public let asid             : ASID
     
-    // Implement VMA
-    // let vma      : UnsafeMutablePointer<VMA>
-    
     init(
         rootTablePhysical: consuming PhysicalPage,
         asid             : ASID
