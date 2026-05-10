@@ -5,7 +5,7 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 10/05/2026.
 //
 
-public enum VMAPermissions: OptionSet {
+public struct VMAPermissions: OptionSet {
     public let  rawValue: UInt64
     public init(rawValue: UInt64) { self.rawValue = rawValue }
     
