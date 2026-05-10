@@ -7,11 +7,11 @@
 
 @frozen
 public struct VirtualMemoryArea: RXEntry {
-    let startAddress: VirtualAddress
-    let endAddress  : VirtualAddress
-    var permissions : VMAPermissions
-    var backingType : BackingType
-    var mappingFlags: MappingFlags
+    public let startAddress: VirtualAddress
+    public let endAddress  : VirtualAddress
+    public var permissions : VMAPermissions
+    public var backingType : BackingType
+    public var mappingFlags: MappingFlags
     
     public var entryID: UInt64 { 0 }
     

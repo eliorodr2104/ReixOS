@@ -6,8 +6,8 @@
 //
 
 public struct LinkedList<T: RXEntry> {
-    private var head: UnsafeMutablePointer<T>?
-    private var tail: UnsafeMutablePointer<T>?
+    internal var head: UnsafeMutablePointer<T>?
+    internal var tail: UnsafeMutablePointer<T>?
     
     public init(
         head: UnsafeMutablePointer<T>?,
