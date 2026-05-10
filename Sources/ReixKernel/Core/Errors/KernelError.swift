@@ -38,7 +38,7 @@ public enum KernelError: KernelFatal {
             case .physicalMemoryManager(let response):
                 response.description
                 
-            case .processManager(let _):
+            case .processManager(_):
                 "" // Need Add localized string
                 
             case .unknown(_):

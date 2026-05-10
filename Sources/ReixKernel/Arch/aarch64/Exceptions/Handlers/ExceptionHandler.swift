@@ -50,36 +50,68 @@ public func exceptionVirtualTableHandler(
         case .sync:
             let frame = framePointer.pointee
             let exceptionClass = (frame.esr >> 26) & 0b111111
-            
+                        
             switch exceptionClass {
-                case 0x15:
-                    let syscallID = frame.x8
-
-                    switch syscallID {
-                        case SyscallNumber.exit.rawValue:
-                            SyscallHandler.handleExit(frame: framePointer)
-                            
-                        case SyscallNumber.yield.rawValue:
-                            SyscallHandler.handleYield(frame: framePointer)
-                            
-                        case SyscallNumber.debugPrint.rawValue:
-                            SyscallHandler.handleDebugPrint(frame: framePointer)
-                            
-                        default:
-                            kprint("Unknown syscall")
-                            kprint(syscallID)
+                case 0x15: // SVC Syscall
+                    guard let type = SyscallNumber(rawValue: frame.x8) else {
+                        return
                     }
                     
+                    SyscallHandler.handle(
+                        type : type,
+                        frame: framePointer
+                    )
                     
-                case 0x3C:
-                    let internalReason = Kernel.internalPanicMessage
-                    Arch.CPU.panic(internalReason, exc: .brk, fp: frame)
+                case 0x24, 0x20: // User Space Abort (Data | Instruction)
+                    userAbortHandle(frame: framePointer, faultAddress: frame.far)
                     
-                case 0x00:
+                case 0x25, 0x21: // Kernel Space Abort
+                    Arch.CPU.panic("Kernel Space Abort", fp: frame)
+                    
+                case 0x3C: // BRK
+                    Arch.CPU.panic("Breakpoint", exc: .brk, fp: frame)
+                    
+                case 0x00: // UDF
                     Arch.CPU.panic(exc: .udf, fp: frame)
                     
                 default:
                     Arch.CPU.panic("EXC Unknown, Exception Class: ", fp: frame)
             }
+    }
+}
+
+fileprivate
+func userAbortHandle(
+    frame       : UnsafeMutablePointer<Arch.TrapFrame>,
+    faultAddress: UInt64
+) {
+    let iss  = frame.pointee.esr & 0x1FFFFFF
+    let dfsc = iss & 0x3F
+    
+    switch dfsc {
+        case 0x04...0x07: // TRANSLATION FAULT
+//            if Kernel.vmm.handlePageFault(addr: faultAddress) {
+//                return // Torna all'utente, l'istruzione verrà ri-eseguita con successo
+//                
+//            } else {
+//                SyscallHandler.handle(type: .exit, frame: frame)
+//            }
+            SyscallHandler.handle(type: .exit, frame: frame)
+            
+        case 0x0C...0x0F: // PERMISSION FAULT
+            
+//            if Kernel.vmm.isCopyOnWrite(addr: faultAddress) {
+//                Kernel.vmm.handleCOW(addr: faultAddress)
+//                return
+//                
+//            } else { SyscallHandler.handle(type: .exit, frame: frame) }
+            
+            SyscallHandler.handle(type: .exit, frame: frame)
+            
+        case 0x21:
+            SyscallHandler.handle(type: .exit, frame: frame)
+            
+        default:
+            Arch.CPU.panic("Unhandled DFSC")
     }
 }

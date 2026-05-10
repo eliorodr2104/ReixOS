@@ -8,11 +8,10 @@
 
 public struct SyscallHandler {
 
-    public static func handleExit(
+    private static func handleExit(
         frame: UnsafeMutablePointer<Arch.TrapFrame>
     ) {
-//        Arch.CPU.panic("Error panic")
-                
+        
         let currentAddr = Arch.CPU.getCurrentProcess()
         if let oldProcess = UnsafeMutablePointer<Process>(bitPattern: UInt(currentAddr)) {
             oldProcess.pointee.context?.pointee = frame.pointee
@@ -48,7 +47,7 @@ public struct SyscallHandler {
 //        }
     }
 
-    public static func handleYield(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
+    private static func handleYield(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
         let currentAddr = Arch.CPU.getCurrentProcess()
         if let current = UnsafeMutablePointer<Process>(bitPattern: UInt(currentAddr)) {
             current.pointee.context?.pointee = frame.pointee
@@ -68,29 +67,35 @@ public struct SyscallHandler {
     public static func handleDebugPrint(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
         let userBufferAddr = frame.pointee.x0
         let length         = frame.pointee.x1
-
-        if let ptr = UnsafePointer<UInt8>(bitPattern: UInt(userBufferAddr)) {
-            for i in 0..<Int(length) {
-                kputc(ptr.advanced(by: i).pointee)
+        
+        if UserMemory.validateRegion(addr: userBufferAddr, size: Int(length)) {
+            if let ptr = UnsafePointer<UInt8>(bitPattern: UInt(userBufferAddr)) {
+                for i in 0..<Int(length) {
+                    kputc(ptr.advanced(by: i).pointee)
+                }
+                
+                kprint()
             }
             
-            kprint()
+        } else {
+            kprint("Security Violation: User tried to access kernel memory!")
+            handleExit(frame: frame)
         }
     }
     
-//    public static func handle(
-//        type: SyscallNumber,
-//        frame: UnsafeMutablePointer<Arch.TrapFrame>
-//    ) {
-//        switch type {
-//            case .exit:
-//                handleExit(frame: frame)
-//
-//            case .yield:
-//                handleYield(frame: frame)
-//
-//            case .debugPrint:
-//                handleDebugPrint(frame: frame)
-//        }
-//    }
+    public static func handle(
+        type: SyscallNumber,
+        frame: UnsafeMutablePointer<Arch.TrapFrame>
+    ) {
+        switch type {
+            case .exit:
+                handleExit(frame: frame)
+
+            case .yield:
+                handleYield(frame: frame)
+
+            case .debugPrint:
+                handleDebugPrint(frame: frame)
+        }
+    }
 }
