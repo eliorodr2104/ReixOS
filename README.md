@@ -38,9 +38,9 @@ clear && make clean && make run
 
 The next major milestones for ReixOS involve transitioning from hardware initialization to a fully working user-space:
 
-- [ ] Processes and Context Switching
-- [ ] CPU Scheduler
-- [ ] Functional User-Space execution
+- [x] Processes and Context Switching
+- [x] CPU Scheduler
+- [x] Functional User-Space execution
 - [ ] Robust Heap allocation for all processes
 - [ ] Inter-Process Communication (IPC)
 - [ ] Better I/O handling
