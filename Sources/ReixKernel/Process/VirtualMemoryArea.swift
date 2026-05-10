@@ -15,6 +15,6 @@ public struct VirtualMemoryArea: RXEntry {
     
     public var entryID: UInt64 { 0 }
     
-    public var back: UnsafeMutablePointer<Self>?
+    public var prev: UnsafeMutablePointer<Self>?
     public var next: UnsafeMutablePointer<Self>?
 }

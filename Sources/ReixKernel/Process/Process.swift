@@ -26,6 +26,6 @@ public struct Process: RXEntry {
     
     public var entryID: UInt64 { pid }
     
-    public var back : UnsafeMutablePointer<Self>?
+    public var prev : UnsafeMutablePointer<Self>?
     public var next : UnsafeMutablePointer<Self>?
 }

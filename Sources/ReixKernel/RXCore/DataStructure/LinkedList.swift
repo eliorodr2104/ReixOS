@@ -19,57 +19,95 @@ public struct LinkedList<T: RXEntry> {
     
     public mutating func pushBack(_ element: UnsafeMutablePointer<T>) {
         element.pointee.next = nil
+        element.pointee.prev = tail
         
         if let currentTail = tail {
             currentTail.pointee.next = element
-            tail = element
             
-        } else {
-            head = element
-            tail = element
-        }
+        } else { head = element }
         
+        tail = element
     }
     
     public mutating func popFront() -> UnsafeMutablePointer<T>? {
-        guard let elementToReturn = self.head else {
+        guard let elementToReturn = head else {
             return nil
         }
         
         head = elementToReturn.pointee.next
         
-        if head == nil {
-            tail = nil
-        }
+        if let newHead = head {
+            newHead.pointee.prev = nil
+            
+        } else { tail = nil }
         
         elementToReturn.pointee.next = nil
+        elementToReturn.pointee.prev = nil
+        
         return elementToReturn
     }
     
+    public mutating func insertBefore(
+        element: UnsafeMutablePointer<T>,
+        to node: UnsafeMutablePointer<T>
+    ) {
+        let previous = node.pointee.prev
+        
+        element.pointee.prev = previous
+        element.pointee.next = node
+        node.pointee.prev    = element
+        
+        if let previousNode = previous {
+            previousNode.pointee.next = element
+            
+        } else { head = element }
+    }
+    
+    public mutating func insertAfter(
+        element: UnsafeMutablePointer<T>,
+        to node: UnsafeMutablePointer<T>
+    ) {
+        let next = node.pointee.next
+        
+        element.pointee.prev = node
+        element.pointee.next = next
+        node.pointee.next    = element
+        
+        if let nextNode = next {
+            nextNode.pointee.prev = element
+            
+        } else { tail = element }
+    }
+    
+    public mutating func remove(element: UnsafeMutablePointer<T>) -> UnsafeMutablePointer<T>? {
+        let prev = element.pointee.prev
+        let next = element.pointee.next
+        
+        if let previousNode = prev {
+            previousNode.pointee.next = next
+            
+        } else { head = next }
+        
+        if let nextNode = next {
+            nextNode.pointee.prev = prev
+            
+        } else { tail = prev }
+        
+        element.pointee.next = nil
+        element.pointee.prev = nil
+        
+        return element
+    }
+    
     public mutating func remove(id: T.IDType) -> UnsafeMutablePointer<T>? {
-        var previous: UnsafeMutablePointer<T>? = nil
         var current = head
         
-        while let process = current {
-            let next = process.pointee.next
-
-            if process.pointee.entryID == id {
-                if let previous = previous {
-                    previous.pointee.next = next
-                } else {
-                    head = next
-                }
-
-                if tail == process {
-                    tail = previous
-                }
-
-                process.pointee.next = nil
-                return process
+        while let element = current {
+            if element.pointee.entryID == id {
+                return remove(element: element)
             }
-
-            previous = process
-            current = next
+            
+            current = element.pointee.next
         }
         
         return nil

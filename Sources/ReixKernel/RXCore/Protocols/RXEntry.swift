@@ -9,6 +9,6 @@ public protocol RXEntry: ~Copyable {
     associatedtype IDType: Equatable
     
     var entryID: IDType { get }
-    var back   : UnsafeMutablePointer<Self>? { get set }
+    var prev   : UnsafeMutablePointer<Self>? { get set }
     var next   : UnsafeMutablePointer<Self>? { get set }
 }
