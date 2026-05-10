@@ -7,9 +7,9 @@
 
 public struct RoundRobin: SchedulerInterface {
     
-    private var ready     : LinkedList = LinkedList(head: nil, tail: nil)
-    private var waiting   : LinkedList = LinkedList(head: nil, tail: nil)
-    private var terminated: LinkedList = LinkedList(head: nil, tail: nil)
+    private var ready     : LinkedList = LinkedList<Process>(head: nil, tail: nil)
+    private var waiting   : LinkedList = LinkedList<Process>(head: nil, tail: nil)
+    private var terminated: LinkedList = LinkedList<Process>(head: nil, tail: nil)
             
     private var currentTicks: UInt = 0   // Tick
     private let quantum     : UInt = 100 // One tick is 10ms
@@ -83,7 +83,7 @@ public struct RoundRobin: SchedulerInterface {
     }
     
     public mutating func wakeUp(_ pid: PID) throws(SchedulerError) {
-        guard let process = waiting.remove(pid: pid) else {
+        guard let process = waiting.remove(id: pid) else {
             throw .processNotExist
         }
         

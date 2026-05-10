@@ -10,7 +10,9 @@ public typealias ASID = UInt16
 @frozen
 public struct AddressSpace {
     public let rootTablePhysical: PhysicalPage
-    public let asid             : ASID
+    
+//    public let vmaHead: VirtualMemoryArea
+    public let asid   : ASID
     
     init(
         rootTablePhysical: consuming PhysicalPage,

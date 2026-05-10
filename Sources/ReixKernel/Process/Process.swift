@@ -8,7 +8,7 @@
 public typealias PID = UInt64
 
 @frozen
-public struct Process: ~Copyable {
+public struct Process: RXEntry {
     
     public let pid         : PID                                   // Process ID
     public var status      : ProcessStatus                         // Current status
@@ -23,6 +23,9 @@ public struct Process: ~Copyable {
     public var elfImage    : PhysicalPage?
     public var elfLoadBase : UInt64
     public var elfLoadEnd  : UInt64
-    public var nextProcess : UnsafeMutablePointer<Process>?
     
+    public var entryID: UInt64 { pid }
+    
+    public var back : UnsafeMutablePointer<Self>?
+    public var next : UnsafeMutablePointer<Self>?
 }
