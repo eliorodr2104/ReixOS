@@ -7,6 +7,20 @@
 
 extension LinkedList: VMAStructure where T == VirtualMemoryArea {
     
+    public init(
+        head: UnsafeMutablePointer<T>?,
+        tail: UnsafeMutablePointer<T>?,
+        minAddress: VirtualAddress?,
+        maxAddress: VirtualAddress?
+    ) {
+        self.head = head
+        self.tail = tail
+        
+        self.minAddress = minAddress
+        self.maxAddress = maxAddress
+    }
+    
+    
     public func search(at address: VirtualAddress) -> UnsafeMutablePointer<VirtualMemoryArea>? {
         var current = head
                 
@@ -60,12 +74,56 @@ extension LinkedList: VMAStructure where T == VirtualMemoryArea {
     }
     
     
-    public func delete(at address: VirtualAddress) {
+    public mutating func delete(at address: VirtualAddress) {
+        guard let currentNode = search(at: address) else {
+            return // Implement Error, searching failh
+        }
         
+        guard let deletedNode = remove(element: currentNode) else {
+            return // Implement Error, removing failed
+        }
+        
+        // Free node because is not more usable
+        KernelHeap.kfree(deletedNode)
     }
     
-    public func findFreeGAP(size: UInt64, alignment: UInt64) -> VirtualAddress? {
+    public func findFreeGAP(
+        size     : UInt64,
+        alignment: UInt64
+    ) -> VirtualAddress? {
+        
+        guard let minAddress = self.minAddress,
+              let maxAddress = self.maxAddress else {
+            return nil // Implement Error, min address not setted
+        }
+        
+        var currentMinAddress = minAddress
+        var current           = head
+        
+        while let node = current {
+            
+            let alignedStart = align(currentMinAddress, to: alignment)
+            
+            if alignedStart + size <= node.pointee.startAddress {
+                return alignedStart
+            }
+            
+            current           = node.pointee.next
+            currentMinAddress = node.pointee.endAddress
+        }
+        
+        let lastAlignedStart = align(currentMinAddress, to: alignment)
+        if lastAlignedStart + size <= maxAddress {
+            return lastAlignedStart
+        }
+        
         return nil
     }
+
     
+    @inline(__always)
+    private func align(
+        _  address  : VirtualAddress,
+        to alignment: UInt64
+    ) -> VirtualAddress { (address + (alignment - 1)) & ~(alignment - 1) }
 }

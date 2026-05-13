@@ -7,7 +7,9 @@
 
 public protocol VMAStructure {
     func search(at address: VirtualAddress) -> UnsafeMutablePointer<VirtualMemoryArea>?
+    
     mutating func insert(_ region: UnsafeMutablePointer<VirtualMemoryArea>)
-    func delete(at address: VirtualAddress)
+    mutating func delete(at address: VirtualAddress)
+    
     func findFreeGAP(size: UInt64, alignment: UInt64) -> VirtualAddress?
 }

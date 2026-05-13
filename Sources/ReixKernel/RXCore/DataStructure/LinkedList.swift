@@ -9,12 +9,18 @@ public struct LinkedList<T: RXEntry> {
     internal var head: UnsafeMutablePointer<T>?
     internal var tail: UnsafeMutablePointer<T>?
     
+    internal let minAddress: VirtualAddress?
+    internal let maxAddress: VirtualAddress?
+    
     public init(
         head: UnsafeMutablePointer<T>?,
         tail: UnsafeMutablePointer<T>?
     ) {
         self.head = head
         self.tail = tail
+        
+        self.minAddress = nil
+        self.maxAddress = nil
     }
     
     public mutating func pushBack(_ element: UnsafeMutablePointer<T>) {
