@@ -4,11 +4,14 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 27/04/2026.
 //
 
+// Global label, call swift func
 .global jump_to_user_mode
+
+// Procedure Params:
+//     x0 = TrapFrame Pointer
+//     x1 = User RootTable Address
+//     x2 = Top Kernel Stack Address
 jump_to_user_mode:
-    // x0 = Puntatore al TrapFrame
-    // x1 = Indirizzo RootTable Utente
-    // x2 = Indirizzo Cima del Kernel Stack
     
     adr     x3, safe_high_half
     ldr     x4, =0xFFFF800000000000

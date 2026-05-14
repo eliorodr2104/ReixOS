@@ -5,7 +5,10 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 23/04/2026.
 //
 
+/// AArch64CPU, CPU Abstraction for ARM Architecture.
+/// Contains the most common Low-Level ASM calls
 public struct AArch64CPU: CPUInterface {
+    
     
     @_silgen_name("nop")
     private static func nop_asm()
@@ -35,6 +38,8 @@ public struct AArch64CPU: CPUInterface {
     public static func getCurrentProcess() -> VirtualAddress
     
     
+    // MARK: - Function used on protocol CPUInterface
+    
     public static func enableInterrupts() {
         enable_interrupts()
     }
@@ -51,12 +56,25 @@ public struct AArch64CPU: CPUInterface {
         nop_asm()
     }
     
-    @inline(__always)
+    
+    /// Turn of the system.
+    ///
+    /// Disable the interrupts, print register satte and the backtrace,
+    /// set core to sleep mode, using a WFI procedure.
+    ///
+    /// - Parameters:
+    ///     - reason: String for describe the error.
+    ///     - exception: Enum exception, this is captured on kernel error.
+    ///     - framePointer: Pointer to TrapFrame, contains state of registers when kernel is crashing.
+    @inline(__always) // TODO: Considering leave inlinable func, because the Stack on boot is small
     public static func panic(
-        _   reason      : String?    = nil,
-        exc exception   : Exception? = nil,
+        _   reason      : String?         = nil,
+        exc exception   : Exception?      = nil,
         fp  framePointer: Arch.TrapFrame? = nil
     ) -> Never {
+        
+        // Disable Interrupts because in Panic mode the CPU
+        // Is blocked
         disableInterrupts()
         
         kprint()
@@ -80,6 +98,7 @@ public struct AArch64CPU: CPUInterface {
         
         kprint("------------------------------------------------------")
         
+        // Current FP state
         if let frame = framePointer {
             kprint()
             kprint("GPR State:")
@@ -99,21 +118,25 @@ public struct AArch64CPU: CPUInterface {
             kprintf("  [<0x%x>] (PC/ELR)\n", frame.elr)
             kprintf("  [<0x%x>] (LR/x30)\n", frame.x30)
             
-            printStackTrace(framePointer: frame.x29)
+            printStackTrace(frame.x29)
         }
         
         kprint("------------------------------------------------------")
         kprint("=                SYSTEM HALTED                       =")
         kprint("------------------------------------------------------")
         
+        // Block CPU and not consuming energy
         while true { waitForInterrupt() }
     }
     
-    private static func printStackTrace(framePointer: UInt64) {
-        guard framePointer != 0 else { return }
+    /// Print current register state of current frame pointer
+    /// - Parameters:
+    ///     - framePointerAddress: Address of FramePointer struct on the memory
+    @inline(__always)
+    private static func printStackTrace(_ framePointerAddress: UInt64) {
+        guard framePointerAddress != 0 else { return }
         
-        var fp = framePointer
-        
+        var fp = framePointerAddress
         while fp != 0 {
             let returnAddress = UnsafePointer<UInt64>(
                 bitPattern: UInt(fp + 8)

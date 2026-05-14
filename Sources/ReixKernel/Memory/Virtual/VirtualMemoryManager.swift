@@ -10,10 +10,10 @@ public struct VirtualMemoryManager {
     
     
     /// Root (TTBR1 - Address 0xFFFF...)
-    private let kernelRootTable  : UnsafeMutablePointer<PageTableEntry>
+    private let kernelRootTable  : UnsafeMutablePointer<Arch.PageTableEntry>
     
     /// Root Temp (TTBR0 - Address 0x0000...)
-    private let identityRootTable: UnsafeMutablePointer<PageTableEntry>
+    private let identityRootTable: UnsafeMutablePointer<Arch.PageTableEntry>
     
     private let kernelTableAddress  : PhysicalAddress
     private let identityTableAddress: PhysicalAddress
@@ -37,21 +37,21 @@ public struct VirtualMemoryManager {
         let pageIdentityTable     = try self.ppmPtr.pointee.alloc(4096)
         self.identityTableAddress = pageIdentityTable.address
         
-        self.kernelRootTable = UnsafeMutablePointer<PageTableEntry>(
+        self.kernelRootTable = UnsafeMutablePointer<Arch.PageTableEntry>(
             bitPattern: UInt(kernelTableAddress)
         )!
         
-        self.identityRootTable = UnsafeMutablePointer<PageTableEntry>(
+        self.identityRootTable = UnsafeMutablePointer<Arch.PageTableEntry>(
             bitPattern: UInt(identityTableAddress)
         )!
         
         
         self.kernelRootTable.initialize(
-            repeating: PageTableEntry(rawValue: 0),
+            repeating: Arch.PageTableEntry(rawValue: 0),
             count    : 512
         )
         self.identityRootTable.initialize(
-            repeating: PageTableEntry(rawValue: 0),
+            repeating: Arch.PageTableEntry(rawValue: 0),
             count    : 512
         )
         
@@ -149,8 +149,8 @@ public struct VirtualMemoryManager {
     
     public func createAddressSpace() throws(PPMError) -> AddressSpace {
         let page = try ppmPtr.pointee.alloc(4096, flag: .kernel)
-        let rootTable: UnsafeMutablePointer<PageTableEntry> = physToVirt(page.address)
-        rootTable.initialize(repeating: PageTableEntry(rawValue: 0), count: 512)
+        let rootTable: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(page.address)
+        rootTable.initialize(repeating: Arch.PageTableEntry(rawValue: 0), count: 512)
         try mapKernelIdentitySpace(table: rootTable)
 
         let asid = Self.asidCounter
@@ -181,7 +181,7 @@ public struct VirtualMemoryManager {
         physical    : PhysicalAddress,
         flags       : VirtualPageFlags
     ) throws(PPMError) {
-        let tablePointer: UnsafeMutablePointer<PageTableEntry> = physToVirt(addressSpace.rootTablePhysical.address)
+        let tablePointer: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(addressSpace.rootTablePhysical.address)
         
         try map(
             table   : tablePointer,
@@ -196,12 +196,12 @@ public struct VirtualMemoryManager {
         addressSpace: borrowing AddressSpace,
         virtual     : VirtualAddress
     ) throws(PPMError) {
-        let tablePointer: UnsafeMutablePointer<PageTableEntry> = physToVirt(addressSpace.rootTablePhysical.address)
+        let tablePointer: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(addressSpace.rootTablePhysical.address)
         guard let leafTable = lookupLeafTable(table: tablePointer, virtual: virtual) else {
             return
         }
 
-        leafTable[virtual.l3] = PageTableEntry(rawValue: 0)
+        leafTable[virtual.l3] = Arch.PageTableEntry(rawValue: 0)
 
         if Arch.MMU.isMMUEnabled() {
             Arch.MMU.flushTLB()
@@ -212,7 +212,7 @@ public struct VirtualMemoryManager {
     // MARK: - Internals Handlers
     
     private func map(
-        table       : UnsafeMutablePointer<PageTableEntry>,
+        table       : UnsafeMutablePointer<Arch.PageTableEntry>,
         virtual     : VirtualAddress,
         physical    : PhysicalAddress,
         type        : MemoryType,
@@ -241,16 +241,16 @@ public struct VirtualMemoryManager {
     }
     
     private func mapTable(
-        current: UnsafeMutablePointer<PageTableEntry>,
+        current: UnsafeMutablePointer<Arch.PageTableEntry>,
         _ index: Int
-    ) throws(PPMError) -> UnsafeMutablePointer<PageTableEntry> {
+    ) throws(PPMError) -> UnsafeMutablePointer<Arch.PageTableEntry> {
         var entry = current[index]
         
         if !entry.isPresent {
             let newPage = try ppmPtr.pointee.alloc(4096, flag: .kernel)
             
-            let newTablePtr: UnsafeMutablePointer<PageTableEntry> = physToVirt(newPage.address)
-            newTablePtr.initialize(repeating: PageTableEntry(rawValue: 0), count: 512)
+            let newTablePtr: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(newPage.address)
+            newTablePtr.initialize(repeating: Arch.PageTableEntry(rawValue: 0), count: 512)
             
             entry.physicalAddress = newPage.address
             entry.flags = [.valid, .page]
@@ -261,9 +261,9 @@ public struct VirtualMemoryManager {
     }
 
     private func lookupLeafTable(
-        table  : UnsafeMutablePointer<PageTableEntry>,
+        table  : UnsafeMutablePointer<Arch.PageTableEntry>,
         virtual: VirtualAddress
-    ) -> UnsafeMutablePointer<PageTableEntry>? {
+    ) -> UnsafeMutablePointer<Arch.PageTableEntry>? {
         var currentTable = table
         let indexes = [virtual.l0, virtual.l1, virtual.l2]
 
@@ -310,7 +310,7 @@ public struct VirtualMemoryManager {
 
     
     private func unmapKernelIdentitySpace(
-        table: UnsafeMutablePointer<PageTableEntry>
+        table: UnsafeMutablePointer<Arch.PageTableEntry>
     ) throws(PPMError) {
         let ramStart = PhysicalAddress(self.ppmPtr.pointee.ramStart)
         let kernelStart = getOfaddressWithSymbol(of: &_kernel_start)
@@ -386,7 +386,7 @@ public struct VirtualMemoryManager {
     }
     
     private func mapKernelIdentitySpace(
-        table: UnsafeMutablePointer<PageTableEntry>
+        table: UnsafeMutablePointer<Arch.PageTableEntry>
     ) throws(PPMError) {
         let ramStart = PhysicalAddress(self.ppmPtr.pointee.ramStart)
         let kernelStart = getOfaddressWithSymbol(of: &_kernel_start)
@@ -442,7 +442,7 @@ public struct VirtualMemoryManager {
     
 
     private func mapIdentitySection(
-        table       : UnsafeMutablePointer<PageTableEntry>,
+        table       : UnsafeMutablePointer<Arch.PageTableEntry>,
         startAddress: PhysicalAddress,
         endAddress  : PhysicalAddress,
         type        : MemoryType       = .normal,
@@ -466,7 +466,7 @@ public struct VirtualMemoryManager {
     }
     
     private func mapUserRootSection(
-        table       : UnsafeMutablePointer<PageTableEntry>,
+        table       : UnsafeMutablePointer<Arch.PageTableEntry>,
         startAddress: PhysicalAddress,
         endAddress  : PhysicalAddress,
         type        : MemoryType       = .normal,

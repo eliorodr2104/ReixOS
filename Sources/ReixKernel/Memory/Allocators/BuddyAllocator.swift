@@ -5,7 +5,6 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 21/04/2026.
 //
 
-
 public struct BuddyAllocator: Allocator {
     private let startRam: PhysicalAddress
     private let sizeRam : UInt64
@@ -354,51 +353,4 @@ public struct BuddyAllocator: Allocator {
         (bitmap[index / 8] & (1 << UInt8(index % 8))) != 0
     }
     
-    public func debugDump() throws(AllocatorError) {
-        kprint("=== BuddyAllocator Dump ===")
-        
-        kprintf("startRam: 0x%x", startRam)
-        kprintf("sizeRam : 0x%x", sizeRam)
-        
-        for order in 0...Self.maxOrder {
-            let blockBytes = try blockSize(order)
-                        
-            
-            kprintf("0x%x", UInt64(order))
-            kprint(" ")
-            kprintf("0x%x", (blockBytes / 1024))
-            kprint(" [KiB]")
-
-            var current = try getFreeListHead(order: order)
-            if current == 0 {
-                kprint("  (empty)")
-                continue
-            }
-            
-            while current != 0 {
-                kprint("  -> ")
-                kprintf("0x%x", current)
-                kprint()
-                
-                let node = UnsafePointer<UInt64>(bitPattern: UInt(current))!
-                current = node.pointee
-            }
-        }
-        
-        // Bitmap summary
-        let totalPages = Int(sizeRam / Self.pageSize)
-        var used = 0
-        var free = 0
-        for i in 0..<totalPages {
-            if testBit(i) { used += 1 } else { free += 1 }
-        }
-        
-        kprintf("Pages total: 0x%x", UInt64(totalPages))
-                
-        kprintf("Pages used: 0x%x", UInt64(used))
-                
-        kprintf("Pages free: 0x%x", UInt64(free))
-        
-        kprint("==========================")
-    }
 }

@@ -11,14 +11,14 @@
 .global memcmp
 
 // --- memcpy (x0: dest, x1: src, x2: n) ---
-// Ritorna x0
+// Return: x0
 memcpy:
     mov x3, x0
 .Lmemcpy_16:
     cmp x2, #16
     b.lo .Lmemcpy_1
-    ldp x4, x5, [x1], #16    // Carica 16 byte da src
-    stp x4, x5, [x3], #16    // Salva 16 byte in dest
+    ldp x4, x5, [x1], #16    // Load 16 byte to src
+    stp x4, x5, [x3], #16    // Save 16 byte in dest
     sub x2, x2, #16
     b .Lmemcpy_16
 .Lmemcpy_1:
@@ -31,18 +31,18 @@ memcpy:
     ret
 
 // --- memset (x0: s, x1: c, x2: n) ---
-// Ritorna x0
+// Return x0
 memset:
     mov x3, x0
-    and w1, w1, #0xff        // Puliamo x1 per avere solo il byte
-    // "Propaghiamo" il byte su tutto il registro a 64 bit
+    and w1, w1, #0xff
+
     orr w1, w1, w1, lsl #8
     orr w1, w1, w1, lsl #16
     orr x1, x1, x1, lsl #32
 .Lmemset_16:
     cmp x2, #16
     b.lo .Lmemset_1
-    stp x1, x1, [x3], #16    // Scrive 16 byte (x1 è ripetuto)
+    stp x1, x1, [x3], #16
     sub x2, x2, #16
     b .Lmemset_16
 .Lmemset_1:
@@ -54,11 +54,10 @@ memset:
     ret
 
 // --- memmove (x0: dest, x1: src, x2: n) ---
-// Gestisce aree sovrapposte
 memmove:
     cmp x0, x1
     b.eq .Lmove_done
-    b.lo memcpy              // Se dest < src, memcpy normale va bene
+    b.lo memcpy
     
     // Se dest > src, dobbiamo copiare dalla fine all'inizio
     add x3, x0, x2

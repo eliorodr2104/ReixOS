@@ -7,6 +7,17 @@
 
 public struct VMAManager {
     
+    private var vmaList: LinkedList<VirtualMemoryArea>
+    
+    init() {
+        self.vmaList = LinkedList(
+            head      : nil,
+            tail      : nil,
+            minAddress: 0,
+            maxAddress: 0
+        )
+    }
+    
     public func memoryMap(
         size       : UInt64,
         permissions: VMAPermissions,
