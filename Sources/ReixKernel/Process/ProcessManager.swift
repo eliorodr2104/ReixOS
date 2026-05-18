@@ -100,18 +100,19 @@ public struct ProcessManager {
             capacity: 1
         )
         processPtr.initialize(to: Process(
-            pid                  : pid,
-            status               : .new,
-            addressSpace         : addressSpace,
-            priority             : 1,
-            type                 : .user,
-            context              : trapFramePtr,
-            kernelStack          : kStackTop,
-            kernelStackAllocation: kStackRaw,
-            userStack            : userStackSection,
-            elfImage             : elf.image,
-            elfLoadBase          : elf.loadBase,
-            elfLoadEnd           : elf.loadEnd
+            pid           : pid,
+            parent        : nil,
+            status        : .new,
+            addressSpace  : addressSpace,
+            priority      : 1,
+            type          : .user,
+            context       : trapFramePtr,
+            kernelStackTop: kStackTop,
+            kernelStackRaw: kStackRaw,
+            stack         : userStackSection,
+            elfImage      : elf.image,
+            elfLoadBase   : elf.loadBase,
+            elfLoadEnd    : elf.loadEnd
         ))
                 
         return processPtr
@@ -128,9 +129,9 @@ public struct ProcessManager {
             virtual: userStackTop
         )
 
-        if let userStack = process.pointee.userStack {
+        if let userStack = process.pointee.stack {
             try ppm.pointee.free(userStack)
-            process.pointee.userStack = nil
+            process.pointee.stack = nil
         }
 
         var elfVirtual = process.pointee.elfLoadBase
@@ -152,10 +153,10 @@ public struct ProcessManager {
             process.pointee.context = nil
         }
         
-        if let stackAddress = process.pointee.kernelStackAllocation {
+        if let stackAddress = process.pointee.kernelStackRaw {
             KernelHeap.kfree(UnsafeMutableRawPointer(stackAddress))
-            process.pointee.kernelStackAllocation = nil
-            process.pointee.kernelStack = nil
+            process.pointee.kernelStackRaw = nil
+            process.pointee.kernelStackTop = nil
         }
         
         try vmm.pointee.destroyAddressSpace(

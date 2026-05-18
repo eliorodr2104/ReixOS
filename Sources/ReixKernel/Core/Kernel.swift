@@ -88,7 +88,7 @@ public struct Kernel {
         kprint(.message, in: "Launching Process.\n")
         
         let trapFramePtr = firstProcess.pointee.context!
-        let kStackTop    = UInt64(UInt(bitPattern: firstProcess.pointee.kernelStack!))
+        let kStackTop    = UInt64(UInt(bitPattern: firstProcess.pointee.kernelStackTop!))
         
         do {
             try scheduler.addTask(secondProcess)

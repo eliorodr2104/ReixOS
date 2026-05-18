@@ -12,4 +12,8 @@ public enum SyscallNumber: UInt64 {
     case yield
     case putchar
     case getPid
+    case spawnProcess
+    case reapChild
+    case sleep
+    case terminate
 }

@@ -79,6 +79,10 @@ public struct SyscallHandler {
         } else { frame.pointee.x0 = 0 }
     }
     
+    private static func handleReapChild(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
+        // TODO: Need get Process PTR
+    }
+    
     
     public static func handle(
         type: SyscallNumber,
@@ -96,6 +100,12 @@ public struct SyscallHandler {
                 
             case .getPid:
                 handleGetPID(frame: frame)
+                
+            case .reapChild:
+                handleReapChild(frame: frame)
+                
+            default:
+                break
         }
     }
 }
