@@ -8,6 +8,11 @@
 typealias SystemLogger = Logger<PL011UART>
 private let _logger = SystemLogger(driver: PL011UART())
 
+@_cdecl("putchar")
+public func putchar(ch: UInt8) {
+    _logger.kputc(ch)
+}
+
 public func kprint(
     _  type: PrintType = .message,
     in str : String

@@ -35,7 +35,7 @@ SWIFT_KERNEL_OBJ := swift_kernel.o
 # 1. Trova prima i sorgenti dei moduli Userland (lascia invariato questo blocco)
 RX_CORE_SRCS := $(wildcard $(SYSCALL_ARCH_DIR)/*.swift)
 RX_IO_SRCS   := $(shell find $(SYSCALL_DIR) -type f -name "*.swift" \( -name "*IO*" -o -path "*/IO/*" -o -path "*/RXIO/*" \))
-RX_TASK_SRCS := $(shell find $(SYSCALL_DIR) -type f -name "*.swift" \( -name "*Task*" -o -path "*/Task/*" -o -path "*/RXTask/*" \))
+RX_TASK_SRCS := $(shell find $(SYSCALL_DIR) -type f -name "*.swift" \( -name "*Reix*" -o -path "*/Reix/*" -o -path "*/Reix/*" \))
 
 # 2. Trova tutti i file di base escludendo SOLO la cartella Userland principale
 KERNEL_SWIFT_SRCS_ALL := $(shell find Sources -name "*.swift" -not -path "$(USER_DIR)/*")
@@ -63,8 +63,8 @@ MOD_CORE_OBJ := $(USER_MOD_DIR)/RXSyscallCore.o
 MOD_IO_MOD   := $(USER_MOD_DIR)/RXIO.swiftmodule
 MOD_IO_OBJ   := $(USER_MOD_DIR)/RXIO.o
 
-MOD_TASK_MOD := $(USER_MOD_DIR)/RXTask.swiftmodule
-MOD_TASK_OBJ := $(USER_MOD_DIR)/RXTask.o
+MOD_TASK_MOD := $(USER_MOD_DIR)/Reix.swiftmodule
+MOD_TASK_OBJ := $(USER_MOD_DIR)/Reix.o
 
 ALL_USER_MODS := $(MOD_CORE_MOD) $(MOD_IO_MOD) $(MOD_TASK_MOD)
 ALL_USER_OBJS := $(MOD_CORE_OBJ) $(MOD_IO_OBJ) $(MOD_TASK_OBJ)
@@ -111,8 +111,8 @@ $(MOD_IO_MOD): $(RX_IO_SRCS) $(MOD_CORE_MOD) | $(USER_MOD_DIR)
 	$(SWIFTC) $(SWIFT_FLAGS) -I $(USER_MOD_DIR) -emit-module -module-name RXIO -emit-module-path $@ -c $(RX_IO_SRCS) -o $(MOD_IO_OBJ)
 
 $(MOD_TASK_MOD): $(RX_TASK_SRCS) $(MOD_CORE_MOD) | $(USER_MOD_DIR)
-	@echo "Compile Module: RXTask (With Process)"
-	$(SWIFTC) $(SWIFT_FLAGS) -I $(USER_MOD_DIR) -emit-module -module-name RXTask -emit-module-path $@ -c $(RX_TASK_SRCS) -o $(MOD_TASK_OBJ)
+	@echo "Compile Module: Reix"
+	$(SWIFTC) $(SWIFT_FLAGS) -I $(USER_MOD_DIR) -emit-module -module-name Reix -emit-module-path $@ -c $(RX_TASK_SRCS) -o $(MOD_TASK_OBJ)
 
 
 # Userland apps compile

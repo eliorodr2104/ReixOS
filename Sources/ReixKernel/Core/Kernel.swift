@@ -24,7 +24,6 @@ public struct Kernel {
                 Arch.CPU.waitForInterrupt()
             }
             
-            
             // MARK: - Starting boot
             kprint(in: "Hello on ReixOS!\n")
 

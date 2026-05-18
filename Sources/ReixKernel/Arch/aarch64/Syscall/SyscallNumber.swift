@@ -12,5 +12,4 @@ public enum SyscallNumber: UInt64 {
     case yield
     case putchar
     case getPid
-    
 }

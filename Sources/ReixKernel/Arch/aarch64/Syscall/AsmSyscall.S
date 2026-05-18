@@ -29,17 +29,3 @@ _asm_syscall:
     
     svc #0
     ret
-
-
-_asm_syscall_ptr:
-    // x0: syscall number
-    // x1: ptr
-    // x2: size
-    
-    mov x8, x0 // Move to x8, because ARM need syscall number in x8 reg
-
-    mov x0, x1
-    mov x1, x2
-    
-    svc #0
-    ret

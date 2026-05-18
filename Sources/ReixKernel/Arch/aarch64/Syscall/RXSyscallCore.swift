@@ -13,13 +13,6 @@ private func _asm_syscall_raw(
     _ a3  : UInt64
 ) -> UInt64
 
-@_silgen_name("_asm_syscall_ptr")
-private func _asm_syscall_ptr(
-    _ type: UInt64,
-    _ ptr : UnsafePointer<UInt8>,
-    _ len : Int
-)
-
 
 public func _syscall(_ type: SyscallNumber) -> UInt64 {
     _asm_syscall_raw(type.rawValue, 0, 0, 0)
@@ -27,10 +20,4 @@ public func _syscall(_ type: SyscallNumber) -> UInt64 {
 
 public func _syscall(_ type: SyscallNumber, _ arg1: UInt64) -> UInt64 {
     _asm_syscall_raw(type.rawValue, arg1, 0, 0)
-}
-
-public func _syscall(_ type: SyscallNumber, _ text: String) {
-    text.utf8.withContiguousStorageIfAvailable { buffer in
-        _asm_syscall_ptr(type.rawValue, buffer.baseAddress!, buffer.count)
-    }
 }
