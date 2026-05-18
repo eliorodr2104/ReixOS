@@ -7,5 +7,5 @@
 
 
 public protocol HardwareTimerInterface {
-    static func arm()
+    static func ect()
 }

@@ -11,8 +11,12 @@ public struct GICv2: InterruptController {
     private static var gicc: UnsafeMutablePointer<UInt32>! // CPU Interface
     
     public static func initialize(dBase: UInt64, cBase: UInt64) {
-        self.gicd = UnsafeMutablePointer<UInt32>(bitPattern: UInt(dBase))
-        self.gicc = UnsafeMutablePointer<UInt32>(bitPattern: UInt(cBase))
+        self.gicd = UnsafeMutablePointer<UInt32>(
+            bitPattern: UInt(dBase + VirtualMemoryManager.physicalOffset)
+        )
+        self.gicc = UnsafeMutablePointer<UInt32>(
+            bitPattern: UInt(cBase + VirtualMemoryManager.physicalOffset)
+        )
         
         // Confi Distributor (GICD)
         // Offset 0x000: GICD_CTLR (Control Register)

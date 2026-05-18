@@ -46,6 +46,7 @@ public struct SyscallHandler {
 //            KernelHeap.kfree(UnsafeMutableRawPointer(oldProcess!))
 //        }
     }
+    
 
     private static func handleYield(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
         let currentAddr = Arch.CPU.getCurrentProcess()
@@ -63,25 +64,21 @@ public struct SyscallHandler {
             frame.pointee = trapFrame.pointee
         }
     }
+    
 
-    public static func handleDebugPrint(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
-        let userBufferAddr = frame.pointee.x0
-        let length         = frame.pointee.x1
-        
-        if UserMemory.validateRegion(addr: userBufferAddr, size: Int(length)) {
-            if let ptr = UnsafePointer<UInt8>(bitPattern: UInt(userBufferAddr)) {
-                for i in 0..<Int(length) {
-                    kputc(ptr.advanced(by: i).pointee)
-                }
-                
-                kprint()
-            }
-            
-        } else {
-            kprint("Security Violation: User tried to access kernel memory!")
-            handleExit(frame: frame)
-        }
+    public static func handlePutchar(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
+        kputc(UInt8(frame.pointee.x0))
     }
+    
+    
+    private static func handleGetPID(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
+        let currentAddr = Arch.CPU.getCurrentProcess()
+        if let current = UnsafeMutablePointer<Process>(bitPattern: UInt(currentAddr)) {
+            frame.pointee.x0 = UInt64(current.pointee.pid)
+            
+        } else { frame.pointee.x0 = 0 }
+    }
+    
     
     public static func handle(
         type: SyscallNumber,
@@ -94,8 +91,11 @@ public struct SyscallHandler {
             case .yield:
                 handleYield(frame: frame)
 
-            case .debugPrint:
-                handleDebugPrint(frame: frame)
+            case .putchar:
+                handlePutchar(frame: frame)
+                
+            case .getPid:
+                handleGetPID(frame: frame)
         }
     }
 }

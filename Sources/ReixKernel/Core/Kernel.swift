@@ -18,41 +18,40 @@ public struct Kernel {
     public static func boot(dtbRawAddress: PhysicalAddress) {
         
         do {
+            // MARK: - First Step, discover physical address
             if !QemuVirtPlatform.discover(into: &platformInfo, at: dtbRawAddress) {
-                kprint("Error!")
+                kprint(.error, in: "DTB Tree not found.\n")
                 Arch.CPU.waitForInterrupt()
             }
-            kprint("\nHello on ReixOS!")
+            
+            
+            // MARK: - Starting boot
+            kprint(in: "Hello on ReixOS!\n")
 
             self.ppm = try PhysicalPageManager<BuddyAllocator>()
-            kprint("\nInit PPM!")
+            kprint(.boot, in: "Initialize Physical Page Manager.")
             
             self.vmm = try VirtualMemoryManager(ppmPtr: &ppm!)
-            
-            let virtualVBAR = getOfaddressWithSymbol(of: &_evt_start) + VirtualMemoryManager.physicalOffset
-            Arch.CPU.setVBAR(virtualVBAR)
+            kprint(.boot, in: "Initialize Virtual Memory Manager.")
             
             self.ppm?.applyFramesMetadataVirtualOffset(VirtualMemoryManager.physicalOffset)
-            kprint("Init VMM!")
+            kprint(.boot, in: "Mapping Physical to Virtual Address on PPM.")
         
             KernelHeap.initialize(ppmPtr: &ppm!)
-            kprint("Debug Heap init!")
+            kprint(.boot, in: "Initialize Kernel Heap.")
             
-            let virtualOffset = VirtualMemoryManager.physicalOffset
             GIC.initialize(
-                dBase: platformInfo.gic.gicdBase + virtualOffset,
-                cBase: platformInfo.gic.giccBase + virtualOffset
+                dBase: platformInfo.gic.gicdBase,
+                cBase: platformInfo.gic.giccBase
             )
-            kprint("Init GIC!")
+            kprint(.boot, in: "Initialize Global Interrupt Controller.")
                                     
             ProcessManager.initialize(vmm: &vmm!, ppm: &ppm!)
-            kprint("Process Manager init!")
+            kprint(.boot, in: "Initialize Process Manager.")
 
-            AArch64VirtualTimer.arm()
-
-                                    
-//            try testKernelHeap()
-            
+            AArch64VirtualTimer.ect()
+            kprint(.boot, in: "Enable Core Virtual Timer\n")
+                                                
         } catch { internalPanic(error) }
         
         
@@ -64,7 +63,7 @@ public struct Kernel {
     
     private static func run() throws(KernelError) {
         
-        kprint("\nKernel is running")
+        kprint(.message, in: "Kernel is running\n")
         
         do {
             try testProcessLaunch()
@@ -73,11 +72,6 @@ public struct Kernel {
         while true {
             Arch.CPU.waitForInterrupt()
         }
-        
-//        do {
-//            try ppm?.testPPM()
-//            
-//        } catch { throw KernelError(error) }
     }
     
     private static func internalPanic<E: KernelFatal>(_ error: E) {
@@ -86,18 +80,19 @@ public struct Kernel {
     }
     
     private static func testProcessLaunch() throws (ProcessManagerError) {
+        kprint(.message, in: "Start Process Launch Test.\n")
+        
+        // Two programs, this is contains into initdr tar.
         let firstProcess  = try ProcessManager.spawnProcess(filename: "idle.elf")
         let secondProcess = try ProcessManager.spawnProcess(filename: "init.elf")
         
-        kprintf("Process PID: %d", firstProcess.pointee.pid)
-        kprint("Test launch process")
+        kprint(.message, in: "Launching Process.\n")
         
-        let trapFramePtr  = firstProcess.pointee.context!
-        let kStackTop     = UInt64(UInt(bitPattern: firstProcess.pointee.kernelStack!))
+        let trapFramePtr = firstProcess.pointee.context!
+        let kStackTop    = UInt64(UInt(bitPattern: firstProcess.pointee.kernelStack!))
         
         do {
             try scheduler.addTask(secondProcess)
-            
         } catch { Arch.CPU.panic(error.localizedDescription) }
         
         firstProcess.pointee.status = .running
@@ -105,12 +100,10 @@ public struct Kernel {
             VirtualAddress(UInt(bitPattern: firstProcess))
         )
         
-        
         jump_to_user_mode(
             trapFrame     : trapFramePtr,
             rootTable     : firstProcess.pointee.addressSpace.rootTablePhysical.address,
             kernelStackTop: kStackTop
         )
-        
     }
 }

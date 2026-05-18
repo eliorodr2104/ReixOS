@@ -66,7 +66,7 @@ func handleExceptionType(
                     }
                 }
                 
-                AArch64VirtualTimer.arm()
+                AArch64VirtualTimer.ect()
                 GIC.endOfInterrupt(id: interruptID)
                 
                 if Kernel.scheduler.onTick() {

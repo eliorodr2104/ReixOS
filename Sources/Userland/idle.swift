@@ -5,12 +5,14 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 07/05/2026.
 //
 
+import RXIO
+import RXTask
+
 @_cdecl("_start")
 public func main() {
     
-    System.print("Idle process")
+    print(String(getPID()))
+    print("Idle process")
     
-    while true {
-        
-    }
+    while true {  }
 }

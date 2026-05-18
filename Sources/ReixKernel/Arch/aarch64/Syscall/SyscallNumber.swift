@@ -8,8 +8,9 @@
 public enum SyscallNumber: UInt64 {
     
     // System syscall
-    case exit       = 0
-    case yield      = 1
-    case debugPrint = 2
+    case exit
+    case yield
+    case putchar
+    case getPid
     
 }

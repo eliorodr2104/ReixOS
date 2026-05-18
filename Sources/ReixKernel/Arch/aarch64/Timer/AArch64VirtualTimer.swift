@@ -7,7 +7,7 @@
 
 public struct AArch64VirtualTimer: HardwareTimerInterface {
     
-    public static func arm() {
+    public static func ect() {
         enable_core_timer()
     }
 }
