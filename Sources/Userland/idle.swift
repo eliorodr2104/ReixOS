@@ -10,7 +10,12 @@ import Reix
 @_cdecl("_start")
 public func main() {
     
-    print(String(getPID()))
+    
+    let currentPid = getPID()
+    print("Test a rape self process")
+    let result = reapChild(for: currentPid)
+    
+    print(String(result))
     print("Idle process")
     
     while true {  }

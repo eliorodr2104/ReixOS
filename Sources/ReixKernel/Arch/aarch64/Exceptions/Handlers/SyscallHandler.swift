@@ -72,15 +72,40 @@ public struct SyscallHandler {
     
     
     private static func handleGetPID(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
-        let currentAddr = Arch.CPU.getCurrentProcess()
-        if let current = UnsafeMutablePointer<Process>(bitPattern: UInt(currentAddr)) {
+        let currentRawProcess = Arch.CPU.getCurrentProcess()
+        if let current = UnsafeMutablePointer<Process>(bitPattern: UInt(currentRawProcess)) {
             frame.pointee.x0 = UInt64(current.pointee.pid)
             
         } else { frame.pointee.x0 = 0 }
     }
     
+    // TODO: - Create a ExitCode standard, zero val is a temp not found
     private static func handleReapChild(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
-        // TODO: Need get Process PTR
+        let childPid = frame.pointee.x0
+        
+        if let child = Kernel.scheduler.search(in: .waiting, to: childPid) {
+            let currentPtr = Arch.CPU.getCurrentProcess()
+            
+            // TODO: - Add throws for all case
+            guard let parent  = child.pointee.parent,
+                  let current = UnsafeMutablePointer<Process>(bitPattern: UInt(currentPtr)),
+                  parent.pointee.pid == current.pointee.pid
+            else {
+                return
+            }
+                        
+            if !Kernel.scheduler.reapChild(child) {
+                // Block process, this waiting child died
+                // Manage error, temp is try? and not block the kernel
+                try? Kernel.scheduler.block(current.pointee.pid)
+                handleYield(frame: frame)
+            }
+            
+            frame.pointee.x0 = UInt64(child.pointee.exitCode ?? 0)
+            return
+        }
+        
+        frame.pointee.x0 = 0
     }
     
     

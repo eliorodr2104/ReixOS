@@ -85,7 +85,7 @@ public struct LinkedList<T: RXEntry> {
         } else { tail = element }
     }
     
-    public mutating func remove(element: UnsafeMutablePointer<T>) -> UnsafeMutablePointer<T>? {
+    public mutating func remove(element: UnsafeMutablePointer<T>) {
         let prev = element.pointee.prev
         let next = element.pointee.next
         
@@ -100,9 +100,7 @@ public struct LinkedList<T: RXEntry> {
         } else { tail = prev }
         
         element.pointee.next = nil
-        element.pointee.prev = nil
-        
-        return element
+        element.pointee.prev = nil        
     }
     
     public mutating func remove(id: T.IDType) -> UnsafeMutablePointer<T>? {
@@ -110,7 +108,22 @@ public struct LinkedList<T: RXEntry> {
         
         while let element = current {
             if element.pointee.entryID == id {
-                return remove(element: element)
+                remove(element: element)
+                return element
+            }
+            
+            current = element.pointee.next
+        }
+        
+        return nil
+    }
+    
+    public func search(id: T.IDType) -> UnsafeMutablePointer<T>? {
+        var current = head
+        
+        while let element = current {
+            if element.pointee.entryID == id {
+                return element
             }
             
             current = element.pointee.next

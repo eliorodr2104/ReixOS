@@ -91,6 +91,27 @@ public struct RoundRobin: SchedulerInterface {
         ready.pushBack(process)
     }
     
+    // Get a process pointer, because the handler delete a child process
+    public mutating func reapChild(_ child: UnsafeMutablePointer<Process>) -> Bool {
+        guard child.pointee.status == .terminated else {
+            return false
+        }
+                      
+        terminated.remove(element: child)
+        return true
+    }
+    
+    public func search(
+        in queue: QueueType = .ready,
+        to pid  : PID
+    ) -> UnsafeMutablePointer<Process>? {
+        switch queue {
+            case .ready     : ready     .search(id: pid)
+            case .waiting   : waiting   .search(id: pid)
+            case .terminated: terminated.search(id: pid)
+        }
+    }
+    
     public func notifyTaskBlocked(_ processID: PID) {
         
     }
@@ -98,4 +119,10 @@ public struct RoundRobin: SchedulerInterface {
     public func notifyTaskYielded(_ processID: PID) {
         
     }
+}
+
+public enum QueueType {
+    case ready
+    case waiting
+    case terminated
 }

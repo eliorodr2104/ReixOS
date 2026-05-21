@@ -30,13 +30,23 @@ public func getParentPID() -> UInt64 {
 }
 
 @inline(__always)
+public func split() -> PID {
+    return 0
+}
+
+@inline(__always)
+public func exec(path: StaticString) {
+    
+}
+
+@inline(__always)
 public func spawnProcess(path: StaticString) -> UInt64 {
     return 0 // _syscall()
 }
 
 @inline(__always)
 public func reapChild(for pid: PID) -> ExitCode {
-    return 0 // _syscall()
+    return _syscall(.reapChild, pid)
 }
 
 @inline(__always)

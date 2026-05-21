@@ -11,7 +11,7 @@ public typealias PID = UInt64
 public struct Process: RXEntry {
         
     public let pid           : PID                                   // Process ID
-    public let parent        : UnsafePointer<UInt64>?                // Parent ptr
+    public let parent        : UnsafePointer<Process>?                // Parent ptr
     public var status        : ProcessStatus                         // Current status
     public var exitCode      : UInt32?
     public var addressSpace  : AddressSpace                          // Virtual memory space
