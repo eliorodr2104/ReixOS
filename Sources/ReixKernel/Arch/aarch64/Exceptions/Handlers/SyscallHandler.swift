@@ -8,12 +8,25 @@
 
 public struct SyscallHandler {
 
-    private static func handleExit(
-        frame: UnsafeMutablePointer<Arch.TrapFrame>
-    ) {
-        
+    private static func handleExit(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
         let currentAddr = Arch.CPU.getCurrentProcess()
+        
+        // Get Old Process and change
         if let oldProcess = UnsafeMutablePointer<Process>(bitPattern: UInt(currentAddr)) {
+           
+            // Control if parent is waiting process
+            if let parentPtr = oldProcess.pointee.parent,
+               parentPtr.pointee.waitingChildPid == oldProcess.pointee.pid,
+               let parentFrame = parentPtr.pointee.context
+            {
+                parentFrame.pointee.x0 = frame.pointee.x0
+                
+//                Kernel.scheduler.freeProcessStructure(child)
+//                Kernel.scheduler.unblock(parentPtr.pointee.pid)
+            }
+            
+            
+            
             oldProcess.pointee.context?.pointee = frame.pointee
             oldProcess.pointee.status           = .terminated
             
@@ -82,30 +95,34 @@ public struct SyscallHandler {
     // TODO: - Create a ExitCode standard, zero val is a temp not found
     private static func handleReapChild(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
         let childPid = frame.pointee.x0
+        let currentPtr = Arch.CPU.getCurrentProcess()
         
-        if let child = Kernel.scheduler.search(in: .waiting, to: childPid) {
-            let currentPtr = Arch.CPU.getCurrentProcess()
-            
-            // TODO: - Add throws for all case
-            guard let parent  = child.pointee.parent,
-                  let current = UnsafeMutablePointer<Process>(bitPattern: UInt(currentPtr)),
-                  parent.pointee.pid == current.pointee.pid
-            else {
-                return
-            }
-                        
-            if !Kernel.scheduler.reapChild(child) {
-                // Block process, this waiting child died
-                // Manage error, temp is try? and not block the kernel
-                try? Kernel.scheduler.block(current.pointee.pid)
-                handleYield(frame: frame)
-            }
-            
-            frame.pointee.x0 = UInt64(child.pointee.exitCode ?? 0)
+        // TODO: - Add throws for all case
+        guard let current = UnsafeMutablePointer<Process>(bitPattern: UInt(currentPtr)) else {
+            frame.pointee.x0 = 0
             return
         }
         
-        frame.pointee.x0 = 0
+        guard let child = Kernel.scheduler.search(to: childPid) else {
+            frame.pointee.x0 = 0
+            return
+        }
+        
+        guard child.pointee.pid == current.pointee.pid else {
+            frame.pointee.x0 = UInt64.max
+            return
+        }
+        
+        if child.pointee.status == .terminated {
+            frame.pointee.x0 = UInt64(child.pointee.exitCode ?? 0)
+            // Kernel.scheduler.freeProcessStructure(child)
+            return
+        }
+        
+        current.pointee.waitingChildPid = childPid
+        try? Kernel.scheduler.block(current.pointee.pid)
+        handleYield(frame: frame)
+        return
     }
     
     

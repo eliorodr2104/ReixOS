@@ -120,9 +120,3 @@ public struct RoundRobin: SchedulerInterface {
         
     }
 }
-
-public enum QueueType {
-    case ready
-    case waiting
-    case terminated
-}
