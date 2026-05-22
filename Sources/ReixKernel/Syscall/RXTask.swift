@@ -36,7 +36,7 @@ public func split() -> PID {
 
 @inline(__always)
 public func exec(path: StaticString) {
-    
+    // _syscall()
 }
 
 @inline(__always)
@@ -51,7 +51,7 @@ public func reapChild(for pid: PID) -> ExitCode {
 
 @inline(__always)
 public func sleep(for value: Int) {
-    return // _syscall(.getPid)
+    return // _syscall()
 }
 
 @inline(__always)

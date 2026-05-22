@@ -137,23 +137,13 @@ public struct SyscallHandler {
         frame: UnsafeMutablePointer<Arch.TrapFrame>
     ) {
         switch type {
-            case .exit:
-                handleExit(frame: frame)
-
-            case .yield:
-                handleYield(frame: frame)
-
-            case .putchar:
-                handlePutchar(frame: frame)
+            case .exit     : handleExit     (frame: frame)
+            case .yield    : handleYield    (frame: frame)
+            case .putchar  : handlePutchar  (frame: frame)
+            case .getPid   : handleGetPID   (frame: frame)
+            case .reapChild: handleReapChild(frame: frame)
                 
-            case .getPid:
-                handleGetPID(frame: frame)
-                
-            case .reapChild:
-                handleReapChild(frame: frame)
-                
-            default:
-                break
+            default: break
         }
     }
 }
