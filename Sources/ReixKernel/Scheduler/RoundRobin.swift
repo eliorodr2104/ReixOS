@@ -10,9 +10,10 @@ public struct RoundRobin: SchedulerInterface {
     private var ready     : LinkedList = LinkedList<Process>(head: nil, tail: nil)
     private var waiting   : LinkedList = LinkedList<Process>(head: nil, tail: nil)
     private var terminated: LinkedList = LinkedList<Process>(head: nil, tail: nil)
-            
+    
     private var currentTicks: UInt = 0   // Tick
     private let quantum     : UInt = 100 // One tick is 10ms
+    
     
     public mutating func addTask(_ process: UnsafeMutablePointer<Process>) throws(SchedulerError) {
         guard process.pointee.status == .new else {
@@ -23,9 +24,11 @@ public struct RoundRobin: SchedulerInterface {
         self.ready.pushBack(process)
     }
     
+    
     public mutating func removeTask(_ process: UnsafeMutablePointer<Process>) {
         terminated.pushBack(process)
     }
+    
     
     public mutating func selectNextTask() -> UnsafeMutablePointer<Process>? {
         let currentAddr = Arch.CPU.getCurrentProcess()
@@ -36,7 +39,7 @@ public struct RoundRobin: SchedulerInterface {
                 ready.pushBack(currentPtr)
             }
         }
-                
+        
         if let next = ready.popFront() {
             let nextAddr = VirtualAddress(UInt(bitPattern: next))
             Arch.CPU.setCurrentProcess(nextAddr)
@@ -50,11 +53,13 @@ public struct RoundRobin: SchedulerInterface {
         return nil
     }
     
+    
     public mutating func onTick() -> Bool {
         currentTicks &+= 1
         
         return currentTicks >= quantum
     }
+    
     
     public mutating func yield() -> UnsafeMutablePointer<AArch64TrapFrame>? {
         if let nextProcess = selectNextTask() {
@@ -63,6 +68,7 @@ public struct RoundRobin: SchedulerInterface {
         
         return nil
     }
+    
     
     public mutating func block(_ pid: PID) throws(SchedulerError) {
         let currentAddr = Arch.CPU.getCurrentProcess()
@@ -82,6 +88,7 @@ public struct RoundRobin: SchedulerInterface {
         } else { Arch.CPU.setCurrentProcess(0) }
     }
     
+    
     public mutating func wakeUp(_ pid: PID) throws(SchedulerError) {
         guard let process = waiting.remove(id: pid) else {
             throw .processNotExist
@@ -91,15 +98,17 @@ public struct RoundRobin: SchedulerInterface {
         ready.pushBack(process)
     }
     
+    
     // Get a process pointer, because the handler delete a child process
     public mutating func reapChild(_ child: UnsafeMutablePointer<Process>) -> Bool {
         guard child.pointee.status == .terminated else {
             return false
         }
-                      
+        
         terminated.remove(element: child)
         return true
     }
+    
     
     public func search(
         in queue: QueueType = .ready,
@@ -112,11 +121,14 @@ public struct RoundRobin: SchedulerInterface {
         }
     }
     
+    
     public func notifyTaskBlocked(_ processID: PID) {
         
     }
     
+    
     public func notifyTaskYielded(_ processID: PID) {
         
     }
+    
 }

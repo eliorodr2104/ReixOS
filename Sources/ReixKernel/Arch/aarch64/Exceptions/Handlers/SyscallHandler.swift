@@ -13,22 +13,10 @@ public struct SyscallHandler {
         
         // Get Old Process and change
         if let oldProcess = UnsafeMutablePointer<Process>(bitPattern: UInt(currentAddr)) {
-           
-            // Control if parent is waiting process
-            if let parentPtr = oldProcess.pointee.parent,
-               parentPtr.pointee.waitingChildPid == oldProcess.pointee.pid,
-               let parentFrame = parentPtr.pointee.context
-            {
-                parentFrame.pointee.x0 = frame.pointee.x0
-                
-//                Kernel.scheduler.freeProcessStructure(child)
-//                Kernel.scheduler.unblock(parentPtr.pointee.pid)
-            }
-            
-            
             
             oldProcess.pointee.context?.pointee = frame.pointee
             oldProcess.pointee.status           = .terminated
+            
             
             do {
                 Arch.CPU.setCurrentProcess(0)
@@ -38,6 +26,23 @@ public struct SyscallHandler {
             
             oldProcess.pointee.exitCode = UInt32(frame.pointee.x0)
             Kernel.scheduler.removeTask(oldProcess)
+            
+           
+            // Control if parent is waiting process
+            if let parentPtr = oldProcess.pointee.parent,
+               parentPtr.pointee.waitingChildPid == oldProcess.pointee.pid,
+               let parentFrame = parentPtr.pointee.context
+            {
+                parentFrame.pointee.x0 = frame.pointee.x0
+                
+                // Free child
+                oldProcess.deinitialize(count: 1)
+                KernelHeap.kfree(UnsafeMutableRawPointer(oldProcess))
+                
+                // TODO: Add Error handler
+                try? Kernel.scheduler.wakeUp(parentPtr.pointee.pid)
+            }
+            
         }
         
         // Change Process
@@ -53,11 +58,6 @@ public struct SyscallHandler {
             Arch.CPU.setCurrentProcess(0)
             while true { Arch.CPU.waitForInterrupt() }
         }
-        
-//        if oldProcess != nil {
-//            oldProcess!.deinitialize(count: 1)
-//            KernelHeap.kfree(UnsafeMutableRawPointer(oldProcess!))
-//        }
     }
     
 
@@ -109,18 +109,24 @@ public struct SyscallHandler {
         }
         
         guard child.pointee.pid == current.pointee.pid else {
-            frame.pointee.x0 = UInt64.max
+            frame.pointee.x0 = 0
             return
         }
         
         if child.pointee.status == .terminated {
             frame.pointee.x0 = UInt64(child.pointee.exitCode ?? 0)
-            // Kernel.scheduler.freeProcessStructure(child)
+            
+            child.deinitialize(count: 1)
+            KernelHeap.kfree(UnsafeMutableRawPointer(child))
+            
             return
         }
         
         current.pointee.waitingChildPid = childPid
+        
+        // TODO: Add Error handler
         try? Kernel.scheduler.block(current.pointee.pid)
+        
         handleYield(frame: frame)
         return
     }
