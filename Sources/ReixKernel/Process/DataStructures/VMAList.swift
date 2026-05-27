@@ -76,13 +76,12 @@ extension LinkedList: VMAStructure where T == VirtualMemoryArea {
     
     public mutating func delete(at address: VirtualAddress) {
         guard let currentNode = search(at: address) else {
-            return // Implement Error, searching failh
+            return
         }
-        
+
         remove(element: currentNode)
-        
-        // Free node because is not more usable
-        KernelHeap.kfree(currentNode)
+
+        _ = currentNode
     }
     
     public func findFreeGAP(

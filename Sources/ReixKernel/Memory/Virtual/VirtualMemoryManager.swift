@@ -20,8 +20,11 @@ public struct VirtualMemoryManager {
     
     static let physicalOffset: UInt64 = 0xFFFF800000000000
     static let pageSize      : UInt64 = 4096
-    
-    static var asidCounter: ASID = 1
+
+    /// Monotonically increasing ASID source for newly created address spaces.
+    /// Wraps to `1` (skipping `0`, reserved for the kernel TTBR1 space) and
+    /// flushes the TLB on wrap to avoid stale tagged entries.
+    private var asidCounter: ASID = 1
     
     public func physToVirt<T>(_ phys: UInt64) -> UnsafeMutablePointer<T> {
         let offset = Arch.MMU.isMMUEnabled() ? Self.physicalOffset : 0
@@ -147,20 +150,20 @@ public struct VirtualMemoryManager {
     }
     
     
-    public func createAddressSpace() throws(PPMError) -> AddressSpace {
+    public mutating func createAddressSpace() throws(PPMError) -> AddressSpace {
         let page = try ppmPtr.pointee.alloc(4096, flag: .kernel)
         let rootTable: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(page.address)
         rootTable.initialize(repeating: Arch.PageTableEntry(rawValue: 0), count: 512)
         try mapKernelIdentitySpace(table: rootTable)
 
-        let asid = Self.asidCounter
-        
-        Self.asidCounter = Self.asidCounter &+ 1
-        if Self.asidCounter == 0 {
-            Self.asidCounter = 1
+        let asid = self.asidCounter
+
+        self.asidCounter = self.asidCounter &+ 1
+        if self.asidCounter == 0 {
+            self.asidCounter = 1
             Arch.MMU.flushTLB()
         }
-        
+
         return AddressSpace(
             rootTablePhysical: page,
             asid             : asid

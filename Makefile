@@ -4,7 +4,7 @@ LLD_BIN     = /opt/homebrew/opt/lld@20/bin
 CLANG       = $(LLVM_BIN)/clang
 LD          = $(LLD_BIN)/ld.lld
 OBJCOPY     = $(LLVM_BIN)/llvm-objcopy
-SWIFTC      = /Users/eliorodr2104/.swiftly/bin/swiftc
+SWIFTC      = /Users/mac/.swiftly/bin/swiftc
 
 TARGET      = aarch64-none-none-elf
 USER_DIR    = Sources/Userland

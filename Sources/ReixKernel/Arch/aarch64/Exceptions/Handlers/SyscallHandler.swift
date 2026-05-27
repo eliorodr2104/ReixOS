@@ -10,39 +10,38 @@ public struct SyscallHandler {
 
     private static func handleExit(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
         let currentAddr = Arch.CPU.getCurrentProcess()
-        
-        // Get Old Process and change
+
         if let oldProcess = UnsafeMutablePointer<Process>(bitPattern: UInt(currentAddr)) {
-            
+
             oldProcess.pointee.context?.pointee = frame.pointee
             oldProcess.pointee.status           = .terminated
-            
-            
+
+            let exitingCode = UInt32(frame.pointee.x0)
+
             do {
                 Arch.CPU.setCurrentProcess(0)
-                try ProcessManager.releaseAddressSpace(oldProcess)
-                
+                try Kernel.processManager.pointee.releaseAddressSpace(oldProcess)
+
             } catch { Arch.CPU.panic("Failed to destroy exiting process") }
-            
-            oldProcess.pointee.exitCode = UInt32(frame.pointee.x0)
+
+            if let metadata = oldProcess.pointee.metadata {
+                metadata.pointee.exitCode = exitingCode
+            }
             Kernel.scheduler.removeTask(oldProcess)
-            
-           
-            // Control if parent is waiting process
-            if let parentPtr = oldProcess.pointee.parent,
-               parentPtr.pointee.waitingChildPid == oldProcess.pointee.pid,
+
+
+            if let parentPtr   = oldProcess.pointee.parent,
+               let parentMeta  = parentPtr.pointee.metadata,
+               parentMeta.pointee.waitingChildPid == oldProcess.pointee.pid,
                let parentFrame = parentPtr.pointee.context
             {
                 parentFrame.pointee.x0 = frame.pointee.x0
-                
-                // Free child
-                oldProcess.deinitialize(count: 1)
-                KernelHeap.kfree(UnsafeMutableRawPointer(oldProcess))
-                
-                // TODO: Add Error handler
+
+                Kernel.processManager.pointee.releaseProcess(oldProcess)
+
                 try? Kernel.scheduler.wakeUp(parentPtr.pointee.pid)
             }
-            
+
         }
         
         // Change Process
@@ -114,16 +113,16 @@ public struct SyscallHandler {
         }
         
         if child.pointee.status == .terminated {
-            frame.pointee.x0 = UInt64(child.pointee.exitCode ?? 0)
-            
-            child.deinitialize(count: 1)
-            KernelHeap.kfree(UnsafeMutableRawPointer(child))
-            
+            let childExit = child.pointee.metadata?.pointee.exitCode ?? 0
+            frame.pointee.x0 = UInt64(childExit)
+
+            Kernel.processManager.pointee.releaseProcess(child)
+
             return
         }
-        
-        current.pointee.waitingChildPid = childPid
-        
+
+        current.pointee.metadata.pointee.waitingChildPid = childPid
+
         // TODO: Add Error handler
         try? Kernel.scheduler.block(current.pointee.pid)
         

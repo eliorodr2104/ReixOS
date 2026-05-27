@@ -5,10 +5,16 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 30/04/2026.
 //
 
+/// Contract every kernel heap implementation must honour.
+///
+/// Instance-based by design: a heap owns mutable state (free lists,
+/// backing PPM pointer) and must be reachable through a stable pointer
+/// so callers can perform mutating allocations without copying the
+/// manager. The lifecycle of the instance is owned by `Kernel`.
 public protocol KernelHeapInterface {
-        
-    static func initialize(ppmPtr: UnsafeMutablePointer<KernelPPM>)
-    
-    static func kmalloc(_ byte: UInt) throws(PPMError) -> UnsafeMutableRawPointer?
-    static func kfree(_ ptr: UnsafeMutableRawPointer) 
+
+    init(ppmPtr: UnsafeMutablePointer<KernelPPM>)
+
+    mutating func kmalloc(_ byte: UInt) throws(PPMError) -> UnsafeMutableRawPointer?
+    mutating func kfree(_ ptr: UnsafeMutableRawPointer)
 }
