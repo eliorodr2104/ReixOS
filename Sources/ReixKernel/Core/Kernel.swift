@@ -32,6 +32,12 @@ public struct Kernel {
     /// for the whole kernel lifetime.
     public  static var syscallHandler: UnsafeMutablePointer<SyscallHandler>!
 
+    /// Live interrupt controller instance composed at boot.
+    ///
+    /// Reached from the IRQ path of the exception vector to acknowledge
+    /// pending interrupts and signal end-of-interrupt.
+    public  static var gic: UnsafeMutablePointer<GICv2>!
+
     public  static var scheduler: KernelScheduler = RoundRobin()
 
     public  static var internalPanicMessage: String?
@@ -70,10 +76,19 @@ public struct Kernel {
             kprint(.boot, in: "Initialize Kernel Heap.")
             
 
-            GIC.initialize(
+            let gicSize = MemoryLayout<GICv2>.stride
+            guard let gicRaw = try heap.pointee.kmalloc(UInt(gicSize)) else {
+                Arch.CPU.panic("Failed to allocate GICv2 on the kernel heap")
+            }
+            let gicPtr = gicRaw.bindMemory(
+                to      : GICv2.self,
+                capacity: 1
+            )
+            gicPtr.initialize(to: GICv2(
                 dBase: platformInfo.gic.gicdBase,
                 cBase: platformInfo.gic.giccBase
-            )
+            ))
+            self.gic = gicPtr
             kprint(.boot, in: "Initialize Global Interrupt Controller.")
             
 

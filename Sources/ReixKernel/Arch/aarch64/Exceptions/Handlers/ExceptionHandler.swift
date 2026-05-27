@@ -54,7 +54,7 @@ func handleExceptionType(
 ) {
     switch type {
         case .irq:
-            let interruptID = GIC.acknowledgeInterrupt()
+            let interruptID = Kernel.gic.pointee.acknowledgeInterrupt()
             if interruptID == 27 {
                 
                 let processAddress = Arch.CPU.getCurrentProcess()
@@ -67,7 +67,7 @@ func handleExceptionType(
                 }
                 
                 AArch64VirtualTimer.ect()
-                GIC.endOfInterrupt(id: interruptID)
+                Kernel.gic.pointee.endOfInterrupt(id: interruptID)
                 
                 if Kernel.scheduler.onTick() {
                     if let nextProcess = Kernel.scheduler.selectNextTask() {

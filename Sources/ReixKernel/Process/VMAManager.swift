@@ -130,6 +130,39 @@ public struct VMAManager {
     }
 
 
+    /// Decide whether the half-open range `[start, end)` is fully
+    /// covered by VMAs that grant `permissions`. Used by the syscall
+    /// validation layer (`UserMemory.validateRegion`) to refuse buffers
+    /// that fall on unmapped pages or violate access rights.
+    public func contains(
+        start      : VirtualAddress,
+        end        : VirtualAddress,
+        permissions: VMAPermissions
+    ) -> Bool {
+
+        guard end > start else { return false }
+        guard start >= UserSpaceLayout.userMin,
+              end   <= UserSpaceLayout.userMax
+        else { return false }
+
+        var cursor = start
+        while cursor < end {
+            guard let vmaPtr = vmaList.search(at: cursor) else {
+                return false
+            }
+            let vma = vmaPtr.pointee
+
+            guard vma.permissions.contains(permissions) else {
+                return false
+            }
+
+            cursor = vma.endAddress
+        }
+
+        return true
+    }
+
+
     /// Walk every registered VMA, unmap each mapped page and release
     /// the corresponding physical frame when the backing is owned by
     /// the VMA (`.anonymous`). For `.fileBacked` and `.shared` only the

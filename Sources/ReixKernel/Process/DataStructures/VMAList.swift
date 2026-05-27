@@ -152,7 +152,13 @@ extension LinkedList: VMAStructure where T == VirtualMemoryArea {
                     alignment: alignment
                 )
 
-            case .downward: nil
+            case .downward:
+                findFreeGAPDownward(
+                    min      : min,
+                    max      : max,
+                    size     : size,
+                    alignment: alignment
+                )
         }
     }
 
@@ -271,8 +277,51 @@ extension LinkedList: VMAStructure where T == VirtualMemoryArea {
         }
 
         let lastAlignedStart = align(currentMinAddress, to: alignment)
-        
+
         if lastAlignedStart + size <= max { return lastAlignedStart }
+
+        return nil
+    }
+
+
+    private func findFreeGAPDownward(
+        min      : VirtualAddress,
+        max      : VirtualAddress,
+        size     : UInt64,
+        alignment: UInt64
+    ) -> VirtualAddress? {
+
+        var currentMaxAddress = max
+        var current           = tail
+
+        while let node = current {
+            let nodeStart = node.pointee.startAddress
+            let nodeEnd   = node.pointee.endAddress
+
+            if nodeStart >= currentMaxAddress {
+                current = node.pointee.prev
+                continue
+            }
+
+            if nodeEnd <= min { break }
+
+            guard currentMaxAddress >= size else { return nil }
+
+            let candidate = alignDown(currentMaxAddress - size, to: alignment)
+
+            if candidate >= nodeEnd && candidate >= min {
+                return candidate
+            }
+
+            currentMaxAddress = nodeStart
+            current           = node.pointee.prev
+        }
+
+        guard currentMaxAddress >= size else { return nil }
+
+        let candidate = alignDown(currentMaxAddress - size, to: alignment)
+
+        if candidate >= min { return candidate }
 
         return nil
     }
@@ -283,4 +332,11 @@ extension LinkedList: VMAStructure where T == VirtualMemoryArea {
         _  address  : VirtualAddress,
         to alignment: UInt64
     ) -> VirtualAddress { (address + (alignment - 1)) & ~(alignment - 1) }
+
+
+    @inline(__always)
+    private func alignDown(
+        _  address  : VirtualAddress,
+        to alignment: UInt64
+    ) -> VirtualAddress { address & ~(alignment - 1) }
 }
