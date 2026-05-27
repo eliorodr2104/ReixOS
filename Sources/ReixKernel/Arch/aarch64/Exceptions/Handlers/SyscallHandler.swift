@@ -5,10 +5,42 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 03/05/2026.
 //
 
-
+/// Dispatches user-space syscalls into kernel actions.
+///
+/// Built as an instance struct so its dependencies (process manager and
+/// scheduler) are explicit and injected, instead of being reached via
+/// hidden static facades. The single live instance is composed by
+/// `Kernel.boot` and reached through `Kernel.syscallHandler`.
 public struct SyscallHandler {
 
-    private static func handleExit(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
+    private let processManager: UnsafeMutablePointer<ProcessManager>
+    private let scheduler     : UnsafeMutablePointer<KernelScheduler>
+
+    public init(
+        processManager: UnsafeMutablePointer<ProcessManager>,
+        scheduler     : UnsafeMutablePointer<KernelScheduler>
+    ) {
+        self.processManager = processManager
+        self.scheduler      = scheduler
+    }
+
+    public func handle(
+        type : SyscallNumber,
+        frame: UnsafeMutablePointer<Arch.TrapFrame>
+    ) {
+        switch type {
+            case .exit     : handleExit     (frame: frame)
+            case .yield    : handleYield    (frame: frame)
+            case .putchar  : handlePutchar  (frame: frame)
+            case .getPid   : handleGetPID   (frame: frame)
+            case .reapChild: handleReapChild(frame: frame)
+
+            default: break
+        }
+    }
+
+
+    private func handleExit(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
         let currentAddr = Arch.CPU.getCurrentProcess()
 
         if let oldProcess = UnsafeMutablePointer<Process>(bitPattern: UInt(currentAddr)) {
@@ -20,14 +52,14 @@ public struct SyscallHandler {
 
             do {
                 Arch.CPU.setCurrentProcess(0)
-                try Kernel.processManager.pointee.releaseAddressSpace(oldProcess)
+                try processManager.pointee.releaseAddressSpace(oldProcess)
 
             } catch { Arch.CPU.panic("Failed to destroy exiting process") }
 
             if let metadata = oldProcess.pointee.metadata {
                 metadata.pointee.exitCode = exitingCode
             }
-            Kernel.scheduler.removeTask(oldProcess)
+            scheduler.pointee.removeTask(oldProcess)
 
 
             if let parentPtr   = oldProcess.pointee.parent,
@@ -37,86 +69,86 @@ public struct SyscallHandler {
             {
                 parentFrame.pointee.x0 = frame.pointee.x0
 
-                Kernel.processManager.pointee.releaseProcess(oldProcess)
+                processManager.pointee.releaseProcess(oldProcess)
 
-                try? Kernel.scheduler.wakeUp(parentPtr.pointee.pid)
+                try? scheduler.pointee.wakeUp(parentPtr.pointee.pid)
             }
 
         }
-        
-        // Change Process
-        if let trapFrame = Kernel.scheduler.yield() {
+
+        if let trapFrame = scheduler.pointee.yield() {
             let nextAddr = Arch.CPU.getCurrentProcess()
             if let next = UnsafeMutablePointer<Process>(bitPattern: UInt(nextAddr)) {
                 Arch.MMU.switchUserAddressSpace(next.pointee.addressSpace.rootTablePhysical.address)
             }
-            
+
             frame.pointee = trapFrame.pointee
-            
+
         } else {
             Arch.CPU.setCurrentProcess(0)
             while true { Arch.CPU.waitForInterrupt() }
         }
     }
-    
 
-    private static func handleYield(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
+
+    private func handleYield(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
         let currentAddr = Arch.CPU.getCurrentProcess()
         if let current = UnsafeMutablePointer<Process>(bitPattern: UInt(currentAddr)) {
             current.pointee.context?.pointee = frame.pointee
         }
 
-        if let trapFrame = Kernel.scheduler.yield() {
+        if let trapFrame = scheduler.pointee.yield() {
             let nextAddr = Arch.CPU.getCurrentProcess()
-            
+
             if let next = UnsafeMutablePointer<Process>(bitPattern: UInt(nextAddr)) {
                 Arch.MMU.switchUserAddressSpace(next.pointee.addressSpace.rootTablePhysical.address)
             }
-            
+
             frame.pointee = trapFrame.pointee
         }
     }
-    
 
-    public static func handlePutchar(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
+
+    private func handlePutchar(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
         kputc(UInt8(frame.pointee.x0))
     }
-    
-    
-    private static func handleGetPID(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
+
+
+    private func handleGetPID(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
         let currentRawProcess = Arch.CPU.getCurrentProcess()
         if let current = UnsafeMutablePointer<Process>(bitPattern: UInt(currentRawProcess)) {
             frame.pointee.x0 = UInt64(current.pointee.pid)
-            
+
         } else { frame.pointee.x0 = 0 }
     }
-    
+
+
     // TODO: - Create a ExitCode standard, zero val is a temp not found
-    private static func handleReapChild(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
+    private func handleReapChild(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
         let childPid = frame.pointee.x0
         let currentPtr = Arch.CPU.getCurrentProcess()
-        
+
         // TODO: - Add throws for all case
         guard let current = UnsafeMutablePointer<Process>(bitPattern: UInt(currentPtr)) else {
             frame.pointee.x0 = 0
             return
         }
-        
-        guard let child = Kernel.scheduler.search(to: childPid) else {
+
+        guard let child = scheduler.pointee.search(to: childPid) else {
             frame.pointee.x0 = 0
             return
         }
-        
+
         guard child.pointee.pid == current.pointee.pid else {
             frame.pointee.x0 = 0
             return
         }
-        
+
         if child.pointee.status == .terminated {
             let childExit = child.pointee.metadata?.pointee.exitCode ?? 0
             frame.pointee.x0 = UInt64(childExit)
 
-            Kernel.processManager.pointee.releaseProcess(child)
+            processManager.pointee.releaseProcess(child)
 
             return
         }
@@ -124,25 +156,9 @@ public struct SyscallHandler {
         current.pointee.metadata.pointee.waitingChildPid = childPid
 
         // TODO: Add Error handler
-        try? Kernel.scheduler.block(current.pointee.pid)
-        
+        try? scheduler.pointee.block(current.pointee.pid)
+
         handleYield(frame: frame)
         return
-    }
-    
-    
-    public static func handle(
-        type: SyscallNumber,
-        frame: UnsafeMutablePointer<Arch.TrapFrame>
-    ) {
-        switch type {
-            case .exit     : handleExit     (frame: frame)
-            case .yield    : handleYield    (frame: frame)
-            case .putchar  : handlePutchar  (frame: frame)
-            case .getPid   : handleGetPID   (frame: frame)
-            case .reapChild: handleReapChild(frame: frame)
-                
-            default: break
-        }
     }
 }

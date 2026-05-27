@@ -25,6 +25,13 @@ public struct Kernel {
     /// before `boot` has populated it is a programming error.
     public  static var processManager: UnsafeMutablePointer<ProcessManager>!
 
+    /// Live SyscallHandler instance composed at boot.
+    ///
+    /// Reached from the exception vector (`@_cdecl swift_exception_handler`)
+    /// when a synchronous SVC trap is decoded. Heap-allocated and stable
+    /// for the whole kernel lifetime.
+    public  static var syscallHandler: UnsafeMutablePointer<SyscallHandler>!
+
     public  static var scheduler: KernelScheduler = RoundRobin()
 
     public  static var internalPanicMessage: String?
@@ -42,6 +49,7 @@ public struct Kernel {
 
             // MARK: - Starting boot
             kprint(in: "Hello on ReixOS!\n")
+            
 
             self.ppm = try PhysicalPageManager<BuddyAllocator>()
             kprint(.boot, in: "Initialize Physical Page Manager.")
@@ -51,6 +59,7 @@ public struct Kernel {
 
             self.ppm?.applyFramesMetadataVirtualOffset(VirtualMemoryManager.physicalOffset)
             kprint(.boot, in: "Mapping Physical to Virtual Address on PPM.")
+            
 
             let heapPage     = try ppm!.alloc(4096, flag: .kernel)
             let heapVirtual  = heapPage.address + VirtualMemoryManager.physicalOffset
@@ -59,12 +68,14 @@ public struct Kernel {
             heapPtr.initialize(to: BucketsHeap(ppmPtr: &ppm!))
             self.heap = heapPtr
             kprint(.boot, in: "Initialize Kernel Heap.")
+            
 
             GIC.initialize(
                 dBase: platformInfo.gic.gicdBase,
                 cBase: platformInfo.gic.giccBase
             )
             kprint(.boot, in: "Initialize Global Interrupt Controller.")
+            
 
             let processManagerSize = MemoryLayout<ProcessManager>.stride
             guard let processManagerRaw = try heap.pointee.kmalloc(UInt(processManagerSize)) else {
@@ -81,9 +92,27 @@ public struct Kernel {
             ))
             self.processManager = processManagerPtr
             kprint(.boot, in: "Initialize Process Manager.")
+            
+
+            let syscallHandlerSize = MemoryLayout<SyscallHandler>.stride
+            guard let syscallHandlerRaw = try heap.pointee.kmalloc(UInt(syscallHandlerSize)) else {
+                Arch.CPU.panic("Failed to allocate SyscallHandler on the kernel heap")
+            }
+            let syscallHandlerPtr = syscallHandlerRaw.bindMemory(
+                to: SyscallHandler.self,
+                capacity: 1
+            )
+            syscallHandlerPtr.initialize(to: SyscallHandler(
+                processManager: processManager,
+                scheduler     : &scheduler
+            ))
+            self.syscallHandler = syscallHandlerPtr
+            kprint(.boot, in: "Initialize Syscall Handler.")
+            
 
             AArch64VirtualTimer.ect()
             kprint(.boot, in: "Enable Core Virtual Timer\n")
+            
 
         } catch { internalPanic(error) }
 

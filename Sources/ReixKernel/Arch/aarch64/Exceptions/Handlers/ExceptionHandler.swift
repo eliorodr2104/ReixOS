@@ -90,12 +90,12 @@ func handleExceptionType(
                     guard let type = SyscallNumber(rawValue: frame.x8) else {
                         return
                     }
-                    
-                    SyscallHandler.handle(
+
+                    Kernel.syscallHandler.pointee.handle(
                         type : type,
                         frame: framePointer
                     )
-                    
+
                 case 0x24, 0x20: // User Space Abort (Data | Instruction)
                     userAbortHandle(frame: framePointer, faultAddress: frame.far)
                     
@@ -136,9 +136,9 @@ func userAbortHandle(
 //                return // Torna all'utente, l'istruzione verrà ri-eseguita con successo
 //                
 //            } else {
-//                SyscallHandler.handle(type: .exit, frame: frame)
+//                Kernel.syscallHandler.pointee.handle(type: .exit, frame: frame)
 //            }
-            SyscallHandler.handle(type: .exit, frame: frame)
+            Kernel.syscallHandler.pointee.handle(type: .exit, frame: frame)
             
         case 0x0C...0x0F: // PERMISSION FAULT
             
@@ -146,12 +146,12 @@ func userAbortHandle(
 //                Kernel.vmm.handleCOW(addr: faultAddress)
 //                return
 //                
-//            } else { SyscallHandler.handle(type: .exit, frame: frame) }
+//            } else { Kernel.syscallHandler.pointee.handle(type: .exit, frame: frame) }
             
-            SyscallHandler.handle(type: .exit, frame: frame)
+            Kernel.syscallHandler.pointee.handle(type: .exit, frame: frame)
             
         case 0x21:
-            SyscallHandler.handle(type: .exit, frame: frame)
+            Kernel.syscallHandler.pointee.handle(type: .exit, frame: frame)
             
         default:
             Arch.CPU.panic("Unhandled DFSC")
