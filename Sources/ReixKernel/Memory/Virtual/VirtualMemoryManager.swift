@@ -166,26 +166,28 @@ public struct VirtualMemoryManager {
 
         return AddressSpace(
             rootTablePhysical: page,
-            asid             : asid
+            asid             : asid,
+            vmaManager       : nil
         )
     }
-    
+
+
     public func destroyAddressSpace(
         addressSpace: consuming AddressSpace
     ) throws(PPMError) {
         try ppmPtr.pointee.freeOwnedKernelPage(addressSpace.rootTablePhysical)
         Arch.MMU.flushTLB()
     }
-    
-    
+
+
     public func mapUserPage(
-        addressSpace: borrowing AddressSpace,
-        virtual     : VirtualAddress,
-        physical    : PhysicalAddress,
-        flags       : VirtualPageFlags
+        rootTable: PhysicalPage,
+        virtual  : VirtualAddress,
+        physical : PhysicalAddress,
+        flags    : VirtualPageFlags
     ) throws(PPMError) {
-        let tablePointer: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(addressSpace.rootTablePhysical.address)
-        
+        let tablePointer: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable.address)
+
         try map(
             table   : tablePointer,
             virtual : virtual,
@@ -194,12 +196,28 @@ public struct VirtualMemoryManager {
             flags   : flags
         )
     }
-    
-    public func unmapUserPage(
+
+
+    public func mapUserPage(
         addressSpace: borrowing AddressSpace,
-        virtual     : VirtualAddress
+        virtual     : VirtualAddress,
+        physical    : PhysicalAddress,
+        flags       : VirtualPageFlags
     ) throws(PPMError) {
-        let tablePointer: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(addressSpace.rootTablePhysical.address)
+        try mapUserPage(
+            rootTable: addressSpace.rootTablePhysical,
+            virtual  : virtual,
+            physical : physical,
+            flags    : flags
+        )
+    }
+
+
+    public func unmapUserPage(
+        rootTable: PhysicalPage,
+        virtual  : VirtualAddress
+    ) throws(PPMError) {
+        let tablePointer: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable.address)
         guard let leafTable = lookupLeafTable(table: tablePointer, virtual: virtual) else {
             return
         }
@@ -209,6 +227,50 @@ public struct VirtualMemoryManager {
         if Arch.MMU.isMMUEnabled() {
             Arch.MMU.flushTLB()
         }
+    }
+
+
+    public func unmapUserPage(
+        addressSpace: borrowing AddressSpace,
+        virtual     : VirtualAddress
+    ) throws(PPMError) {
+        try unmapUserPage(
+            rootTable: addressSpace.rootTablePhysical,
+            virtual  : virtual
+        )
+    }
+
+
+    public func physicalAddressOf(
+        rootTable: PhysicalPage,
+        virtual  : VirtualAddress
+    ) -> PhysicalAddress? {
+        let tablePointer: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable.address)
+        guard let leafTable = lookupLeafTable(table: tablePointer, virtual: virtual) else {
+            return nil
+        }
+
+        let entry = leafTable[virtual.l3]
+        guard entry.isPresent else { return nil }
+
+        return entry.physicalAddress
+    }
+
+
+    public func unmapAndFreeUserPage(
+        rootTable: PhysicalPage,
+        virtual  : VirtualAddress
+    ) throws(PPMError) {
+        guard let phys = physicalAddressOf(
+            rootTable: rootTable,
+            virtual  : virtual
+        ) else { return }
+
+        try ppmPtr.pointee.free(PhysicalPage(address: phys, order: 0))
+        try unmapUserPage(
+            rootTable: rootTable,
+            virtual  : virtual
+        )
     }
     
     

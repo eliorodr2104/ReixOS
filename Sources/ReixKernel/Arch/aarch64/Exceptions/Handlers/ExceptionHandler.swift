@@ -129,31 +129,32 @@ func userAbortHandle(
 ) {
     let iss  = frame.pointee.esr & 0x1FFFFFF
     let dfsc = iss & 0x3F
-    
+
+    let cause: FaultCause
     switch dfsc {
-        case 0x04...0x07: // TRANSLATION FAULT
-//            if Kernel.vmm.handlePageFault(addr: faultAddress) {
-//                return // Torna all'utente, l'istruzione verrà ri-eseguita con successo
-//                
-//            } else {
-//                Kernel.syscallHandler.pointee.handle(type: .exit, frame: frame)
-//            }
-            Kernel.syscallHandler.pointee.handle(type: .exit, frame: frame)
-            
-        case 0x0C...0x0F: // PERMISSION FAULT
-            
-//            if Kernel.vmm.isCopyOnWrite(addr: faultAddress) {
-//                Kernel.vmm.handleCOW(addr: faultAddress)
-//                return
-//                
-//            } else { Kernel.syscallHandler.pointee.handle(type: .exit, frame: frame) }
-            
-            Kernel.syscallHandler.pointee.handle(type: .exit, frame: frame)
-            
-        case 0x21:
-            Kernel.syscallHandler.pointee.handle(type: .exit, frame: frame)
-            
+        case 0x04...0x07: cause = .translation
+        case 0x0C...0x0F: cause = .permission
+        case 0x21       : cause = .alignment
+        case 0x08...0x0B: cause = .access
         default:
             Arch.CPU.panic("Unhandled DFSC")
     }
+
+    let currentAddr = Arch.CPU.getCurrentProcess()
+    guard let process = UnsafeMutablePointer<Process>(
+        bitPattern: UInt(currentAddr)
+    ) else { Arch.CPU.panic("User abort raised without a current process") }
+
+    if process.pointee.addressSpace.handlePageFault(
+        at   : faultAddress,
+        cause: cause
+    ) { return }
+
+    kprintf(
+        "[SEGFAULT] pid=%d far=0x%x elr=0x%x\n",
+        process.pointee.pid,
+        faultAddress,
+        frame.pointee.elr
+    )
+    Kernel.syscallHandler.pointee.handle(type: .exit, frame: frame)
 }

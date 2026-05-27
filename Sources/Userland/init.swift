@@ -9,7 +9,9 @@ import Reix
 
 @_cdecl("_start")
 public func main() {
-        
+
     print(String(getPID()))
     print("Hi, this is init process!")
+
+    exit(code: 0)
 }
