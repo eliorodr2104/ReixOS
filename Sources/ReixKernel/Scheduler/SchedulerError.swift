@@ -5,17 +5,16 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 08/05/2026.
 //
 
-public enum SchedulerError: Error {
+public enum SchedulerError: KernelDiagnostic {
     case notNewerProcess
     case processNotExist
-    
-    public var localizedDescription: String {
+
+    public var description: String {
         switch self {
-            case .notNewerProcess:
-                "The process not contains new status"
-                
-            case .processNotExist:
-                "The pid is not found on process list"
+            case .notNewerProcess: "Scheduler Error: the process is not in the .new state."
+            case .processNotExist: "Scheduler Error: the PID is not in any scheduler queue."
         }
     }
+
+    public var category: ErrorCategory { .scheduler }
 }

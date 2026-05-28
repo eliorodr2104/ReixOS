@@ -167,7 +167,7 @@ public struct Kernel {
 
         do {
             try scheduler.addTask(secondProcess)
-        } catch { Arch.CPU.panic(error.localizedDescription) }
+        } catch { Arch.CPU.panic(error.description) }
 
         firstProcess.pointee.status = .running
         Arch.CPU.setCurrentProcess(

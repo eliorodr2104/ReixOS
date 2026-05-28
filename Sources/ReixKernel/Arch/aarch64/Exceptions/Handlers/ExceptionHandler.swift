@@ -55,32 +55,12 @@ func handleExceptionType(
     switch type {
         case .irq:
             let interruptID = Kernel.gic.pointee.acknowledgeInterrupt()
-            if interruptID == 27 {
-                
-                let processAddress = Arch.CPU.getCurrentProcess()
-                if processAddress != 0 {
-                    let current = UnsafeMutablePointer<Process>(bitPattern: UInt(processAddress))
-                    
-                    if let c = current {
-                        c.pointee.context?.pointee = framePointer.pointee
-                    }
-                }
-                
-                AArch64VirtualTimer.ect()
-                Kernel.gic.pointee.endOfInterrupt(id: interruptID)
-                
-                if Kernel.scheduler.onTick() {
-                    if let nextProcess = Kernel.scheduler.selectNextTask() {
-                        
-                        Arch.MMU.switchUserAddressSpace(
-                            nextProcess.pointee.addressSpace.rootTablePhysical.address
-                        )
-                        framePointer.pointee = nextProcess.pointee.context!.pointee
-                    }
-                }
-            }
-            
-            
+            InterruptDispatcher.dispatch(
+                id   : interruptID,
+                frame: framePointer
+            )
+
+
         case .synchronous:
             let frame = framePointer.pointee
             let exceptionClass = (frame.esr >> 26) & 0b111111

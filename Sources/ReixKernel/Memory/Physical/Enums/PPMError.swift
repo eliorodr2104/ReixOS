@@ -6,36 +6,38 @@
 //
 
 public enum PPMError: KernelFatal {
-    case allocationFailed(reason: AllocatorError)
+    case allocationFailed       (reason  : AllocatorError)
     case metadataInconsistency
     case invalidFlags
     case protectedMemoryViolation
     case initRamError
-    case invalidRefCount(_ count: Int)
-    case pageOrderMismatch(expected: UInt8, provided: UInt8)
-        
+    case invalidRefCount        (_ count : Int)
+    case pageOrderMismatch      (expected: UInt8, provided: UInt8)
+
     public var description: String {
         switch self {
             case .allocationFailed(let reason):
-                "PPM Error: Allocation failed. Reason: \(reason.localizedDescription)"
-                
+                "PPM Error: allocation failed (" + reason.description + ")"
+
             case .metadataInconsistency:
-                "PPM Error: Frame metadata is inconsistent or corrupted."
-                
+                "PPM Error: frame metadata is inconsistent or corrupted."
+
             case .invalidFlags:
-                "PPM Error: Invalid page flags detected in metadata."
-                
+                "PPM Error: invalid page flags detected in metadata."
+
             case .protectedMemoryViolation:
-                "PPM Error: Memory protection violation. Attempted to free a reserved or kernel page."
-                
+                "PPM Error: memory protection violation, tried to free a reserved or kernel page."
+
             case .initRamError:
-                "PPM Error: RAM initialization failed (Invalid DTB info)."
-                
+                "PPM Error: RAM initialization failed (invalid DTB info)."
+
             case .invalidRefCount:
-                "PPM Error: Invalid reference count. Attempted to free an already unreferenced page."
-                
+                "PPM Error: invalid reference count, tried to free an already unreferenced page."
+
             case .pageOrderMismatch:
-                "PPM Error: Page order mismatch"
+                "PPM Error: page order mismatch between metadata and provided page."
         }
     }
+
+    public var category: ErrorCategory { .memory }
 }
