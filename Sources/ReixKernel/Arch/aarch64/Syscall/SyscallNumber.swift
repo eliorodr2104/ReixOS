@@ -6,8 +6,7 @@
 //
 
 public enum SyscallNumber: UInt64 {
-    
-    // System syscall
+
     case exit
     case yield
     case putchar
@@ -16,4 +15,8 @@ public enum SyscallNumber: UInt64 {
     case reapChild
     case sleep
     case terminate
+
+    case brk
+    case mmap
+    case munmap
 }

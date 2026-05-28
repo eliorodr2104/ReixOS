@@ -32,7 +32,6 @@ public struct Process: RXEntry {
 
     public var kernelStackTop: UnsafeMutableRawPointer?
     public var kernelStackRaw: UnsafeMutableRawPointer?
-    public var stack         : PhysicalPage?
 
     /// Pointer to the cold metadata block. Implicit-unwrapped because the
     /// pointer is always populated immediately after `Process` is allocated

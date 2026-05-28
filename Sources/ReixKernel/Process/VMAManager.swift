@@ -27,6 +27,14 @@ public struct VMAManager {
     private let rootTablePhysical: PhysicalPage
     private let asid             : ASID
 
+    /// Current program break for the brk-style heap. Set once by
+    /// `setInitialBreak` at spawn time, then bumped by `extendBreak`.
+    private var currentBreak: VirtualAddress = 0
+
+    /// Cached pointer to the single VMA covering the brk heap, if any.
+    /// `nil` until the first successful `extendBreak`.
+    private var brkVMA: UnsafeMutablePointer<VirtualMemoryArea>? = nil
+
     public init(
         heap             : UnsafeMutablePointer<BucketsHeap>,
         vmm              : UnsafeMutablePointer<VirtualMemoryManager>,
@@ -160,6 +168,162 @@ public struct VMAManager {
         }
 
         return true
+    }
+
+
+    /// Seed the program break value used by `extendBreak`. Called by
+    /// `ProcessManager.spawnProcess` once the ELF image is loaded, with
+    /// the first page-aligned address above the ELF end.
+    public mutating func setInitialBreak(_ value: VirtualAddress) {
+        self.currentBreak = value
+    }
+
+
+    /// Query the current program break.
+    public func programBreak() -> VirtualAddress {
+        return currentBreak
+    }
+
+
+    /// Move the program break upward to `newBreak`, page-aligned.
+    ///
+    /// Returns the new break value on success. Shrinking is rejected
+    /// silently by returning the current break (no-op). The brk heap is
+    /// represented by a single VMA `.noReserve`: on the first call the
+    /// VMA is registered, on subsequent calls its end address is moved
+    /// forward in place. The pages are not allocated here — the page
+    /// fault handler materialises them lazily.
+    public mutating func extendBreak(
+        to newBreak: VirtualAddress
+    ) throws(VMAError) -> VirtualAddress {
+
+        let aligned = (newBreak + UserSpaceLayout.pageSize - 1) & ~(UserSpaceLayout.pageSize - 1)
+
+        guard aligned >= UserSpaceLayout.userMin,
+              aligned <= UserSpaceLayout.mmapBase
+        else { throw .invalidLayout }
+
+        if aligned <= currentBreak {
+            return currentBreak
+        }
+
+        if let existing = brkVMA {
+            if vmaList.searchOverlap(
+                start: existing.pointee.endAddress,
+                end  : aligned
+            ) != nil {
+                throw .regionOverlap
+            }
+
+            let grown = VirtualMemoryArea(
+                startAddress: existing.pointee.startAddress,
+                endAddress  : aligned,
+                permissions : existing.pointee.permissions,
+                backingType : existing.pointee.backingType,
+                mappingFlags: existing.pointee.mappingFlags,
+                prev        : existing.pointee.prev,
+                next        : existing.pointee.next
+            )
+            existing.pointee = grown
+
+        } else {
+            try registerRegion(
+                start      : currentBreak,
+                size       : aligned - currentBreak,
+                permissions: [.read, .write, .user],
+                backing    : .anonymous,
+                flags      : .noReserve
+            )
+            brkVMA = vmaList.search(at: currentBreak)
+        }
+
+        currentBreak = aligned
+        return currentBreak
+    }
+
+
+    /// Reserve an anonymous read/write region in the mmap area.
+    ///
+    /// The region is registered as `.noReserve`: physical pages are
+    /// allocated only when the user actually touches them. The hint is
+    /// ignored in this milestone — placement is always automatic, in
+    /// the topmost free gap of `[stackLimit, mmapBase)`.
+    public mutating func mmapAnonymous(
+        size       : UInt64,
+        permissions: VMAPermissions
+    ) throws(VMAError) -> VirtualAddress {
+
+        guard size > 0 else { throw .invalidLayout }
+
+        let alignedSize = (size + UserSpaceLayout.pageSize - 1) & ~(UserSpaceLayout.pageSize - 1)
+
+        guard let start = vmaList.findFreeGAPInRange(
+            min      : UserSpaceLayout.mmapMin,
+            max      : UserSpaceLayout.mmapBase,
+            size     : alignedSize,
+            alignment: UserSpaceLayout.pageSize,
+            direction: .downward
+        ) else { throw .noFreeGap }
+
+        try registerRegion(
+            start      : start,
+            size       : alignedSize,
+            permissions: permissions,
+            backing    : .anonymous,
+            flags      : .noReserve
+        )
+
+        return start
+    }
+
+
+    /// Release a previously reserved region.
+    ///
+    /// Only full-region unmap is supported in this milestone: `addr`
+    /// must match the VMA start and `size` must match the VMA size.
+    /// Partial unmap (split) is left for the next milestone.
+    public mutating func munmapRegion(
+        addr: VirtualAddress,
+        size: UInt64
+    ) throws(VMAError) {
+
+        guard size > 0 else { throw .invalidLayout }
+
+        let alignedSize = (size + UserSpaceLayout.pageSize - 1) & ~(UserSpaceLayout.pageSize - 1)
+        let end         = addr + alignedSize
+
+        guard let vmaPtr = vmaList.search(at: addr) else {
+            throw .invalidLayout
+        }
+
+        guard vmaPtr.pointee.startAddress == addr,
+              vmaPtr.pointee.endAddress   == end
+        else { throw .invalidLayout }
+
+        if brkVMA == vmaPtr {
+            brkVMA = nil
+        }
+
+        var va = vmaPtr.pointee.startAddress
+        while va < vmaPtr.pointee.endAddress {
+            switch vmaPtr.pointee.backingType {
+                case .anonymous:
+                    try? vmm.pointee.unmapAndFreeUserPage(
+                        rootTable: rootTablePhysical,
+                        virtual  : va
+                    )
+
+                case .fileBacked, .shared:
+                    try? vmm.pointee.unmapUserPage(
+                        rootTable: rootTablePhysical,
+                        virtual  : va
+                    )
+            }
+            va += UserSpaceLayout.pageSize
+        }
+
+        vmaList.remove(element: vmaPtr)
+        heap.pointee.kfree(UnsafeMutableRawPointer(vmaPtr))
     }
 
 

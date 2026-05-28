@@ -47,25 +47,22 @@ public struct Kernel {
     public static func boot(dtbRawAddress: PhysicalAddress) {
 
         do {
-            // MARK: - First Step, discover physical address
             if !QemuVirtPlatform.discover(into: &platformInfo, at: dtbRawAddress) {
-                kprint(.error, in: "DTB Tree not found.\n")
+                kprint(.error, in: "DTB Tree not found.", by: .boot)
                 Arch.CPU.waitForInterrupt()
             }
 
-            // MARK: - Starting boot
-            kprint(in: "Hello on ReixOS!\n")
-            
+            printBootBanner()
 
             self.ppm = try PhysicalPageManager<BuddyAllocator>()
-            kprint(.boot, in: "Initialize Physical Page Manager.")
+            kprint(.boot, in: "Physical Page Manager ready.", by: .ppm)
 
             self.vmm = try VirtualMemoryManager(ppmPtr: &ppm!)
-            kprint(.boot, in: "Initialize Virtual Memory Manager.")
+            kprint(.boot, in: "Virtual Memory Manager ready.", by: .vmm)
 
             self.ppm?.applyFramesMetadataVirtualOffset(VirtualMemoryManager.physicalOffset)
-            kprint(.boot, in: "Mapping Physical to Virtual Address on PPM.")
-            
+            kprint(.boot, in: "Frame metadata mapped into high-half.", by: .ppm)
+
 
             let heapPage     = try ppm!.alloc(4096, flag: .kernel)
             let heapVirtual  = heapPage.address + VirtualMemoryManager.physicalOffset
@@ -73,8 +70,8 @@ public struct Kernel {
             let heapPtr      = heapRaw.bindMemory(to: BucketsHeap.self, capacity: 1)
             heapPtr.initialize(to: BucketsHeap(ppmPtr: &ppm!))
             self.heap = heapPtr
-            kprint(.boot, in: "Initialize Kernel Heap.")
-            
+            kprint(.boot, in: "Kernel heap ready.", by: .heap)
+
 
             let gicSize = MemoryLayout<GICv2>.stride
             guard let gicRaw = try heap.pointee.kmalloc(UInt(gicSize)) else {
@@ -89,8 +86,8 @@ public struct Kernel {
                 cBase: platformInfo.gic.giccBase
             ))
             self.gic = gicPtr
-            kprint(.boot, in: "Initialize Global Interrupt Controller.")
-            
+            kprint(.boot, in: "Generic Interrupt Controller ready.", by: .gic)
+
 
             let processManagerSize = MemoryLayout<ProcessManager>.stride
             guard let processManagerRaw = try heap.pointee.kmalloc(UInt(processManagerSize)) else {
@@ -106,8 +103,8 @@ public struct Kernel {
                 heap: heap
             ))
             self.processManager = processManagerPtr
-            kprint(.boot, in: "Initialize Process Manager.")
-            
+            kprint(.boot, in: "Process Manager ready.", by: .proc)
+
 
             let syscallHandlerSize = MemoryLayout<SyscallHandler>.stride
             guard let syscallHandlerRaw = try heap.pointee.kmalloc(UInt(syscallHandlerSize)) else {
@@ -122,12 +119,12 @@ public struct Kernel {
                 scheduler     : &scheduler
             ))
             self.syscallHandler = syscallHandlerPtr
-            kprint(.boot, in: "Initialize Syscall Handler.")
-            
+            kprint(.boot, in: "Syscall Handler ready.", by: .sys)
+
 
             AArch64VirtualTimer.ect()
-            kprint(.boot, in: "Enable Core Virtual Timer\n")
-            
+            kprint(.boot, in: "Virtual Timer enabled.", by: .tim)
+            kprint()
 
         } catch { internalPanic(error) }
 
@@ -140,7 +137,7 @@ public struct Kernel {
 
     private static func run() throws(KernelError) {
 
-        kprint(.message, in: "Kernel is running\n")
+        kprint(.info, in: "Kernel is running.", by: .kern)
 
         do {
             try testProcessLaunch()
@@ -157,12 +154,13 @@ public struct Kernel {
     }
 
     private static func testProcessLaunch() throws (ProcessManagerError) {
-        kprint(.message, in: "Start Process Launch Test.\n")
+        kprint(.info, in: "Starting process launch test.", by: .proc)
 
         let firstProcess  = try processManager.pointee.spawnProcess(filename: "idle.elf")
         let secondProcess = try processManager.pointee.spawnProcess(filename: "init.elf")
 
-        kprint(.message, in: "Launching Process.\n")
+        kprint(.info, in: "Handing control to user space.", by: .proc)
+        kprint()
 
         let trapFramePtr = firstProcess.pointee.context!
         let kStackTop    = UInt64(UInt(bitPattern: firstProcess.pointee.kernelStackTop!))

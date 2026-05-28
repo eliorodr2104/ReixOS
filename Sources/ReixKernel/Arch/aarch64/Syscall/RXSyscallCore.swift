@@ -18,6 +18,17 @@ public func _syscall(_ type: SyscallNumber) -> UInt64 {
     _asm_syscall_raw(type.rawValue, 0, 0, 0)
 }
 
-public func _syscall(_ type: SyscallNumber, _ arg1: UInt64) -> UInt64 {
+public func _syscall(
+    _ type: SyscallNumber,
+    _ arg1: UInt64
+) -> UInt64 {
     _asm_syscall_raw(type.rawValue, arg1, 0, 0)
+}
+
+public func _syscall(
+    _ type: SyscallNumber,
+    _ arg1: UInt64,
+    _ arg2: UInt64
+) -> UInt64 {
+    _asm_syscall_raw(type.rawValue, arg1, arg2, 0)
 }

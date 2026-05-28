@@ -14,13 +14,32 @@ public func putchar(ch: UInt8) {
 }
 
 public func kprint(
-    _  type: PrintType = .message,
-    in str : String
+    _  type     : PrintType = .message,
+    in str      : String
 ) {
     _logger.kprintf(type.message)
     _logger.kprintf(" ")
     _logger.kprint(str)
 }
+
+
+/// Tagged log line. Format:
+///     `[LEVEL  ][SYS ] message`
+///
+/// Both prefixes use fixed-width brackets so consecutive lines align in
+/// any serial terminal. Use the un-tagged overload when the line is not
+/// attributable to a single subsystem.
+public func kprint(
+    _   type     : PrintType,
+    in  str      : String,
+    by  subsystem: Subsystem
+) {
+    _logger.kprintf(type.message)
+    _logger.kprintf(subsystem.tag)
+    _logger.kprintf(" ")
+    _logger.kprint(str)
+}
+
 
 public func kprint(_ s: String) {
     _logger.kprint(s)

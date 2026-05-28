@@ -35,6 +35,10 @@ public struct SyscallHandler {
             case .getPid   : handleGetPID   (frame: frame)
             case .reapChild: handleReapChild(frame: frame)
 
+            case .brk      : handleBrk     (frame: frame)
+            case .mmap     : handleMmap    (frame: frame)
+            case .munmap   : handleMunmap  (frame: frame)
+
             default: break
         }
     }
@@ -160,5 +164,82 @@ public struct SyscallHandler {
 
         handleYield(frame: frame)
         return
+    }
+
+
+    private func handleBrk(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
+        let requested  = frame.pointee.x0
+        let currentPtr = Arch.CPU.getCurrentProcess()
+
+        guard let current     = UnsafeMutablePointer<Process>(bitPattern: UInt(currentPtr)),
+              let vmaManager  = current.pointee.addressSpace.vmaManager,
+              let metadata    = current.pointee.metadata
+        else {
+            frame.pointee.x0 = UInt64.max
+            return
+        }
+
+        if requested == 0 {
+            frame.pointee.x0 = vmaManager.pointee.programBreak()
+            return
+        }
+
+        do {
+            let newBreak = try vmaManager.pointee.extendBreak(to: requested)
+            metadata.pointee.programBreak = newBreak
+            frame.pointee.x0              = newBreak
+
+        } catch {
+            frame.pointee.x0 = UInt64.max
+        }
+    }
+
+
+    private func handleMmap(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
+        let requestedSize = frame.pointee.x0
+        let currentPtr    = Arch.CPU.getCurrentProcess()
+
+        guard let current    = UnsafeMutablePointer<Process>(bitPattern: UInt(currentPtr)),
+              let vmaManager = current.pointee.addressSpace.vmaManager
+        else {
+            frame.pointee.x0 = 0
+            return
+        }
+
+        do {
+            let mapped = try vmaManager.pointee.mmapAnonymous(
+                size       : requestedSize,
+                permissions: [.read, .write, .user]
+            )
+            frame.pointee.x0 = mapped
+
+        } catch {
+            frame.pointee.x0 = 0
+        }
+    }
+
+
+    private func handleMunmap(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
+        let addr       = frame.pointee.x0
+        let size       = frame.pointee.x1
+        let currentPtr = Arch.CPU.getCurrentProcess()
+
+        guard let current    = UnsafeMutablePointer<Process>(bitPattern: UInt(currentPtr)),
+              let vmaManager = current.pointee.addressSpace.vmaManager
+        else {
+            frame.pointee.x0 = UInt64.max
+            return
+        }
+
+        do {
+            try vmaManager.pointee.munmapRegion(
+                addr: addr,
+                size: size
+            )
+            frame.pointee.x0 = 0
+
+        } catch {
+            frame.pointee.x0 = UInt64.max
+        }
     }
 }

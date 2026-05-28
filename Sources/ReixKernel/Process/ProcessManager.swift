@@ -62,9 +62,9 @@ public struct ProcessManager {
             )
         } catch { throw .elfParsingFailed(error) }
 
-        var userStackSection: PhysicalPage
+        let stackPage: PhysicalPage
         do {
-            userStackSection = try ppm.pointee.alloc(4096)
+            stackPage = try ppm.pointee.alloc(4096)
         } catch { throw .allocationPageFailed(error) }
 
         let userStackTop   = UserSpaceLayout.stackTop
@@ -73,7 +73,7 @@ public struct ProcessManager {
             try vmm.pointee.mapUserPage(
                 addressSpace: addressSpace,
                 virtual     : firstStackPage,
-                physical    : userStackSection.address,
+                physical    : stackPage.address,
                 flags       : [.present, .userAccess, .pxn, .uxn]
             )
         } catch { throw .mappingFailed(error) }
@@ -145,9 +145,10 @@ public struct ProcessManager {
             context       : trapFramePtr,
             kernelStackTop: kStackTop,
             kernelStackRaw: kStackRaw,
-            stack         : userStackSection,
             metadata      : metadataPtr
         ))
+
+        vmaManagerPtr.pointee.setInitialBreak(initialBreak)
 
         return processPtr
     }
@@ -158,12 +159,10 @@ public struct ProcessManager {
         if let vmaManager = process.pointee.addressSpace.vmaManager {
             vmaManager.pointee.teardown()
             vmaManager.deinitialize(count: 1)
-            
+
             heap.pointee.kfree(UnsafeMutableRawPointer(vmaManager))
             process.pointee.addressSpace.vmaManager = nil
         }
-
-        process.pointee.stack = nil
 
         if let metadata = process.pointee.metadata {
             if let elfImage = metadata.pointee.elfImage {

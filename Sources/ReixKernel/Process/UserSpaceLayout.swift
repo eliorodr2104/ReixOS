@@ -34,6 +34,11 @@ public enum UserSpaceLayout {
     /// from this anchor (enabled in step 5b).
     public static let mmapBase: VirtualAddress = 0x0000_4000_0000_0000
 
+    /// Lower bound the mmap area may consume. Picked far above any
+    /// plausible ELF base + brk heap so collisions only happen for
+    /// pathologically large processes.
+    public static let mmapMin: VirtualAddress = 0x0000_2000_0000_0000
+
     /// Top of the initial user stack. The first stack page sits at
     /// `stackTop - pageSize`.
     public static let stackTop: VirtualAddress = 0x0000_7FFF_FFFE_0000
