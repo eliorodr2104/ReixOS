@@ -7,10 +7,12 @@
 
 /// Dispatches user-space syscalls into kernel actions.
 ///
-/// Built as an instance struct so its dependencies (process manager and
-/// scheduler) are explicit and injected, instead of being reached via
-/// hidden static facades. The single live instance is composed by
-/// `Kernel.boot` and reached through `Kernel.syscallHandler`.
+/// Holds the injected dependencies (process manager, scheduler) and
+/// forwards each trap to the matching `SyscallProvider`. The actual
+/// logic of every syscall lives in its own file under
+/// `Arch/aarch64/Syscall/Providers/`, conforming to `SyscallProvider`.
+/// The dispatcher is intentionally a single compile-time switch — no
+/// existential indirection, no dynamic table.
 public struct SyscallHandler {
 
     private let processManager: UnsafeMutablePointer<ProcessManager>
@@ -28,218 +30,23 @@ public struct SyscallHandler {
         type : SyscallNumber,
         frame: UnsafeMutablePointer<Arch.TrapFrame>
     ) {
-        switch type {
-            case .exit     : handleExit     (frame: frame)
-            case .yield    : handleYield    (frame: frame)
-            case .putchar  : handlePutchar  (frame: frame)
-            case .getPid   : handleGetPID   (frame: frame)
-            case .reapChild: handleReapChild(frame: frame)
+        let context = SyscallContext(
+            processManager: processManager,
+            scheduler     : scheduler
+        )
 
-            case .brk      : handleBrk     (frame: frame)
-            case .mmap     : handleMmap    (frame: frame)
-            case .munmap   : handleMunmap  (frame: frame)
+        switch type {
+            case .exit     : ExitSyscall     .handle(frame: frame, context: context)
+            case .yield    : YieldSyscall    .handle(frame: frame, context: context)
+            case .putchar  : PutcharSyscall  .handle(frame: frame, context: context)
+            case .getPid   : GetPIDSyscall   .handle(frame: frame, context: context)
+            case .reapChild: ReapChildSyscall.handle(frame: frame, context: context)
+
+            case .brk      : BrkSyscall     .handle(frame: frame, context: context)
+            case .mmap     : MmapSyscall    .handle(frame: frame, context: context)
+            case .munmap   : MunmapSyscall  .handle(frame: frame, context: context)
 
             default: break
-        }
-    }
-
-
-    private func handleExit(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
-        let currentAddr = Arch.CPU.getCurrentProcess()
-
-        if let oldProcess = UnsafeMutablePointer<Process>(bitPattern: UInt(currentAddr)) {
-
-            oldProcess.pointee.context?.pointee = frame.pointee
-            oldProcess.pointee.status           = .terminated
-
-            let exitingCode = UInt32(frame.pointee.x0)
-
-            do {
-                Arch.CPU.setCurrentProcess(0)
-                try processManager.pointee.releaseAddressSpace(oldProcess)
-
-            } catch { Arch.CPU.panic("Failed to destroy exiting process") }
-
-            if let metadata = oldProcess.pointee.metadata {
-                metadata.pointee.exitCode = exitingCode
-            }
-            scheduler.pointee.removeTask(oldProcess)
-
-
-            if let parentPtr   = oldProcess.pointee.parent,
-               let parentMeta  = parentPtr.pointee.metadata,
-               parentMeta.pointee.waitingChildPid == oldProcess.pointee.pid,
-               let parentFrame = parentPtr.pointee.context
-            {
-                parentFrame.pointee.x0 = frame.pointee.x0
-
-                processManager.pointee.releaseProcess(oldProcess)
-
-                try? scheduler.pointee.wakeUp(parentPtr.pointee.pid)
-            }
-
-        }
-
-        if let trapFrame = scheduler.pointee.yield() {
-            let nextAddr = Arch.CPU.getCurrentProcess()
-            if let next = UnsafeMutablePointer<Process>(bitPattern: UInt(nextAddr)) {
-                Arch.MMU.switchUserAddressSpace(next.pointee.addressSpace.rootTablePhysical.address)
-            }
-
-            frame.pointee = trapFrame.pointee
-
-        } else {
-            Arch.CPU.setCurrentProcess(0)
-            while true { Arch.CPU.waitForInterrupt() }
-        }
-    }
-
-
-    private func handleYield(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
-        let currentAddr = Arch.CPU.getCurrentProcess()
-        if let current = UnsafeMutablePointer<Process>(bitPattern: UInt(currentAddr)) {
-            current.pointee.context?.pointee = frame.pointee
-        }
-
-        if let trapFrame = scheduler.pointee.yield() {
-            let nextAddr = Arch.CPU.getCurrentProcess()
-
-            if let next = UnsafeMutablePointer<Process>(bitPattern: UInt(nextAddr)) {
-                Arch.MMU.switchUserAddressSpace(next.pointee.addressSpace.rootTablePhysical.address)
-            }
-
-            frame.pointee = trapFrame.pointee
-        }
-    }
-
-
-    private func handlePutchar(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
-        kputc(UInt8(frame.pointee.x0))
-    }
-
-
-    private func handleGetPID(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
-        let currentRawProcess = Arch.CPU.getCurrentProcess()
-        if let current = UnsafeMutablePointer<Process>(bitPattern: UInt(currentRawProcess)) {
-            frame.pointee.x0 = UInt64(current.pointee.pid)
-
-        } else { frame.pointee.x0 = 0 }
-    }
-
-
-    // TODO: - Create a ExitCode standard, zero val is a temp not found
-    private func handleReapChild(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
-        let childPid = frame.pointee.x0
-        let currentPtr = Arch.CPU.getCurrentProcess()
-
-        // TODO: - Add throws for all case
-        guard let current = UnsafeMutablePointer<Process>(bitPattern: UInt(currentPtr)) else {
-            frame.pointee.x0 = 0
-            return
-        }
-
-        guard let child = scheduler.pointee.search(to: childPid) else {
-            frame.pointee.x0 = 0
-            return
-        }
-
-        guard child.pointee.pid == current.pointee.pid else {
-            frame.pointee.x0 = 0
-            return
-        }
-
-        if child.pointee.status == .terminated {
-            let childExit = child.pointee.metadata?.pointee.exitCode ?? 0
-            frame.pointee.x0 = UInt64(childExit)
-
-            processManager.pointee.releaseProcess(child)
-
-            return
-        }
-
-        current.pointee.metadata.pointee.waitingChildPid = childPid
-
-        // TODO: Add Error handler
-        try? scheduler.pointee.block(current.pointee.pid)
-
-        handleYield(frame: frame)
-        return
-    }
-
-
-    private func handleBrk(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
-        let requested  = frame.pointee.x0
-        let currentPtr = Arch.CPU.getCurrentProcess()
-
-        guard let current     = UnsafeMutablePointer<Process>(bitPattern: UInt(currentPtr)),
-              let vmaManager  = current.pointee.addressSpace.vmaManager,
-              let metadata    = current.pointee.metadata
-        else {
-            frame.pointee.x0 = UInt64.max
-            return
-        }
-
-        if requested == 0 {
-            frame.pointee.x0 = vmaManager.pointee.programBreak()
-            return
-        }
-
-        do {
-            let newBreak = try vmaManager.pointee.extendBreak(to: requested)
-            metadata.pointee.programBreak = newBreak
-            frame.pointee.x0              = newBreak
-
-        } catch {
-            frame.pointee.x0 = UInt64.max
-        }
-    }
-
-
-    private func handleMmap(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
-        let requestedSize = frame.pointee.x0
-        let currentPtr    = Arch.CPU.getCurrentProcess()
-
-        guard let current    = UnsafeMutablePointer<Process>(bitPattern: UInt(currentPtr)),
-              let vmaManager = current.pointee.addressSpace.vmaManager
-        else {
-            frame.pointee.x0 = 0
-            return
-        }
-
-        do {
-            let mapped = try vmaManager.pointee.mmapAnonymous(
-                size       : requestedSize,
-                permissions: [.read, .write, .user]
-            )
-            frame.pointee.x0 = mapped
-
-        } catch {
-            frame.pointee.x0 = 0
-        }
-    }
-
-
-    private func handleMunmap(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
-        let addr       = frame.pointee.x0
-        let size       = frame.pointee.x1
-        let currentPtr = Arch.CPU.getCurrentProcess()
-
-        guard let current    = UnsafeMutablePointer<Process>(bitPattern: UInt(currentPtr)),
-              let vmaManager = current.pointee.addressSpace.vmaManager
-        else {
-            frame.pointee.x0 = UInt64.max
-            return
-        }
-
-        do {
-            try vmaManager.pointee.munmapRegion(
-                addr: addr,
-                size: size
-            )
-            frame.pointee.x0 = 0
-
-        } catch {
-            frame.pointee.x0 = UInt64.max
         }
     }
 }
