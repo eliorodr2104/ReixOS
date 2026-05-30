@@ -5,47 +5,26 @@
 //  Created by Eliomar on 30/05/2026.
 //
 
-internal struct OpenFileDescription {
-    let address      : VirtualAddress
-    let size         : Size
-    var currentOffset: Size
-    let isUsed       : Bool
-    
-    var dataPointer: UnsafeRawPointer? {
-        UnsafeRawPointer(bitPattern: UInt(address))
-    }
-    
-    init() {
-        self.address       = 0
-        self.size          = 0
-        self.currentOffset = 0
-        self.isUsed        = false
-    }
-    
-    init(
-        address      : VirtualAddress,
-        size         : Size,
-        currentOffset: Size,
-        isUsed       : Bool
-    ) {
-        self.address       = address
-        self.size          = size
-        self.currentOffset = currentOffset
-        self.isUsed        = isUsed
-    }
-}
 
-
-public struct MockFileSystem: FileSystemInterface {
+public struct TarFileSystem: FileSystemInterface {
     
     static let sizeBufferOpenedFiles: Int = 32
     
     let tarAddress : VirtualAddress = Kernel.platformInfo.initrdStart
     let openedFiles: UnsafeMutablePointer<OpenFileDescription>
+            
+    init(heap: UnsafeMutablePointer<BucketsHeap>) {
         
-    init() {
-        self.openedFiles = UnsafeMutablePointer<OpenFileDescription>.allocate(capacity: 32)
+        let openFileDescriptionSize = MemoryLayout<OpenFileDescription>.stride
+        guard let openFileDescriptionRaw = try? heap.pointee.kmalloc(UInt(openFileDescriptionSize)) else {
+            Arch.CPU.panic("Failed to allocate OpenFileDescription Array on the kernel heap")
+        }
         
+        self.openedFiles = openFileDescriptionRaw.bindMemory(
+            to      : OpenFileDescription.self,
+            capacity: 32
+        )
+                
         openedFiles.initialize(
             repeating: OpenFileDescription(
                 address      : 0,
@@ -59,7 +38,7 @@ public struct MockFileSystem: FileSystemInterface {
     
     
     public func open(
-        path : StaticString,
+        path : UnsafePointer<CChar>,
         flags: FileFlags
     ) -> Result<FileHandle, FSError> {
         guard !flags.contains(.write) else {
@@ -176,7 +155,7 @@ public struct MockFileSystem: FileSystemInterface {
 
 
 
-    public func getInfo(path: StaticString) -> Result<FileInfo, FSError> {
+    public func getInfo(path: UnsafePointer<CChar>) -> Result<FileInfo, FSError> {
         let findedResult = findFile(path)
         switch findedResult {
             case .success(let entry):
@@ -228,7 +207,7 @@ public struct MockFileSystem: FileSystemInterface {
     }
     
     
-    private func findFile(_ path: StaticString) -> Result<TarInfo, FSError> {
+    private func findFile(_ path: UnsafePointer<CChar>) -> Result<TarInfo, FSError> {
         var entry = TarInfo(address: tarAddress)
         while entry.name?.pointee != 0 {
             
@@ -254,20 +233,17 @@ public struct MockFileSystem: FileSystemInterface {
     
     
     private func isFileSection(
-        filename: StaticString,
+        filename: UnsafePointer<CChar>,
         entryTar: UnsafePointer<CChar>?
     ) -> Bool{
         
         guard let entryTar = entryTar else { return false }
 
-        var current = UnsafeRawPointer(
-            filename.utf8Start
-        ).assumingMemoryBound(to: CChar.self)
-        
+        var current      = filename
         var result       = true
         var iteratorName = 0
         
-        while current.pointee != 0 && result {            
+        while current.pointee != 0 && result {
             
             if (current.pointee != entryTar[iteratorName]) {
                 result = false

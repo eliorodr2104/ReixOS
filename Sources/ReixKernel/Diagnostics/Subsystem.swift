@@ -24,6 +24,7 @@ public enum Subsystem {
     case vma
     case elf
     case sched
+    case fs
 
     var tag: String {
         switch self {
@@ -39,6 +40,7 @@ public enum Subsystem {
             case .vma  : "[VMA ]"
             case .elf  : "[ELF ]"
             case .sched: "[SCHD]"
+            case .fs   : "[FS  ]"
         }
     }
 }

@@ -39,6 +39,8 @@ public struct Kernel {
     public  static var gic: UnsafeMutablePointer<GICv2>!
 
     public  static var scheduler: UnsafeMutablePointer<KernelScheduler>!
+    
+    public  static var fileSystem: UnsafeMutablePointer<KernelInternalFileSystem>!
 
     public  static var internalPanicMessage: String?
     public  static var platformInfo = PlatformInfo()
@@ -87,6 +89,22 @@ public struct Kernel {
             ))
             self.gic = gicPtr
             kprint(.boot, in: "Generic Interrupt Controller ready.", by: .gic)
+            
+            
+            let tarFileSystemSize = MemoryLayout<KernelInternalFileSystem>.stride
+            guard let tarFileSystemRaw = try heap.pointee.kmalloc(UInt(tarFileSystemSize)) else {
+                Arch.CPU.panic("Failed to allocate TarFileSystem on the kernel heap")
+            }
+            let tarFileSystemPtr = tarFileSystemRaw.bindMemory(
+                to      : KernelInternalFileSystem.self,
+                capacity: 1
+            )
+            tarFileSystemPtr.initialize(
+                to: TarFileSystem(heap: heap)
+            )
+            self.fileSystem = tarFileSystemPtr
+            kprint(.boot, in: "Internal File System ready.", by: .fs)
+            
 
 
             let processManagerSize = MemoryLayout<ProcessManager>.stride
@@ -98,9 +116,10 @@ public struct Kernel {
                 capacity: 1
             )
             processManagerPtr.initialize(to: ProcessManager(
-                vmm : &vmm!,
-                ppm : &ppm!,
-                heap: heap
+                vmm       : &vmm!,
+                ppm       : &ppm!,
+                heap      : heap,
+                fileSystem: fileSystem
             ))
             self.processManager = processManagerPtr
             kprint(.boot, in: "Process Manager ready.", by: .proc)
@@ -168,9 +187,20 @@ public struct Kernel {
 
     private static func testProcessLaunch() throws (ProcessManagerError) {
         kprint(.info, in: "Starting process launch test.", by: .proc)
+        
+        let firstProcessPath: StaticString = "idle.elf"
+        let firstProcessPathPtr = UnsafeRawPointer(
+            firstProcessPath.utf8Start
+        ).assumingMemoryBound(to: CChar.self)
+        
+        
+        let secondProcessPath: StaticString = "init.elf"
+        let secondProcessPathPtr = UnsafeRawPointer(
+            secondProcessPath.utf8Start
+        ).assumingMemoryBound(to: CChar.self)
 
-        let firstProcess  = try processManager.pointee.spawnProcess(filename: "idle.elf")
-        let secondProcess = try processManager.pointee.spawnProcess(filename: "init.elf")
+        let firstProcess  = try processManager.pointee.spawnProcess(path: firstProcessPathPtr)
+        let secondProcess = try processManager.pointee.spawnProcess(path: secondProcessPathPtr)
 
         kprint(.info, in: "Handing control to user space.", by: .proc)
         kprint()

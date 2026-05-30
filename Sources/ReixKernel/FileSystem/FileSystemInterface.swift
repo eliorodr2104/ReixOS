@@ -10,7 +10,7 @@ public typealias Size = Int
 public protocol FileSystemInterface {
     
     func open(
-        path : StaticString,
+        path : UnsafePointer<CChar>,
         flags: FileFlags
     ) -> Result<FileHandle, FSError>
     
@@ -39,5 +39,5 @@ public protocol FileSystemInterface {
 
 
 
-    func getInfo(path: StaticString) -> Result<FileInfo, FSError>
+    func getInfo(path: UnsafePointer<CChar>) -> Result<FileInfo, FSError>
 }

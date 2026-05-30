@@ -16,260 +16,154 @@ public struct ProcessManager {
     /// Monotonically increasing PID source. Never reused within a boot.
     private var pidCounter: PID = 0
 
-    private let vmm : UnsafeMutablePointer<VirtualMemoryManager>
-    private let ppm : UnsafeMutablePointer<KernelPPM>
-    private let heap: UnsafeMutablePointer<BucketsHeap>
+    private let vmm       : UnsafeMutablePointer<VirtualMemoryManager>
+    private let ppm       : UnsafeMutablePointer<KernelPPM>
+    private let heap      : UnsafeMutablePointer<BucketsHeap>
+    private let fileSystem: UnsafeMutablePointer<KernelInternalFileSystem>
 
     
     public init(
-        vmm : UnsafeMutablePointer<VirtualMemoryManager>,
-        ppm : UnsafeMutablePointer<KernelPPM>,
-        heap: UnsafeMutablePointer<BucketsHeap>
+        vmm       : UnsafeMutablePointer<VirtualMemoryManager>,
+        ppm       : UnsafeMutablePointer<KernelPPM>,
+        heap      : UnsafeMutablePointer<BucketsHeap>,
+        fileSystem: UnsafeMutablePointer<KernelInternalFileSystem>
     ) {
-        self.vmm  = vmm
-        self.ppm  = ppm
-        self.heap = heap
+        self.vmm        = vmm
+        self.ppm        = ppm
+        self.heap       = heap
+        self.fileSystem = fileSystem
     }
 
-    
-    // For testing because used hardcoded string
-    public mutating func spawnProcess(filename: StaticString) throws(ProcessManagerError) -> UnsafeMutablePointer<Process> {
-        
-        let cPtr = UnsafeRawPointer(
-            filename.utf8Start
-        ).assumingMemoryBound(to: CChar.self)
-        
-        let elfRawAddress = parseTar(
-            filename  : cPtr,
-            tarAddress: Kernel.platformInfo.initrdStart
-        )
-        guard elfRawAddress != 0 else { throw .programAddressNotValid }
 
-        var addressSpace: AddressSpace
-        do {
-            addressSpace = try vmm.pointee.createAddressSpace()
-        } catch { throw .creationProcessFailed(error) }
-
-        let vmaManagerPtr = try attachVMAManager(to: &addressSpace)
-
-        var elf: LoadedELF
-        do {
-            elf = try ElfParser.loadSegments(
-                elfAddress  : elfRawAddress,
-                addressSpace: addressSpace,
-                vmaManager  : vmaManagerPtr,
-                vmm         : vmm,
-                ppm         : ppm
-            )
-        } catch { throw .elfParsingFailed(error) }
-
-        let stackPage: PhysicalPage
-        do {
-            stackPage = try ppm.pointee.alloc(4096)
-        } catch { throw .allocationPageFailed(error) }
-
-        let userStackTop   = UserSpaceLayout.stackTop
-        let firstStackPage = userStackTop - UserSpaceLayout.pageSize
-        do {
-            try vmm.pointee.mapUserPage(
-                addressSpace: addressSpace,
-                virtual     : firstStackPage,
-                physical    : stackPage.address,
-                flags       : [.present, .userAccess, .pxn, .uxn]
-            )
-        } catch { throw .mappingFailed(error) }
-
-        try? vmaManagerPtr.pointee.registerRegion(
-            start      : firstStackPage,
-            size       : UserSpaceLayout.pageSize,
-            permissions: [.read, .write, .user],
-            backing    : .anonymous,
-            flags      : .growDown
-        )
-
-        let trapSize = MemoryLayout<Arch.TrapFrame>.stride
-        guard let trapRaw = try? heap.pointee.kmalloc(UInt(trapSize)) else {
-            throw .heapAllocationFailed
-        }
-
-        let trapFramePtr = trapRaw.bindMemory(
-            to      : Arch.TrapFrame.self,
-            capacity: 1
-        )
-        trapFramePtr.initialize(to: Arch.TrapFrame())
-        trapFramePtr.pointee.elr   = elf.entryPoint
-        trapFramePtr.pointee.spsr  = 0x0
-        trapFramePtr.pointee.spel0 = userStackTop
-
-        let pid = self.pidCounter
-        self.pidCounter += 1
-
-        guard let kStackRaw = try? heap.pointee.kmalloc(4096) else {
-            throw .heapAllocationFailed
-        }
-        let kStackTop = kStackRaw.advanced(by: 4096)
-
-        let initialBreak = (elf.loadEnd + UserSpaceLayout.pageSize - 1) & ~(UserSpaceLayout.pageSize - 1)
-
-        let metadataSize = MemoryLayout<ProcessMetadata>.stride
-        guard let metadataRaw = try? heap.pointee.kmalloc(UInt(metadataSize)) else {
-            throw .heapAllocationFailed
-        }
-
-        let metadataPtr = metadataRaw.bindMemory(
-            to      : ProcessMetadata.self,
-            capacity: 1
-        )
-        metadataPtr.initialize(to: ProcessMetadata(
-            elfImage    : elf.image,
-            elfLoadBase : elf.loadBase,
-            elfLoadEnd  : elf.loadEnd,
-            programBreak: initialBreak
-        ))
-
-        let processSize = MemoryLayout<Process>.stride
-        guard let rawProcessMemory = try? heap.pointee.kmalloc(UInt(processSize)) else {
-            throw .heapAllocationFailed
-        }
-
-        let processPtr = rawProcessMemory.bindMemory(
-            to      : Process.self,
-            capacity: 1
-        )
-        processPtr.initialize(to: Process(
-            pid           : pid,
-            family        : ProcessRelations(),
-            status        : .new,
-            addressSpace  : addressSpace,
-            priority      : 1,
-            type          : .user,
-            context       : trapFramePtr,
-            kernelStackTop: kStackTop,
-            kernelStackRaw: kStackRaw,
-            metadata      : metadataPtr
-        ))
-
-        vmaManagerPtr.pointee.setInitialBreak(initialBreak)
-
-        return processPtr
-    }
-    
-    
     public mutating func spawnProcess(path: UnsafePointer<CChar>) throws(ProcessManagerError) -> UnsafeMutablePointer<Process> {
+        
+        switch fileSystem.pointee.open(
+            path : path,
+            flags: .read
+        ) {
+                
+            case .success(let handle):
+                
+                var addressSpace: AddressSpace
+                do {
+                    addressSpace = try vmm.pointee.createAddressSpace()
+                } catch { throw .creationProcessFailed(error) }
 
-        let elfRawAddress = parseTar(
-            filename  : path,
-            tarAddress: Kernel.platformInfo.initrdStart
-        )
-        guard elfRawAddress != 0 else { throw .programAddressNotValid }
+                let vmaManagerPtr = try attachVMAManager(to: &addressSpace)
 
-        var addressSpace: AddressSpace
-        do {
-            addressSpace = try vmm.pointee.createAddressSpace()
-        } catch { throw .creationProcessFailed(error) }
+                var elf: LoadedELF
+                do {
+                    elf = try ElfParser.loadSegments(
+                        handle      : handle,
+                        fileSystem  : fileSystem,
+                        addressSpace: addressSpace,
+                        vmaManager  : vmaManagerPtr,
+                        vmm         : vmm,
+                        ppm         : ppm
+                    )
+                } catch {
+                    _ = fileSystem.pointee.close(handle: handle)
+                    throw .programAddressNotValid // TODO: Change this
+                }
+                
+                
+                _ = fileSystem.pointee.close(handle: handle)
+                
 
-        let vmaManagerPtr = try attachVMAManager(to: &addressSpace)
+                let stackPage: PhysicalPage
+                do {
+                    stackPage = try ppm.pointee.alloc(4096)
+                } catch { throw .allocationPageFailed(error) }
 
-        var elf: LoadedELF
-        do {
-            elf = try ElfParser.loadSegments(
-                elfAddress  : elfRawAddress,
-                addressSpace: addressSpace,
-                vmaManager  : vmaManagerPtr,
-                vmm         : vmm,
-                ppm         : ppm
-            )
-        } catch { throw .elfParsingFailed(error) }
+                let userStackTop   = UserSpaceLayout.stackTop
+                let firstStackPage = userStackTop - UserSpaceLayout.pageSize
+                do {
+                    try vmm.pointee.mapUserPage(
+                        addressSpace: addressSpace,
+                        virtual     : firstStackPage,
+                        physical    : stackPage.address,
+                        flags       : [.present, .userAccess, .pxn, .uxn]
+                    )
+                } catch { throw .mappingFailed(error) }
 
-        let stackPage: PhysicalPage
-        do {
-            stackPage = try ppm.pointee.alloc(4096)
-        } catch { throw .allocationPageFailed(error) }
+                try? vmaManagerPtr.pointee.registerRegion(
+                    start      : firstStackPage,
+                    size       : UserSpaceLayout.pageSize,
+                    permissions: [.read, .write, .user],
+                    backing    : .anonymous,
+                    flags      : .growDown
+                )
 
-        let userStackTop   = UserSpaceLayout.stackTop
-        let firstStackPage = userStackTop - UserSpaceLayout.pageSize
-        do {
-            try vmm.pointee.mapUserPage(
-                addressSpace: addressSpace,
-                virtual     : firstStackPage,
-                physical    : stackPage.address,
-                flags       : [.present, .userAccess, .pxn, .uxn]
-            )
-        } catch { throw .mappingFailed(error) }
+                let trapSize = MemoryLayout<Arch.TrapFrame>.stride
+                guard let trapRaw = try? heap.pointee.kmalloc(UInt(trapSize)) else {
+                    throw .heapAllocationFailed
+                }
 
-        try? vmaManagerPtr.pointee.registerRegion(
-            start      : firstStackPage,
-            size       : UserSpaceLayout.pageSize,
-            permissions: [.read, .write, .user],
-            backing    : .anonymous,
-            flags      : .growDown
-        )
+                let trapFramePtr = trapRaw.bindMemory(
+                    to      : Arch.TrapFrame.self,
+                    capacity: 1
+                )
+                trapFramePtr.initialize(to: Arch.TrapFrame())
+                trapFramePtr.pointee.elr   = elf.entryPoint
+                trapFramePtr.pointee.spsr  = 0x0
+                trapFramePtr.pointee.spel0 = userStackTop
 
-        let trapSize = MemoryLayout<Arch.TrapFrame>.stride
-        guard let trapRaw = try? heap.pointee.kmalloc(UInt(trapSize)) else {
-            throw .heapAllocationFailed
+                let pid = self.pidCounter
+                self.pidCounter += 1
+
+                guard let kStackRaw = try? heap.pointee.kmalloc(4096) else {
+                    throw .heapAllocationFailed
+                }
+                let kStackTop = kStackRaw.advanced(by: 4096)
+
+                let initialBreak = (elf.loadEnd + UserSpaceLayout.pageSize - 1) & ~(UserSpaceLayout.pageSize - 1)
+
+                let metadataSize = MemoryLayout<ProcessMetadata>.stride
+                guard let metadataRaw = try? heap.pointee.kmalloc(UInt(metadataSize)) else {
+                    throw .heapAllocationFailed
+                }
+
+                let metadataPtr = metadataRaw.bindMemory(
+                    to      : ProcessMetadata.self,
+                    capacity: 1
+                )
+                metadataPtr.initialize(to: ProcessMetadata(
+                    elfImage    : elf.image,
+                    elfLoadBase : elf.loadBase,
+                    elfLoadEnd  : elf.loadEnd,
+                    programBreak: initialBreak
+                ))
+
+                let processSize = MemoryLayout<Process>.stride
+                guard let rawProcessMemory = try? heap.pointee.kmalloc(UInt(processSize)) else {
+                    throw .heapAllocationFailed
+                }
+
+                let processPtr = rawProcessMemory.bindMemory(
+                    to      : Process.self,
+                    capacity: 1
+                )
+                processPtr.initialize(to: Process(
+                    pid           : pid,
+                    family        : ProcessRelations(),
+                    status        : .new,
+                    addressSpace  : addressSpace,
+                    priority      : 1,
+                    type          : .user,
+                    context       : trapFramePtr,
+                    kernelStackTop: kStackTop,
+                    kernelStackRaw: kStackRaw,
+                    metadata      : metadataPtr
+                ))
+
+                vmaManagerPtr.pointee.setInitialBreak(initialBreak)
+
+                return processPtr
+                
+                
+            case .failure(let failure):
+                throw .elfParsingFailed(.invalidMagicNumber)
         }
-
-        let trapFramePtr = trapRaw.bindMemory(
-            to      : Arch.TrapFrame.self,
-            capacity: 1
-        )
-        trapFramePtr.initialize(to: Arch.TrapFrame())
-        trapFramePtr.pointee.elr   = elf.entryPoint
-        trapFramePtr.pointee.spsr  = 0x0
-        trapFramePtr.pointee.spel0 = userStackTop
-
-        let pid = self.pidCounter
-        self.pidCounter += 1
-
-        guard let kStackRaw = try? heap.pointee.kmalloc(4096) else {
-            throw .heapAllocationFailed
-        }
-        let kStackTop = kStackRaw.advanced(by: 4096)
-
-        let initialBreak = (elf.loadEnd + UserSpaceLayout.pageSize - 1) & ~(UserSpaceLayout.pageSize - 1)
-
-        let metadataSize = MemoryLayout<ProcessMetadata>.stride
-        guard let metadataRaw = try? heap.pointee.kmalloc(UInt(metadataSize)) else {
-            throw .heapAllocationFailed
-        }
-
-        let metadataPtr = metadataRaw.bindMemory(
-            to      : ProcessMetadata.self,
-            capacity: 1
-        )
-        metadataPtr.initialize(to: ProcessMetadata(
-            elfImage    : elf.image,
-            elfLoadBase : elf.loadBase,
-            elfLoadEnd  : elf.loadEnd,
-            programBreak: initialBreak
-        ))
-
-        let processSize = MemoryLayout<Process>.stride
-        guard let rawProcessMemory = try? heap.pointee.kmalloc(UInt(processSize)) else {
-            throw .heapAllocationFailed
-        }
-
-        let processPtr = rawProcessMemory.bindMemory(
-            to      : Process.self,
-            capacity: 1
-        )
-        processPtr.initialize(to: Process(
-            pid           : pid,
-            family        : ProcessRelations(),
-            status        : .new,
-            addressSpace  : addressSpace,
-            priority      : 1,
-            type          : .user,
-            context       : trapFramePtr,
-            kernelStackTop: kStackTop,
-            kernelStackRaw: kStackRaw,
-            metadata      : metadataPtr
-        ))
-
-        vmaManagerPtr.pointee.setInitialBreak(initialBreak)
-
-        return processPtr
     }
 
 
