@@ -100,7 +100,7 @@ public struct Kernel {
                 capacity: 1
             )
             tarFileSystemPtr.initialize(
-                to: TarFileSystem(heap: heap)
+                to: TarFileSystem()
             )
             self.fileSystem = tarFileSystemPtr
             kprint(.boot, in: "Internal File System ready.", by: .fs)

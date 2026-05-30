@@ -16,7 +16,7 @@ public struct RoundRobin: SchedulerInterface {
     
     
     public mutating func addTask(_ process: UnsafeMutablePointer<Process>) throws(SchedulerError) {
-        guard process.pointee.status == .new else {
+        guard case .new = process.pointee.status else {
             throw .notNewerProcess
         }
         
@@ -34,7 +34,7 @@ public struct RoundRobin: SchedulerInterface {
         let currentAddr = Arch.CPU.getCurrentProcess()
         
         if currentAddr != 0, let currentPtr = UnsafeMutablePointer<Process>(bitPattern: UInt(currentAddr)) {
-            if currentPtr.pointee.status == .running {
+            if case .running = currentPtr.pointee.status {
                 currentPtr.pointee.status = .ready
                 ready.pushBack(currentPtr)
             }
@@ -93,7 +93,7 @@ public struct RoundRobin: SchedulerInterface {
     
     // Get a process pointer, because the handler delete a child process
     public mutating func reapChild(_ child: UnsafeMutablePointer<Process>) -> Bool {
-        guard child.pointee.status == .terminated else {
+        guard case .terminated = child.pointee.status else {
             return false
         }
         

@@ -10,5 +10,8 @@ public enum ProcessStatus {
     case ready
     case running
     case waiting
+    case blockedOnSend(UnsafeMutablePointer<Endpoint>?)
+    case blockedOnReceive(UnsafeMutablePointer<Endpoint>?)
+    case blockedOnReply
     case terminated
 }

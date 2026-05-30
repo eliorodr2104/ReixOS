@@ -153,7 +153,10 @@ public struct ProcessManager {
                     context       : trapFramePtr,
                     kernelStackTop: kStackTop,
                     kernelStackRaw: kStackRaw,
-                    metadata      : metadataPtr
+                    metadata      : metadataPtr,
+                    message       : nil,
+                    replyTo       : nil,
+                    ipcDeadline   : nil
                 ))
 
                 vmaManagerPtr.pointee.setInitialBreak(initialBreak)

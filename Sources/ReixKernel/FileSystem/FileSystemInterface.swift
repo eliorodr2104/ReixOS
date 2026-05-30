@@ -9,17 +9,17 @@ public typealias Size = Int
 
 public protocol FileSystemInterface {
     
-    func open(
+    mutating func open(
         path : UnsafePointer<CChar>,
         flags: FileFlags
     ) -> Result<FileHandle, FSError>
     
-    func close(
+    mutating func close(
         handle: FileHandle
     ) -> Result<Void, FSError>
 
 
-    func read(
+    mutating func read(
         handle: FileHandle,
         buffer: UnsafeMutableRawPointer,
         count : Size
@@ -31,7 +31,7 @@ public protocol FileSystemInterface {
         count : Size
     ) -> Result<Size, FSError>
     
-    func seek(
+    mutating func seek(
            handle: FileHandle,
         to offset: Size,
            method: SeekMethod

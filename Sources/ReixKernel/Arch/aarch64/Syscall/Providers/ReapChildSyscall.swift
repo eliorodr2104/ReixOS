@@ -39,7 +39,7 @@ public struct ReapChildSyscall: SyscallProvider {
             return
         }
 
-        if child.pointee.status == .terminated {
+        if case .terminated = child.pointee.status {
             let childExit = child.pointee.metadata?.pointee.exitCode ?? 0
             frame.pointee.x0 = UInt64(childExit)
 

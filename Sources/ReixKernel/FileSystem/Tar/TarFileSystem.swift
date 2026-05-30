@@ -7,37 +7,16 @@
 
 
 public struct TarFileSystem: FileSystemInterface {
-    
-    static let sizeBufferOpenedFiles: Int = 32
-    
+        
     let tarAddress : VirtualAddress = Kernel.platformInfo.initrdStart
-    let openedFiles: UnsafeMutablePointer<OpenFileDescription>
+    var openedFiles: InlineArray<32, OpenFileDescription>
             
-    init(heap: UnsafeMutablePointer<BucketsHeap>) {
-        
-        let openFileDescriptionSize = MemoryLayout<OpenFileDescription>.stride
-        guard let openFileDescriptionRaw = try? heap.pointee.kmalloc(UInt(openFileDescriptionSize)) else {
-            Arch.CPU.panic("Failed to allocate OpenFileDescription Array on the kernel heap")
-        }
-        
-        self.openedFiles = openFileDescriptionRaw.bindMemory(
-            to      : OpenFileDescription.self,
-            capacity: 32
-        )
-                
-        openedFiles.initialize(
-            repeating: OpenFileDescription(
-                address      : 0,
-                size         : 0,
-                currentOffset: 0,
-                isUsed       : false
-            ),
-            count: 32
-        )
+    init() {
+        self.openedFiles = InlineArray(repeating: OpenFileDescription())
     }
     
     
-    public func open(
+    public mutating func open(
         path : UnsafePointer<CChar>,
         flags: FileFlags
     ) -> Result<FileHandle, FSError> {
@@ -66,10 +45,10 @@ public struct TarFileSystem: FileSystemInterface {
         return .failure(.fileNotFound)
     }
     
-    public func close(
+    public mutating func close(
         handle: FileHandle
     ) -> Result<Void, FSError> {
-        guard handle.id >= 0 && handle.id < Self.sizeBufferOpenedFiles else {
+        guard handle.id >= 0 && handle.id < openedFiles.count else {
             return .failure(.invalidArgument)
         }
         
@@ -79,35 +58,35 @@ public struct TarFileSystem: FileSystemInterface {
     }
 
 
-    public func read(
+    public mutating func read(
         handle: FileHandle,
         buffer: UnsafeMutableRawPointer,
         count : Size
     ) -> Result<Size, FSError> {
         
-        guard handle.id >= 0 && handle.id < Self.sizeBufferOpenedFiles else {
+        guard handle.id >= 0 && handle.id < openedFiles.count else {
             return .failure(.invalidArgument)
         }
         
-        let file = openedFiles.advanced(by: handle.id)
-        guard file.pointee.isUsed else {
+        let file = openedFiles[handle.id]
+        guard file.isUsed else {
             return .failure(.ioError)
         }
         
-        guard file.pointee.currentOffset <= file.pointee.size else {
+        guard file.currentOffset <= file.size else {
             return .success(0)
         }
         
-        let remainingBytes = file.pointee.size - file.pointee.currentOffset
+        let remainingBytes = file.size - file.currentOffset
         var readBytesSize  = count
-        if file.pointee.currentOffset + readBytesSize >= file.pointee.size {
+        if file.currentOffset + readBytesSize >= file.size {
             readBytesSize = remainingBytes
         }
         
-        let source = file.pointee.dataPointer! + file.pointee.currentOffset
+        let source = file.dataPointer! + file.currentOffset
         buffer.copyMemory(from: source, byteCount: readBytesSize)
         
-        file.pointee.currentOffset = file.pointee.currentOffset + readBytesSize
+        openedFiles[handle.id].currentOffset += readBytesSize
         
         return .success(readBytesSize)
     }
@@ -123,32 +102,32 @@ public struct TarFileSystem: FileSystemInterface {
     }
     
     
-    public func seek(
+    public mutating func seek(
            handle: FileHandle,
         to offset: Size,
            method: SeekMethod
     ) -> Result<Size, FSError> {
         
-        guard handle.id >= 0 && handle.id < Self.sizeBufferOpenedFiles else {
+        guard handle.id >= 0 && handle.id < openedFiles.count else {
             return .failure(.invalidArgument)
         }
         
-        let file = openedFiles.advanced(by: handle.id)
-        guard file.pointee.isUsed else {
+        var file = openedFiles[handle.id]
+        guard file.isUsed else {
             return .failure(.ioError)
         }
     
         let newOffset = switch method {
             case .start  :                              offset
-            case .current: file.pointee.currentOffset + offset
-            case .end    : file.pointee.size          + offset
+            case .current: file.currentOffset + offset
+            case .end    : file.size          + offset
         }
         
-        guard newOffset <= file.pointee.size else {
+        guard newOffset <= file.size else {
             return .failure(.invalidArgument)
         }
         
-        file.pointee.currentOffset = newOffset
+        openedFiles[handle.id].currentOffset = newOffset
         
         return .success(newOffset)
     }
@@ -181,7 +160,7 @@ public struct TarFileSystem: FileSystemInterface {
     
     // MARK: - Helpers
     
-    private func findBucket(
+    private mutating func findBucket(
         address: VirtualAddress,
         size   : Int
     ) -> Int? {

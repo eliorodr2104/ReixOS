@@ -41,6 +41,8 @@ public struct ProcessMetadata {
     /// Exit code written by the exiting process. Read by the parent
     /// when reaping the zombie.
     public var exitCode: UInt32?
+    
+//    public var endpointCaps: InlineArray<16, EndpointCap?>
 
     public init(
         elfImage       : PhysicalPage?  = nil,
