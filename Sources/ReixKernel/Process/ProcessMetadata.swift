@@ -57,4 +57,13 @@ public struct ProcessMetadata {
         self.waitingChildPid = waitingChildPid
         self.exitCode        = exitCode
     }
+    
+    public init() {
+        self.elfImage        = nil
+        self.elfLoadBase     = 0
+        self.elfLoadEnd      = 0
+        self.programBreak    = 0
+        self.waitingChildPid = nil
+        self.exitCode        = nil
+    }
 }

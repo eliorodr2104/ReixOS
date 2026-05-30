@@ -10,7 +10,8 @@ import Reix
 @_cdecl("_start")
 public func main() {
 
-    print(String(getPID()))
+    let pid = getPID()
+    print(String(pid))
     print("Hi, this is init process!")
     
     let region = mmap(size: 4096)
@@ -21,7 +22,15 @@ public func main() {
         _ = munmap(addr: region, size: 4096)
     }
     
-    let childPid = spawnProcess(path: "child.elf") // Because kernel dont have a FS, is in tar file
+//    let childPid = spawnProcess(path: "child.elf")
+    
+    let childPid = split()
+    print(String(childPid))
+    
+    if childPid == 0 {
+        print("I'm eunuch!")
+        
+    } else { print("I have a eunuch children") }
     
     exit(code: 0)
 }

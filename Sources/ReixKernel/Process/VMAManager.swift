@@ -29,7 +29,7 @@ public struct VMAManager {
 
     /// Current program break for the brk-style heap. Set once by
     /// `setInitialBreak` at spawn time, then bumped by `extendBreak`.
-    private var currentBreak: VirtualAddress = 0
+    public var currentBreak: VirtualAddress = 0
 
     /// Cached pointer to the single VMA covering the brk heap, if any.
     /// `nil` until the first successful `extendBreak`.
@@ -477,5 +477,74 @@ public struct VMAManager {
         }
 
         return true
+    }
+    
+    
+    /// Reproduce the parent's address space into `self` (the child of a
+    /// `split`/`fork`).
+    ///
+    /// For every parent VMA we register an equivalent region and then make
+    /// a *private* copy of each page the parent has actually mapped:
+    /// allocate a fresh frame, copy the bytes and map it into the child's
+    /// root table. The child therefore owns every page it sees, so each
+    /// region is registered as `.anonymous` — its frames are released
+    /// per-page on teardown — while the parent's permissions and mapping
+    /// flags (`growDown` / `noReserve`) are preserved so lazy growth keeps
+    /// working. Pages the parent has not faulted in yet are left unmapped
+    /// in the child too: they fault in on demand exactly as they would
+    /// have in the parent.
+    public mutating func cloneRegions(from parent: VMAManager) throws(VMAError) {
+        var current = parent.vmaList.head
+
+        while let nodePtr = current {
+            let vma  = nodePtr.pointee
+            let size = vma.endAddress - vma.startAddress
+
+            try registerRegion(
+                start      : vma.startAddress,
+                size       : size,
+                permissions: vma.permissions,
+                backing    : .anonymous,
+                flags      : vma.mappingFlags
+            )
+
+            if nodePtr == parent.brkVMA {
+                self.brkVMA = self.vmaList.search(at: vma.startAddress)
+            }
+
+            let flags = vma.permissions.toPageFlags()
+            var va    = vma.startAddress
+            while va < vma.endAddress {
+                if let parentPhys = vmm.pointee.physicalAddressOf(
+                    rootTable: parent.rootTablePhysical,
+                    virtual  : va
+                ) {
+                    let page: PhysicalPage
+                    do {
+                        page = try ppm.pointee.alloc(4096)
+                    } catch { throw .allocationFailed(error) }
+
+                    let src: UnsafeMutablePointer<UInt8> = vmm.pointee.physToVirt(parentPhys)
+                    let dst: UnsafeMutablePointer<UInt8> = vmm.pointee.physToVirt(page.address)
+                    dst.update(from: src, count: Int(UserSpaceLayout.pageSize))
+
+                    do {
+                        try vmm.pointee.mapUserPage(
+                            rootTable: rootTablePhysical,
+                            virtual  : va,
+                            physical : page.address,
+                            flags    : flags
+                        )
+                    } catch {
+                        try? ppm.pointee.free(page)
+                        throw .mappingFailed(error)
+                    }
+                }
+
+                va += UserSpaceLayout.pageSize
+            }
+
+            current = vma.next
+        }
     }
 }

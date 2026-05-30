@@ -161,9 +161,83 @@ public struct ProcessManager {
                 return processPtr
                 
                 
-            case .failure(let failure):
+            case .failure(_):
                 throw .elfParsingFailed(.invalidMagicNumber)
         }
+    }
+    
+    
+    public mutating func spawnProcess() throws(ProcessManagerError) -> UnsafeMutablePointer<Process> {
+        
+        var addressSpace: AddressSpace
+        do {
+            addressSpace = try vmm.pointee.createAddressSpace()
+        } catch { throw .creationProcessFailed(error) }
+
+        // Fork/split path: the child starts with an EMPTY user address
+        // space. Every region — including the stack — is reproduced from
+        // the parent (descriptor + page contents) by `cloneRegions`, so we
+        // must NOT pre-map or pre-register a stack here: doing so would
+        // collide with the parent's stack VMA during the clone and abort it.
+        _ = try attachVMAManager(to: &addressSpace)
+
+        let trapSize = MemoryLayout<Arch.TrapFrame>.stride
+        guard let trapRaw = try? heap.pointee.kmalloc(UInt(trapSize)) else {
+            throw .heapAllocationFailed
+        }
+
+        let trapFramePtr = trapRaw.bindMemory(
+            to      : Arch.TrapFrame.self,
+            capacity: 1
+        )
+        trapFramePtr.initialize(to: Arch.TrapFrame())
+        trapFramePtr.pointee.elr   = 0
+        trapFramePtr.pointee.spsr  = 0x0
+        trapFramePtr.pointee.spel0 = UserSpaceLayout.stackTop
+
+        let pid = self.pidCounter
+        self.pidCounter += 1
+
+        guard let kStackRaw = try? heap.pointee.kmalloc(4096) else {
+            throw .heapAllocationFailed
+        }
+        let kStackTop = kStackRaw.advanced(by: 4096)
+
+        let metadataSize = MemoryLayout<ProcessMetadata>.stride
+        guard let metadataRaw = try? heap.pointee.kmalloc(UInt(metadataSize)) else {
+            throw .heapAllocationFailed
+        }
+
+        let metadataPtr = metadataRaw.bindMemory(
+            to      : ProcessMetadata.self,
+            capacity: 1
+        )
+
+        metadataPtr.initialize(to: ProcessMetadata())
+
+        let processSize = MemoryLayout<Process>.stride
+        guard let rawProcessMemory = try? heap.pointee.kmalloc(UInt(processSize)) else {
+            throw .heapAllocationFailed
+        }
+
+        let processPtr = rawProcessMemory.bindMemory(
+            to      : Process.self,
+            capacity: 1
+        )
+        processPtr.initialize(to: Process(
+            pid           : pid,
+            family        : ProcessRelations(),
+            status        : .new,
+            addressSpace  : addressSpace,
+            priority      : 1,
+            type          : .user,
+            context       : trapFramePtr,
+            kernelStackTop: kStackTop,
+            kernelStackRaw: kStackRaw,
+            metadata      : metadataPtr
+        ))
+
+        return processPtr
     }
 
 

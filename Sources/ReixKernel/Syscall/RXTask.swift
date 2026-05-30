@@ -31,7 +31,7 @@ public func getParentPID() -> UInt64 {
 
 @inline(__always)
 public func split() -> PID {
-    return 0
+    _syscall(.split)
 }
 
 @inline(__always)

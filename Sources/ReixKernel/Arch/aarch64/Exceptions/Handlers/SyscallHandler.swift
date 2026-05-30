@@ -43,6 +43,7 @@ public struct SyscallHandler {
             case .getParentPid : GetParentPIDSyscall.handle(frame: frame, context: context)
             case .reapChild    : ReapChildSyscall   .handle(frame: frame, context: context)
             case .spawnProcess : SpawnProcessSyscall.handle(frame: frame, context: context)
+            case .split        : SplitProcessSyscall.handle(frame: frame, context: context)
             case .brk          : BrkSyscall         .handle(frame: frame, context: context)
             case .mmap         : MmapSyscall        .handle(frame: frame, context: context)
             case .munmap       : MunmapSyscall      .handle(frame: frame, context: context)
@@ -50,4 +51,5 @@ public struct SyscallHandler {
             default: break
         }
     }
+    
 }
