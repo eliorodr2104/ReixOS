@@ -17,15 +17,15 @@ public struct VirtualTimerInterruptHandler: InterruptHandler {
 
     public static let id: UInt32 = 27
 
-    public static func handle(frame: UnsafeMutablePointer<Arch.TrapFrame>) {
+    public static func handle(frame: UnsafeMutablePointer<Arch.TrapFrame>) {        
         snapshotCurrentContext(frame: frame)
 
         AArch64VirtualTimer.ect()
         Kernel.gic.pointee.endOfInterrupt(id: id)
 
-        guard Kernel.scheduler.onTick() else { return }
+        guard Kernel.scheduler.pointee.onTick() else { return }
 
-        if let nextProcess = Kernel.scheduler.selectNextTask() {
+        if let nextProcess = Kernel.scheduler.pointee.selectNextTask() {
             Arch.MMU.switchUserAddressSpace(
                 nextProcess.pointee.addressSpace.rootTablePhysical.address
             )

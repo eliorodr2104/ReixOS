@@ -20,6 +20,8 @@ public func main() {
         print(String(UInt64(ptr.pointee)))
         _ = munmap(addr: region, size: 4096)
     }
-
+    
+    let childPid = spawnProcess(path: "child.elf") // Because kernel dont have a FS, is in tar file
+    
     exit(code: 0)
 }

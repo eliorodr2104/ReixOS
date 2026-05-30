@@ -7,7 +7,6 @@
 
 @_silgen_name("jump_to_user_mode")
 func jump_to_user_mode(
-    trapFrame     : UnsafeMutablePointer<Arch.TrapFrame>,
-    rootTable     : UInt64,
-    kernelStackTop: UInt64
+    trapFrame: UnsafeMutablePointer<Arch.TrapFrame>,
+    rootTable: UInt64
 )

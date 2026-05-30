@@ -10,7 +10,12 @@
 // Procedure Params:
 //     x0 = TrapFrame Pointer
 //     x1 = User RootTable Address
-//     x2 = Top Kernel Stack Address
+//
+// The EL1 exception stack is the single dedicated kernel stack reserved by
+// the linker (.stack section, symbol stack_top). It is intentionally not a
+// per-process stack: this kernel is non-preemptive at EL1 (IRQs masked) and
+// every syscall runs to completion, unwinding the stack before eret, so a
+// single shared stack is sufficient and is kept anchored at stack_top.
 jump_to_user_mode:
     
     adr     x3, safe_high_half
@@ -25,7 +30,9 @@ safe_high_half:
     dsb     ish
     isb
 
-    mov     sp, x2
+    ldr     x2, =stack_top
+    ldr     x3, =0xFFFF800000000000
+    add     sp, x2, x3
 
     ldp     x3, x4,   [x0, #248]
     msr     elr_el1,  x3

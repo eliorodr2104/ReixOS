@@ -38,7 +38,7 @@ public struct Kernel {
     /// pending interrupts and signal end-of-interrupt.
     public  static var gic: UnsafeMutablePointer<GICv2>!
 
-    public  static var scheduler: KernelScheduler = RoundRobin()
+    public  static var scheduler: UnsafeMutablePointer<KernelScheduler>!
 
     public  static var internalPanicMessage: String?
     public  static var platformInfo = PlatformInfo()
@@ -104,6 +104,19 @@ public struct Kernel {
             ))
             self.processManager = processManagerPtr
             kprint(.boot, in: "Process Manager ready.", by: .proc)
+            
+            
+            let schedulerSize = MemoryLayout<KernelScheduler>.stride
+            guard let schedulerRaw = try heap.pointee.kmalloc(UInt(schedulerSize)) else {
+                Arch.CPU.panic("Failed to allocate Scheduler on the kernel heap")
+            }
+            let schedulerPtr = schedulerRaw.bindMemory(
+                to: RoundRobin.self,
+                capacity: 1
+            )
+            schedulerPtr.initialize(to: RoundRobin())
+            self.scheduler = schedulerPtr
+            kprint(.boot, in: "Scheduler ready.", by: .sched)
 
 
             let syscallHandlerSize = MemoryLayout<SyscallHandler>.stride
@@ -116,7 +129,7 @@ public struct Kernel {
             )
             syscallHandlerPtr.initialize(to: SyscallHandler(
                 processManager: processManager,
-                scheduler     : &scheduler
+                scheduler     : scheduler
             ))
             self.syscallHandler = syscallHandlerPtr
             kprint(.boot, in: "Syscall Handler ready.", by: .sys)
@@ -163,10 +176,9 @@ public struct Kernel {
         kprint()
 
         let trapFramePtr = firstProcess.pointee.context!
-        let kStackTop    = UInt64(UInt(bitPattern: firstProcess.pointee.kernelStackTop!))
 
         do {
-            try scheduler.addTask(secondProcess)
+            try scheduler.pointee.addTask(secondProcess)
         } catch { Arch.CPU.panic(error.description) }
 
         firstProcess.pointee.status = .running
@@ -175,9 +187,8 @@ public struct Kernel {
         )
 
         jump_to_user_mode(
-            trapFrame     : trapFramePtr,
-            rootTable     : firstProcess.pointee.addressSpace.rootTablePhysical.address,
-            kernelStackTop: kStackTop
+            trapFrame: trapFramePtr,
+            rootTable: firstProcess.pointee.addressSpace.rootTablePhysical.address
         )
     }
 }

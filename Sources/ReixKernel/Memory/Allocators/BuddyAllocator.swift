@@ -80,8 +80,8 @@ public struct BuddyAllocator: Allocator {
                 page.address <= startRam + sizeRam)
         else { throw .addressInvalid(page.address) }
         guard try !isBlockFree(page.address, order: page.order) else { throw(.doubleFreeInvalid) }
-        
-        
+
+
         try mergeAndInsert(address: page.address, order: page.order)
     }
     
@@ -124,10 +124,10 @@ public struct BuddyAllocator: Allocator {
         
         var currentAddress = address
         var currentOrder   = order
-        
+
         while currentOrder < Self.maxOrder {
             let buddyAddress = try buddyOf(address: currentAddress, order: currentOrder)
-            
+
             if try isBlockFree(buddyAddress, order: currentOrder) {
                 if !(try removeFreeBlock(address: buddyAddress, order: currentOrder)) {
                     fatalError("PPM: Buddy block in list not found - Corrupted structures")
@@ -323,27 +323,43 @@ public struct BuddyAllocator: Allocator {
         
         var prev: UInt64 = 0
         var curr = try getFreeListHead(order: order)
-        
+
+        var visited = 0
+        let visitLimit = Int(sizeRam / Self.pageSize) + 16
+
         while curr != 0 {
+            visited += 1
+            if visited > visitLimit {
+                kprintf("[BUDDY] free-list CYCLE order=%d while removing addr=0x%x\n", UInt64(order), address)
+                var dump = try getFreeListHead(order: order)
+                var dumped = 0
+                while dump != 0 && dumped < 12 {
+                    kprintf("[BUDDY]   node[%d]=0x%x\n", UInt64(dumped), dump)
+                    dump = UnsafeMutableRawPointer(bitPattern: UInt(dump))!.load(as: UInt64.self)
+                    dumped += 1
+                }
+                Arch.CPU.panic("Buddy free-list cycle detected")
+            }
+
             let currPtr = UnsafeMutableRawPointer(bitPattern: UInt(curr))!
             let next = currPtr.load(as: UInt64.self)
-            
+
             if curr == address {
                 if prev == 0 {
                     try setFreeListHead(order: order, address: next)
-                    
+
                 } else {
                     let prevPtr = UnsafeMutableRawPointer(bitPattern: UInt(prev))!
                     prevPtr.storeBytes(of: next, as: UInt64.self)
-                    
+
                 }
                 return true
             }
-            
+
             prev = curr
             curr = next
         }
-        
+
         return false
     }
     

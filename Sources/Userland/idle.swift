@@ -12,11 +12,11 @@ public func main() {
     
     
     let currentPid = getPID()
-    print("Test a rape self process")
+    print("Test a reap self process")
     let result = reapChild(for: currentPid)
     
     print(String(result))
     print("Idle process")
     
-    while true {  }
+    while true { yield() }
 }

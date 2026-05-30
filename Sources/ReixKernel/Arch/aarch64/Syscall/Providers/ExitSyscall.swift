@@ -10,7 +10,9 @@
 /// Releases the running process address space and resources, records
 /// the exit code on the cold metadata, optionally wakes a parent that
 /// was waiting on it, then yields to the next ready task. When the
-/// scheduler has nothing else to run the CPU parks in WFI.
+/// scheduler has nothing else to run the CPU unmasks IRQs and parks in
+/// WFI so the next timer tick or device interrupt can re-enter the
+/// scheduler once a task becomes runnable again.
 public struct ExitSyscall: SyscallProvider {
 
     public static let number: SyscallNumber = .exit
@@ -37,10 +39,8 @@ public struct ExitSyscall: SyscallProvider {
             if let metadata = oldProcess.pointee.metadata {
                 metadata.pointee.exitCode = exitingCode
             }
-            context.scheduler.pointee.removeTask(oldProcess)
 
-
-            if let parentPtr   = oldProcess.pointee.parent,
+            if let parentPtr   = oldProcess.pointee.family.parent,
                let parentMeta  = parentPtr.pointee.metadata,
                parentMeta.pointee.waitingChildPid == oldProcess.pointee.pid,
                let parentFrame = parentPtr.pointee.context
@@ -50,6 +50,9 @@ public struct ExitSyscall: SyscallProvider {
                 context.processManager.pointee.releaseProcess(oldProcess)
 
                 try? context.scheduler.pointee.wakeUp(parentPtr.pointee.pid)
+
+            } else {
+                context.scheduler.pointee.removeTask(oldProcess)
             }
         }
 
@@ -62,6 +65,7 @@ public struct ExitSyscall: SyscallProvider {
 
         } else {
             Arch.CPU.setCurrentProcess(0)
+            Arch.CPU.enableInterrupts()
             while true { Arch.CPU.waitForInterrupt() }
         }
     }

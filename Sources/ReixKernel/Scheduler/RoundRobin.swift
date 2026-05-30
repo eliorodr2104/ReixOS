@@ -33,7 +33,7 @@ public struct RoundRobin: SchedulerInterface {
     public mutating func selectNextTask() -> UnsafeMutablePointer<Process>? {
         let currentAddr = Arch.CPU.getCurrentProcess()
         
-        if let currentPtr = UnsafeMutablePointer<Process>(bitPattern: UInt(currentAddr)) {
+        if currentAddr != 0, let currentPtr = UnsafeMutablePointer<Process>(bitPattern: UInt(currentAddr)) {
             if currentPtr.pointee.status == .running {
                 currentPtr.pointee.status = .ready
                 ready.pushBack(currentPtr)
@@ -44,7 +44,7 @@ public struct RoundRobin: SchedulerInterface {
             let nextAddr = VirtualAddress(UInt(bitPattern: next))
             Arch.CPU.setCurrentProcess(nextAddr)
             next.pointee.status = .running
-            
+                        
             currentTicks = 0
             return next
         }
@@ -78,14 +78,6 @@ public struct RoundRobin: SchedulerInterface {
         
         process.pointee.status = .waiting
         waiting.pushBack(process)
-        
-        if let next = ready.popFront() {
-            let nextAddr = VirtualAddress(UInt(bitPattern: next))
-            Arch.CPU.setCurrentProcess(nextAddr)
-            next.pointee.status = .running
-            
-            currentTicks = 0
-        } else { Arch.CPU.setCurrentProcess(0) }
     }
     
     

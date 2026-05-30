@@ -24,6 +24,13 @@ public struct LinkedList<T: RXEntry> {
     }
     
     public mutating func pushBack(_ element: UnsafeMutablePointer<T>) {
+        if let prevElement = element.pointee.prev,
+           let nextElement = element.pointee.next {
+            
+            prevElement.pointee.next = nextElement
+            nextElement.pointee.prev = prevElement
+        }
+        
         element.pointee.next = nil
         element.pointee.prev = tail
         

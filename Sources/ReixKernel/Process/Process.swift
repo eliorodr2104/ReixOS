@@ -22,7 +22,7 @@ public typealias PID = UInt64
 public struct Process: RXEntry {
 
     public let pid    : PID
-    public let parent : UnsafePointer<Process>?
+    public var family : ProcessRelations
 
     public var status      : ProcessStatus
     public var addressSpace: AddressSpace
@@ -41,6 +41,6 @@ public struct Process: RXEntry {
 
     public var entryID: UInt64 { pid }
 
-    public var prev: UnsafeMutablePointer<Self>?
-    public var next: UnsafeMutablePointer<Self>?
+    public var prev  : UnsafeMutablePointer<Self>?
+    public var next  : UnsafeMutablePointer<Self>?
 }

@@ -41,7 +41,11 @@ public func exec(path: StaticString) {
 
 @inline(__always)
 public func spawnProcess(path: StaticString) -> UInt64 {
-    return 0 // _syscall()
+    return _syscall(
+        .spawnProcess,
+        UInt64(UInt(bitPattern: path.utf8Start)),
+        UInt64(path.utf8CodeUnitCount)
+    )
 }
 
 @inline(__always)

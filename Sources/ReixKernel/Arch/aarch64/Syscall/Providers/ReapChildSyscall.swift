@@ -29,12 +29,12 @@ public struct ReapChildSyscall: SyscallProvider {
             return
         }
 
-        guard let child = context.scheduler.pointee.search(to: childPid) else {
+        guard let child = context.scheduler.pointee.search(in: .terminated, to: childPid) else {
             frame.pointee.x0 = 0
             return
         }
 
-        guard child.pointee.pid == current.pointee.pid else {
+        guard child.pointee.family.parent?.pointee.pid == current.pointee.pid else {
             frame.pointee.x0 = 0
             return
         }
@@ -43,6 +43,7 @@ public struct ReapChildSyscall: SyscallProvider {
             let childExit = child.pointee.metadata?.pointee.exitCode ?? 0
             frame.pointee.x0 = UInt64(childExit)
 
+            _ = context.scheduler.pointee.reapChild(child)
             context.processManager.pointee.releaseProcess(child)
             return
         }

@@ -41,7 +41,7 @@
 			buildPhases = (
 			);
 			buildToolPath = /usr/bin/make;
-			buildWorkingDirectory = /Users/eliorodr2104/Documents/Informatica/Progetti_HYLO/ReixOS;
+			buildWorkingDirectory = "$(PROJECT_DIR)";
 			dependencies = (
 			);
 			name = ReixOS;

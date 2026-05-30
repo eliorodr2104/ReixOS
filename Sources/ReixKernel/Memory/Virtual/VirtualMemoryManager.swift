@@ -175,6 +175,16 @@ public struct VirtualMemoryManager {
     public func destroyAddressSpace(
         addressSpace: consuming AddressSpace
     ) throws(PPMError) {
+        // The exiting process root table may still be installed in TTBR0_EL1.
+        // The kernel executes from the low identity map provided by TTBR0
+        // (VBAR and kernel text live there), so freeing the live root and
+        // flushing the TLB would invalidate the kernel's own code/vector
+        // mappings and wedge the CPU in a translation-fault loop. Detach by
+        // installing the kernel identity root in TTBR0 before reclaiming the
+        // page; the kernel identity root carries the same kernel mappings and
+        // is never freed.
+        Arch.MMU.switchUserAddressSpace(self.identityTableAddress)
+
         try ppmPtr.pointee.freeOwnedKernelPage(addressSpace.rootTablePhysical)
         Arch.MMU.flushTLB()
     }
