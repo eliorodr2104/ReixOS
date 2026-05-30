@@ -5,12 +5,12 @@
 //  Created by Eliomar on 30/05/2026.
 //
 
-public typealias Size = UInt64
+public typealias Size = Int
 
 public protocol FileSystemInterface {
     
     func open(
-        path : String,
+        path : StaticString,
         flags: FileFlags
     ) -> Result<FileHandle, FSError>
     

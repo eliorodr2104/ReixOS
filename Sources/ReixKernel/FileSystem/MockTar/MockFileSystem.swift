@@ -6,28 +6,97 @@
 //
 
 internal struct OpenFileDescription {
-    let dataPointer  : UnsafeRawPointer
+    let address      : VirtualAddress
     let size         : Size
     var currentOffset: Size
     let isUsed       : Bool
+    
+    var dataPointer: UnsafeRawPointer? {
+        UnsafeRawPointer(bitPattern: UInt(address))
+    }
+    
+    init() {
+        self.address       = 0
+        self.size          = 0
+        self.currentOffset = 0
+        self.isUsed        = false
+    }
+    
+    init(
+        address      : VirtualAddress,
+        size         : Size,
+        currentOffset: Size,
+        isUsed       : Bool
+    ) {
+        self.address       = address
+        self.size          = size
+        self.currentOffset = currentOffset
+        self.isUsed        = isUsed
+    }
 }
 
 
 public struct MockFileSystem: FileSystemInterface {
     
-    let tarAddress = Kernel.platformInfo.initrdStart
+    static let sizeBufferOpenedFiles: Int = 32
+    
+    let tarAddress : VirtualAddress = Kernel.platformInfo.initrdStart
+    let openedFiles: UnsafeMutablePointer<OpenFileDescription>
+        
+    init() {
+        self.openedFiles = UnsafeMutablePointer<OpenFileDescription>.allocate(capacity: 32)
+        
+        openedFiles.initialize(
+            repeating: OpenFileDescription(
+                address      : 0,
+                size         : 0,
+                currentOffset: 0,
+                isUsed       : false
+            ),
+            count: 32
+        )
+    }
+    
     
     public func open(
-        path : String,
+        path : StaticString,
         flags: FileFlags
     ) -> Result<FileHandle, FSError> {
-        return .success(FileHandle(id: 0))
+        guard !flags.contains(.write) else {
+            return .failure(.readOnlyFileSystem)
+        }
+        
+        let findedResult = findFile(path)
+        switch findedResult {
+            case .success(let entry):
+            
+                if let sizeEntry = getFileSize(size: entry.size) {
+                    
+                    if let id = findBucket(
+                        address: entry.address + 512,
+                        size   : sizeEntry
+                        
+                    ) { return .success(FileHandle(id: id)) }
+                }
+                
+                
+            case .failure(let failure):
+                return .failure(failure)
+        }
+        
+        return .failure(.fileNotFound)
     }
     
     public func close(
         handle: FileHandle
     ) -> Result<Void, FSError> {
-        .failure(.fileNotFound)
+        guard handle.id >= 0 && handle.id < Self.sizeBufferOpenedFiles else {
+            return .failure(.invalidArgument)
+        }
+        
+        openedFiles[handle.id] = OpenFileDescription()
+        
+        return .success(Void())
     }
 
 
@@ -36,9 +105,36 @@ public struct MockFileSystem: FileSystemInterface {
         buffer: UnsafeMutableRawPointer,
         count : Size
     ) -> Result<Size, FSError> {
-        .failure(.fileNotFound)
+        
+        guard handle.id >= 0 && handle.id < Self.sizeBufferOpenedFiles else {
+            return .failure(.invalidArgument)
+        }
+        
+        let file = openedFiles.advanced(by: handle.id)
+        guard file.pointee.isUsed else {
+            return .failure(.ioError)
+        }
+        
+        guard file.pointee.currentOffset <= file.pointee.size else {
+            return .success(0)
+        }
+        
+        let remainingBytes = file.pointee.size - file.pointee.currentOffset
+        var readBytesSize  = count
+        if file.pointee.currentOffset + readBytesSize >= file.pointee.size {
+            readBytesSize = remainingBytes
+        }
+        
+        let source = file.pointee.dataPointer! + file.pointee.currentOffset
+        buffer.copyMemory(from: source, byteCount: readBytesSize)
+        
+        file.pointee.currentOffset = file.pointee.currentOffset + readBytesSize
+        
+        return .success(readBytesSize)
     }
     
+    
+    // TODO: Not yet implemented because is only read FS
     public func write(
         handle: FileHandle,
         buffer: UnsafeRawPointer,
@@ -47,17 +143,92 @@ public struct MockFileSystem: FileSystemInterface {
         .failure(.fileNotFound)
     }
     
+    
     public func seek(
            handle: FileHandle,
         to offset: Size,
            method: SeekMethod
     ) -> Result<Size, FSError> {
-        .failure(.fileNotFound)
+        
+        guard handle.id >= 0 && handle.id < Self.sizeBufferOpenedFiles else {
+            return .failure(.invalidArgument)
+        }
+        
+        let file = openedFiles.advanced(by: handle.id)
+        guard file.pointee.isUsed else {
+            return .failure(.ioError)
+        }
+    
+        let newOffset = switch method {
+            case .start  :                              offset
+            case .current: file.pointee.currentOffset + offset
+            case .end    : file.pointee.size          + offset
+        }
+        
+        guard newOffset <= file.pointee.size else {
+            return .failure(.invalidArgument)
+        }
+        
+        file.pointee.currentOffset = newOffset
+        
+        return .success(newOffset)
     }
 
 
 
     public func getInfo(path: StaticString) -> Result<FileInfo, FSError> {
+        let findedResult = findFile(path)
+        switch findedResult {
+            case .success(let entry):
+            
+                if let sizeEntry = getFileSize(size: entry.size) {
+                    return .success(
+                        FileInfo(
+                            size       : sizeEntry,
+                            isDirectory: false,
+                            permissions: 0
+                        )
+                    )
+                }
+                
+                
+            case .failure(let failure):
+                return .failure(failure)
+        }
+        
+        return .failure(.fileNotFound)
+    }
+    
+    
+    // MARK: - Helpers
+    
+    private func findBucket(
+        address: VirtualAddress,
+        size   : Int
+    ) -> Int? {
+        
+        var idBucket: Int?
+        for i in 0..<32 {
+            
+            if !openedFiles[i].isUsed {
+                
+                openedFiles[i] = OpenFileDescription(
+                    address      : address,
+                    size         : size,
+                    currentOffset: 0,
+                    isUsed       : true
+                )
+
+                idBucket = i
+                break
+            }
+        }
+        
+        return idBucket
+    }
+    
+    
+    private func findFile(_ path: StaticString) -> Result<TarInfo, FSError> {
         var entry = TarInfo(address: tarAddress)
         while entry.name?.pointee != 0 {
             
@@ -65,27 +236,16 @@ public struct MockFileSystem: FileSystemInterface {
                 return .failure(.fileNotFound)
             }
             
-            let size = getFileSize(size: entry.size);
-            switch size {
-                case .success(let success):
-                    let currentAddress = entry.address
-                    let sizeAligned = (success + 511) & ~511;
+            if let sizeEntry = getFileSize(size: entry.size) {
+                let currentAddress = entry.address
+                let sizeAligned = (sizeEntry + 511) & ~511;
+            
+                guard isFileSection(filename: path, entryTar: entry.name) else {
+                    entry = TarInfo(address: currentAddress + 512 + UInt64(sizeAligned))
+                    continue
+                }
                 
-                    guard isFileSection(filename: path, entryTar: entry.name) else {
-                        entry = TarInfo(address: currentAddress + 512 + UInt64(sizeAligned))
-                        continue
-                    }
-                
-                    return .success(
-                        FileInfo(
-                            size: UInt64(success),
-                            isDirectory: false,
-                            permissions: 0
-                        )
-                    )
-                    
-                case .failure(let failure):
-                    return .failure(failure)
+                return .success(entry)
             }
         }
         
@@ -97,6 +257,8 @@ public struct MockFileSystem: FileSystemInterface {
         filename: StaticString,
         entryTar: UnsafePointer<CChar>?
     ) -> Bool{
+        
+        guard let entryTar = entryTar else { return false }
 
         var current = UnsafeRawPointer(
             filename.utf8Start
@@ -105,9 +267,9 @@ public struct MockFileSystem: FileSystemInterface {
         var result       = true
         var iteratorName = 0
         
-        while current.pointee != 0 && result {
+        while current.pointee != 0 && result {            
             
-            if (current.pointee != entryTar?.advanced(by: iteratorName).pointee) {
+            if (current.pointee != entryTar[iteratorName]) {
                 result = false
                 break
             }
@@ -120,16 +282,16 @@ public struct MockFileSystem: FileSystemInterface {
     }
     
     
-    private func getFileSize(size: UnsafePointer<CChar>?) -> Result<Int, FSError> {
-        guard let size = size else { return .failure(.ioError) }
+    private func getFileSize(size: UnsafePointer<CChar>?) -> Int? {
+        guard let size = size else { return nil }
         
         var result: Int = 0;
         for i in 0..<12 {
-            let character = size.advanced(by: i).pointee;
+            let character = size[i];
             if character < 48 || character > 55 { continue }
             result = (result << 3) + Int(character - 48);
         }
         
-        return .success(Int(result));
+        return Int(result);
     }
 }
