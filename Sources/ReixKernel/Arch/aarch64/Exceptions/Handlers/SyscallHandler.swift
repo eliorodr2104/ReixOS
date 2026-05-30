@@ -36,15 +36,16 @@ public struct SyscallHandler {
         )
 
         switch type {
-            case .exit        : ExitSyscall        .handle(frame: frame, context: context)
-            case .yield       : YieldSyscall       .handle(frame: frame, context: context)
-            case .putchar     : PutcharSyscall     .handle(frame: frame, context: context)
-            case .getPid      : GetPIDSyscall      .handle(frame: frame, context: context)
-            case .reapChild   : ReapChildSyscall   .handle(frame: frame, context: context)
-            case .spawnProcess: SpawnProcessSyscall.handle(frame: frame, context: context)
-            case .brk         : BrkSyscall         .handle(frame: frame, context: context)
-            case .mmap        : MmapSyscall        .handle(frame: frame, context: context)
-            case .munmap      : MunmapSyscall      .handle(frame: frame, context: context)
+            case .exit         : ExitSyscall        .handle(frame: frame, context: context)
+            case .yield        : YieldSyscall       .handle(frame: frame, context: context)
+            case .putchar      : PutcharSyscall     .handle(frame: frame, context: context)
+            case .getPid       : GetPIDSyscall      .handle(frame: frame, context: context)
+            case .getParentPid : GetParentPIDSyscall.handle(frame: frame, context: context)
+            case .reapChild    : ReapChildSyscall   .handle(frame: frame, context: context)
+            case .spawnProcess : SpawnProcessSyscall.handle(frame: frame, context: context)
+            case .brk          : BrkSyscall         .handle(frame: frame, context: context)
+            case .mmap         : MmapSyscall        .handle(frame: frame, context: context)
+            case .munmap       : MunmapSyscall      .handle(frame: frame, context: context)
 
             default: break
         }

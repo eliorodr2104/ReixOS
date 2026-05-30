@@ -29,7 +29,6 @@ public struct ExitSyscall: SyscallProvider {
             oldProcess.pointee.status           = .terminated
 
             let exitingCode = UInt32(frame.pointee.x0)
-
             do {
                 Arch.CPU.setCurrentProcess(0)
                 try context.processManager.pointee.releaseAddressSpace(oldProcess)
@@ -40,22 +39,21 @@ public struct ExitSyscall: SyscallProvider {
                 metadata.pointee.exitCode = exitingCode
             }
 
+            // If have a parent and this is blocked waiting his children
+            // wakeup him
             if let parentPtr   = oldProcess.pointee.family.parent,
                let parentMeta  = parentPtr.pointee.metadata,
                parentMeta.pointee.waitingChildPid == oldProcess.pointee.pid,
                let parentFrame = parentPtr.pointee.context
             {
                 parentFrame.pointee.x0 = frame.pointee.x0
-
                 context.processManager.pointee.releaseProcess(oldProcess)
-
                 try? context.scheduler.pointee.wakeUp(parentPtr.pointee.pid)
 
-            } else {
-                context.scheduler.pointee.removeTask(oldProcess)
-            }
+            } else { context.scheduler.pointee.removeTask(oldProcess) }
         }
 
+        // Switch address with current process enter to consuming CPU
         if let trapFrame = context.scheduler.pointee.yield() {
             let nextAddr = Arch.CPU.getCurrentProcess()
             if let next = UnsafeMutablePointer<Process>(bitPattern: UInt(nextAddr)) {

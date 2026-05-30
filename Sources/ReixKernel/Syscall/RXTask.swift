@@ -26,7 +26,7 @@ public func getPID() -> UInt64 {
 
 @inline(__always)
 public func getParentPID() -> UInt64 {
-    _syscall(.getPid)
+    _syscall(.getParentPid)
 }
 
 @inline(__always)
