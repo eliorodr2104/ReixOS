@@ -76,15 +76,8 @@ public struct Kernel {
             self.heap = heapPtr
             kprint(.boot, in: "Kernel heap ready.", by: .heap)
 
-
-            let gicSize = MemoryLayout<GICv2>.stride
-            guard let gicRaw = try heap.pointee.kmalloc(UInt(gicSize)) else {
-                Arch.CPU.panic("Failed to allocate GICv2 on the kernel heap")
-            }
-            let gicPtr = gicRaw.bindMemory(
-                to      : GICv2.self,
-                capacity: 1
-            )
+                    
+            let gicPtr = heap.pointee.kmalloc(GICv2.self)
             gicPtr.initialize(to: GICv2(
                 dBase: platformInfo.gic.gicdBase,
                 cBase: platformInfo.gic.giccBase
@@ -93,14 +86,7 @@ public struct Kernel {
             kprint(.boot, in: "Generic Interrupt Controller ready.", by: .gic)
             
             
-            let tarFileSystemSize = MemoryLayout<KernelInternalFileSystem>.stride
-            guard let tarFileSystemRaw = try heap.pointee.kmalloc(UInt(tarFileSystemSize)) else {
-                Arch.CPU.panic("Failed to allocate TarFileSystem on the kernel heap")
-            }
-            let tarFileSystemPtr = tarFileSystemRaw.bindMemory(
-                to      : KernelInternalFileSystem.self,
-                capacity: 1
-            )
+            let tarFileSystemPtr = heap.pointee.kmalloc(KernelInternalFileSystem.self)
             tarFileSystemPtr.initialize(
                 to: TarFileSystem()
             )
@@ -108,15 +94,7 @@ public struct Kernel {
             kprint(.boot, in: "Internal File System ready.", by: .fs)
             
 
-
-            let processManagerSize = MemoryLayout<ProcessManager>.stride
-            guard let processManagerRaw = try heap.pointee.kmalloc(UInt(processManagerSize)) else {
-                Arch.CPU.panic("Failed to allocate ProcessManager on the kernel heap")
-            }
-            let processManagerPtr = processManagerRaw.bindMemory(
-                to: ProcessManager.self,
-                capacity: 1
-            )
+            let processManagerPtr = heap.pointee.kmalloc(ProcessManager.self)
             processManagerPtr.initialize(to: ProcessManager(
                 vmm       : &vmm!,
                 ppm       : &ppm!,
@@ -127,40 +105,24 @@ public struct Kernel {
             kprint(.boot, in: "Process Manager ready.", by: .proc)
             
             
-            let schedulerSize = MemoryLayout<KernelScheduler>.stride
-            guard let schedulerRaw = try heap.pointee.kmalloc(UInt(schedulerSize)) else {
-                Arch.CPU.panic("Failed to allocate Scheduler on the kernel heap")
-            }
-            let schedulerPtr = schedulerRaw.bindMemory(
-                to: RoundRobin.self,
-                capacity: 1
-            )
+            let schedulerPtr = heap.pointee.kmalloc(KernelScheduler.self)
             schedulerPtr.initialize(to: RoundRobin())
             self.scheduler = schedulerPtr
             kprint(.boot, in: "Scheduler ready.", by: .sched)
 
             
-            let ipcSize = MemoryLayout<KernelIPC>.stride
-            guard let ipcRaw = try heap.pointee.kmalloc(UInt(ipcSize)) else {
-                Arch.CPU.panic("Failed to allocate IPC on the kernel heap")
-            }
-            let ipcPtr = ipcRaw.bindMemory(
-                to: RendezvousIPC.self,
-                capacity: 1
+            let ipcPtr = heap.pointee.kmalloc(KernelIPC.self)
+            ipcPtr.initialize(
+                to: KernelIPC(
+                    scheduler: self.scheduler,
+                    heap     : self.heap
+                )
             )
-            ipcPtr.initialize(to: KernelIPC(scheduler: self.scheduler))
             self.ipc = ipcPtr
             kprint(.boot, in: "IPC ready.", by: .ipc)
             
 
-            let syscallHandlerSize = MemoryLayout<SyscallHandler>.stride
-            guard let syscallHandlerRaw = try heap.pointee.kmalloc(UInt(syscallHandlerSize)) else {
-                Arch.CPU.panic("Failed to allocate SyscallHandler on the kernel heap")
-            }
-            let syscallHandlerPtr = syscallHandlerRaw.bindMemory(
-                to: SyscallHandler.self,
-                capacity: 1
-            )
+            let syscallHandlerPtr = heap.pointee.kmalloc(SyscallHandler.self)
             syscallHandlerPtr.initialize(to: SyscallHandler(
                 processManager: self.processManager,
                 scheduler     : self.scheduler,
@@ -219,11 +181,7 @@ public struct Kernel {
         let secondProcess = try processManager.pointee.spawnProcess(path: secondProcessPathPtr)
         
         
-        let endpointSize = MemoryLayout<Endpoint>.stride
-        guard let endpointRaw = try? Kernel.heap.pointee.kmalloc(UInt(endpointSize)) else {
-            Arch.CPU.panic("Failed to allocate IPC endpoint")
-        }
-        let endpointPtr = endpointRaw.bindMemory(to: Endpoint.self, capacity: 1)
+        let endpointPtr = Kernel.heap.pointee.kmalloc(Endpoint.self)
         endpointPtr.initialize(to: Endpoint(
             state: .idle,
             queue: LinkedList(head: nil, tail: nil)

@@ -21,6 +21,8 @@ public typealias PID = UInt64
 @frozen
 public struct Process: RXEntry {
 
+    public static var errorMessageAllocation = "Failed to allocate Process on the kernel heap"
+    
     public let pid    : PID
     public var family : ProcessRelations
 

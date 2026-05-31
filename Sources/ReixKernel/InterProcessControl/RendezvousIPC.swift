@@ -14,15 +14,21 @@ public enum CommunicationMessageResult {
 
 public struct RendezvousIPC: IPCInterface {
     
+    public static var errorMessageAllocation = "Failed to allocate IPC on the kernel heap"
+    
     var endpoints: InlineArray<64, UnsafeMutablePointer<Endpoint>?>
     var scheduler: UnsafeMutablePointer<KernelScheduler>
+    var heap     : UnsafeMutablePointer<KernelHeap>
     
-    init(scheduler: UnsafeMutablePointer<KernelScheduler>) {
-        self.endpoints = InlineArray(
-            repeating: nil // Need allocate them with kmalloc
-        )
+    init(
+        scheduler: UnsafeMutablePointer<KernelScheduler>,
+        heap     : UnsafeMutablePointer<KernelHeap>
+    ) {
+        self.endpoints = InlineArray(repeating: nil)
         self.scheduler = scheduler
+        self.heap      = heap
     }
+    
     
     public mutating func send(
         capability: EndpointCap,
@@ -73,6 +79,7 @@ public struct RendezvousIPC: IPCInterface {
         return .success(.blocked)
         
     }
+    
     
     public mutating func receive(
         capability: EndpointCap,
@@ -128,4 +135,28 @@ public struct RendezvousIPC: IPCInterface {
         
     }
 
+    
+    public mutating func spawnEndpoint(
+        for process: UnsafeMutablePointer<Process>
+    ) -> Result<UInt32, IPCError> {
+        
+        var endpointID: Int? = nil
+        for i in 0..<endpoints.count {
+            
+            if endpoints[i] != nil {
+                endpointID = i
+                break
+            }
+        }
+        
+        guard let id = endpointID else {
+            return .failure(.notFoundFreeEndpoint)
+        }
+        
+        
+        // Need modify kmalloc, because write a poem is not scalar code
+        let endpoint = heap.pointee.kmalloc(Endpoint.self)
+        
+        return .success(0)
+    }
 }

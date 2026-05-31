@@ -5,7 +5,7 @@
 //  Created by Eliomar on 30/05/2026.
 //
 
-public protocol IPCInterface {
+public protocol IPCInterface: RXObject {
     
     mutating func send(
         capability: EndpointCap,

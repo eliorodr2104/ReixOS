@@ -11,7 +11,9 @@
 /// VMM/PPM/Heap pointers) is explicit and testable. The single live
 /// instance is composed by `Kernel.boot` and reached through
 /// `Kernel.processManager`.
-public struct ProcessManager {
+public struct ProcessManager: RXObject {
+    
+    public static var errorMessageAllocation = "Failed to allocate ProcessManager on the kernel heap"
 
     /// Monotonically increasing PID source. Never reused within a boot.
     private var pidCounter: PID = 0
@@ -94,16 +96,8 @@ public struct ProcessManager {
                     flags      : .growDown
                 )
 
-                let trapSize = MemoryLayout<Arch.TrapFrame>.stride
-                guard let trapRaw = try? heap.pointee.kmalloc(UInt(trapSize)) else {
-                    throw .heapAllocationFailed
-                }
-
-                let trapFramePtr = trapRaw.bindMemory(
-                    to      : Arch.TrapFrame.self,
-                    capacity: 1
-                )
-                trapFramePtr.initialize(to: Arch.TrapFrame())
+                let trapFramePtr = heap.pointee.kmalloc(Arch.TrapFrame.self)
+                trapFramePtr.initialize(to: Arch.TrapFrame()) // Create constructor limited
                 trapFramePtr.pointee.elr   = elf.entryPoint
                 trapFramePtr.pointee.spsr  = 0x0
                 trapFramePtr.pointee.spel0 = userStackTop
@@ -111,22 +105,13 @@ public struct ProcessManager {
                 let pid = self.pidCounter
                 self.pidCounter += 1
 
-                guard let kStackRaw = try? heap.pointee.kmalloc(4096) else {
-                    throw .heapAllocationFailed
-                }
+                let kStackRaw = heap.pointee.kmalloc(4096)
                 let kStackTop = kStackRaw.advanced(by: 4096)
 
                 let initialBreak = (elf.loadEnd + UserSpaceLayout.pageSize - 1) & ~(UserSpaceLayout.pageSize - 1)
 
-                let metadataSize = MemoryLayout<ProcessMetadata>.stride
-                guard let metadataRaw = try? heap.pointee.kmalloc(UInt(metadataSize)) else {
-                    throw .heapAllocationFailed
-                }
-
-                let metadataPtr = metadataRaw.bindMemory(
-                    to      : ProcessMetadata.self,
-                    capacity: 1
-                )
+                
+                let metadataPtr = heap.pointee.kmalloc(ProcessMetadata.self)
                 metadataPtr.initialize(to: ProcessMetadata(
                     elfImage    : elf.image,
                     elfLoadBase : elf.loadBase,
@@ -134,15 +119,7 @@ public struct ProcessManager {
                     programBreak: initialBreak
                 ))
 
-                let processSize = MemoryLayout<Process>.stride
-                guard let rawProcessMemory = try? heap.pointee.kmalloc(UInt(processSize)) else {
-                    throw .heapAllocationFailed
-                }
-
-                let processPtr = rawProcessMemory.bindMemory(
-                    to      : Process.self,
-                    capacity: 1
-                )
+                let processPtr = heap.pointee.kmalloc(Process.self)
                 processPtr.initialize(to: Process(
                     pid           : pid,
                     family        : ProcessRelations(),
@@ -184,15 +161,7 @@ public struct ProcessManager {
         // collide with the parent's stack VMA during the clone and abort it.
         _ = try attachVMAManager(to: &addressSpace)
 
-        let trapSize = MemoryLayout<Arch.TrapFrame>.stride
-        guard let trapRaw = try? heap.pointee.kmalloc(UInt(trapSize)) else {
-            throw .heapAllocationFailed
-        }
-
-        let trapFramePtr = trapRaw.bindMemory(
-            to      : Arch.TrapFrame.self,
-            capacity: 1
-        )
+        let trapFramePtr = heap.pointee.kmalloc(Arch.TrapFrame.self)
         trapFramePtr.initialize(to: Arch.TrapFrame())
         trapFramePtr.pointee.elr   = 0
         trapFramePtr.pointee.spsr  = 0x0
@@ -201,32 +170,13 @@ public struct ProcessManager {
         let pid = self.pidCounter
         self.pidCounter += 1
 
-        guard let kStackRaw = try? heap.pointee.kmalloc(4096) else {
-            throw .heapAllocationFailed
-        }
+        let kStackRaw = heap.pointee.kmalloc(4096)
         let kStackTop = kStackRaw.advanced(by: 4096)
 
-        let metadataSize = MemoryLayout<ProcessMetadata>.stride
-        guard let metadataRaw = try? heap.pointee.kmalloc(UInt(metadataSize)) else {
-            throw .heapAllocationFailed
-        }
-
-        let metadataPtr = metadataRaw.bindMemory(
-            to      : ProcessMetadata.self,
-            capacity: 1
-        )
-
+        let metadataPtr = heap.pointee.kmalloc(ProcessMetadata.self)
         metadataPtr.initialize(to: ProcessMetadata())
 
-        let processSize = MemoryLayout<Process>.stride
-        guard let rawProcessMemory = try? heap.pointee.kmalloc(UInt(processSize)) else {
-            throw .heapAllocationFailed
-        }
-
-        let processPtr = rawProcessMemory.bindMemory(
-            to      : Process.self,
-            capacity: 1
-        )
+        let processPtr = heap.pointee.kmalloc(Process.self)
         processPtr.initialize(to: Process(
             pid           : pid,
             family        : ProcessRelations(),
@@ -298,15 +248,8 @@ public struct ProcessManager {
     private func attachVMAManager(
         to addressSpace: inout AddressSpace
     ) throws(ProcessManagerError) -> UnsafeMutablePointer<VMAManager> {
-        let vmaManagerSize = MemoryLayout<VMAManager>.stride
-        guard let vmaRaw = try? heap.pointee.kmalloc(UInt(vmaManagerSize)) else {
-            throw .heapAllocationFailed
-        }
-
-        let vmaPtr = vmaRaw.bindMemory(
-            to      : VMAManager.self,
-            capacity: 1
-        )
+        
+        let vmaPtr = heap.pointee.kmalloc(VMAManager.self)
         vmaPtr.initialize(to: VMAManager(
             heap             : heap,
             vmm              : vmm,

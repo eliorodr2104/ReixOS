@@ -6,8 +6,10 @@
 //
 
 
-public struct Endpoint {
-    public var state: EndpointState = .idle
+public struct Endpoint: RXObject {
+    public static var errorMessageAllocation: String = "Failed to allocate IPC endpoint"
     
+    public var state: EndpointState = .idle
     public var queue: LinkedList<Process>
+    
 }

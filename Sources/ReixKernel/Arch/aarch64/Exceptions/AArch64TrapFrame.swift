@@ -14,7 +14,9 @@
 /// - Important: The memory layout of this struct must exactly match the order in
 /// which registers are pushed onto the stack by the assembly exception vector code.
 @frozen
-public struct AArch64TrapFrame {
+public struct AArch64TrapFrame: RXObject {
+    
+    public static var errorMessageAllocation = "Failed to allocate AArch64TrapFrame on the kernel heap"
         
     /// Registers x0 through x7 (typically used for parameter passing and return values).
     public var x0,  x1,  x2,  x3,  x4,  x5,  x6,  x7 : UInt64

@@ -7,6 +7,8 @@
 
 public struct RoundRobin: SchedulerInterface {
     
+    public static var errorMessageAllocation = "Failed to allocate Scheduler on the kernel heap"
+    
     private var ready     : LinkedList = LinkedList<Process>(head: nil, tail: nil)
     private var waiting   : LinkedList = LinkedList<Process>(head: nil, tail: nil)
     private var terminated: LinkedList = LinkedList<Process>(head: nil, tail: nil)

@@ -13,7 +13,9 @@
 /// `Arch/aarch64/Syscall/Providers/`, conforming to `SyscallProvider`.
 /// The dispatcher is intentionally a single compile-time switch — no
 /// existential indirection, no dynamic table.
-public struct SyscallHandler {
+public struct SyscallHandler: RXObject {
+    
+    public static var errorMessageAllocation = "Failed to allocate SyscallHandler on the kernel heap"
 
     private let processManager: UnsafeMutablePointer<ProcessManager>
     private let scheduler     : UnsafeMutablePointer<KernelScheduler>

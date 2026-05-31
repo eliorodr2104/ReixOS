@@ -173,21 +173,9 @@ extension LinkedList: VMAStructure where T == VirtualMemoryArea {
               address < region.pointee.endAddress
         else { throw .invalidLayout }
 
-        let nodeSize: UInt = UInt(MemoryLayout<VirtualMemoryArea>.stride)
-
-        let allocated: UnsafeMutableRawPointer?
-        do {
-            allocated = try heap.pointee.kmalloc(nodeSize)
-            
-        } catch { throw .heapAllocationFailed(error) }
-
-        guard let allocatedRaw = allocated else {
-            throw .heapAllocationFailed(.metadataInconsistency)
-        }
-
-        let newRegion = allocatedRaw.initializeMemory(
-            as       : VirtualMemoryArea.self,
-            repeating: VirtualMemoryArea(
+        let newRegionPtr = heap.pointee.kmalloc(VirtualMemoryArea.self)
+        newRegionPtr.initialize(
+            to: VirtualMemoryArea(
                 startAddress: address,
                 endAddress  : region.pointee.endAddress,
                 permissions : region.pointee.permissions,
@@ -195,9 +183,7 @@ extension LinkedList: VMAStructure where T == VirtualMemoryArea {
                 mappingFlags: region.pointee.mappingFlags,
                 prev        : nil,
                 next        : nil
-            ),
-            
-            count: 1
+            )
         )
 
         let truncated = VirtualMemoryArea(
@@ -211,9 +197,9 @@ extension LinkedList: VMAStructure where T == VirtualMemoryArea {
         )
         region.pointee = truncated
 
-        insertAfter(element: newRegion, to: region)
+        insertAfter(element: newRegionPtr, to: region)
 
-        return newRegion
+        return newRegionPtr
     }
 
 

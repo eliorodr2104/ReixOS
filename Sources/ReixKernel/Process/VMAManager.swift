@@ -16,7 +16,9 @@
 /// All dependencies (kernel heap, VMM, PPM) and the root page table
 /// physical reference are injected at construction time so the type is
 /// free of static facades.
-public struct VMAManager {
+public struct VMAManager: RXObject {
+    
+    public static var errorMessageAllocation = "Failed to allocate VMAManager on the kernel heap"
 
     private var vmaList: LinkedList<VirtualMemoryArea>
 
@@ -78,28 +80,15 @@ public struct VMAManager {
             throw .regionOverlap
         }
 
-        let nodeSize = UInt(MemoryLayout<VirtualMemoryArea>.stride)
-        let nodeRaw: UnsafeMutableRawPointer?
-        do {
-            nodeRaw = try heap.pointee.kmalloc(nodeSize)
-
-        } catch { throw .heapAllocationFailed(error) }
-
-        guard let storage = nodeRaw else {
-            throw .heapAllocationFailed(.metadataInconsistency)
-        }
-
-        let nodePtr = storage.initializeMemory(
-            as       : VirtualMemoryArea.self,
-            repeating: VirtualMemoryArea(
+        let nodePtr = heap.pointee.kmalloc(VirtualMemoryArea.self)
+        nodePtr.initialize(
+            to: VirtualMemoryArea(
                 startAddress: start,
                 endAddress  : end,
                 permissions : permissions,
                 backingType : backing,
                 mappingFlags: flags
-            ),
-            
-            count: 1
+            )            
         )
 
         vmaList.insert(nodePtr)

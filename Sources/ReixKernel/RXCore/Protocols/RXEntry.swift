@@ -5,7 +5,7 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 10/05/2026.
 //
 
-public protocol RXEntry: ~Copyable {
+public protocol RXEntry: RXObject {
     associatedtype IDType: Equatable
     
     var entryID: IDType { get }

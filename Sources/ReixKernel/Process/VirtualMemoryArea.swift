@@ -12,6 +12,8 @@
 /// `startAddress`. Sorting and lookup use the start address as identity.
 @frozen
 public struct VirtualMemoryArea: RXEntry {
+    
+    public static var errorMessageAllocation = "Failed to allocate VirtualMemoryArea on the kernel heap"
 
     public let startAddress: VirtualAddress
     public let endAddress  : VirtualAddress

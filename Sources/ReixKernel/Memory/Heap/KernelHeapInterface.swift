@@ -14,7 +14,16 @@
 public protocol KernelHeapInterface {
 
     init(ppmPtr: UnsafeMutablePointer<KernelPPM>)
+    
+    mutating func kmalloc(
+        _ size        : UInt,
+          errorMessage: String
+    ) -> UnsafeMutableRawPointer
 
-    mutating func kmalloc(_ byte: UInt) throws(PPMError) -> UnsafeMutableRawPointer?
+    mutating func kmalloc<Object: RXObject>(
+        _ type    : Object.Type,
+        _ capacity: Int
+    ) -> UnsafeMutablePointer<Object>
+    
     mutating func kfree(_ ptr: UnsafeMutableRawPointer)
 }

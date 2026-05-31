@@ -12,7 +12,6 @@ public enum ProcessManagerError: KernelDiagnostic {
     case creationProcessFailed  (PPMError)
     case allocationPageFailed   (PPMError)
     case mappingFailed          (PPMError)
-    case heapAllocationFailed
 
     public var description: String {
         switch self {
@@ -33,9 +32,7 @@ public enum ProcessManagerError: KernelDiagnostic {
 
             case .mappingFailed(let inner):
                 "Process Manager Error: user page mapping failed (" + inner.description + ")"
-
-            case .heapAllocationFailed:
-                "Process Manager Error: kernel heap allocation failed."
+                
         }
     }
 

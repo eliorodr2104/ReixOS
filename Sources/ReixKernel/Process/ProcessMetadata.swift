@@ -16,8 +16,10 @@
 /// The instance is allocated on the kernel heap by `ProcessManager`
 /// at spawn time and released at teardown.
 @frozen
-public struct ProcessMetadata {
+public struct ProcessMetadata: RXObject {
 
+    public static var errorMessageAllocation = "Failed to allocate ProcessMetadata on the kernel heap"
+    
     /// Backing physical page of the ELF image. Allocated by `ElfParser`,
     /// kept alive for the whole process lifetime, freed by the teardown.
     public var elfImage   : PhysicalPage?

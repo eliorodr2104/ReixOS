@@ -23,8 +23,13 @@ public struct BucketsHeap: KernelHeapInterface {
         self.buckets = KernelBuckets()
     }
 
-    public mutating func kmalloc(_ size: UInt) throws(PPMError) -> UnsafeMutableRawPointer? {
-        guard size <= UInt(Self.pageSize) && size > 0 else { return nil }
+    public mutating func kmalloc(
+        _ size        : UInt,
+          errorMessage: String = "Kmalloc Failed"
+    ) -> UnsafeMutableRawPointer {
+        guard size <= UInt(Self.pageSize) else {
+            Arch.CPU.panic("Kmalloc Failed, struct is greater than page size")
+        }
 
         let sizeNormalized = Self.normalizedToPowerOfTwo(size)
         let shift          = UInt8(sizeNormalized.trailingZeroBitCount)
@@ -39,31 +44,101 @@ public struct BucketsHeap: KernelHeapInterface {
             return allocatedBlock
 
         } else {
-            let page = try ppmPtr.pointee.alloc(4096, heapShift: shift)
-            let virtualAddress = page.address + Self.physicalOffset
+            
+            do {
+                let page = try ppmPtr.pointee.alloc(4096, heapShift: shift)
+                let virtualAddress = page.address + Self.physicalOffset
 
-            let chunkSize   = Int(sizeNormalized)
-            let blockCount  = Self.pageSize / chunkSize
-            let returnBlock = UnsafeMutableRawPointer(bitPattern: UInt(virtualAddress))!
+                let chunkSize   = Int(sizeNormalized)
+                let blockCount  = Self.pageSize / chunkSize
+                let returnBlock = UnsafeMutableRawPointer(bitPattern: UInt(virtualAddress))!
 
-            if blockCount > 1 {
-                let firstFreeBlock = returnBlock + chunkSize
-                buckets[bucketsIndex] = firstFreeBlock
+                if blockCount > 1 {
+                    let firstFreeBlock = returnBlock + chunkSize
+                    buckets[bucketsIndex] = firstFreeBlock
 
-                var currentBlock = firstFreeBlock
+                    var currentBlock = firstFreeBlock
 
-                for _ in 2..<blockCount {
-                    let nextBlock = currentBlock + chunkSize
-                    currentBlock.storeBytes(of: nextBlock, as: UnsafeMutableRawPointer?.self)
-                    currentBlock = nextBlock
+                    for _ in 2..<blockCount {
+                        let nextBlock = currentBlock + chunkSize
+                        currentBlock.storeBytes(of: nextBlock, as: UnsafeMutableRawPointer?.self)
+                        currentBlock = nextBlock
+                    }
+
+                    currentBlock.storeBytes(of: nil, as: UnsafeMutableRawPointer?.self)
                 }
 
-                currentBlock.storeBytes(of: nil, as: UnsafeMutableRawPointer?.self)
-            }
-
-            return returnBlock
+                return returnBlock
+                
+            } catch { Arch.CPU.panic(errorMessage) }
         }
     }
+    
+    public mutating func kmalloc<Object: RXObject>(
+        _ type: Object.Type,
+        _ capacity: Int = 1
+    ) -> UnsafeMutablePointer<Object> {
+        
+        let objectSize = UInt(MemoryLayout<KernelIPC>.stride)
+        guard objectSize <= UInt(Self.pageSize) else {
+            Arch.CPU.panic("Kmalloc Failed, struct is greater than page size")
+        }
+
+        let sizeNormalized = Self.normalizedToPowerOfTwo(objectSize)
+        let shift          = UInt8(sizeNormalized.trailingZeroBitCount)
+        let bucketsIndex   = Int(shift - 3)
+
+        let bucket = buckets[bucketsIndex]
+
+        var rawMemoryBlockResult: UnsafeMutableRawPointer?
+        if let allocatedBlock = bucket {
+            let nextPointer = allocatedBlock.load(as: UnsafeMutableRawPointer?.self)
+            buckets[bucketsIndex] = nextPointer
+
+            // Set founded block
+            rawMemoryBlockResult = allocatedBlock
+
+        } else {
+            do {
+                let page = try ppmPtr.pointee.alloc(4096, heapShift: shift)
+                let virtualAddress = page.address + Self.physicalOffset
+
+                let chunkSize   = Int(sizeNormalized)
+                let blockCount  = Self.pageSize / chunkSize
+                let returnBlock = UnsafeMutableRawPointer(bitPattern: UInt(virtualAddress))!
+
+                if blockCount > 1 {
+                    let firstFreeBlock = returnBlock + chunkSize
+                    buckets[bucketsIndex] = firstFreeBlock
+
+                    var currentBlock = firstFreeBlock
+
+                    for _ in 2..<blockCount {
+                        let nextBlock = currentBlock + chunkSize
+                        currentBlock.storeBytes(of: nextBlock, as: UnsafeMutableRawPointer?.self)
+                        currentBlock = nextBlock
+                    }
+
+                    currentBlock.storeBytes(of: nil, as: UnsafeMutableRawPointer?.self)
+                }
+
+                // Set founded block
+                rawMemoryBlockResult = returnBlock
+                
+            } catch { Arch.CPU.panic(Object.errorMessageAllocation) }
+        }
+        
+        guard let rawMemoryBlock = rawMemoryBlockResult else {
+            Arch.CPU.panic("Kmalloc Failed: Memory full")
+        }
+        
+        return rawMemoryBlock.bindMemory(
+            to      : Object.self,
+            capacity: capacity
+        )
+        
+    }
+
 
     public mutating func kfree(_ ptr: UnsafeMutableRawPointer) {
         let virtualAddress  = UInt(bitPattern: ptr)
