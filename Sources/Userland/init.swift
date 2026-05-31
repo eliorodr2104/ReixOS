@@ -11,57 +11,48 @@ enum TestIPCLabel: UInt32, IPCLabel {
     case open = 0
 }
 
-
 @_cdecl("_start")
 public func main() {
-
     print("Hi, this is init process!")
-    let endpointHandle = spawnEndpoint()
-    
-    
-    print("Splitting myself...\n")
-    let resultSplit = split()
-    
-    
-    if resultSplit == 0 {
-        print("I'm children server!")
-        print("Respond message to my parent!\n")
-        var request = receive(handle: endpointHandle)
-        while true {
-            var words = InlineArray<4, UInt32>(repeating: 0)
-            words[0] = request.words[0] + 1
-            
-            request = replyRecv(
-                handle: endpointHandle,
-                message: Message(tag: request.tag, words: words)
-            )
+
+    let firstEndpoint = spawnEndpoint()
+    let childPid = split()
+
+    if childPid == 0 {
+        print(String(UInt64(123))) // Is bug, i need resolve this in VMA
+        let receivedMessage = receive(handle: firstEndpoint)
+        
+        guard let secondEndpointCapability = receivedMessage.grantedCap else {
+            print("Not received capability!")
+            exit(code: 1)
         }
+        
+        print("Received Capability, new handle:", terminator: " ")
+        print(String(secondEndpointCapability))
+
+        let data = receive(handle: secondEndpointCapability)
+        print("Data on secondEndpoint:", terminator: " ")
+        print(String(UInt64(data.message.words[0])))
         
         exit(code: 0)
     }
+
     
-    print("Call Children Server...")
-    var words = InlineArray<4, UInt32>(repeating: 0)
-    print("Send 90 Message:", terminator: " ")
-    print(String(words[0]))
-    print("")
-    
-    
-    for i in 0..<99999 {
-        words[0] = UInt32(66 + i)
-        let resp = call(
-            handle: endpointHandle,
-            message: Message(
-                tag: MessageTag(TestIPCLabel.open, length: 1),
-                words: words
-            )
-        )
-    }
-    
-    print("End Sending messages")
-//    print("[PARENT] Message Received:", terminator: " ")
-//    print(String(resp.words[0]))
-//    print("")
+    let secondEndpoint = spawnEndpoint()
+
+    let emptyWords = InlineArray<4, UInt32>(repeating: 0)
+    _ = send(
+        handle : firstEndpoint,
+        message: Message(tag: MessageTag(TestIPCLabel.open, length: 0), words: emptyWords),
+        grant  : secondEndpoint
+    )
+
+    var dataWords = InlineArray<4, UInt32>(repeating: 0)
+    dataWords[0] = 99
+    _ = send(
+        handle : secondEndpoint,
+        message: Message(tag: MessageTag(TestIPCLabel.open, length: 1), words: dataWords)
+    )
 
     exit(code: 0)
 }

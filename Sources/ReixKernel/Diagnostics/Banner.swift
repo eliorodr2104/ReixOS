@@ -12,7 +12,9 @@
 /// any 7-bit serial terminal (no UTF-8 box-drawing, no escape codes).
 public func printBootBanner() {
     kprint()
-    kprint(" ReixOS 0.1.0  AArch64 / Embedded Swift")
+    kprint()
+    kprint(" ReixOS 0.1.5  AArch64 / Embedded Swift")
     kprint(" (c) 2026 Eliomar Alejandro Rodriguez Ferrer")
+    kprint(" Micro Kernel Writed in Embedded Swift for fun!")
     kprint()
 }

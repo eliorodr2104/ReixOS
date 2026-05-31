@@ -51,6 +51,7 @@ _asm_recv:
     str x4, [x9, #24]   // buffer[3] = word2
     str x5, [x9, #32]   // buffer[4] = word3
     str x6, [x9, #40]   // buffer[5] = badge
+    str x7, [x9, #48]   // buffer[6] = grantHandle
 
     ret // x0 state
 
@@ -84,5 +85,6 @@ _asm_call:
     str x4, [x9, #24]   // buffer[3] = word2
     str x5, [x9, #32]   // buffer[4] = word3
     str x6, [x9, #40]   // buffer[5] = badge
+    str x7, [x9, #48]   // buffer[6] = grantHandle
 
     ret // x0 status

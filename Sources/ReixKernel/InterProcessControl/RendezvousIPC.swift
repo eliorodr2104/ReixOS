@@ -5,12 +5,6 @@
 //  Created by Eliomar on 30/05/2026.
 //
 
-// Move to file separatly
-public enum CommunicationMessageResult {
-    case sended
-    case blocked
-}
-
 
 public struct RendezvousIPC: IPCInterface {
     
@@ -41,11 +35,37 @@ public struct RendezvousIPC: IPCInterface {
         }
         
         let endpointPtr = capability.endpoint
+        let grantHandle = UInt32(frame.x6)
+        
         if endpointPtr.pointee.state == .recvBlocked {
             
             guard let receiverProcess = endpointPtr.pointee.queue.popFront() else {
                 return .failure(.noReply)
             }
+            
+            
+            var transferResult: Result<UInt32, IPCError>?
+            if grantHandle != UInt32.max {
+                let currentProcessRaw = Arch.CPU.getCurrentProcess()
+                guard let currentProcess = UnsafeMutablePointer<Process>(
+                    bitPattern: UInt(currentProcessRaw)
+                ) else { return .failure(.noReply) }
+                
+                transferResult = transferCapability(
+                    from   : currentProcess,
+                    handler: grantHandle,
+                    to     : receiverProcess
+                )
+            }
+            
+            switch transferResult {
+                case .success(let newGrantHandle):
+                    receiverProcess.pointee.context!.pointee.x7 = UInt64(newGrantHandle)
+            
+                case .failure(_), nil:
+                    receiverProcess.pointee.context!.pointee.x7 = UInt64(UInt32.max)
+            }
+            
             
             if endpointPtr.pointee.queue.isEmpty() {
                 endpointPtr.pointee.state = .idle
@@ -68,8 +88,9 @@ public struct RendezvousIPC: IPCInterface {
         ) else { return .failure(.noReply) }
         
         // Iplement Build Message
-        currentProcess.pointee.message  = Message(from: frame)
-        currentProcess.pointee.ipcBadge = capability.badge
+        currentProcess.pointee.message      = Message(from: frame)
+        currentProcess.pointee.ipcBadge     = capability.badge
+        currentProcess.pointee.pendingGrant = grantHandle == UInt32.max ? nil : grantHandle
         
         endpointPtr.pointee.queue.pushBack(currentProcess)
         
@@ -90,12 +111,38 @@ public struct RendezvousIPC: IPCInterface {
             return .failure(.notEnoughRights)
         }
         
-        let endpointPtr = capability.endpoint
+        let endpointPtr  = capability.endpoint
+        
         if endpointPtr.pointee.state == .sendBlocked {
             
             guard let senderProcess = endpointPtr.pointee.queue.popFront() else {
                 return .failure(.noReply)
             }
+            
+            let currentProcessRaw = Arch.CPU.getCurrentProcess()
+            guard let currentProcess = UnsafeMutablePointer<Process>(
+                bitPattern: UInt(currentProcessRaw)
+            ) else { return .failure(.noReply) }
+            
+            
+            var transferResult: Result<UInt32, IPCError>?
+            if let pendingGrant = senderProcess.pointee.pendingGrant {
+                transferResult = transferCapability(
+                    from   : senderProcess,
+                    handler: pendingGrant,
+                    to     : currentProcess
+                )
+            }
+            
+            switch transferResult {
+                case .success(let newGrantHandle):
+                    frame.pointee.x7 = UInt64(newGrantHandle)
+                    senderProcess.pointee.pendingGrant = nil
+                    
+                case .failure(_), nil:
+                    frame.pointee.x7 = UInt64(UInt32.max)
+            }
+            
         
             if endpointPtr.pointee.queue.isEmpty() {
                 endpointPtr.pointee.state = .idle
@@ -105,11 +152,6 @@ public struct RendezvousIPC: IPCInterface {
             frame.pointee.x6 = UInt64(senderProcess.pointee.ipcBadge?.raw ?? 0)
                         
             if senderProcess.pointee.expectsReply {
-                let currentProcessRaw = Arch.CPU.getCurrentProcess()
-                guard let currentProcess = UnsafeMutablePointer<Process>(
-                    bitPattern: UInt(currentProcessRaw)
-                ) else { return .failure(.noReply) }
-                
                 currentProcess.pointee.replyTo      = senderProcess
                 senderProcess.pointee.status        = .blockedOnReply
                 senderProcess.pointee.expectsReply  = false
@@ -273,5 +315,29 @@ public struct RendezvousIPC: IPCInterface {
         }
         
         return .success(handle)
+    }
+    
+    
+    public func transferCapability(
+        from senderProcess  : UnsafeMutablePointer<Process>,
+             handler        : UInt32,
+        to   receiverProcess: UnsafeMutablePointer<Process>
+        
+    ) -> Result<UInt32, IPCError> {
+        let senderMetadata = senderProcess.pointee.metadata!
+        guard let capability = senderMetadata.pointee.capsTable.resolve(handler) else {
+            return .failure(.invalidCapability)
+        }
+        
+        guard capability.rights.contains(.grant) else {
+            return .failure(.notEnoughRights)
+        }
+        
+        let receiverMetadata = receiverProcess.pointee.metadata!
+        guard let receiverHandle = receiverMetadata.pointee.capsTable.install(capability) else {
+            return .failure(.outOfEndpoints)
+        }
+        
+        return .success(receiverHandle)
     }
 }
