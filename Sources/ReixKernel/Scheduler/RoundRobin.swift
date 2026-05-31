@@ -14,7 +14,7 @@ public struct RoundRobin: SchedulerInterface {
     private var terminated: LinkedList = LinkedList<Process>(head: nil, tail: nil)
     
     private var currentTicks: UInt = 0   // Tick
-    private let quantum     : UInt = 100 // One tick is 10ms
+    private let quantum     : UInt = 7 // One tick is 10ms
     
     
     public mutating func addTask(_ process: UnsafeMutablePointer<Process>) throws(SchedulerError) {

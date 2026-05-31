@@ -102,3 +102,32 @@ public func reply(message: Message) -> UInt64 {
         UInt64(message.words[3])
     )
 }
+
+@inline(__always)
+public func replyRecv(
+    handle : UInt32,
+    message: Message
+) -> Message {
+    var raw = ReceivedMessageRaw()
+
+    _ = withUnsafeMutablePointer(to: &raw) { ptr in
+        _asm_call_raw(
+            SyscallNumber.replyRecv.rawValue,
+            UInt64(handle),
+            message.tag.packed(),
+            UInt64(message.words[0]),
+            UInt64(message.words[1]),
+            UInt64(message.words[2]),
+            UInt64(message.words[3]),
+            UnsafeMutableRawPointer(ptr)
+        )
+    }
+
+    var w = InlineArray<4, UInt32>(repeating: 0)
+    w[0] = UInt32(truncatingIfNeeded: raw.word0)
+    w[1] = UInt32(truncatingIfNeeded: raw.word1)
+    w[2] = UInt32(truncatingIfNeeded: raw.word2)
+    w[3] = UInt32(truncatingIfNeeded: raw.word3)
+
+    return Message(tag: MessageTag(packed: raw.tag), words: w)
+}

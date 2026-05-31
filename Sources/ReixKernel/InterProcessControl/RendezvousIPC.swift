@@ -216,8 +216,17 @@ public struct RendezvousIPC: IPCInterface {
         return .success(.sended)
     }
     
-    public mutating func replyRecv() {
+    public mutating func replyRecv(
+        capability: EndpointCap,
+        frame     : UnsafeMutablePointer<AArch64.TrapFrame>
+    ) -> Result<CommunicationMessageResult, IPCError> {
+        guard capability.rights.contains(.receive) else {
+            return .failure(.notEnoughRights)
+        }
         
+        _ = reply(frame: frame.pointee)
+        
+        return receive(capability: capability, frame: frame)
     }
 
     

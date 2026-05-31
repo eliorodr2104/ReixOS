@@ -26,5 +26,8 @@ public protocol IPCInterface: RXObject {
         frame: AArch64.TrapFrame
     ) -> Result<CommunicationMessageResult, IPCError> // Server respond to call process
     
-    mutating func replyRecv() // reply + receive fuse (server loop)
+    mutating func replyRecv(
+        capability: EndpointCap,
+        frame     : UnsafeMutablePointer<AArch64.TrapFrame>
+    ) -> Result<CommunicationMessageResult, IPCError> // reply + receive fuse (server loop)
 }

@@ -64,6 +64,7 @@ public struct SyscallHandler: RXObject {
             case .spawnEndpoint: SpawnEndpointSyscall.handle(frame: frame, context: context)
             case .call         : CallSyscall         .handle(frame: frame, context: context)
             case .reply        : ReplySyscall        .handle(frame: frame, context: context)
+            case .replyRecv    : ReplyRecvSyscall    .handle(frame: frame, context: context)
 
             default: break
         }
