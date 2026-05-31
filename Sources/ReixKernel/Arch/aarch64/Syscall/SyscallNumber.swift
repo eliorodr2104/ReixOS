@@ -29,4 +29,8 @@ public enum SyscallNumber: UInt64 {
     // IPC
     case send
     case receive
+    case spawnEndpoint
+    case call
+    case reply
+    case replyRecv
 }

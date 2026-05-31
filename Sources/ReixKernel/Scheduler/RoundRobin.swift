@@ -62,7 +62,7 @@ public struct RoundRobin: SchedulerInterface {
             default: break
         }
         
-        process.pointee.status = .running
+        process.pointee.status = .ready
         ready.pushBack(process)
     }
     

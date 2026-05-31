@@ -41,6 +41,10 @@ public struct SplitProcessSyscall: SyscallProvider {
             childMetadata.pointee.elfLoadEnd   = parentMetadata.pointee.elfLoadEnd
             childMetadata.pointee.programBreak = parentMetadata.pointee.programBreak
             
+            // Clone Endpoint Table into Metadata Struct
+            childMetadata.pointee.capsTable = parentMetadata.pointee.capsTable
+
+            
             let childVMM  = childProcess.pointee.addressSpace.vmaManager
             let parentVMM = currentProcess.pointee.addressSpace.vmaManager
                     
@@ -53,6 +57,7 @@ public struct SplitProcessSyscall: SyscallProvider {
                 frame.pointee.x0 = UInt64(0xFFFFFFFFFFFFFFFF) // Create error code
                 return
             }
+            
             
             currentProcess.pointee.family.pushChild(childProcess)
             try? context.scheduler.pointee.addTask(childProcess)

@@ -14,4 +14,5 @@ public enum IPCError: Error {
     case noReply
     case invalidMessage
     case notFoundFreeEndpoint
+    case outOfEndpoints
 }

@@ -180,20 +180,6 @@ public struct Kernel {
         let firstProcess  = try processManager.pointee.spawnProcess(path: firstProcessPathPtr)
         let secondProcess = try processManager.pointee.spawnProcess(path: secondProcessPathPtr)
         
-        
-        let endpointPtr = Kernel.heap.pointee.kmalloc(Endpoint.self)
-        endpointPtr.initialize(to: Endpoint(
-            state: .idle,
-            queue: LinkedList(head: nil, tail: nil)
-        ))
-
-        _ = firstProcess.pointee.metadata.pointee.capsTable.install(
-            EndpointCap(endpoint: endpointPtr, badge: Badge(1), rights: .receive)
-        )
-        _ = secondProcess.pointee.metadata.pointee.capsTable.install(
-            EndpointCap(endpoint: endpointPtr, badge: Badge(1), rights: .send)
-        )
-        
 
         kprint(.info, in: "Handing control to user space.", by: .proc)
         kprint()

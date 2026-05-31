@@ -17,9 +17,14 @@ public protocol IPCInterface: RXObject {
         frame     : UnsafeMutablePointer<AArch64.TrapFrame>
     ) -> Result<CommunicationMessageResult, IPCError> // wait, block if not send mess
     
-    mutating func call()      // send + wait-reply, is atomic
+    mutating func call(
+        capability: EndpointCap,
+        frame     : AArch64.TrapFrame
+    ) -> Result<CommunicationMessageResult, IPCError> // send + wait-reply, is atomic
     
-    mutating func reply()     // Server respond to call process
+    mutating func reply(
+        frame: AArch64.TrapFrame
+    ) -> Result<CommunicationMessageResult, IPCError> // Server respond to call process
     
     mutating func replyRecv() // reply + receive fuse (server loop)
 }
