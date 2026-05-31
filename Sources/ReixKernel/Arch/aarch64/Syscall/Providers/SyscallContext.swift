@@ -15,12 +15,15 @@ public struct SyscallContext {
 
     public let processManager: UnsafeMutablePointer<ProcessManager>
     public let scheduler     : UnsafeMutablePointer<KernelScheduler>
+    public let ipc           : UnsafeMutablePointer<KernelIPC>
 
     public init(
         processManager: UnsafeMutablePointer<ProcessManager>,
-        scheduler     : UnsafeMutablePointer<KernelScheduler>
+        scheduler     : UnsafeMutablePointer<KernelScheduler>,
+        ipc           : UnsafeMutablePointer<KernelIPC>
     ) {
         self.processManager = processManager
         self.scheduler      = scheduler
+        self.ipc            = ipc
     }
 }

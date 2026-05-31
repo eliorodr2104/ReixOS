@@ -26,6 +26,11 @@ REIX_MOD_SRCS := $(shell find $(SYSCALL_DIR) -type f -name "*.swift")
 
 RX_CORE_SRCS  := $(wildcard $(SYSCALL_ARCH_DIR)/*.swift)
 
+# Shared IPC data structures: compiled into BOTH the kernel (picked up by the
+# KERNEL_SWIFT_SRCS find below, since it lives under Sources/ReixKernel) and the
+# Reix module, so userland and kernel agree on the same Message/MessageTag ABI.
+IPC_SHARED_SRCS := Sources/ReixKernel/InterProcessControl/RXIPCShared.swift
+
 KERNEL_SWIFT_SRCS_ALL := $(shell find Sources -name "*.swift" -not -path "$(USER_DIR)/*")
 KERNEL_C_SRCS_ALL     := $(shell find Sources -name "*.c" -not -path "$(USER_DIR)/*")
 KERNEL_ASM_SRCS_ALL   := $(shell find Sources -name "*.S" -not -path "$(USER_DIR)/*")
@@ -82,9 +87,9 @@ kernel.bin: kernel.elf
 $(USER_MOD_DIR):
 	@mkdir -p $(USER_MOD_DIR)
 
-$(MOD_REIX_MOD): $(REIX_MOD_SRCS) $(RX_CORE_SRCS) | $(USER_MOD_DIR)
+$(MOD_REIX_MOD): $(REIX_MOD_SRCS) $(RX_CORE_SRCS) $(IPC_SHARED_SRCS) | $(USER_MOD_DIR)
 	@echo "Compilazione Modulo Unificato: Reix"
-	$(SWIFTC) $(SWIFT_FLAGS) -emit-module -module-name Reix -emit-module-path $@ -c $(REIX_MOD_SRCS) $(RX_CORE_SRCS) -o $(MOD_REIX_OBJ)
+	$(SWIFTC) $(SWIFT_FLAGS) -emit-module -module-name Reix -emit-module-path $@ -c $(REIX_MOD_SRCS) $(RX_CORE_SRCS) $(IPC_SHARED_SRCS) -o $(MOD_REIX_OBJ)
 
 # Userland apps compile
 $(USER_STUBS_OBJ): $(USER_DIR)/user_stubs.c

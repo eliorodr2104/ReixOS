@@ -21,7 +21,7 @@ public let RX_MEM_FAILURE: UInt64 = UInt64.max
 /// available, request outside the user heap area).
 @inline(__always)
 public func brk(_ newBreak: UInt64) -> UInt64 {
-    return _syscall(.brk, newBreak)
+    _syscall(.brk, newBreak)
 }
 
 
@@ -52,7 +52,7 @@ public func sbrk(_ delta: Int64) -> UInt64 {
 /// (no free gap, invalid size).
 @inline(__always)
 public func mmap(size: UInt64) -> UInt64 {
-    return _syscall(.mmap, size)
+    _syscall(.mmap, size)
 }
 
 
@@ -64,5 +64,5 @@ public func mmap(size: UInt64) -> UInt64 {
 /// known, size mismatch).
 @inline(__always)
 public func munmap(addr: UInt64, size: UInt64) -> UInt64 {
-    return _syscall(.munmap, addr, size)
+    _syscall(.munmap, addr, size)
 }

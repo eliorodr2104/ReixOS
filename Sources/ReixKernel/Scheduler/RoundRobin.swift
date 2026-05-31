@@ -54,6 +54,17 @@ public struct RoundRobin: SchedulerInterface {
     }
     
     
+    public mutating func resume(_ process: UnsafeMutablePointer<Process>) {
+        switch process.pointee.status {
+            case .ready, .running, .terminated: return
+            default: break
+        }
+        
+        process.pointee.status = .running
+        ready.pushBack(process)
+    }
+    
+    
     public mutating func onTick() -> Bool {
         currentTicks &+= 1
         

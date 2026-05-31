@@ -5,7 +5,8 @@
 //
 
 .global _asm_syscall
-.global _asm_syscall_ptr
+.global _asm_recv
+
 
 _asm_syscall:
     // x0: syscall number
@@ -29,3 +30,25 @@ _asm_syscall:
     
     svc #0
     ret
+
+
+_asm_recv:
+    // x0: Syscall number
+    // x1: Handle
+    // x2: Output buffer ptr
+
+    mov x8, x0
+    mov x9, x2
+    mov x0, x1
+
+    svc #0
+
+    // Return: x0 = status, x1 = tag, x2..x5=words, x6=badge
+    str x1, [x9]        // buffer[0] = tag
+    str x2, [x9, #8]    // buffer[1] = word0
+    str x3, [x9, #16]   // buffer[2] = word1
+    str x4, [x9, #24]   // buffer[3] = word2
+    str x5, [x9, #32]   // buffer[4] = word3
+    str x6, [x9, #40]   // buffer[5] = badge
+
+    ret // x0 state

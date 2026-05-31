@@ -42,7 +42,7 @@ public struct ProcessMetadata {
     /// when reaping the zombie.
     public var exitCode: UInt32?
     
-//    public var endpointCaps: InlineArray<16, EndpointCap?>
+    public var capsTable: CapsTable
 
     public init(
         elfImage       : PhysicalPage?  = nil,
@@ -58,6 +58,7 @@ public struct ProcessMetadata {
         self.programBreak    = programBreak
         self.waitingChildPid = waitingChildPid
         self.exitCode        = exitCode
+        self.capsTable       = CapsTable()
     }
     
     public init() {
@@ -67,5 +68,7 @@ public struct ProcessMetadata {
         self.programBreak    = 0
         self.waitingChildPid = nil
         self.exitCode        = nil
+        self.capsTable       = CapsTable()
     }
+    
 }

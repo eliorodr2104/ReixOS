@@ -44,6 +44,8 @@ public struct Process: RXEntry {
     public var prev  : UnsafeMutablePointer<Self>?
     public var next  : UnsafeMutablePointer<Self>?
     
+    public var ipcBadge: Badge?
+    
     public var message: Message?
     public var replyTo: UnsafeMutablePointer<Process>?
     public var ipcDeadline: UInt32?

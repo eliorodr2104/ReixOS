@@ -24,6 +24,7 @@ public enum Subsystem {
     case vma
     case elf
     case sched
+    case ipc
     case fs
 
     var tag: String {
@@ -40,6 +41,7 @@ public enum Subsystem {
             case .vma  : "[VMA ]"
             case .elf  : "[ELF ]"
             case .sched: "[SCHD]"
+            case .ipc  : "[IPC ]"
             case .fs   : "[FS  ]"
         }
     }

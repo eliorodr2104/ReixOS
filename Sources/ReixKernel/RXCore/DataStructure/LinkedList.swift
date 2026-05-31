@@ -6,11 +6,15 @@
 //
 
 public struct LinkedList<T: RXEntry> {
+    
     internal var head: UnsafeMutablePointer<T>?
     internal var tail: UnsafeMutablePointer<T>?
     
     internal let minAddress: VirtualAddress?
     internal let maxAddress: VirtualAddress?
+    
+    public var count: Int = 0
+    
     
     public init(
         head: UnsafeMutablePointer<T>?,
@@ -21,6 +25,14 @@ public struct LinkedList<T: RXEntry> {
         
         self.minAddress = nil
         self.maxAddress = nil
+        
+        if head != nil {
+            self.count += 1
+        }
+        
+        if tail != nil {
+            self.count += 1
+        }
     }
     
     public mutating func pushBack(_ element: UnsafeMutablePointer<T>) {
@@ -33,6 +45,8 @@ public struct LinkedList<T: RXEntry> {
         } else { head = element }
         
         tail = element
+        
+        count += 1
     }
     
     public mutating func popFront() -> UnsafeMutablePointer<T>? {
@@ -50,6 +64,7 @@ public struct LinkedList<T: RXEntry> {
         elementToReturn.pointee.next = nil
         elementToReturn.pointee.prev = nil
         
+        count -= 1
         return elementToReturn
     }
     
@@ -67,6 +82,8 @@ public struct LinkedList<T: RXEntry> {
             previousNode.pointee.next = element
             
         } else { head = element }
+        
+        count += 1
     }
     
     public mutating func insertAfter(
@@ -83,6 +100,8 @@ public struct LinkedList<T: RXEntry> {
             nextNode.pointee.prev = element
             
         } else { tail = element }
+        
+        count += 1
     }
     
     public mutating func remove(element: UnsafeMutablePointer<T>) {
@@ -100,7 +119,9 @@ public struct LinkedList<T: RXEntry> {
         } else { tail = prev }
         
         element.pointee.next = nil
-        element.pointee.prev = nil        
+        element.pointee.prev = nil
+        
+        count -= 1
     }
     
     public mutating func remove(id: T.IDType) -> UnsafeMutablePointer<T>? {
@@ -109,6 +130,7 @@ public struct LinkedList<T: RXEntry> {
         while let element = current {
             if element.pointee.entryID == id {
                 remove(element: element)
+                count -= 1
                 return element
             }
             
@@ -130,5 +152,11 @@ public struct LinkedList<T: RXEntry> {
         }
         
         return nil
+    }
+    
+    
+    @inline(__always)
+    public func isEmpty() -> Bool {
+        count == 0
     }
 }

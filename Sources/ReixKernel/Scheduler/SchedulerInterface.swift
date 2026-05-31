@@ -9,6 +9,7 @@ public protocol SchedulerInterface {
     mutating func addTask(_ process: borrowing UnsafeMutablePointer<Process>) throws(SchedulerError)
     mutating func removeTask(_ process: UnsafeMutablePointer<Process>)
     mutating func selectNextTask() -> UnsafeMutablePointer<Process>?
+    mutating func resume(_ process: UnsafeMutablePointer<Process>)
     mutating func onTick() -> Bool
     mutating func yield() -> UnsafeMutablePointer<AArch64TrapFrame>?
     

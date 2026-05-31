@@ -40,6 +40,8 @@ public struct Kernel {
 
     public  static var scheduler: UnsafeMutablePointer<KernelScheduler>!
     
+    public  static var ipc: UnsafeMutablePointer<KernelIPC>!
+    
     public  static var fileSystem: UnsafeMutablePointer<KernelInternalFileSystem>!
 
     public  static var internalPanicMessage: String?
@@ -137,6 +139,19 @@ public struct Kernel {
             self.scheduler = schedulerPtr
             kprint(.boot, in: "Scheduler ready.", by: .sched)
 
+            
+            let ipcSize = MemoryLayout<KernelIPC>.stride
+            guard let ipcRaw = try heap.pointee.kmalloc(UInt(ipcSize)) else {
+                Arch.CPU.panic("Failed to allocate IPC on the kernel heap")
+            }
+            let ipcPtr = ipcRaw.bindMemory(
+                to: RendezvousIPC.self,
+                capacity: 1
+            )
+            ipcPtr.initialize(to: KernelIPC(scheduler: self.scheduler))
+            self.ipc = ipcPtr
+            kprint(.boot, in: "IPC ready.", by: .ipc)
+            
 
             let syscallHandlerSize = MemoryLayout<SyscallHandler>.stride
             guard let syscallHandlerRaw = try heap.pointee.kmalloc(UInt(syscallHandlerSize)) else {
@@ -147,8 +162,9 @@ public struct Kernel {
                 capacity: 1
             )
             syscallHandlerPtr.initialize(to: SyscallHandler(
-                processManager: processManager,
-                scheduler     : scheduler
+                processManager: self.processManager,
+                scheduler     : self.scheduler,
+                ipc           : self.ipc
             ))
             self.syscallHandler = syscallHandlerPtr
             kprint(.boot, in: "Syscall Handler ready.", by: .sys)
@@ -201,6 +217,25 @@ public struct Kernel {
 
         let firstProcess  = try processManager.pointee.spawnProcess(path: firstProcessPathPtr)
         let secondProcess = try processManager.pointee.spawnProcess(path: secondProcessPathPtr)
+        
+        
+        let endpointSize = MemoryLayout<Endpoint>.stride
+        guard let endpointRaw = try? Kernel.heap.pointee.kmalloc(UInt(endpointSize)) else {
+            Arch.CPU.panic("Failed to allocate IPC endpoint")
+        }
+        let endpointPtr = endpointRaw.bindMemory(to: Endpoint.self, capacity: 1)
+        endpointPtr.initialize(to: Endpoint(
+            state: .idle,
+            queue: LinkedList(head: nil, tail: nil)
+        ))
+
+        _ = firstProcess.pointee.metadata.pointee.capsTable.install(
+            EndpointCap(endpoint: endpointPtr, badge: Badge(1), rights: .receive)
+        )
+        _ = secondProcess.pointee.metadata.pointee.capsTable.install(
+            EndpointCap(endpoint: endpointPtr, badge: Badge(1), rights: .send)
+        )
+        
 
         kprint(.info, in: "Handing control to user space.", by: .proc)
         kprint()

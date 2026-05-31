@@ -17,13 +17,16 @@ public struct SyscallHandler {
 
     private let processManager: UnsafeMutablePointer<ProcessManager>
     private let scheduler     : UnsafeMutablePointer<KernelScheduler>
+    private let ipc           : UnsafeMutablePointer<KernelIPC>
 
     public init(
         processManager: UnsafeMutablePointer<ProcessManager>,
-        scheduler     : UnsafeMutablePointer<KernelScheduler>
+        scheduler     : UnsafeMutablePointer<KernelScheduler>,
+        ipc           : UnsafeMutablePointer<KernelIPC>
     ) {
         self.processManager = processManager
         self.scheduler      = scheduler
+        self.ipc            = ipc
     }
 
     public func handle(
@@ -32,7 +35,8 @@ public struct SyscallHandler {
     ) {
         let context = SyscallContext(
             processManager: processManager,
-            scheduler     : scheduler
+            scheduler     : scheduler,
+            ipc           : ipc
         )
 
         switch type {
@@ -44,9 +48,17 @@ public struct SyscallHandler {
             case .reapChild    : ReapChildSyscall   .handle(frame: frame, context: context)
             case .spawnProcess : SpawnProcessSyscall.handle(frame: frame, context: context)
             case .split        : SplitProcessSyscall.handle(frame: frame, context: context)
+                
+            
+            // VMA
             case .brk          : BrkSyscall         .handle(frame: frame, context: context)
             case .mmap         : MmapSyscall        .handle(frame: frame, context: context)
             case .munmap       : MunmapSyscall      .handle(frame: frame, context: context)
+                
+                
+            // ICP
+            case .send         : SendSyscall        .handle(frame: frame, context: context)
+            case .receive      : ReceiveSyscall     .handle(frame: frame, context: context)
 
             default: break
         }

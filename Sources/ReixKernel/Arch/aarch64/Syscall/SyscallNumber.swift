@@ -18,7 +18,15 @@ public enum SyscallNumber: UInt64 {
     case sleep
     case terminate
 
+    
+    // VMA
+    
     case brk
     case mmap
     case munmap
+    
+    
+    // IPC
+    case send
+    case receive
 }

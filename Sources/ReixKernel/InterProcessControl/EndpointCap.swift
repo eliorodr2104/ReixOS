@@ -7,12 +7,12 @@
 
 
 public struct EndpointCap {
-    public var endpoint: Endpoint
+    public var endpoint: UnsafeMutablePointer<Endpoint>
     public var badge   : Badge
     public var rights  : CapRights
 
     public init(
-        endpoint: Endpoint,
+        endpoint: UnsafeMutablePointer<Endpoint>,
         badge   : Badge,
         rights  : CapRights
     ) {

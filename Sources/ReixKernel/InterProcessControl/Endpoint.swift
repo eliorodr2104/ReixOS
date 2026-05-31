@@ -7,8 +7,7 @@
 
 
 public struct Endpoint {
-    public var state    : EndpointState = .idle
+    public var state: EndpointState = .idle
     
-    public var queueHead: UnsafeMutablePointer<Process>?
-    public var queueTail: UnsafeMutablePointer<Process>?
+    public var queue: LinkedList<Process>
 }
