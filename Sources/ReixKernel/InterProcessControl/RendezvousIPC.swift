@@ -14,6 +14,7 @@ public struct RendezvousIPC: IPCInterface {
     var scheduler: UnsafeMutablePointer<KernelScheduler>
     var heap     : UnsafeMutablePointer<KernelHeap>
     
+    
     init(
         scheduler: UnsafeMutablePointer<KernelScheduler>,
         heap     : UnsafeMutablePointer<KernelHeap>

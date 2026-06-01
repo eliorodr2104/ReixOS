@@ -17,7 +17,6 @@ public struct RoundRobin: SchedulerInterface {
     private var currentTicks: UInt = 0   // Tick
     private let quantum     : UInt = 7 // One tick is 10ms
     
-    
     private(set) var systemTicks: UInt64 = 0
     
     

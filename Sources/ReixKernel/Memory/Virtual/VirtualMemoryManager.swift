@@ -6,25 +6,26 @@
 //
 
 public struct VirtualMemoryManager {
-    private let ppmPtr: UnsafeMutablePointer<KernelPPM>
     
-    
+    private let ppmPtr              : UnsafeMutablePointer<KernelPPM>
+        
     /// Root (TTBR1 - Address 0xFFFF...)
-    private let kernelRootTable  : UnsafeMutablePointer<Arch.PageTableEntry>
+    private let kernelRootTable     : UnsafeMutablePointer<Arch.PageTableEntry>
     
     /// Root Temp (TTBR0 - Address 0x0000...)
-    private let identityRootTable: UnsafeMutablePointer<Arch.PageTableEntry>
+    private let identityRootTable   : UnsafeMutablePointer<Arch.PageTableEntry>
     
     private let kernelTableAddress  : PhysicalAddress
     private let identityTableAddress: PhysicalAddress
     
-    static let physicalOffset: UInt64 = 0xFFFF800000000000
-    static let pageSize      : UInt64 = 4096
+    static let physicalOffset       : UInt64 = 0xFFFF800000000000
+    static let pageSize             : UInt64 = 4096
 
     /// Monotonically increasing ASID source for newly created address spaces.
     /// Wraps to `1` (skipping `0`, reserved for the kernel TTBR1 space) and
     /// flushes the TLB on wrap to avoid stale tagged entries.
-    private var asidCounter: ASID = 1
+    private var asidCounter         : ASID = 1
+    
     
     public func physToVirt<T>(_ phys: UInt64) -> UnsafeMutablePointer<T> {
         let offset = Arch.MMU.isMMUEnabled() ? Self.physicalOffset : 0

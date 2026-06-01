@@ -7,11 +7,14 @@
 
 
 public struct PhysicalPageManager<A: Allocator> {
-    public  let ramStart : UInt64
-    public  let ramSize  : UInt64
-
-    private let allocator: A
+    
+    private let allocator     : A
+    
+    public  let ramStart      : UInt64
+    public  let ramSize       : UInt64
+    
     public  var framesMetadata: UnsafeMutablePointer<FrameInfo>?
+    
     
     public func alloc(
         _ bytes  : Int,

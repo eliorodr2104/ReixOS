@@ -6,14 +6,17 @@
 //
 
 public struct BuddyAllocator: Allocator {
-    private let startRam: PhysicalAddress
-    private let sizeRam : UInt64
     
-    private let bitmap   : UnsafeMutablePointer<UInt8>
-    private let freeLists: UnsafeMutableRawPointer
+    private let startRam       : PhysicalAddress
+    private let sizeRam        : UInt64
+    
+    private let bitmap         : UnsafeMutablePointer<UInt8>
+    private let freeLists      : UnsafeMutableRawPointer
+    
+    private static let pageSize: UInt64 = 4096
     
     private static let maxOrder: UInt8  = 11
-    private static let pageSize: UInt64 = 4096
+
     
     public init(
         start           : PhysicalAddress,
