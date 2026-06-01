@@ -12,10 +12,11 @@ ReixOS is built around a few core radical ideas:
 * **Human-Readable Systems:** Traditional OS design (like Linux) relies on cryptic syscalls and hard-to-read integer error codes. ReixOS aims to expose everything through high-level, human-readable data structures and clear errors. 
 * **The Anti-Bash Terminal:** In the future, the terminal will not rely on parsing endless, unstructured strings with indecipherable commands. Instead, it will be built on POP: every terminal module will adhere to strict protocols, exchanging strongly-typed data instead of raw text.
 * **Absolute Isolation:** A pure microkernel approach where every process is completely isolated, not just in its virtual address space, but eventually at the disk/storage level as well.
+* **Flat Process Tree:** Child processes are terminal; they lack the capability to fork or spawn subsequent child processes. The process hierarchy is strictly limited to a depth of one level (Parent -> Children).
 
 ## Architecture & Current State
 
-The project is currently in an **embryonic state**. The codebase is primarily Swift (~75%), falling back to C and Assembly only when strictly necessary for low-level CPU bootstrapping and ABI requirements.
+The project is currently in an **embryonic state**. The codebase is primarily Swift, falling back to C and Assembly only when strictly necessary for low-level CPU bootstrapping and ABI requirements.
 
 At this stage, the foundational subsystems are in place:
 * Basic UART Driver
@@ -23,6 +24,9 @@ At this stage, the foundational subsystems are in place:
 * Virtual Memory Management (VMM)
 * Exception Vector Table (EVT)
 * Basic Kernel Heap
+* Scheduler
+* Internal TAR FS
+* Rendezvous IPC
 
 ## Getting Started
 
@@ -31,7 +35,7 @@ To build and run ReixOS, you don't need a complex custom toolchain. You just nee
 The Makefile takes care of compiling the source and launching it inside QEMU. Simply run:
 
 ```bash
-clear && make clean && make run
+make clean && make run
 ```
 
 ## Roadmap
@@ -41,8 +45,8 @@ The next major milestones for ReixOS involve transitioning from hardware initial
 - [x] Processes and Context Switching
 - [x] CPU Scheduler
 - [x] Functional User-Space execution
-- [ ] Robust Heap allocation for all processes
-- [ ] Inter-Process Communication (IPC)
+- [x] Robust Heap allocation for all processes
+- [x] Inter-Process Communication (IPC)
 - [ ] Better I/O handling
 - [ ] POP-based Shell implementation
 
