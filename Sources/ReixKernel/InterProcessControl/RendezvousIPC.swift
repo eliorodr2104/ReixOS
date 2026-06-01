@@ -93,9 +93,10 @@ public struct RendezvousIPC: IPCInterface {
         currentProcess.pointee.message      = Message(from: frame)
         currentProcess.pointee.ipcBadge     = capability.badge
         currentProcess.pointee.pendingGrant = grantHandle == UInt32.max ? nil : grantHandle
-        
+        currentProcess.pointee.ipcDeadline  = nil
+
         endpointPtr.pointee.queue.pushBack(currentProcess)
-        
+
         endpointPtr.pointee.state     = .sendBlocked
         currentProcess.pointee.status = .blockedOnSend(endpointPtr)
         
@@ -106,8 +107,9 @@ public struct RendezvousIPC: IPCInterface {
     
     public mutating func receive(
         capability: EndpointCap,
-        frame     : UnsafeMutablePointer<AArch64.TrapFrame>,
-        blocking  : Bool = true
+        frame       : UnsafeMutablePointer<AArch64.TrapFrame>,
+        blocking    : Bool = true,
+        timeoutTicks: UInt64? = nil
         
     ) -> Result<CommunicationMessageResult, IPCError> {
         
@@ -174,8 +176,9 @@ public struct RendezvousIPC: IPCInterface {
         
 
         endpointPtr.pointee.queue.pushBack(currentProcess)
-        endpointPtr.pointee.state = .recvBlocked
-        currentProcess.pointee.status = .blockedOnReceive(endpointPtr)
+        endpointPtr.pointee.state          = .recvBlocked
+        currentProcess.pointee.status      = .blockedOnReceive(endpointPtr)
+        currentProcess.pointee.ipcDeadline = timeoutTicks.map { scheduler.pointee.systemTicks + $0 }
         
         return .success(.blocked)
     }
@@ -230,6 +233,7 @@ public struct RendezvousIPC: IPCInterface {
         currentProcess.pointee.message      = Message(from: frame)
         currentProcess.pointee.ipcBadge     = capability.badge
         currentProcess.pointee.expectsReply = true
+        currentProcess.pointee.ipcDeadline  = nil
         currentProcess.pointee.status       = .blockedOnSend(endpointPtr)
         
         endpointPtr.pointee.queue.pushBack(currentProcess)

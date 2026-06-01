@@ -7,6 +7,7 @@
 .global _asm_syscall
 .global _asm_recv
 .global _asm_call
+.global _asm_recv_timeout
 
 
 _asm_syscall:
@@ -79,6 +80,32 @@ _asm_call:
     svc #0
 
     // Return: x0 = status, x1 = tag, x2..x5 = words, x6 = badge
+    str x1, [x9]        // buffer[0] = tag
+    str x2, [x9, #8]    // buffer[1] = word0
+    str x3, [x9, #16]   // buffer[2] = word1
+    str x4, [x9, #24]   // buffer[3] = word2
+    str x5, [x9, #32]   // buffer[4] = word3
+    str x6, [x9, #40]   // buffer[5] = badge
+    str x7, [x9, #48]   // buffer[6] = grantHandle
+
+    ret // x0 status
+
+
+_asm_recv_timeout:
+    // x0: syscall number
+    // x1: handle
+    // x2: timeout ticks
+    // x3: reply buffer ptr
+
+    mov x8, x0      // syscall number in x8
+    mov x9, x3      // save reply buffer ptr (survives the syscall)
+
+    mov x0, x1      // handle
+    mov x1, x2      // timeout ticks
+
+    svc #0
+
+    // Return: x0 = status, x1 = tag, x2..x5 = words, x6 = badge, x7 = grant
     str x1, [x9]        // buffer[0] = tag
     str x2, [x9, #8]    // buffer[1] = word0
     str x3, [x9, #16]   // buffer[2] = word1

@@ -76,6 +76,37 @@ public func receive(handle: UInt32) -> ReceivedMessage {
 
 
 @inline(__always)
+public func receive(
+    handle : UInt32,
+    timeout: UInt32
+) -> ReceivedMessage? {
+    var raw = ReceivedMessageRaw()
+
+    let resultAsm = withUnsafeMutablePointer(to: &raw) { ptr in
+        _asm_recv_timeout_raw(
+            SyscallNumber.receiveTimeout.rawValue,
+            UInt64(handle),
+            UInt64(timeout),
+            UnsafeMutableRawPointer(ptr)
+        )
+    }
+
+    guard resultAsm == IPCStatus.ok.rawValue else { return nil }
+
+    var w = InlineArray<4, UInt32>(repeating: 0)
+    w[0] = UInt32(truncatingIfNeeded: raw.word0)
+    w[1] = UInt32(truncatingIfNeeded: raw.word1)
+    w[2] = UInt32(truncatingIfNeeded: raw.word2)
+    w[3] = UInt32(truncatingIfNeeded: raw.word3)
+
+    return ReceivedMessage(
+        message   : Message(tag: MessageTag(packed: raw.tag), words: w),
+        grantedCap: UInt32(raw.grantedHandle)
+    )
+}
+
+
+@inline(__always)
 public func spawnEndpoint() -> UInt32 {
     return UInt32(truncatingIfNeeded: _syscall(.spawnEndpoint))
 }

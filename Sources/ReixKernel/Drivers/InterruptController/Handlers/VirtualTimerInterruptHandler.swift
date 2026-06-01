@@ -23,9 +23,11 @@ public struct VirtualTimerInterruptHandler: InterruptHandler {
         AArch64VirtualTimer.ect()
         Kernel.gic.pointee.endOfInterrupt(id: id)
 
-        guard Kernel.scheduler.pointee.onTick() else { return }
+        let quantumExpired = Kernel.scheduler.pointee.onTick()
         
         Kernel.ipc.pointee.checkTimeouts(now: Kernel.scheduler.pointee.systemTicks)
+
+        guard quantumExpired else { return }
 
         if let nextProcess = Kernel.scheduler.pointee.selectNextTask() {
             Arch.MMU.switchUserAddressSpace(

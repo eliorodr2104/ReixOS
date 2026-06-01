@@ -50,7 +50,7 @@ public struct Process: RXEntry {
     
     public var message: Message?
     public var replyTo: UnsafeMutablePointer<Process>?
-    public var ipcDeadline: UInt32?
+    public var ipcDeadline: UInt64?
     public var expectsReply: Bool = false
     public var pendingGrant: UInt32? = nil
 

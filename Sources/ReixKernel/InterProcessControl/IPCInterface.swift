@@ -14,9 +14,10 @@ public protocol IPCInterface: RXObject {
     ) -> Result<CommunicationMessageResult, IPCError> // Send mess, block if not receive the mess
     
     mutating func receive(
-        capability: EndpointCap,
-        frame     : UnsafeMutablePointer<AArch64.TrapFrame>,
-        blocking  : Bool
+        capability  : EndpointCap,
+        frame       : UnsafeMutablePointer<AArch64.TrapFrame>,
+        blocking    : Bool,
+        timeoutTicks: UInt64?
     ) -> Result<CommunicationMessageResult, IPCError> // wait, block if not send mess
     
     mutating func call(

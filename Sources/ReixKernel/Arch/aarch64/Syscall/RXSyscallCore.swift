@@ -24,6 +24,14 @@ public func _asm_recv_raw(
     _ buffer: UnsafeMutableRawPointer
 ) -> UInt64
 
+@_silgen_name("_asm_recv_timeout")
+public func _asm_recv_timeout_raw(
+    _ number: UInt64,
+    _ handle: UInt64,
+    _ ticks : UInt64,
+    _ buffer: UnsafeMutableRawPointer
+) -> UInt64
+
 @_silgen_name("_asm_call")
 public func _asm_call_raw(
     _ number: UInt64,
