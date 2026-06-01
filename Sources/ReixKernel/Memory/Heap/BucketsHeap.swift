@@ -79,7 +79,7 @@ public struct BucketsHeap: KernelHeapInterface {
         _ capacity: Int = 1
     ) -> UnsafeMutablePointer<Object> {
         
-        let objectSize = UInt(MemoryLayout<KernelIPC>.stride)
+        let objectSize = UInt(MemoryLayout<Object>.stride * capacity)
         guard objectSize <= UInt(Self.pageSize) else {
             Arch.CPU.panic("Kmalloc Failed, struct is greater than page size")
         }
