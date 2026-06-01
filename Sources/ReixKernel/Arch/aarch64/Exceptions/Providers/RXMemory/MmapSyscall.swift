@@ -22,9 +22,8 @@ public struct MmapSyscall: SyscallProvider {
         _ = context
 
         let requestedSize = frame.pointee.x0
-        let currentPtr    = Arch.CPU.getCurrentProcess()
 
-        guard let current    = UnsafeMutablePointer<Process>(bitPattern: UInt(currentPtr)),
+        guard let current    = Arch.CPU.getCurrentProcess(),
               let vmaManager = current.pointee.addressSpace.vmaManager
         else {
             frame.pointee.x0 = 0

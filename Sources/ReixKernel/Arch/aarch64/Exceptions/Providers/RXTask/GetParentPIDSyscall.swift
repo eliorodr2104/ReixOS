@@ -17,9 +17,8 @@ public struct GetParentPIDSyscall: SyscallProvider {
         context: SyscallContext
     ) {
         _ = context
-        let currentRawProcess = Arch.CPU.getCurrentProcess()
 
-        if let current = UnsafeMutablePointer<Process>(bitPattern: UInt(currentRawProcess)),
+        if let current = Arch.CPU.getCurrentProcess(),
            let parent  = current.pointee.family.parent {
             frame.pointee.x0 = UInt64(parent.pointee.pid)
 

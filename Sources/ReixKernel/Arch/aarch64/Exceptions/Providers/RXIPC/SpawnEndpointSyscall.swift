@@ -14,11 +14,8 @@ public struct SpawnEndpointSyscall: SyscallProvider {
         frame  : UnsafeMutablePointer<Arch.TrapFrame>,
         context: SyscallContext
     ) {
-        let currentAddress = Arch.CPU.getCurrentProcess()
-        guard let current = UnsafeMutablePointer<Process>(
-            bitPattern: UInt(currentAddress)
-            
-        ) else {
+
+        guard let current = Arch.CPU.getCurrentProcess() else {
             frame.pointee.x0 = UInt64(UInt32.max) // Error value
             return
         }

@@ -13,8 +13,12 @@ public struct RoundRobin: SchedulerInterface {
     private var waiting   : LinkedList = LinkedList<Process>(head: nil, tail: nil)
     private var terminated: LinkedList = LinkedList<Process>(head: nil, tail: nil)
     
+    
     private var currentTicks: UInt = 0   // Tick
     private let quantum     : UInt = 7 // One tick is 10ms
+    
+    
+    private(set) var systemTicks: UInt64 = 0
     
     
     public mutating func addTask(_ process: UnsafeMutablePointer<Process>) throws(SchedulerError) {
@@ -33,9 +37,8 @@ public struct RoundRobin: SchedulerInterface {
     
     
     public mutating func selectNextTask() -> UnsafeMutablePointer<Process>? {
-        let currentAddr = Arch.CPU.getCurrentProcess()
         
-        if currentAddr != 0, let currentPtr = UnsafeMutablePointer<Process>(bitPattern: UInt(currentAddr)) {
+        if let currentPtr = Arch.CPU.getCurrentProcess() {
             if case .running = currentPtr.pointee.status {
                 currentPtr.pointee.status = .ready
                 ready.pushBack(currentPtr)
@@ -69,6 +72,7 @@ public struct RoundRobin: SchedulerInterface {
     
     public mutating func onTick() -> Bool {
         currentTicks &+= 1
+        systemTicks  &+= 1
         
         return currentTicks >= quantum
     }
@@ -84,8 +88,8 @@ public struct RoundRobin: SchedulerInterface {
     
     
     public mutating func block(_ pid: PID) throws(SchedulerError) {
-        let currentAddr = Arch.CPU.getCurrentProcess()
-        guard let process = UnsafeMutablePointer<Process>(bitPattern: UInt(currentAddr)) else {
+
+        guard let process = Arch.CPU.getCurrentProcess() else {
             throw .processNotExist
         }
         

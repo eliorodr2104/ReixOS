@@ -47,10 +47,10 @@ public struct RendezvousIPC: IPCInterface {
             
             var transferResult: Result<UInt32, IPCError>?
             if grantHandle != UInt32.max {
-                let currentProcessRaw = Arch.CPU.getCurrentProcess()
-                guard let currentProcess = UnsafeMutablePointer<Process>(
-                    bitPattern: UInt(currentProcessRaw)
-                ) else { return .failure(.noReply) }
+
+                guard let currentProcess = Arch.CPU.getCurrentProcess() else {
+                    return .failure(.noReply)
+                }
                 
                 transferResult = transferCapability(
                     from   : currentProcess,
@@ -85,10 +85,9 @@ public struct RendezvousIPC: IPCInterface {
         guard blocking else { return .failure(.wouldBlock) }
         
         
-        let currentProcessRaw = Arch.CPU.getCurrentProcess()
-        guard let currentProcess = UnsafeMutablePointer<Process>(
-            bitPattern: UInt(currentProcessRaw)
-        ) else { return .failure(.noReply) }
+        guard let currentProcess = Arch.CPU.getCurrentProcess() else {
+            return .failure(.noReply)
+        }
         
         // Iplement Build Message
         currentProcess.pointee.message      = Message(from: frame)
@@ -124,10 +123,9 @@ public struct RendezvousIPC: IPCInterface {
                 return .failure(.noReply)
             }
             
-            let currentProcessRaw = Arch.CPU.getCurrentProcess()
-            guard let currentProcess = UnsafeMutablePointer<Process>(
-                bitPattern: UInt(currentProcessRaw)
-            ) else { return .failure(.noReply) }
+            guard let currentProcess = Arch.CPU.getCurrentProcess() else {
+                return .failure(.noReply)
+            }
             
             
             var transferResult: Result<UInt32, IPCError>?
@@ -170,10 +168,9 @@ public struct RendezvousIPC: IPCInterface {
         
         guard blocking else { return .failure(.wouldBlock) }
         
-        let currentProcessRaw = Arch.CPU.getCurrentProcess()
-        guard let currentProcess = UnsafeMutablePointer<Process>(
-            bitPattern: UInt(currentProcessRaw)
-        ) else { return .failure(.noReply) }
+        guard let currentProcess = Arch.CPU.getCurrentProcess() else {
+            return .failure(.noReply)
+        }
         
 
         endpointPtr.pointee.queue.pushBack(currentProcess)
@@ -209,10 +206,9 @@ public struct RendezvousIPC: IPCInterface {
             // Reg x6 used for return badge
             receiverProcess.pointee.context!.pointee.x6 = UInt64(capability.badge)
             
-            let currentProcessRaw = Arch.CPU.getCurrentProcess()
-            guard let currentProcess = UnsafeMutablePointer<Process>(
-                bitPattern: UInt(currentProcessRaw)
-            ) else { return .failure(.noReply) }
+            guard let currentProcess = Arch.CPU.getCurrentProcess() else {
+                return .failure(.noReply)
+            }
             
             receiverProcess.pointee.replyTo = currentProcess
             
@@ -226,10 +222,9 @@ public struct RendezvousIPC: IPCInterface {
         
         // Server not ready
         
-        let currentProcessRaw = Arch.CPU.getCurrentProcess()
-        guard let currentProcess = UnsafeMutablePointer<Process>(
-            bitPattern: UInt(currentProcessRaw)
-        ) else { return .failure(.noReply) }
+        guard let currentProcess = Arch.CPU.getCurrentProcess() else {
+            return .failure(.noReply)
+        }
         
         
         currentProcess.pointee.message      = Message(from: frame)
@@ -248,10 +243,8 @@ public struct RendezvousIPC: IPCInterface {
         frame: AArch64.TrapFrame
     ) -> Result<CommunicationMessageResult, IPCError> {
                     
-        let currentProcessRaw = Arch.CPU.getCurrentProcess()
-        guard let currentProcess = UnsafeMutablePointer<Process>(
-            bitPattern: UInt(currentProcessRaw)
-        ), let replyProcess = currentProcess.pointee.replyTo else {
+        guard let currentProcess = Arch.CPU.getCurrentProcess(),
+              let replyProcess = currentProcess.pointee.replyTo else {
             
             return .failure(.noReply)
         }
@@ -345,5 +338,37 @@ public struct RendezvousIPC: IPCInterface {
         }
         
         return .success(receiverHandle)
+    }
+    
+    
+    public func checkTimeouts(now: UInt64) {        
+        
+        for i in 0..<endpoints.count {
+            
+            if let endpoint = endpoints[i],
+               endpoint.pointee.state != .idle {
+                
+                var iterator = endpoint.pointee.queue.getIterator()
+                while let current: UnsafeMutablePointer<Process> = iterator {
+                    let next = current.pointee.next
+                    
+                    if let deadLine = current.pointee.ipcDeadline,
+                       deadLine <= now {
+                        
+                        endpoint.pointee.queue.remove(element: current)
+                        current.pointee.context?.pointee.x0 = IPCStatus.timeout.rawValue
+                        
+                        current.pointee.ipcDeadline = nil
+                        scheduler.pointee.resume(current)
+                    }
+                    
+                    iterator = next
+                }
+                
+                if endpoint.pointee.queue.isEmpty() {
+                    endpoint.pointee.state = .idle
+                }
+            }
+        }
     }
 }

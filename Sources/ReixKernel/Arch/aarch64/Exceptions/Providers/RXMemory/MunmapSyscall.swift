@@ -23,9 +23,8 @@ public struct MunmapSyscall: SyscallProvider {
 
         let addr       = frame.pointee.x0
         let size       = frame.pointee.x1
-        let currentPtr = Arch.CPU.getCurrentProcess()
 
-        guard let current    = UnsafeMutablePointer<Process>(bitPattern: UInt(currentPtr)),
+        guard let current    = Arch.CPU.getCurrentProcess(),
               let vmaManager = current.pointee.addressSpace.vmaManager
         else {
             frame.pointee.x0 = UInt64.max

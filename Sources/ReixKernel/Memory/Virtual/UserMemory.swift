@@ -31,8 +31,7 @@ public struct UserMemory {
         guard validateRegion(addr: addr, size: size) else { return false }
         guard size > 0 else { return false }
 
-        let currentAddr = Arch.CPU.getCurrentProcess()
-        guard let process = UnsafeMutablePointer<Process>(bitPattern: UInt(currentAddr)) else {
+        guard let process = Arch.CPU.getCurrentProcess() else {
             return false
         }
 

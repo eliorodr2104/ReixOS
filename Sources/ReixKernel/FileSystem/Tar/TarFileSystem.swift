@@ -114,13 +114,13 @@ public struct TarFileSystem: FileSystemInterface {
             return .failure(.invalidArgument)
         }
         
-        var file = openedFiles[handle.id]
+        let file = openedFiles[handle.id]
         guard file.isUsed else {
             return .failure(.ioError)
         }
     
         let newOffset = switch method {
-            case .start  :                              offset
+            case .start  :                      offset
             case .current: file.currentOffset + offset
             case .end    : file.size          + offset
         }

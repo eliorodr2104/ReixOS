@@ -22,9 +22,7 @@ public struct BrkSyscall: SyscallProvider {
         _ = context
 
         let requested  = frame.pointee.x0
-        let currentPtr = Arch.CPU.getCurrentProcess()
-
-        guard let current    = UnsafeMutablePointer<Process>(bitPattern: UInt(currentPtr)),
+        guard let current    = Arch.CPU.getCurrentProcess(),
               let vmaManager = current.pointee.addressSpace.vmaManager,
               let metadata   = current.pointee.metadata
         else {

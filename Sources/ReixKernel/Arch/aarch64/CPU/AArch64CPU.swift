@@ -35,7 +35,7 @@ public struct AArch64CPU: CPUInterface {
     public static func setCurrentProcess(_ address: VirtualAddress)
 
     @_silgen_name("get_current_process")
-    public static func getCurrentProcess() -> VirtualAddress
+    public static func getCurrentProcessRaw() -> VirtualAddress
 
 
     // MARK: - Function used on protocol CPUInterface
@@ -45,6 +45,13 @@ public struct AArch64CPU: CPUInterface {
     public static func triggerTrap      () { trigger_trap      () }
     public static func nop              () { nop_asm           () }
 
+    
+    public static func getCurrentProcess() -> UnsafeMutablePointer<Process>? {
+        let processAddress = Self.getCurrentProcessRaw()
+ 
+        return UnsafeMutablePointer<Process>(bitPattern: UInt(processAddress))
+    }
+    
 
     /// Drive the kernel into a controlled halt.
     ///

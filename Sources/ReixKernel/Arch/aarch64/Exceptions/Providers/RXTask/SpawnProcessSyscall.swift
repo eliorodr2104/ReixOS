@@ -14,8 +14,7 @@ public struct SpawnProcessSyscall: SyscallProvider {
     ) {
         
         // TODO: Add first Eunuch control and add Error launch
-        let currentRawProcess = Arch.CPU.getCurrentProcess()
-        guard let currentProcess = UnsafeMutablePointer<Process>(bitPattern: UInt(currentRawProcess)),
+        guard let currentProcess = Arch.CPU.getCurrentProcess(),
               currentProcess.pointee.family.parent == nil else {
             return
         }

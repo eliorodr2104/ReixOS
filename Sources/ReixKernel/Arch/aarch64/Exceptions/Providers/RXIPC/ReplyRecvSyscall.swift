@@ -14,11 +14,8 @@ public struct ReplyRecvSyscall: SyscallProvider {
         frame  : UnsafeMutablePointer<Arch.TrapFrame>,
         context: SyscallContext
     ) {
-        let currentProcessAddress = Arch.CPU.getCurrentProcess()
         
-        guard let currentProcess = UnsafeMutablePointer<Process>(
-            bitPattern: UInt(currentProcessAddress)
-        ) else { return }
+        guard let currentProcess = Arch.CPU.getCurrentProcess() else { return }
         
         let handle   = frame.pointee.x0
         let metadata = currentProcess.pointee.metadata!

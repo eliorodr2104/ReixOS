@@ -21,10 +21,9 @@ public struct ReapChildSyscall: SyscallProvider {
         context: SyscallContext
     ) {
         let childPid   = frame.pointee.x0
-        let currentPtr = Arch.CPU.getCurrentProcess()
 
         // TODO: - Add throws for all case
-        guard let current = UnsafeMutablePointer<Process>(bitPattern: UInt(currentPtr)) else {
+        guard let current = Arch.CPU.getCurrentProcess() else {
             frame.pointee.x0 = 0
             return
         }

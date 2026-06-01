@@ -24,6 +24,8 @@ public struct VirtualTimerInterruptHandler: InterruptHandler {
         Kernel.gic.pointee.endOfInterrupt(id: id)
 
         guard Kernel.scheduler.pointee.onTick() else { return }
+        
+        Kernel.ipc.pointee.checkTimeouts(now: Kernel.scheduler.pointee.systemTicks)
 
         if let nextProcess = Kernel.scheduler.pointee.selectNextTask() {
             Arch.MMU.switchUserAddressSpace(
@@ -37,10 +39,9 @@ public struct VirtualTimerInterruptHandler: InterruptHandler {
     private static func snapshotCurrentContext(
         frame: UnsafeMutablePointer<Arch.TrapFrame>
     ) {
-        let processAddress = Arch.CPU.getCurrentProcess()
-        guard processAddress != 0,
-              let current = UnsafeMutablePointer<Process>(bitPattern: UInt(processAddress))
-        else { return }
+        guard let current = Arch.CPU.getCurrentProcess() else {
+            return
+        }
 
         current.pointee.context?.pointee = frame.pointee
     }

@@ -159,4 +159,8 @@ public struct LinkedList<T: RXEntry> {
     public func isEmpty() -> Bool {
         count == 0
     }
+    
+    public func getIterator() -> UnsafeMutablePointer<T>? {
+        return head
+    }
 }

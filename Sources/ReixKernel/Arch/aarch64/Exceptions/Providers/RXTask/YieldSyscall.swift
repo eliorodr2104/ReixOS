@@ -18,15 +18,14 @@ public struct YieldSyscall: SyscallProvider {
         frame  : UnsafeMutablePointer<Arch.TrapFrame>,
         context: SyscallContext
     ) {
-        let currentAddr = Arch.CPU.getCurrentProcess()
-        if let current = UnsafeMutablePointer<Process>(bitPattern: UInt(currentAddr)) {
+
+        if let current = Arch.CPU.getCurrentProcess() {
             current.pointee.context?.pointee = frame.pointee
         }
 
         if let trapFrame = context.scheduler.pointee.yield() {
-            let nextAddr = Arch.CPU.getCurrentProcess()
 
-            if let next = UnsafeMutablePointer<Process>(bitPattern: UInt(nextAddr)) {
+            if let next = Arch.CPU.getCurrentProcess() {
                 Arch.MMU.switchUserAddressSpace(next.pointee.addressSpace.rootTablePhysical.address)
             }
             frame.pointee = trapFrame.pointee

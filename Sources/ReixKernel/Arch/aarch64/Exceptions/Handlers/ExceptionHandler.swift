@@ -120,10 +120,9 @@ func userAbortHandle(
             Arch.CPU.panic("Unhandled DFSC")
     }
 
-    let currentAddr = Arch.CPU.getCurrentProcess()
-    guard let process = UnsafeMutablePointer<Process>(
-        bitPattern: UInt(currentAddr)
-    ) else { Arch.CPU.panic("User abort raised without a current process") }
+    guard let process = Arch.CPU.getCurrentProcess() else {
+        Arch.CPU.panic("User abort raised without a current process")
+    }
 
     if process.pointee.addressSpace.handlePageFault(
         at   : faultAddress,

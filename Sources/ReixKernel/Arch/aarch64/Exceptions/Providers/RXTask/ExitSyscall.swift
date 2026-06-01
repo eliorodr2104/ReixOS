@@ -21,9 +21,8 @@ public struct ExitSyscall: SyscallProvider {
         frame  : UnsafeMutablePointer<Arch.TrapFrame>,
         context: SyscallContext
     ) {
-        let currentAddr = Arch.CPU.getCurrentProcess()
 
-        if let oldProcess = UnsafeMutablePointer<Process>(bitPattern: UInt(currentAddr)) {
+        if let oldProcess = Arch.CPU.getCurrentProcess() {
 
             oldProcess.pointee.context?.pointee = frame.pointee
             oldProcess.pointee.status           = .terminated
@@ -55,8 +54,8 @@ public struct ExitSyscall: SyscallProvider {
 
         // Switch address with current process enter to consuming CPU
         if let trapFrame = context.scheduler.pointee.yield() {
-            let nextAddr = Arch.CPU.getCurrentProcess()
-            if let next = UnsafeMutablePointer<Process>(bitPattern: UInt(nextAddr)) {
+
+            if let next = Arch.CPU.getCurrentProcess() {
                 Arch.MMU.switchUserAddressSpace(next.pointee.addressSpace.rootTablePhysical.address)
             }
             frame.pointee = trapFrame.pointee
