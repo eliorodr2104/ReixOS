@@ -19,24 +19,27 @@
 public struct VMAManager: RXObject {
     
     public static var errorMessageAllocation = "Failed to allocate VMAManager on the kernel heap"
-
-    private let rootTablePhysical: PhysicalPage
+    
+    private var vmaList: LinkedList<VirtualMemoryArea> // 40 Byte (All ptr 8 Bytes var)
     
     /// Current program break for the brk-style heap. Set once by
     /// `setInitialBreak` at spawn time, then bumped by `extendBreak`.
-    public var currentBreak: VirtualAddress = 0
+    public var currentBreak: VirtualAddress = 0 // 8 Byte
     
-    private var vmaList: LinkedList<VirtualMemoryArea>
-
-    private let heap: UnsafeMutablePointer<BucketsHeap>
-    private let vmm : UnsafeMutablePointer<VirtualMemoryManager>
-    private let ppm : UnsafeMutablePointer<KernelPPM>
+    private let heap: UnsafeMutablePointer<BucketsHeap>                 // 8 Byte
+    private let vmm : UnsafeMutablePointer<VirtualMemoryManager>        // 8 Byte
+    private let ppm : UnsafeMutablePointer<KernelPPM>                   // 8 Byte
     
     /// Cached pointer to the single VMA covering the brk heap, if any.
     /// `nil` until the first successful `extendBreak`.
-    private var brkVMA: UnsafeMutablePointer<VirtualMemoryArea>? = nil
-
-    private let asid: ASID
+    private var brkVMA: UnsafeMutablePointer<VirtualMemoryArea>? = nil  // 8 Byte
+    
+    
+    private let rootTablePhysical: PhysicalPage // 9 Byte
+    
+    
+    private let asid: ASID // 2 Byte
+    
 
     public init(
         heap             : UnsafeMutablePointer<BucketsHeap>,
@@ -214,10 +217,10 @@ public struct VMAManager: RXObject {
                 startAddress: existing.pointee.startAddress,
                 endAddress  : aligned,
                 permissions : existing.pointee.permissions,
-                backingType : existing.pointee.backingType,
-                mappingFlags: existing.pointee.mappingFlags,
                 prev        : existing.pointee.prev,
-                next        : existing.pointee.next
+                next        : existing.pointee.next,
+                backingType : existing.pointee.backingType,
+                mappingFlags: existing.pointee.mappingFlags
             )
             existing.pointee = grown
 
@@ -425,10 +428,10 @@ public struct VMAManager: RXObject {
             startAddress: aligned,
             endAddress  : vmaPtr.pointee.endAddress,
             permissions : vmaPtr.pointee.permissions,
-            backingType : vmaPtr.pointee.backingType,
-            mappingFlags: vmaPtr.pointee.mappingFlags,
             prev        : vmaPtr.pointee.prev,
-            next        : vmaPtr.pointee.next
+            next        : vmaPtr.pointee.next,
+            backingType : vmaPtr.pointee.backingType,
+            mappingFlags: vmaPtr.pointee.mappingFlags
         )
         vmaPtr.pointee = extended
 

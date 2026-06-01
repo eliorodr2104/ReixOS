@@ -180,9 +180,7 @@ extension LinkedList: VMAStructure where T == VirtualMemoryArea {
                 endAddress  : region.pointee.endAddress,
                 permissions : region.pointee.permissions,
                 backingType : region.pointee.backingType,
-                mappingFlags: region.pointee.mappingFlags,
-                prev        : nil,
-                next        : nil
+                mappingFlags: region.pointee.mappingFlags
             )
         )
 
@@ -190,10 +188,10 @@ extension LinkedList: VMAStructure where T == VirtualMemoryArea {
             startAddress: region.pointee.startAddress,
             endAddress  : address,
             permissions : region.pointee.permissions,
-            backingType : region.pointee.backingType,
-            mappingFlags: region.pointee.mappingFlags,
             prev        : region.pointee.prev,
-            next        : region.pointee.next
+            next        : region.pointee.next,
+            backingType : region.pointee.backingType,
+            mappingFlags: region.pointee.mappingFlags
         )
         region.pointee = truncated
 
@@ -219,10 +217,10 @@ extension LinkedList: VMAStructure where T == VirtualMemoryArea {
             startAddress: first.pointee.startAddress,
             endAddress  : second.pointee.endAddress,
             permissions : first.pointee.permissions,
-            backingType : first.pointee.backingType,
-            mappingFlags: first.pointee.mappingFlags,
             prev        : first.pointee.prev,
-            next        : first.pointee.next
+            next        : first.pointee.next,
+            backingType : first.pointee.backingType,
+            mappingFlags: first.pointee.mappingFlags
         )
         first.pointee = merged
 

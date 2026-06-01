@@ -12,15 +12,15 @@
 /// through a stable pointer composed by `Kernel`.
 public struct BucketsHeap: KernelHeapInterface {
 
-    private let ppmPtr : UnsafeMutablePointer<KernelPPM>
-    private var buckets: KernelBuckets
+    private var buckets: InlineArray<10, UnsafeMutableRawPointer?> // 10 * 8 Byte
+    private let ppmPtr : UnsafeMutablePointer<KernelPPM>           // 8 Byte
 
-    private static let physicalOffset: UInt64 = 0xFFFF800000000000
-    private static let pageSize      : Int    = 4096
+    private static let physicalOffset: UInt64 = 0xFFFF800000000000 // 8 Byte
+    private static let pageSize      : Int    = 4096               // 8 Byte
 
     public init(ppmPtr: UnsafeMutablePointer<KernelPPM>) {
         self.ppmPtr  = ppmPtr
-        self.buckets = KernelBuckets()
+        self.buckets = InlineArray(repeating: nil)
     }
 
     public mutating func kmalloc(
