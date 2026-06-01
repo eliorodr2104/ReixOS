@@ -7,13 +7,13 @@
 
 public struct LinkedList<T: RXEntry> {
     
-    internal var head: UnsafeMutablePointer<T>?
-    internal var tail: UnsafeMutablePointer<T>?
-    
     internal let minAddress: VirtualAddress?
     internal let maxAddress: VirtualAddress?
     
     public var count: Int = 0
+    
+    internal var head: UnsafeMutablePointer<T>?
+    internal var tail: UnsafeMutablePointer<T>?
     
     
     public init(

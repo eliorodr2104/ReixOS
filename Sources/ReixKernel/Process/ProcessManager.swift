@@ -122,18 +122,13 @@ public struct ProcessManager: RXObject {
                 let processPtr = heap.pointee.kmalloc(Process.self)
                 processPtr.initialize(to: Process(
                     pid           : pid,
-                    family        : ProcessRelations(),
-                    status        : .new,
                     addressSpace  : addressSpace,
-                    priority      : 1,
-                    type          : .user,
+
                     context       : trapFramePtr,
                     kernelStackTop: kStackTop,
                     kernelStackRaw: kStackRaw,
+
                     metadata      : metadataPtr,
-                    message       : nil,
-                    replyTo       : nil,
-                    ipcDeadline   : nil
                 ))
 
                 vmaManagerPtr.pointee.setInitialBreak(initialBreak)
@@ -179,15 +174,13 @@ public struct ProcessManager: RXObject {
         let processPtr = heap.pointee.kmalloc(Process.self)
         processPtr.initialize(to: Process(
             pid           : pid,
-            family        : ProcessRelations(),
-            status        : .new,
             addressSpace  : addressSpace,
-            priority      : 1,
-            type          : .user,
+
             context       : trapFramePtr,
             kernelStackTop: kStackTop,
             kernelStackRaw: kStackRaw,
-            metadata      : metadataPtr
+
+            metadata      : metadataPtr,
         ))
 
         return processPtr

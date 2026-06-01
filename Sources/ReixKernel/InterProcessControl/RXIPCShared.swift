@@ -9,8 +9,8 @@
 
 
 public struct MessageTag {
-    public var label : UInt32
-    public var length: UInt8
+    public var label : UInt32 // 4 Byte
+    public var length: UInt8  // 1 Byte
 
     public init(
         _ label : some IPCLabel,
@@ -33,8 +33,9 @@ public struct MessageTag {
 
 public struct Message {
 
-    public var tag  : MessageTag
-    public var words: InlineArray<4, UInt32>
+    public var words: InlineArray<4, UInt32> // 16 Byte
+    public var tag  : MessageTag             // 5 Byte
+        
 
     public init(
         tag  : MessageTag,

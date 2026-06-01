@@ -6,8 +6,9 @@
 //
 
 public struct PhysicalPage {
-    public let address: PhysicalAddress
-    public let order  : UInt8
+    
+    public let address: PhysicalAddress // 8 Byte
+    public let order  : UInt8           // 1 Byte
     
     init(
         address: PhysicalAddress = 0,

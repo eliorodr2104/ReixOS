@@ -20,22 +20,23 @@ public struct VMAManager: RXObject {
     
     public static var errorMessageAllocation = "Failed to allocate VMAManager on the kernel heap"
 
+    private let rootTablePhysical: PhysicalPage
+    
+    /// Current program break for the brk-style heap. Set once by
+    /// `setInitialBreak` at spawn time, then bumped by `extendBreak`.
+    public var currentBreak: VirtualAddress = 0
+    
     private var vmaList: LinkedList<VirtualMemoryArea>
 
     private let heap: UnsafeMutablePointer<BucketsHeap>
     private let vmm : UnsafeMutablePointer<VirtualMemoryManager>
     private let ppm : UnsafeMutablePointer<KernelPPM>
-
-    private let rootTablePhysical: PhysicalPage
-    private let asid             : ASID
-
-    /// Current program break for the brk-style heap. Set once by
-    /// `setInitialBreak` at spawn time, then bumped by `extendBreak`.
-    public var currentBreak: VirtualAddress = 0
-
+    
     /// Cached pointer to the single VMA covering the brk heap, if any.
     /// `nil` until the first successful `extendBreak`.
     private var brkVMA: UnsafeMutablePointer<VirtualMemoryArea>? = nil
+
+    private let asid: ASID
 
     public init(
         heap             : UnsafeMutablePointer<BucketsHeap>,

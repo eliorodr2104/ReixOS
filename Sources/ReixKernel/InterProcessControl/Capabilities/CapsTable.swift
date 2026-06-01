@@ -11,7 +11,7 @@ public struct CapsTable {
     
     private var caps: InlineArray = InlineArray<16, EndpointCap?>(
         repeating: nil
-    )
+    ) // (16 * 13) 208 Byte
     
     
     public mutating func install(_ cap: EndpointCap) -> UInt32? {

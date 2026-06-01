@@ -7,11 +7,11 @@
 
 
 public struct ProcessRelations {
-    public var parent: UnsafeMutablePointer<Process>?
+    public var parent: UnsafeMutablePointer<Process>? // 8 Byte
     
-    var firstChild   : UnsafeMutablePointer<Process>?
-    var nextSibling  : UnsafeMutablePointer<Process>?
-    var prevSibling  : UnsafeMutablePointer<Process>?
+    var firstChild   : UnsafeMutablePointer<Process>? // 8 Byte
+    var nextSibling  : UnsafeMutablePointer<Process>? // 8 Byte
+    var prevSibling  : UnsafeMutablePointer<Process>? // 8 Byte
     
     init() {
         self.parent      = nil

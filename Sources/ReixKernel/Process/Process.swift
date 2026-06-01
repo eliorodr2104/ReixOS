@@ -23,35 +23,65 @@ public struct Process: RXEntry {
 
     public static var errorMessageAllocation = "Failed to allocate Process on the kernel heap"
     
-    public let pid    : PID
-    public var family : ProcessRelations
-
-    public var status      : ProcessStatus
-    public var addressSpace: AddressSpace
-    public var priority    : UInt8
-    public var type        : ProcessType
-    public var context     : UnsafeMutablePointer<Arch.TrapFrame>?
-
-    public var kernelStackTop: UnsafeMutableRawPointer?
-    public var kernelStackRaw: UnsafeMutableRawPointer?
-
+    public var family        : ProcessRelations                      // 32 Byte -> (8 + 8 + 8 + 8)
+    public var message       : Message? = nil                        // 21 Byte -> (4 * 4) + (4 + 1)
+    public var addressSpace  : AddressSpace                          // 19 Byte -> ((1 + 8) + 8 + 2)
+    
+    
+    public let pid           : PID                                   // 8 Byte
+    public var context       : UnsafeMutablePointer<Arch.TrapFrame>? // 8 Byte
+    
+    
     /// Pointer to the cold metadata block. Implicit-unwrapped because the
     /// pointer is always populated immediately after `Process` is allocated
     /// by `ProcessManager.spawnProcess`; any access before that point is a
     /// programming error and crashes deterministically.
-    public var metadata: UnsafeMutablePointer<ProcessMetadata>!
-
+    public var metadata      : UnsafeMutablePointer<ProcessMetadata>! // 8 Byte
+    public var kernelStackTop: UnsafeMutableRawPointer?               // 8 Byte
+    public var kernelStackRaw: UnsafeMutableRawPointer?               // 8 Byte
+    public var prev          : UnsafeMutablePointer<Self>?            // 8 Byte
+    public var next          : UnsafeMutablePointer<Self>?            // 8 Byte
+    public var replyTo       : UnsafeMutablePointer<Self>? = nil      // 8 Byte
+    public var ipcDeadline   : UInt64?                     = nil      // 8 Byte
+    
+    
+    public var ipcBadge      : Badge?                                 // 4 Byte
+    public var pendingGrant  : UInt32? = nil                          // 4 Byte
+    
+    public var status        : ProcessStatus                          // 9 Byte  -> (8 + 1) Enum with param
+    public var priority      : UInt8                                  // 1 Byte
+    public var type          : ProcessType                            // 1 Byte
+    public var expectsReply  : Bool = false                           // 1 Byte
+    
+    
+    
     public var entryID: UInt64 { pid }
-
-    public var prev  : UnsafeMutablePointer<Self>?
-    public var next  : UnsafeMutablePointer<Self>?
     
-    public var ipcBadge: Badge?
     
-    public var message: Message?
-    public var replyTo: UnsafeMutablePointer<Process>?
-    public var ipcDeadline: UInt64?
-    public var expectsReply: Bool = false
-    public var pendingGrant: UInt32? = nil
-
+    init(
+        pid           : PID,
+        status        : ProcessStatus    = .new,
+        addressSpace  : AddressSpace,
+        
+        context       : UnsafeMutablePointer<Arch.TrapFrame>?,
+        kernelStackTop: UnsafeMutableRawPointer?,
+        kernelStackRaw: UnsafeMutableRawPointer?,
+        family        : ProcessRelations = ProcessRelations(),
+        
+        type          : ProcessType      = .user,
+        priority      : UInt8            = 1,
+        metadata      : UnsafeMutablePointer<ProcessMetadata>!
+        
+    ) {
+        self.pid            = pid
+        self.family         = family
+        self.status         = status
+        self.addressSpace   = addressSpace
+        self.priority       = priority
+        self.type           = type
+        self.context        = context
+        self.kernelStackTop = kernelStackTop
+        self.kernelStackRaw = kernelStackRaw
+        self.metadata       = metadata
+    }
 }

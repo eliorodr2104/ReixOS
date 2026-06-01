@@ -8,9 +8,9 @@
 public typealias Badge = UInt32
 
 public struct EndpointCap {
-    public var endpoint: UnsafeMutablePointer<Endpoint>
-    public var badge   : Badge
-    public var rights  : CapRights
+    public var endpoint: UnsafeMutablePointer<Endpoint> // 8 Byte
+    public var badge   : Badge                          // 4 Byte
+    public var rights  : CapRights                      // 1 Byte
 
     public init(
         endpoint: UnsafeMutablePointer<Endpoint>,

@@ -20,31 +20,38 @@ public struct ProcessMetadata: RXObject {
 
     public static var errorMessageAllocation = "Failed to allocate ProcessMetadata on the kernel heap"
     
-    /// Backing physical page of the ELF image. Allocated by `ElfParser`,
-    /// kept alive for the whole process lifetime, freed by the teardown.
-    public var elfImage   : PhysicalPage?
-
-    /// Virtual base address where the lowest PT_LOAD segment was mapped.
-    /// Used to walk the user page tables during teardown.
-    public var elfLoadBase: UInt64
-
-    /// Virtual end address of the highest PT_LOAD segment.
-    public var elfLoadEnd : UInt64
-
+    public var capsTable: CapsTable         // (16 * 13) 208 Byte
+    
+    
     /// Current program break. Populated by the brk milestone (step 5);
     /// kept at zero until the VMA chain is wired so that any consumer
     /// reading it before step 5 sees a clearly invalid value.
-    public var programBreak: VirtualAddress
+    public var programBreak: VirtualAddress // 8 Byte
 
+    
+    /// Virtual base address where the lowest PT_LOAD segment was mapped.
+    /// Used to walk the user page tables during teardown.
+    public var elfLoadBase: UInt64          // 8 Byte
+    
+
+    /// Virtual end address of the highest PT_LOAD segment.
+    public var elfLoadEnd : UInt64          // 8 Byte
+
+    
     /// PID the process is currently waiting on through reapChild.
     /// `nil` when the process is not blocked on a child.
-    public var waitingChildPid: PID?
+    public var waitingChildPid: PID?        // 8 Byte
 
+    
     /// Exit code written by the exiting process. Read by the parent
     /// when reaping the zombie.
-    public var exitCode: UInt32?
+    public var exitCode: UInt32?            // 4 Byte
     
-    public var capsTable: CapsTable
+    
+    /// Backing physical page of the ELF image. Allocated by `ElfParser`,
+    /// kept alive for the whole process lifetime, freed by the teardown.
+    public var elfImage: PhysicalPage?      // (8 + 1) 9 Byte
+    
 
     public init(
         elfImage       : PhysicalPage?  = nil,

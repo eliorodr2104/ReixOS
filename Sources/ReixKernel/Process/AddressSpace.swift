@@ -17,10 +17,11 @@ public typealias ASID = UInt16
 @frozen
 public struct AddressSpace {
 
-    public let rootTablePhysical: PhysicalPage
-    public let asid             : ASID
-
-    public var vmaManager: UnsafeMutablePointer<VMAManager>?
+    public let rootTablePhysical: PhysicalPage // 1 + 8 Byte
+    
+    public var vmaManager       : UnsafeMutablePointer<VMAManager>? // 8 Byte
+    
+    public let asid             : ASID // 2 Byte
 
     public init(
         rootTablePhysical: consuming PhysicalPage,
