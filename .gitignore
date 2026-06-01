@@ -68,3 +68,7 @@ fastlane/report.xml
 fastlane/Preview.html
 fastlane/screenshots/**/*.png
 fastlane/test_output
+initrd.tar
+Sources/Userland/Modules/Reix.swiftdoc
+Sources/Userland/Modules/Reix.swiftmodule
+Sources/Userland/Modules/Reix.swiftsourceinfo

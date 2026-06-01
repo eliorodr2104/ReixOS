@@ -33,4 +33,6 @@ public enum SyscallNumber: UInt64 {
     case call
     case reply
     case replyRecv
+    case trySend
+    case tryReceive
 }

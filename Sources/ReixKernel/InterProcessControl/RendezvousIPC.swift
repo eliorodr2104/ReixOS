@@ -26,7 +26,8 @@ public struct RendezvousIPC: IPCInterface {
     
     public mutating func send(
         capability: EndpointCap,
-        frame     : AArch64.TrapFrame
+        frame     : AArch64.TrapFrame,
+        blocking  : Bool = true
         
     ) -> Result<CommunicationMessageResult, IPCError> {
         
@@ -74,12 +75,14 @@ public struct RendezvousIPC: IPCInterface {
             Message(from: frame).write(to: receiverProcess.pointee.context!)
             
             // Reg x6 used for return badge
-            receiverProcess.pointee.context!.pointee.x6 = UInt64(capability.badge.raw)
+            receiverProcess.pointee.context!.pointee.x6 = UInt64(capability.badge)
 
             scheduler.pointee.resume(receiverProcess)
             
             return .success(.sended)
         }
+        
+        guard blocking else { return .failure(.wouldBlock) }
         
         
         let currentProcessRaw = Arch.CPU.getCurrentProcess()
@@ -104,7 +107,9 @@ public struct RendezvousIPC: IPCInterface {
     
     public mutating func receive(
         capability: EndpointCap,
-        frame     : UnsafeMutablePointer<AArch64.TrapFrame>
+        frame     : UnsafeMutablePointer<AArch64.TrapFrame>,
+        blocking  : Bool = true
+        
     ) -> Result<CommunicationMessageResult, IPCError> {
         
         guard capability.rights.contains(.receive) else {
@@ -149,7 +154,7 @@ public struct RendezvousIPC: IPCInterface {
             }
             
             senderProcess.pointee.message?.write(to: frame)
-            frame.pointee.x6 = UInt64(senderProcess.pointee.ipcBadge?.raw ?? 0)
+            frame.pointee.x6 = UInt64(senderProcess.pointee.ipcBadge ?? 0)
                         
             if senderProcess.pointee.expectsReply {
                 currentProcess.pointee.replyTo      = senderProcess
@@ -163,6 +168,7 @@ public struct RendezvousIPC: IPCInterface {
             return .success(.sended)
         }
         
+        guard blocking else { return .failure(.wouldBlock) }
         
         let currentProcessRaw = Arch.CPU.getCurrentProcess()
         guard let currentProcess = UnsafeMutablePointer<Process>(
@@ -201,7 +207,7 @@ public struct RendezvousIPC: IPCInterface {
             Message(from: frame).write(to: receiverProcess.pointee.context!)
             
             // Reg x6 used for return badge
-            receiverProcess.pointee.context!.pointee.x6 = UInt64(capability.badge.raw)
+            receiverProcess.pointee.context!.pointee.x6 = UInt64(capability.badge)
             
             let currentProcessRaw = Arch.CPU.getCurrentProcess()
             guard let currentProcess = UnsafeMutablePointer<Process>(

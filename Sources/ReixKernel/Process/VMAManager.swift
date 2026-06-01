@@ -104,6 +104,11 @@ public struct VMAManager: RXObject {
         at address: VirtualAddress,
         cause     : FaultCause
     ) -> Bool {
+        // TODO: Remove when resolve this bug
+        // This is a test for a bug
+        let dbg = vmaList.search(at: address)
+        kprintf("[PF] addr=0x%x found=%d\n", address, dbg != nil ? 1 : 0)
+        
         guard address >= UserSpaceLayout.userMin,
               address <  UserSpaceLayout.userMax
         else { return false }

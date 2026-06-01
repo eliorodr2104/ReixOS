@@ -1,13 +1,13 @@
 //
-//  SendSyscall.swift
+//  TryReceiveSyscall.swift
 //  ReixOS
 //
-//  Created by Eliomar on 31/05/2026.
+//  Created by Eliomar on 01/06/2026.
 //
 
-public struct SendSyscall: SyscallProvider {
+public struct TryReceiveSyscall: SyscallProvider {
     
-    public static let number: SyscallNumber = .send
+    public static let number: SyscallNumber = .tryReceive
 
     public static func handle(
         frame  : UnsafeMutablePointer<Arch.TrapFrame>,
@@ -26,9 +26,10 @@ public struct SendSyscall: SyscallProvider {
             return
         }
         
-        let resultSendMessage = context.ipc.pointee.send(
+        let resultSendMessage = context.ipc.pointee.receive(
             capability: capability,
-            frame     : frame.pointee
+            frame     : frame,
+            blocking  : false
         )
         
         switch resultSendMessage {
@@ -38,13 +39,10 @@ public struct SendSyscall: SyscallProvider {
                         // TODO: OK temp value, need create a const
                         frame.pointee.x0 = IPCStatus.ok.rawValue
                         
-                    case .blocked:
-                        YieldSyscall.handle(frame: frame, context: context)
-                    
+                    case .blocked: break
                 }
                 
             case .failure(let error):
-                // TODO: Error temp value, need create a const
                 frame.pointee.x0 = error.status.rawValue
         }
     }

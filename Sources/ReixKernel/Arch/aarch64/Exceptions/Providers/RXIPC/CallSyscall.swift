@@ -36,17 +36,16 @@ public struct CallSyscall: SyscallProvider {
             case .success(let successType):
                 switch successType {
                     case .sended:
-                        // TODO: OK temp value, need create a const
-                        frame.pointee.x0 = 1
+                        frame.pointee.x0 = IPCStatus.ok.rawValue
                         
                     case .blocked:
                         YieldSyscall.handle(frame: frame, context: context)
                     
                 }
                 
-            case .failure(_):
+            case .failure(let error):
                 // TODO: Error temp value, need create a const
-                frame.pointee.x0 = 0
+                frame.pointee.x0 = error.status.rawValue
         }
     }
 }

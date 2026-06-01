@@ -24,14 +24,14 @@ public struct ReplySyscall: SyscallProvider {
                 switch successType {
                     case .sended:
                         // TODO: OK temp value, need create a const
-                        frame.pointee.x0 = 1
+                        frame.pointee.x0 = IPCStatus.ok.rawValue
                         
                     case .blocked: break
                 }
                 
-            case .failure(_):
+            case .failure(let error):
                 // TODO: Error temp value, need create a const
-                frame.pointee.x0 = 0
+                frame.pointee.x0 = error.status.rawValue
         }
     }
 }

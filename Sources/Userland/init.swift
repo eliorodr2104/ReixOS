@@ -19,7 +19,6 @@ public func main() {
     let childPid = split()
 
     if childPid == 0 {
-        print(String(UInt64(123))) // Is bug, i need resolve this in VMA
         let receivedMessage = receive(handle: firstEndpoint)
         
         guard let secondEndpointCapability = receivedMessage.grantedCap else {

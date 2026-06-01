@@ -8,16 +8,13 @@
 
 @frozen
 public struct CapsTable {
-    private var caps: InlineArray<16, EndpointCap?>
     
-    
-    init() {
-        self.caps = InlineArray(repeating: nil)
-    }
+    private var caps: InlineArray = InlineArray<16, EndpointCap?>(
+        repeating: nil
+    )
     
     
     public mutating func install(_ cap: EndpointCap) -> UInt32? {
-        
         var indexFounded: UInt32?
         for i in 0..<caps.count {
             
@@ -33,9 +30,7 @@ public struct CapsTable {
     }
     
     public func resolve(_ handle: UInt32) -> EndpointCap? {
-        guard handle < caps.count else {
-            return nil
-        }
+        guard handle < caps.count else { return nil }
         
         return caps[Int(handle)]
     }

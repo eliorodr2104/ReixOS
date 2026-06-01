@@ -65,6 +65,8 @@ public struct SyscallHandler: RXObject {
             case .call         : CallSyscall         .handle(frame: frame, context: context)
             case .reply        : ReplySyscall        .handle(frame: frame, context: context)
             case .replyRecv    : ReplyRecvSyscall    .handle(frame: frame, context: context)
+            case .trySend      : TrySendSyscall      .handle(frame: frame, context: context)
+            case .tryReceive   : TryReceiveSyscall   .handle(frame: frame, context: context)
 
             default: break
         }

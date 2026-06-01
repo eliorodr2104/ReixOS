@@ -46,4 +46,17 @@ public struct Message {
 }
 
 
+public enum IPCStatus: UInt64 {
+    case ok = 0
+    case wouldBlock
+    case notEnoughRights
+    case invalidCapability
+    case timeout
+    case noReply
+    case invalidMessage
+    case outOfEndpoints
+}
+
+
+
 public protocol IPCLabel: RawRepresentable where RawValue == UInt32 {  }
