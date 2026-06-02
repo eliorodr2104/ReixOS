@@ -198,11 +198,12 @@ public struct ProcessManager: RXObject {
             process.pointee.addressSpace.vmaManager = nil
         }
 
+        // The ELF image is no longer a single contiguous block: it is loaded as
+        // individual `.anonymous` pages, already released per page by
+        // `teardown` above. So there is no block to free here — doing so would
+        // double-free pages teardown just returned.
         if let metadata = process.pointee.metadata {
-            if let elfImage = metadata.pointee.elfImage {
-                try ppm.pointee.free(elfImage)
-                metadata.pointee.elfImage = nil
-            }
+            metadata.pointee.elfImage    = nil
             metadata.pointee.elfLoadBase = 0
             metadata.pointee.elfLoadEnd  = 0
         }
@@ -228,6 +229,15 @@ public struct ProcessManager: RXObject {
     /// `Process` struct itself. Callers must ensure the process is no
     /// longer referenced by any scheduler queue.
     public func releaseProcess(_ process: UnsafeMutablePointer<Process>) {
+        // Unlink from the parent's children list before the struct is freed.
+        // `pushChild` threads the list through the Process structs themselves,
+        // so leaving a freed child linked leaves the parent with dangling
+        // `firstChild`/sibling pointers into reclaimed heap memory — corrupted
+        // on the next `pushChild`.
+        if let parent = process.pointee.family.parent {
+            parent.pointee.family.removeChild(process)
+        }
+
         if let metadata = process.pointee.metadata {
             metadata.deinitialize(count: 1)
             heap.pointee.kfree(UnsafeMutableRawPointer(metadata))

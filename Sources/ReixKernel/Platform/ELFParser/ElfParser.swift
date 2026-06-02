@@ -89,39 +89,47 @@ public struct ElfParser {
 
         let imageSize = loadEnd - loadBase
 
+        // Load the image as individual page-sized, reference-counted frames
+        // (one `ppm.alloc(4096)` per page) rather than one contiguous block.
+        // This gives every page its own refcount/order-0 metadata, so it can
+        // be released per page by `teardown`, shared copy-on-write by a forked
+        // child, and freed cleanly when the last sharer exits — none of which
+        // works with a single order-N block freed as a whole.
+        //
+        // Pass 1: map every page, zeroed (so .bss tails stay clear).
+        var mapped: UInt64 = 0
+        while mapped < imageSize {
+            let frame: PhysicalPage
+            do { frame = try ppm.pointee.alloc(4096) }
+            catch { throw .allocationFailed(error) }
 
-        var physicalImage: PhysicalPage
-        do {
-            physicalImage = try ppm.pointee.alloc(Int(imageSize))
-        } catch { throw .allocationFailed(error) }
+            let dst: UnsafeMutablePointer<UInt8> = vmm.pointee.physToVirt(frame.address)
+            dst.initialize(repeating: 0, count: Int(Self.pageSize))
 
-        let imageDest: UnsafeMutablePointer<UInt8> = vmm.pointee.physToVirt(physicalImage.address)
-        imageDest.initialize(repeating: 0, count: Int(imageSize))
-
-        var mappedOffset: UInt64 = 0
-        do {
-            while mappedOffset < imageSize {
+            do {
                 try vmm.pointee.mapUserPage(
                     addressSpace: addressSpace,
-                    virtual     : loadBase + mappedOffset,
-                    physical    : physicalImage.address + mappedOffset,
+                    virtual     : loadBase + mapped,
+                    physical    : frame.address,
                     flags       : [.present, .userAccess, .pxn]
                 )
-                mappedOffset += Self.pageSize
-            }
-        } catch { throw .mappingFailed(error) }
+            } catch { throw .mappingFailed(error) }
 
+            mapped += Self.pageSize
+        }
 
+        // Pass 2: scatter each segment's file bytes into the pages it covers,
+        // honouring a possibly page-unaligned p_vaddr.
         for i in 0..<ehdr.e_phnum {
             var phdr = Elf64_Phdr_t()
             let phdrOffset = ehdr.e_phoff + UInt64(i) * UInt64(ehdr.e_phentsize)
-            
+
             _ = fileSystem.pointee.seek(
                 handle: handle,
                 to    : Size(phdrOffset),
                 method: .start
             )
-            
+
             _ = withUnsafeMutablePointer(to: &phdr) { ptr in
                 fileSystem.pointee.read(
                     handle: handle,
@@ -130,33 +138,44 @@ public struct ElfParser {
                 )
             }
 
-            if phdr.p_type == PT_LOAD {
-                let destOffset = Int(phdr.p_vaddr - loadBase)
-                
+            guard phdr.p_type == PT_LOAD else { continue }
 
-                _ = fileSystem.pointee.seek(handle: handle, to: Size(phdr.p_offset), method: .start)
-                
+            _ = fileSystem.pointee.seek(handle: handle, to: Size(phdr.p_offset), method: .start)
 
-                let targetBuffer = UnsafeMutableRawPointer(imageDest.advanced(by: destOffset))
-                
+            var remaining = phdr.p_filesz
+            var va        = phdr.p_vaddr
+            while remaining > 0 {
+                let pageBase = va &  ~(Self.pageSize - 1)
+                let pageOff  = va &   (Self.pageSize - 1)
+                let chunk    = min(Self.pageSize - pageOff, remaining)
+
+                guard let phys = vmm.pointee.physicalAddressOf(
+                    rootTable: addressSpace.rootTablePhysical,
+                    virtual  : pageBase
+                ) else { throw .malformedLayout }
+
+                let pageDst: UnsafeMutablePointer<UInt8> = vmm.pointee.physToVirt(phys)
+
                 let segmentRead = fileSystem.pointee.read(
                     handle: handle,
-                    buffer: targetBuffer,
-                    count : Size(phdr.p_filesz)
+                    buffer: UnsafeMutableRawPointer(pageDst.advanced(by: Int(pageOff))),
+                    count : Size(chunk)
                 )
-                
-                if case .failure(_) = segmentRead { throw .noLoadableSegments /*.readError(err)*/ }
+                if case .failure(_) = segmentRead { throw .noLoadableSegments }
 
-                try? registerSegmentVMA(
-                    phdr      : &phdr,
-                    vmaManager: vmaManager
-                )
+                va        += chunk
+                remaining -= chunk
             }
+
+            try? registerSegmentVMA(
+                phdr      : &phdr,
+                vmaManager: vmaManager
+            )
         }
 
         return LoadedELF(
             entryPoint: ehdr.e_entry,
-            image     : physicalImage,
+            image     : nil,
             loadBase  : loadBase,
             loadEnd   : loadEnd
         )
@@ -180,7 +199,7 @@ public struct ElfParser {
             start      : segmentStart,
             size       : segmentEnd - segmentStart,
             permissions: permissions,
-            backing    : .fileBacked,
+            backing    : .anonymous,
             flags      : .none
         )
     }

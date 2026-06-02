@@ -606,35 +606,40 @@ public struct VMAManager: RXObject {
                         downgradeParentPermissions = false
                     }
                         
+                    // Account the shared frame for the child before mapping it.
+                    // On any failure we propagate instead of silently leaving a
+                    // hole: a half-cloned child that still gets scheduled faults
+                    // on its own (unmapped) code — exactly the failure mode that
+                    // turned an out-of-memory condition into a mystery SEGFAULT.
+                    // The caller (`split`) aborts the spawn on a thrown error.
                     do {
                         try ppm.pointee.retain(parentPhys)
-                        
-                        do {
+                    } catch {
+                        throw .mappingFailed(error)
+                    }
+
+                    do {
+                        try vmm.pointee.mapUserPage(
+                            rootTable: rootTablePhysical,
+                            virtual  : va,
+                            physical : parentPhys,
+                            flags    : pageFlags,
+                            flushTLB : false
+                        )
+
+                        if downgradeParentPermissions {
                             try vmm.pointee.mapUserPage(
-                                rootTable: rootTablePhysical,
+                                rootTable: parent.rootTablePhysical,
                                 virtual  : va,
                                 physical : parentPhys,
                                 flags    : pageFlags,
                                 flushTLB : false
                             )
-                                            
-                            if downgradeParentPermissions {
-                                try vmm.pointee.mapUserPage(
-                                    rootTable: parent.rootTablePhysical,
-                                    virtual  : va,
-                                    physical : parentPhys,
-                                    flags    : pageFlags,
-                                    flushTLB : false
-                                )
-                            }
-                            
-                        } catch {
-                            try? ppm.pointee.free(PhysicalPage(address: parentPhys, order: 0))
-//                            throw error
                         }
-                                        
+
                     } catch {
-                        // throw .mappingFailed(error)
+                        try? ppm.pointee.free(PhysicalPage(address: parentPhys, order: 0))
+                        throw .mappingFailed(error)
                     }
                 }
 

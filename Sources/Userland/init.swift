@@ -14,17 +14,29 @@ enum TestIPCLabel: UInt32, IPCLabel {
 @_cdecl("_start")
 public func main() {
     
-    for _ in 0..<99999 {
+    var pidsChildren: InlineArray<100, PID> = InlineArray(repeating: 0)
+    for i in 0..<100 {
         let pid = split()
                 
         if pid == 0 {
+            for _ in 0..<10000 {
+                yield()
+            }
+            
+            
             exit(code: 0)
         }
         
-        reapChild(for: pid)
+        pidsChildren[i] = pid
     }
     
-    print("End create 10000 process")
+    // Need create a reap childrens func, this reap all childrens
+    
+    for i in 0..<100 {
+        _ = reapChild(for: pidsChildren[i])
+    }
+    
+    print("End Stress Operation")
     
     exit(code: 0)
     
