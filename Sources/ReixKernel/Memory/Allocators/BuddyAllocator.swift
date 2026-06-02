@@ -5,16 +5,35 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 21/04/2026.
 //
 
+/// Intrusive free-list node overlaid on a free block's first 16 bytes.
+///
+/// The buddy free lists thread through the free blocks themselves (no extra
+/// allocation — the allocator can't allocate to track its own free list), so
+/// `FreeBlock` is materialised at a block's physical address and linked via a
+/// `LinkedList<FreeBlock>`. Being doubly linked, unlinking an arbitrary buddy
+/// during a merge is O(1). `entryID` is unused: the buddy never does id-based
+/// lookups, only `pushBack`/`popFront`/`remove(element:)`.
+public struct FreeBlock: RXEntry {
+    public static var errorMessageAllocation = "FreeBlock"
+    public var prev: UnsafeMutablePointer<FreeBlock>?
+    public var next: UnsafeMutablePointer<FreeBlock>?
+    public var entryID: UInt64 { 0 }
+}
+
 public struct BuddyAllocator: Allocator {
-    
+
     private let startRam       : PhysicalAddress
     private let sizeRam        : UInt64
-    
+
     private let bitmap         : UnsafeMutablePointer<UInt8>
-    private let freeLists      : UnsafeMutableRawPointer
-    
+
+    /// One free list per order (0...maxOrder), kept in a small reserved region.
+    /// The list nodes live inside the free blocks (`FreeBlock`), so this only
+    /// stores the 12 list heads/tails — the heavy data is in the pages.
+    private let freeLists      : UnsafeMutablePointer<LinkedList<FreeBlock>>
+
     private static let pageSize: UInt64 = 4096
-    
+
     private static let maxOrder: UInt8  = 11
 
     
@@ -30,9 +49,17 @@ public struct BuddyAllocator: Allocator {
         let bitmapBytes = Int((totalPages + 7) / 8)
                 
         self.bitmap    = UnsafeMutablePointer<UInt8>(bitPattern: UInt(bitmapAddress))!
-        self.freeLists = UnsafeMutableRawPointer(bitPattern: UInt(freeListsAddress))!
-        
-        freeLists.initializeMemory(as: UInt64.self, repeating: 0, count: Int(Self.maxOrder) + 1)
+        self.freeLists = UnsafeMutablePointer<LinkedList<FreeBlock>>(bitPattern: UInt(freeListsAddress))!
+
+        // An empty LinkedList is all-zero (nil head/tail, count 0), so zero the
+        // whole region from its page-aligned base. We must NOT `initialize(to:)`
+        // each element: that memcpy's a 40-byte struct to 40-byte-strided (not
+        // 16-aligned) offsets, and this runs with the MMU still off — where
+        // memory is Device-typed and a 16-byte ldp/stp to a non-16-aligned
+        // address faults. A memset from the aligned base is safe.
+        let listsBytes = (Int(Self.maxOrder) + 1) * MemoryLayout<LinkedList<FreeBlock>>.stride
+        UnsafeMutableRawPointer(freeLists).initializeMemory(as: UInt8.self, repeating: 0, count: listsBytes)
+
         bitmap.initialize(repeating: 0xFF, count: bitmapBytes)
     }
     
@@ -268,101 +295,56 @@ public struct BuddyAllocator: Allocator {
     }
     
     
+    /// Physical address of the order's free-list head, or 0 if the list is
+    /// empty (kept returning a raw address so `alloc` is unchanged).
     private func getFreeListHead(order: UInt8) throws(AllocatorError) -> UInt64 {
         guard order <= Self.maxOrder else { throw .pageOrderInvalid(order) }
-        
-        return freeLists.load(fromByteOffset: Int(order) * 8, as: UInt64.self)
-    }
-    
-    private func setFreeListHead(
-        order  : UInt8,
-        address: UInt64
-    ) throws(AllocatorError) {
-        if address != 0 {
-            guard address >= startRam && address <= startRam + sizeRam else {
-                throw .addressInvalid(address)
-            }
+
+        // `.pointee` mutates/reads the list IN PLACE (an addressor), unlike the
+        // `freeLists[order]` subscript which copies the whole 40-byte struct in
+        // and out — fatal with the MMU off (unaligned 16-byte ldp on Device
+        // memory). All free-list access below goes through `.pointee` for this.
+        if let head = (freeLists + Int(order)).pointee.head {
+            return UInt64(UInt(bitPattern: head))
         }
-        guard order <= Self.maxOrder else { throw .pageOrderInvalid(order) }
-        
-        freeLists.storeBytes(of: address, toByteOffset: Int(order) * 8, as: UInt64.self)
+        return 0
     }
-    
-    
+
+
     private func pushFreeBlock(
         address: UInt64,
         order  : UInt8
     ) throws(AllocatorError) {
-        guard address >= startRam && address <= startRam + sizeRam else { throw .addressInvalid(address) }
+        guard address >= startRam && address < startRam + sizeRam else { throw .addressInvalid(address) }
         guard order <= Self.maxOrder else { throw .pageOrderInvalid(order) }
-        
-        let old = try getFreeListHead(order: order)
-        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(address))!
-        
-        ptr.storeBytes(of: old, as: UInt64.self)
-        
-        try setFreeListHead(order: order, address: address)
+
+        let block = UnsafeMutablePointer<FreeBlock>(bitPattern: UInt(address))!
+        (freeLists + Int(order)).pointee.pushBack(block)
     }
-    
+
     private func popFreeBlock(order: UInt8) throws(AllocatorError) -> UInt64? {
         guard order <= Self.maxOrder else { throw .pageOrderInvalid(order) }
-        
-        let head = try getFreeListHead(order: order)
-        if head == 0 { return nil }
-        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(head))!
-        let next = ptr.load(as: UInt64.self)
-        
-        try setFreeListHead(order: order, address: next)
-        
-        return head
+
+        guard let block = (freeLists + Int(order)).pointee.popFront() else { return nil }
+        return UInt64(UInt(bitPattern: block))
     }
-    
+
+    /// Unlink a known-free block from its order list in O(1).
+    ///
+    /// The buddy invariant guarantees the block is actually in `freeLists[order]`
+    /// when this is called (it is reached only after `isBlockFree` confirms a
+    /// maximally-merged free buddy at exactly this order), so the doubly-linked
+    /// `remove(element:)` can splice it directly instead of scanning the list.
     private func removeFreeBlock(
         address: UInt64,
         order  : UInt8
     ) throws(AllocatorError) -> Bool {
-        guard address >= startRam && address <= startRam + sizeRam else { throw .addressInvalid(address) }
+        guard address >= startRam && address < startRam + sizeRam else { throw .addressInvalid(address) }
         guard order <= Self.maxOrder else { throw .pageOrderInvalid(order) }
-        
-        var prev: UInt64 = 0
-        var curr = try getFreeListHead(order: order)
 
-        var visited = 0
-        let visitLimit = Int(sizeRam / Self.pageSize) + 16
-
-        while curr != 0 {
-            visited += 1
-            if visited > visitLimit {
-                var dump = try getFreeListHead(order: order)
-                var dumped = 0
-                while dump != 0 && dumped < 12 {
-                    dump = UnsafeMutableRawPointer(bitPattern: UInt(dump))!.load(as: UInt64.self)
-                    dumped += 1
-                }
-                
-                Arch.CPU.panic("Buddy free-list cycle detected")
-            }
-
-            let currPtr = UnsafeMutableRawPointer(bitPattern: UInt(curr))!
-            let next = currPtr.load(as: UInt64.self)
-
-            if curr == address {
-                if prev == 0 {
-                    try setFreeListHead(order: order, address: next)
-
-                } else {
-                    let prevPtr = UnsafeMutableRawPointer(bitPattern: UInt(prev))!
-                    prevPtr.storeBytes(of: next, as: UInt64.self)
-
-                }
-                return true
-            }
-
-            prev = curr
-            curr = next
-        }
-
-        return false
+        let block = UnsafeMutablePointer<FreeBlock>(bitPattern: UInt(address))!
+        (freeLists + Int(order)).pointee.remove(element: block)
+        return true
     }
     
     // MARK: - Testing

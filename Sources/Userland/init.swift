@@ -30,7 +30,7 @@ public func main() {
         pidsChildren[i] = pid
     }
     
-    // Need create a reap childrens func, this reap all childrens
+    // Need create a reap childrens syscall, this reap all childrens
     
     for i in 0..<100 {
         _ = reapChild(for: pidsChildren[i])

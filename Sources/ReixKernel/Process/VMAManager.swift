@@ -92,10 +92,31 @@ public struct VMAManager: RXObject {
                 permissions : permissions,
                 backingType : backing,
                 mappingFlags: flags
-            )            
+            )
         )
 
         vmaList.insert(nodePtr)
+
+        // Coalesce the freshly inserted region with adjacent regions that share
+        // its exact attributes (permissions, mapping flags, backing). Without
+        // this, repeated mmap/registration fragments the sorted VMA list into
+        // many tiny nodes and every page-fault `search`, `searchOverlap` and
+        // `contains` (all O(n)) degrades. `mergeAdjacent` keeps the first node
+        // and returns the second to free. Regions with distinct attributes
+        // (ELF text vs data, growDown stack, noReserve brk) never merge, so the
+        // spawn path is unaffected.
+        var survivor = nodePtr
+        if let prev = survivor.pointee.prev,
+           let removed = vmaList.mergeAdjacent(prev, survivor) {
+            if removed == brkVMA { brkVMA = prev }
+            heap.pointee.kfree(UnsafeMutableRawPointer(removed))
+            survivor = prev
+        }
+        if let next = survivor.pointee.next,
+           let removed = vmaList.mergeAdjacent(survivor, next) {
+            if removed == brkVMA { brkVMA = survivor }
+            heap.pointee.kfree(UnsafeMutableRawPointer(removed))
+        }
     }
 
 
@@ -151,18 +172,30 @@ public struct VMAManager: RXObject {
               end   <= UserSpaceLayout.userMax
         else { return false }
 
+        // Locate the VMA containing `start` once, then walk forward following
+        // `next`. The list is sorted, so adjacent coverage is just a contiguity
+        // check (`next.start == cursor`) — O(n) total instead of restarting an
+        // O(n) `search(at:)` for every covered segment (previously O(k·n)).
+        guard var vmaPtr = vmaList.search(at: start) else { return false }
+
         var cursor = start
         while cursor < end {
-            guard let vmaPtr = vmaList.search(at: cursor) else {
-                return false
-            }
             let vma = vmaPtr.pointee
 
-            guard vma.permissions.contains(permissions) else {
-                return false
-            }
+            guard vma.startAddress <= cursor, cursor < vma.endAddress,
+                  vma.permissions.contains(permissions)
+            else { return false }
 
             cursor = vma.endAddress
+            if cursor >= end { break }
+
+            // The next region must start exactly where this one ends, otherwise
+            // there is an unmapped gap inside [start, end).
+            guard let next = vma.next,
+                  next.pointee.startAddress == cursor
+            else { return false }
+
+            vmaPtr = next
         }
 
         return true

@@ -188,8 +188,10 @@ extension PhysicalPageManager where A == BuddyAllocator {
         let bitmapBytes           = (totalPages + 7) / 8
         
         let freeListsAddr         = (bitmapAddr + bitmapBytes + 0xFFF) & ~0xFFF
-        let freeListsSize: UInt64 = 12 * 8
-        
+        // 12 free lists (orders 0...maxOrder), one LinkedList<FreeBlock> each —
+        // the buddy now stores list heads/tails here, not 12 bare UInt64s.
+        let freeListsSize: UInt64 = 12 * UInt64(MemoryLayout<LinkedList<FreeBlock>>.stride)
+
         let framesMetadataAddress = (freeListsAddr + freeListsSize + 0xFFF) & ~0xFFF
         let framesMetadataSize    = totalPages * UInt64(MemoryLayout<FrameInfo>.stride)
         
