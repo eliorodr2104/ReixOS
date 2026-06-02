@@ -292,9 +292,7 @@ public struct RendezvousIPC: IPCInterface {
         guard let id = endpointID else {
             return .failure(.notFoundFreeEndpoint)
         }
-        
-        
-        // Need modify kmalloc, because write a poem is not scalar code
+    
         let endpoint = heap.pointee.kmalloc(Endpoint.self)
         endpoint.initialize(
             to: Endpoint(

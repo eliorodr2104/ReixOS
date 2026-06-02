@@ -41,12 +41,22 @@ public func exec(path: StaticString) {
 
 @inline(__always)
 public func spawnProcess(path: StaticString) -> UInt64 {
-    return _syscall(
+    _syscall(
         .spawnProcess,
         UInt64(UInt(bitPattern: path.utf8Start)),
         UInt64(path.utf8CodeUnitCount)
     )
 }
+
+@inline(__always)
+public func spawnProcess() -> UInt64 {
+    _syscall(
+        .spawnProcess,
+        0,
+        0
+    )
+}
+
 
 @inline(__always)
 public func reapChild(for pid: PID) -> ExitCode {

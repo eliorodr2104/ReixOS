@@ -27,22 +27,28 @@ public struct SpawnProcessSyscall: SyscallProvider {
 
         let length = Int(frame.pointee.x1)
 
-        withUnsafeTemporaryAllocation(
-            byteCount: length + 1,
-            alignment: MemoryLayout<CChar>.alignment
-        ) { buffer in
-            let base = buffer.baseAddress!
-            base.copyMemory(from: source, byteCount: length)
-            base.storeBytes(of: 0, toByteOffset: length, as: CChar.self)
-            let cPath = base.assumingMemoryBound(to: CChar.self)
+        var childProcess: UnsafeMutablePointer<Process>?
+        if length != 0 {
+            withUnsafeTemporaryAllocation(
+                byteCount: length + 1,
+                alignment: MemoryLayout<CChar>.alignment
+            ) { buffer in
+                let base = buffer.baseAddress!
+                base.copyMemory(from: source, byteCount: length)
+                base.storeBytes(of: 0, toByteOffset: length, as: CChar.self)
+                let cPath = base.assumingMemoryBound(to: CChar.self)
 
-            if let childProcess = try? context.processManager.pointee.spawnProcess(path: cPath) {
-                childProcess.pointee.family.parent = currentProcess
-                currentProcess.pointee.family.pushChild(childProcess)
-
-                try? context.scheduler.pointee.addTask(childProcess)
-                frame.pointee.x0 = childProcess.pointee.pid
+                childProcess = try? context.processManager.pointee.spawnProcess(path: cPath)
             }
+            
+        } else { childProcess =  try? context.processManager.pointee.spawnProcess() }
+        
+        if let childProcess = childProcess {
+            childProcess.pointee.family.parent = currentProcess
+            currentProcess.pointee.family.pushChild(childProcess)
+
+            try? context.scheduler.pointee.addTask(childProcess)
+            frame.pointee.x0 = childProcess.pointee.pid
         }
     }
 }

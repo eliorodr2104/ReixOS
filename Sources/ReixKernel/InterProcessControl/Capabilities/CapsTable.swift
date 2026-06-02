@@ -13,6 +13,8 @@ public struct CapsTable {
         repeating: nil
     ) // (16 * 13) 208 Byte
     
+    private var counterElements: UInt = 0 // 8 Byte
+    
     
     public mutating func install(_ cap: EndpointCap) -> UInt32? {
         var indexFounded: UInt32?
@@ -20,7 +22,9 @@ public struct CapsTable {
             
             if caps[i] == nil {
                 indexFounded = UInt32(i)
-                caps[i] = cap
+                caps[i]      = cap
+                
+                counterElements &+= 1
                 break
             }
             
@@ -29,9 +33,15 @@ public struct CapsTable {
         return indexFounded
     }
     
+    
     public func resolve(_ handle: UInt32) -> EndpointCap? {
         guard handle < caps.count else { return nil }
         
         return caps[Int(handle)]
+    }
+    
+    
+    public func hasFreeSlot() -> Bool {
+        counterElements <= caps.count
     }
 }

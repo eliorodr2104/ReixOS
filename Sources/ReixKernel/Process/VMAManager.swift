@@ -110,8 +110,8 @@ public struct VMAManager: RXObject {
     ) -> Bool {
         // TODO: Remove when resolve this bug
         // This is a test for a bug
-        let dbg = vmaList.search(at: address)
-        kprintf("[PF] addr=0x%x found=%d\n", address, dbg != nil ? 1 : 0)
+        // let dbg = vmaList.search(at: address)
+        // kprintf("[PF] addr=0x%x found=%d\n", address, dbg != nil ? 1 : 0)
         
         guard address >= UserSpaceLayout.userMin,
               address <  UserSpaceLayout.userMax
@@ -531,7 +531,8 @@ public struct VMAManager: RXObject {
                             rootTable: rootTablePhysical,
                             virtual  : va,
                             physical : page.address,
-                            flags    : flags
+                            flags    : flags,
+                            flushTLB : false
                         )
                     } catch {
                         try? ppm.pointee.free(page)

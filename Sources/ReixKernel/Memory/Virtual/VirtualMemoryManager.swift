@@ -195,7 +195,8 @@ public struct VirtualMemoryManager {
         rootTable: PhysicalPage,
         virtual  : VirtualAddress,
         physical : PhysicalAddress,
-        flags    : VirtualPageFlags
+        flags    : VirtualPageFlags,
+        flushTLB : Bool = true
     ) throws(PPMError) {
         let tablePointer: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable.address)
 
@@ -204,7 +205,27 @@ public struct VirtualMemoryManager {
             virtual : virtual,
             physical: physical,
             type    : .normal,
-            flags   : flags
+            flags   : flags,
+            flushTLB: flushTLB
+        )
+    }
+    
+    
+    public func protectUserPage(
+        rootTable: PhysicalPage,
+        virtual  : VirtualAddress,
+        flags    : VirtualPageFlags
+    ) throws(PPMError) {
+        guard let phys = physicalAddressOf(
+            rootTable: rootTable,
+            virtual  : virtual
+        ) else { return }
+        
+        try mapUserPage(
+            rootTable: rootTable,
+            virtual  : virtual,
+            physical : phys,
+            flags    : flags
         )
     }
 
@@ -213,16 +234,22 @@ public struct VirtualMemoryManager {
         addressSpace: borrowing AddressSpace,
         virtual     : VirtualAddress,
         physical    : PhysicalAddress,
-        flags       : VirtualPageFlags
+        flags       : VirtualPageFlags,
+        flushTLB    : Bool = true
     ) throws(PPMError) {
-        try mapUserPage(
-            rootTable: addressSpace.rootTablePhysical,
-            virtual  : virtual,
-            physical : physical,
-            flags    : flags
+        let rootTable = addressSpace.rootTablePhysical
+        let tablePointer: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable.address)
+
+        try map(
+            table   : tablePointer,
+            virtual : virtual,
+            physical: physical,
+            type    : .normal,
+            flags   : flags,
+            flushTLB: flushTLB
         )
     }
-
+    
 
     public func unmapUserPage(
         rootTable: PhysicalPage,
@@ -293,7 +320,8 @@ public struct VirtualMemoryManager {
         physical    : PhysicalAddress,
         type        : MemoryType,
         flags       : VirtualPageFlags = [.present],
-        defaultFlags: VirtualPageFlags = [.valid, .page, .accessFlag]
+        defaultFlags: VirtualPageFlags = [.valid, .page, .accessFlag],
+        flushTLB    : Bool             = true
     ) throws(PPMError) {
         
         var currentTable = table
@@ -311,7 +339,8 @@ public struct VirtualMemoryManager {
         entry.flags        = flags.union(defaultFlags)
         
         currentTable[virtual.l3] = entry
-        if Arch.MMU.isMMUEnabled() {
+        
+        if Arch.MMU.isMMUEnabled() && flushTLB {
             Arch.MMU.flushTLB()
         }
     }

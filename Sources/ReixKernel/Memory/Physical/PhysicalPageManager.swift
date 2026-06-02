@@ -12,7 +12,7 @@ public struct PhysicalPageManager<A: Allocator> {
     
     public  let ramStart      : UInt64
     public  let ramSize       : UInt64
-    
+        
     public  var framesMetadata: UnsafeMutablePointer<FrameInfo>?
     
     
@@ -36,7 +36,7 @@ public struct PhysicalPageManager<A: Allocator> {
             metadata.flags     = flag
             metadata.heapShift = heapShift
             framesMetadata![indexMetadata] = metadata
-            
+                        
             return frame
             
         } catch { throw .allocationFailed(reason: error) }
@@ -52,6 +52,7 @@ public struct PhysicalPageManager<A: Allocator> {
         try free(page, allowProtected: true)
     }
 
+    @inline(__always)
     private func free(
         _ page        : consuming PhysicalPage,
         allowProtected: Bool
@@ -97,6 +98,33 @@ public struct PhysicalPageManager<A: Allocator> {
     }
     
     
+    public mutating func applyFramesMetadataVirtualOffset(_ offset: UInt64) {
+        guard let framesMetadata = self.framesMetadata else { return }
+        
+        let virtualAddress  = UInt64(UInt(bitPattern: framesMetadata)) + offset
+        self.framesMetadata = UnsafeMutablePointer<FrameInfo>(bitPattern: UInt(virtualAddress))
+    }
+    
+    
+    public mutating func retain(_ address: PhysicalAddress) throws(PPMError) {
+        let indexMetadata = Int((address - ramStart) / 4096)
+        
+        guard indexMetadata >= 0 else {
+            throw .invalidRefCount(indexMetadata)
+        }
+        
+        var metadata = framesMetadata![indexMetadata]
+        metadata.refCount += 1
+    }
+    
+    
+    public mutating func refCount(_ address: PhysicalAddress) -> UInt32 {
+        let indexMetadata = Int((address - ramStart) / 4096)
+        
+        let metadata = framesMetadata![indexMetadata]
+        return metadata.refCount
+    }
+    
     // MARK: - Helpers
     
     private func setRangeMetadata(
@@ -132,67 +160,6 @@ public struct PhysicalPageManager<A: Allocator> {
                 
             } catch { throw .allocationFailed(reason: error) }
         }
-    }
-    
-    
-    public mutating func applyFramesMetadataVirtualOffset(_ offset: UInt64) {
-        guard let framesMetadata = self.framesMetadata else { return }
-        
-        let virtualAddress = UInt64(UInt(bitPattern: framesMetadata)) + offset
-        self.framesMetadata = UnsafeMutablePointer<FrameInfo>(bitPattern: UInt(virtualAddress))
-    }
-    
-    
-    public func testPPM() throws(PPMError) {
-        kprint("\n--- Starting PPM Test Suite ---")
-        
-        kprint("\nTest 1: Basic Allocation...")
-        let page1 = try self.alloc(4096)
-        kprintf("Allocated page at: 0x%x\n", page1.address)
-        
-        let idx1 = Int((page1.address - ramStart) / 4096)
-        if framesMetadata![idx1].refCount != 1 {
-            kprintf("FAILED: refCount should be 1, found %d\n", UInt64(framesMetadata![idx1].refCount))
-        }
-        
-        kprint("Test 2: Order Allocation (16KB)...")
-        let pageBig = try self.alloc(16384)
-        kprintf("Allocated 16KB at: 0x%x (Order: %d)\n", pageBig.address, UInt64(pageBig.order))
-        
-        try self.free(pageBig)
-        kprint("Large page freed.")
-        
-        kprint("\nTest 3: Reference Counting Logic...")
-        let page2 = try self.alloc(4096)
-        let page2Address = page2.address
-        let idx2  = Int((page2.address - ramStart) / 4096)
-        
-        framesMetadata![idx2].refCount += 1
-        kprintf("Manual retain: refCount is now %d\n", UInt64(framesMetadata![idx2].refCount))
-        
-        try self.free(page2)
-        if framesMetadata![idx2].refCount != 1 {
-            kprint("FAILED: refCount should be 1 after first free")
-            
-        } else {
-            kprint("First free kept the page alive (Correct).")
-        }
-        
-        let page2Extra = PhysicalPage(address: page2Address, order: 0)
-        try self.free(page2Extra)
-        
-        if framesMetadata![idx2].refCount != 0 {
-            kprint("FAILED: refCount should be 0 now")
-        } else {
-            kprint("Second free released the page (Correct).")
-        }
-        
-        kprint("\nTest 4: Memory Protection...")
-        let kernelPage = PhysicalPage(address: ramStart + 0x200000, order: 0)
-        try self.free(kernelPage)
-        
-        kprint("Kernel protection check passed (Check debug logs if any).")
-        kprint("\n--- PPM Test Suite Completed ---")
     }
 }
 

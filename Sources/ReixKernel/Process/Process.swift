@@ -50,6 +50,7 @@ public struct Process: RXEntry {
     
     public var status        : ProcessStatus                          // 9 Byte  -> (8 + 1) Enum with param
     public var priority      : UInt8                                  // 1 Byte
+    public var depth         : UInt8                                  // 1 Byte
     public var type          : ProcessType                            // 1 Byte
     public var expectsReply  : Bool = false                           // 1 Byte
     
@@ -70,6 +71,7 @@ public struct Process: RXEntry {
         
         type          : ProcessType      = .user,
         priority      : UInt8            = 1,
+        depth         : UInt8            = 0,
         metadata      : UnsafeMutablePointer<ProcessMetadata>!
         
     ) {
@@ -78,6 +80,7 @@ public struct Process: RXEntry {
         self.status         = status
         self.addressSpace   = addressSpace
         self.priority       = priority
+        self.depth          = depth
         self.type           = type
         self.context        = context
         self.kernelStackTop = kernelStackTop
