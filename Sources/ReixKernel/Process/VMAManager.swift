@@ -320,6 +320,7 @@ public struct VMAManager: RXObject {
             va += UserSpaceLayout.pageSize
         }
 
+        Arch.MMU.flushTLB()
         vmaList.remove(element: vmaPtr)
         heap.pointee.kfree(UnsafeMutableRawPointer(vmaPtr))
     }
@@ -430,8 +431,7 @@ public struct VMAManager: RXObject {
                             rootTable: rootTablePhysical,
                             virtual  : aligned,
                             physical : page.address,
-                            flags    : flags,
-                            flushTLB : false
+                            flags    : flags
                         )
                     } catch {
                         try? ppm.pointee.free(page)
@@ -623,8 +623,7 @@ public struct VMAManager: RXObject {
                             rootTable: rootTablePhysical,
                             virtual  : va,
                             physical : parentPhys,
-                            flags    : pageFlags,
-                            flushTLB : false
+                            flags    : pageFlags
                         )
 
                         if downgradeParentPermissions {
@@ -632,8 +631,7 @@ public struct VMAManager: RXObject {
                                 rootTable: parent.rootTablePhysical,
                                 virtual  : va,
                                 physical : parentPhys,
-                                flags    : pageFlags,
-                                flushTLB : false
+                                flags    : pageFlags
                             )
                         }
 

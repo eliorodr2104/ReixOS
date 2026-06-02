@@ -27,13 +27,18 @@ public struct BucketsHeap: KernelHeapInterface {
         _ size        : UInt,
           errorMessage: String = "Kmalloc Failed"
     ) -> UnsafeMutableRawPointer {
-        guard size <= UInt(Self.pageSize) else {
+        guard size <= UInt(Self.pageSize), size != 0 else {
             Arch.CPU.panic("Kmalloc Failed, struct is greater than page size")
         }
 
         let sizeNormalized = Self.normalizedToPowerOfTwo(size)
         let shift          = UInt8(sizeNormalized.trailingZeroBitCount)
-        let bucketsIndex   = Int(shift - 3)
+        
+        guard shift >= 3 else {
+            Arch.CPU.panic("Kmalloc Failed, shift is not valid value")
+        }
+        
+        let bucketsIndex = Int(shift - 3)
 
         let bucket = buckets[bucketsIndex]
 

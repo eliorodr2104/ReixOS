@@ -259,8 +259,7 @@ public struct VirtualMemoryManager {
         rootTable: PhysicalPage,
         virtual  : VirtualAddress,
         physical : PhysicalAddress,
-        flags    : VirtualPageFlags,
-        flushTLB : Bool = true
+        flags    : VirtualPageFlags
     ) throws(PPMError) {
         let tablePointer: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable.address)
 
@@ -269,8 +268,7 @@ public struct VirtualMemoryManager {
             virtual : virtual,
             physical: physical,
             type    : .normal,
-            flags   : flags,
-            flushTLB: flushTLB
+            flags   : flags
         )
     }
     
@@ -298,8 +296,7 @@ public struct VirtualMemoryManager {
         addressSpace: borrowing AddressSpace,
         virtual     : VirtualAddress,
         physical    : PhysicalAddress,
-        flags       : VirtualPageFlags,
-        flushTLB    : Bool = true
+        flags       : VirtualPageFlags
     ) throws(PPMError) {
         let rootTable = addressSpace.rootTablePhysical
         let tablePointer: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable.address)
@@ -309,8 +306,7 @@ public struct VirtualMemoryManager {
             virtual : virtual,
             physical: physical,
             type    : .normal,
-            flags   : flags,
-            flushTLB: flushTLB
+            flags   : flags
         )
     }
     
@@ -325,10 +321,6 @@ public struct VirtualMemoryManager {
         }
 
         leafTable[virtual.l3] = Arch.PageTableEntry(rawValue: 0)
-
-        if Arch.MMU.isMMUEnabled() {
-            Arch.MMU.flushTLB()
-        }
     }
 
 
@@ -384,8 +376,7 @@ public struct VirtualMemoryManager {
         physical    : PhysicalAddress,
         type        : MemoryType,
         flags       : VirtualPageFlags = [.present],
-        defaultFlags: VirtualPageFlags = [.valid, .page, .accessFlag],
-        flushTLB    : Bool             = true
+        defaultFlags: VirtualPageFlags = [.valid, .page, .accessFlag]
     ) throws(PPMError) {
         
         var currentTable = table
@@ -403,10 +394,6 @@ public struct VirtualMemoryManager {
         entry.flags        = flags.union(defaultFlags)
         
         currentTable[virtual.l3] = entry
-        
-        if Arch.MMU.isMMUEnabled() && flushTLB {
-            Arch.MMU.flushTLB()
-        }
     }
     
     private func mapTable(
@@ -609,8 +596,7 @@ public struct VirtualMemoryManager {
             table   : table,
             virtual : uartBase,
             physical: uartBase,
-            type    : .device,
-            flushTLB: false
+            type    : .device
         )
 
         let gicDistributorBase  = Kernel.platformInfo.gic.gicdBase
@@ -620,16 +606,14 @@ public struct VirtualMemoryManager {
             table   : table,
             virtual : gicDistributorBase,
             physical: gicDistributorBase,
-            type    : .device,
-            flushTLB: false
+            type    : .device
         )
         
         try map(
             table   : table,
             virtual : gicCpuInterfaceBase,
             physical: gicCpuInterfaceBase,
-            type    : .device,
-            flushTLB: false
+            type    : .device
         )
     }
     
@@ -651,8 +635,7 @@ public struct VirtualMemoryManager {
                 virtual : currentAddr,
                 physical: currentAddr,
                 type    : type,
-                flags   : flags,
-                flushTLB: false
+                flags   : flags
             )
 
             currentAddr += Self.pageSize

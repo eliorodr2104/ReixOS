@@ -26,7 +26,9 @@ public struct LinkedList<T: RXEntry> {
         self.minAddress = nil
         self.maxAddress = nil
         
-        self.count += 1
+        if head != nil || tail != nil {
+            self.count += 1
+        }
     }
     
     public mutating func pushBack(_ element: UnsafeMutablePointer<T>) {
