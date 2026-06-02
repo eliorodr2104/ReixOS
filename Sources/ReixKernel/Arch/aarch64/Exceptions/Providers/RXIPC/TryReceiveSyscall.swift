@@ -19,7 +19,7 @@ public struct TryReceiveSyscall: SyscallProvider {
         let handle   = frame.pointee.x0
         let metadata = currentProcess.pointee.metadata!
         guard let capability = metadata.pointee.capsTable.resolve(UInt32(handle)) else {
-            frame.pointee.x0 = 0 // TODO: Error temp value, need create a const
+            frame.pointee.x0 = IPCStatus.invalidCapability.rawValue
             return
         }
         

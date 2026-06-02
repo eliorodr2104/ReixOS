@@ -69,15 +69,26 @@ int parse_platform_info(const void *fdt_ptr, PlatformInfo *out) {
     
     if (fdt32_to_cpu(h->magic) != 0xd00dfeedU) return -1;
     
-    uint32_t totalsize   = fdt32_to_cpu(h->totalsize);
-    uint32_t off_struct  = fdt32_to_cpu(h->off_dt_struct);
-    uint32_t off_strings = fdt32_to_cpu(h->off_dt_strings);
-    uint32_t size_struct = fdt32_to_cpu(h->size_dt_struct);
-    
+    uint32_t totalsize    = fdt32_to_cpu(h->totalsize);
+    uint32_t off_struct   = fdt32_to_cpu(h->off_dt_struct);
+    uint32_t off_strings  = fdt32_to_cpu(h->off_dt_strings);
+    uint32_t size_struct  = fdt32_to_cpu(h->size_dt_struct);
+    uint32_t size_strings = fdt32_to_cpu(h->size_dt_strings);
+
+    // Validate the header offsets against totalsize before trusting any of
+    // them. A malformed or truncated blob must be rejected here — the walk
+    // below dereferences `p`/`str_table` derived from these fields.
+    if (totalsize < sizeof(struct fdt_header))                       return -2;
+    if (off_struct < sizeof(struct fdt_header) || off_struct > totalsize ||
+        size_struct > totalsize - off_struct)                        return -2;
+    if (off_strings > totalsize || size_strings > totalsize - off_strings) return -3;
+
     out->dtb_base = (uint64_t)(uintptr_t)fdt_ptr;
     out->dtb_size = totalsize;
-    
+
+    const uint8_t *blob_end   = fdt + totalsize;
     const uint8_t *struct_end = fdt + off_struct + size_struct;
+    if (struct_end > blob_end) struct_end = blob_end;
     const char *str_table     = (const char *)(fdt + off_strings);
     const uint32_t *p         = (const uint32_t *)(fdt + off_struct);
     
@@ -105,8 +116,10 @@ int parse_platform_info(const void *fdt_ptr, PlatformInfo *out) {
         if (tag == FDT_BEGIN_NODE) {
             const char *name = (const char *)p;
             size_t nlen = 0;
-            while (((const char *)p)[nlen] != '\0') nlen++;
+            while ((const uint8_t *)p + nlen < struct_end && ((const char *)p)[nlen] != '\0') nlen++;
+            if ((const uint8_t *)p + nlen >= struct_end) break; // unterminated node name
             p += (nlen + 1 + 3) / 4;
+            if ((const uint8_t *)p > struct_end) break;
             
             depth++;
             
@@ -139,11 +152,14 @@ int parse_platform_info(const void *fdt_ptr, PlatformInfo *out) {
             is_gic_node = 0;
             
         } else if (tag == FDT_PROP) {
+            if ((const uint8_t *)p + 8 > struct_end) break; // truncated property header
             uint32_t len = fdt32_to_cpu(*p++);
             uint32_t nameoff = fdt32_to_cpu(*p++);
-            const char *prop_name = str_table + nameoff;
             const uint32_t *prop_data = p;
             p += (len + 3) / 4;
+            if ((const uint8_t *)p > struct_end) break;     // property value overruns struct block
+            // Bound the property name into the strings block; OOB → treat as empty.
+            const char *prop_name = (nameoff < size_strings) ? (str_table + nameoff) : "";
             
             // --- CALCOLO CELLE GENITORE ---
             // IMPORTANTE: Le proprietà di questo nodo (reg, initrd) usano

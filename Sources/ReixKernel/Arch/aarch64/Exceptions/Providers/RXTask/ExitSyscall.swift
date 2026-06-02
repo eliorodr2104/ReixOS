@@ -27,6 +27,10 @@ public struct ExitSyscall: SyscallProvider {
             oldProcess.pointee.context?.pointee = frame.pointee
             oldProcess.pointee.status           = .terminated
 
+            // Reclaim any IPC endpoints this process owned, otherwise its slots
+            // in the fixed 64-entry endpoint table leak on every exit.
+            context.ipc.pointee.releaseEndpoints(of: oldProcess.pointee.pid)
+
             let exitingCode = UInt32(frame.pointee.x0)
             do {
                 Arch.CPU.setCurrentProcess(0)

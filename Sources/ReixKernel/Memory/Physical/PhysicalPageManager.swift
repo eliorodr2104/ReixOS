@@ -106,19 +106,29 @@ public struct PhysicalPageManager<A: Allocator> {
     
     
     public mutating func retain(_ address: PhysicalAddress) throws(PPMError) {
-        let indexMetadata = Int((address - ramStart) / 4096)
-        
-        guard indexMetadata >= 0 else {
-            throw .invalidRefCount(indexMetadata)
+        // Bound the address to RAM before indexing: `address - ramStart`
+        // underflows (UInt64 wraps huge) for any address below ramStart, and an
+        // address at/after ramEnd indexes past `framesMetadata`. The COW path
+        // feeds physical addresses straight from page tables, so a stray value
+        // must fault here, not corrupt the metadata array.
+        guard address >= ramStart, address < ramStart + ramSize else {
+            throw .invalidRefCount(Int(bitPattern: UInt(address)))
         }
-        
+
+        let indexMetadata = Int((address - ramStart) / 4096)
         framesMetadata!.advanced(by: indexMetadata).pointee.refCount += 1
     }
-    
-    
+
+
     public mutating func refCount(of address: PhysicalAddress) -> UInt32 {
+        // Out-of-range addresses report 0 references (treated as "not shared")
+        // rather than reading past the metadata array — same bounding rationale
+        // as `retain`.
+        guard address >= ramStart, address < ramStart + ramSize else {
+            return 0
+        }
+
         let indexMetadata = Int((address - ramStart) / 4096)
-        
         return framesMetadata!.advanced(by: indexMetadata).pointee.refCount
     }
     

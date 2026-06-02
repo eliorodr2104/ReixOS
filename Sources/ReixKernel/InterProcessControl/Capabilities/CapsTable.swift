@@ -36,12 +36,25 @@ public struct CapsTable {
     
     public func resolve(_ handle: UInt32) -> EndpointCap? {
         guard handle < caps.count else { return nil }
-        
+
         return caps[Int(handle)]
     }
-    
-    
+
+
+    /// Revoke the capability at `handle`, freeing the slot. Used to implement
+    /// *move* semantics for `grant`: the sender loses the capability once it is
+    /// transferred, instead of both processes ending up holding it.
+    @discardableResult
+    public mutating func remove(_ handle: UInt32) -> EndpointCap? {
+        guard handle < caps.count, let cap = caps[Int(handle)] else { return nil }
+
+        caps[Int(handle)] = nil
+        if counterElements > 0 { counterElements &-= 1 }
+        return cap
+    }
+
+
     public func hasFreeSlot() -> Bool {
-        counterElements <= caps.count
+        counterElements < caps.count
     }
 }

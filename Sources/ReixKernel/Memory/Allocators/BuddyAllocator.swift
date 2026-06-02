@@ -333,14 +333,13 @@ public struct BuddyAllocator: Allocator {
         while curr != 0 {
             visited += 1
             if visited > visitLimit {
-                kprintf("[BUDDY] free-list CYCLE order=%d while removing addr=0x%x\n", UInt64(order), address)
                 var dump = try getFreeListHead(order: order)
                 var dumped = 0
                 while dump != 0 && dumped < 12 {
-                    kprintf("[BUDDY]   node[%d]=0x%x\n", UInt64(dumped), dump)
                     dump = UnsafeMutableRawPointer(bitPattern: UInt(dump))!.load(as: UInt64.self)
                     dumped += 1
                 }
+                
                 Arch.CPU.panic("Buddy free-list cycle detected")
             }
 

@@ -297,10 +297,11 @@ public struct RendezvousIPC: IPCInterface {
         endpoint.initialize(
             to: Endpoint(
                 state: .idle,
-                queue: LinkedList(head: nil, tail: nil)
+                queue: LinkedList(head: nil, tail: nil),
+                owner: process.pointee.pid
             )
         )
-        
+
         endpoints[id] = endpoint
         
         let capability = EndpointCap(
@@ -315,8 +316,31 @@ public struct RendezvousIPC: IPCInterface {
             heap.pointee.kfree(UnsafeMutableRawPointer(endpoint))
             return .failure(.outOfEndpoints)
         }
-        
+
         return .success(handle)
+    }
+
+
+    /// Reclaim every endpoint created by `pid`, freeing its table slot and heap
+    /// block. Called from the exit path so a process that spawned endpoints and
+    /// then exited doesn't permanently leak slots out of the fixed 64-entry
+    /// table.
+    ///
+    /// NOTE: this is owner-based reclamation. A capability `grant`ed to another
+    /// process points at the same endpoint, so freeing it on the owner's exit
+    /// leaves that grantee with a dangling capability — acceptable until the
+    /// IPC ownership/lifetime policy is finalized, but worth revisiting (e.g.
+    /// refcount endpoints, or block exit while endpoints are still referenced).
+    public mutating func releaseEndpoints(of pid: PID) {
+        for i in 0..<endpoints.count {
+            guard let endpoint = endpoints[i], endpoint.pointee.owner == pid else {
+                continue
+            }
+
+            endpoints[i] = nil
+            endpoint.deinitialize(count: 1)
+            heap.pointee.kfree(UnsafeMutableRawPointer(endpoint))
+        }
     }
     
     
@@ -339,7 +363,13 @@ public struct RendezvousIPC: IPCInterface {
         guard let receiverHandle = receiverMetadata.pointee.capsTable.install(capability) else {
             return .failure(.outOfEndpoints)
         }
-        
+
+        // MOVE, not copy: revoke the capability from the sender now that the
+        // receiver holds it. Otherwise `grant` duplicated authority — both
+        // processes kept the cap (with full rights, including `.grant`), which
+        // let a granted capability be re-granted unboundedly.
+        senderMetadata.pointee.capsTable.remove(handler)
+
         return .success(receiverHandle)
     }
     
