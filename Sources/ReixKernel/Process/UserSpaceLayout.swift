@@ -19,16 +19,25 @@ public enum UserSpaceLayout {
     /// Granule shared with the MMU and the PPM allocator.
     public static let pageSize: UInt64 = 4096
 
-    /// First mappable user VA. The page at `0x0` is reserved to trap
-    /// NULL dereferences as translation faults.
-    public static let userMin: VirtualAddress = 0x0000_0000_0000_1000
+    /// First mappable user VA — the start of L0 entry 1 (512 GiB).
+    ///
+    /// The whole L0[0] subtree (VAs below 512 GiB) is reserved for the kernel:
+    /// every address space shares the kernel's single L0[0] entry by reference
+    /// (see `VMM.createAddressSpace`), so user mappings must never fall inside
+    /// it or they would corrupt the page tables of every process. Confining
+    /// user space to L0[1..255] keeps user and kernel in disjoint top-level
+    /// entries. Everything below 512 GiB (incl. `0x0`) is therefore unmapped
+    /// for user space, so NULL-derived accesses still trap.
+    public static let userMin: VirtualAddress = 0x0000_0080_0000_0000
 
     /// Last mappable user VA (exclusive upper bound). Sits just below
     /// the 48-bit TTBR0 ceiling.
     public static let userMax: VirtualAddress = 0x0000_7FFF_FFFF_F000
 
     /// Default base used by user ELF binaries when linked with `user.ld`.
-    public static let elfBaseTypical: VirtualAddress = 0x0000_0000_0040_0000
+    /// Sits 4 MiB into L0 entry 1 (512 GiB), leaving the bottom of the user
+    /// region as a guard and keeping the ELF image clear of `userMin`.
+    public static let elfBaseTypical: VirtualAddress = 0x0000_0080_0040_0000
 
     /// Top of the mmap allocation area. mmap allocations grow downward
     /// from this anchor (enabled in step 5b).

@@ -155,7 +155,20 @@ public struct VirtualMemoryManager {
         let page = try ppmPtr.pointee.alloc(4096, flag: .kernel)
         let rootTable: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(page.address)
         rootTable.initialize(repeating: Arch.PageTableEntry(rawValue: 0), count: 512)
-        try mapKernelIdentitySpace(table: rootTable)
+
+        // Share the kernel's top-level entries by reference instead of
+        // rebuilding the whole kernel identity per process. The kernel lives
+        // entirely in the L0[0] subtree (RAM identity + device MMIO, all phys
+        // < 512 GiB) and user space is confined to L0[1..511]
+        // (`UserSpaceLayout.userMin`), so copying the populated kernel L0
+        // entries lets every address space point at the SAME kernel page
+        // tables. Address-space creation is O(1) — one zeroed page plus a
+        // pointer copy — instead of O(RAM/4K), and no kernel tables are
+        // duplicated (hence none to leak on teardown).
+        let kernelMaster: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(self.identityTableAddress)
+        for index in 0..<512 where kernelMaster[index].isPresent {
+            rootTable[index] = kernelMaster[index]
+        }
 
         let asid = self.asidCounter
 
@@ -186,8 +199,59 @@ public struct VirtualMemoryManager {
         // is never freed.
         Arch.MMU.switchUserAddressSpace(self.identityTableAddress)
 
+        // Reclaim every intermediate page table (L1/L2/L3) reachable from this
+        // root before freeing the root itself. Each process owns a private copy
+        // of its whole table tree (kernel identity included, built per-process
+        // by `createAddressSpace`/`mapKernelIdentitySpace`), so without this the
+        // ~one tree's worth of table pages per process is never returned to the
+        // PPM and accumulates until the allocator runs dry. Leaf data frames are
+        // NOT touched here: anonymous user pages were already released per-VMA by
+        // `teardown`, and kernel/device frames are globally owned. The dying root
+        // is no longer installed in TTBR0, so walking and freeing it is safe.
+        freePageTables(rootTable: addressSpace.rootTablePhysical)
+
         try ppmPtr.pointee.freeOwnedKernelPage(addressSpace.rootTablePhysical)
         Arch.MMU.flushTLB()
+    }
+
+
+    /// Free the intermediate page-table pages of an address space, depth-first.
+    /// Walks the L0 root and recurses through table descriptors only; the L0
+    /// root page itself is freed by the caller. Leaf (block/page) descriptors
+    /// point at data frames owned elsewhere and are deliberately left alone.
+    private func freePageTables(rootTable: PhysicalPage) {
+        let l0          : UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable.address)
+        let kernelMaster: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(self.identityTableAddress)
+
+        for index in 0..<512 {
+            let entry = l0[index]
+            guard entry.isPresent, entry.isTableDescriptor else { continue }
+
+            // Skip entries shared with the kernel master (copied by reference
+            // in `createAddressSpace`): their subtrees belong to every process
+            // and must never be freed. Only the process-private user subtrees
+            // (L0[1..511]) are reclaimed here.
+            if entry.physicalAddress == kernelMaster[index].physicalAddress { continue }
+
+            freePageTableSubtree(tablePhysical: entry.physicalAddress, level: 1)
+        }
+    }
+
+    /// Free the subtree rooted at a level-`level` table (1 = L1, 2 = L2,
+    /// 3 = L3), then the table page itself. Each table page is fully read
+    /// before it is released, so the post-free overwrite the PPM performs on a
+    /// reclaimed block never races the walk.
+    private func freePageTableSubtree(tablePhysical: PhysicalAddress, level: Int) {
+        if level < 3 {
+            let table: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(tablePhysical)
+            for index in 0..<512 {
+                let entry = table[index]
+                guard entry.isPresent, entry.isTableDescriptor else { continue }
+                freePageTableSubtree(tablePhysical: entry.physicalAddress, level: level + 1)
+            }
+        }
+
+        try? ppmPtr.pointee.freeOwnedKernelPage(PhysicalPage(address: tablePhysical, order: 0))
     }
 
 

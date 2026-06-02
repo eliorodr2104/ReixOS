@@ -69,4 +69,12 @@ public struct AArch64PageTableEntry {
     var isPresent: Bool {
         return flags.contains(.valid)
     }
+
+    /// True when this is a table descriptor (points to a next-level table)
+    /// rather than a block descriptor. At levels 0–2 bits[1:0] == 0b11 marks a
+    /// table; 0b01 marks a block leaf. Used by the page-table tree walker to
+    /// recurse only into tables, never into leaf mappings.
+    var isTableDescriptor: Bool {
+        return (rawValue & 0b11) == 0b11
+    }
 }

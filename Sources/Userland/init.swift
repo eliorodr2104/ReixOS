@@ -14,12 +14,14 @@ enum TestIPCLabel: UInt32, IPCLabel {
 @_cdecl("_start")
 public func main() {
     
-    for _ in 0..<30 {
+    for _ in 0..<99999 {
         let pid = split()
                 
         if pid == 0 {
             exit(code: 0)
         }
+        
+        reapChild(for: pid)
     }
     
     print("End create 10000 process")
