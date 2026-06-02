@@ -30,12 +30,11 @@ public struct PhysicalPageManager<A: Allocator> {
             let frame         = try allocator.alloc(bytes)
             let indexMetadata = Int((frame.address - ramStart) / 4096)
             
-            var metadata = framesMetadata![indexMetadata]
-            metadata.refCount  = 1
-            metadata.order     = frame.order
-            metadata.flags     = flag
-            metadata.heapShift = heapShift
-            framesMetadata![indexMetadata] = metadata
+            let metadata = framesMetadata!.advanced(by: indexMetadata)
+            metadata.pointee.refCount  = 1
+            metadata.pointee.order     = frame.order
+            metadata.pointee.flags     = flag
+            metadata.pointee.heapShift = heapShift
                         
             return frame
             
@@ -113,16 +112,14 @@ public struct PhysicalPageManager<A: Allocator> {
             throw .invalidRefCount(indexMetadata)
         }
         
-        var metadata = framesMetadata![indexMetadata]
-        metadata.refCount += 1
+        framesMetadata!.advanced(by: indexMetadata).pointee.refCount += 1
     }
     
     
-    public mutating func refCount(_ address: PhysicalAddress) -> UInt32 {
+    public mutating func refCount(of address: PhysicalAddress) -> UInt32 {
         let indexMetadata = Int((address - ramStart) / 4096)
         
-        let metadata = framesMetadata![indexMetadata]
-        return metadata.refCount
+        return framesMetadata!.advanced(by: indexMetadata).pointee.refCount
     }
     
     // MARK: - Helpers

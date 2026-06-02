@@ -18,7 +18,7 @@ public func main() {
         let pid = split()
                 
         if pid == 0 {
-            while true {  }
+            exit(code: 0)
         }
     }
     

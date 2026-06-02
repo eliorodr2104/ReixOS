@@ -157,6 +157,7 @@ public struct ProcessManager: RXObject {
         _ = try attachVMAManager(to: &addressSpace)
 
         let trapFramePtr = heap.pointee.kmalloc(Arch.TrapFrame.self)
+        
         trapFramePtr.initialize(to: Arch.TrapFrame())
         trapFramePtr.pointee.elr   = 0
         trapFramePtr.pointee.spsr  = 0x0

@@ -370,9 +370,11 @@ public struct VirtualMemoryManager {
         virtual: VirtualAddress
     ) -> UnsafeMutablePointer<Arch.PageTableEntry>? {
         var currentTable = table
-        let indexes = [virtual.l0, virtual.l1, virtual.l2]
+                
+        let indexes: InlineArray<3, Int> = [virtual.l0, virtual.l1, virtual.l2]
 
-        for index in indexes {
+        for i in 0..<indexes.count {
+            let index = indexes[i]
             let entry = currentTable[index]
             guard entry.isPresent else { return nil }
             currentTable = physToVirt(entry.physicalAddress)
@@ -472,6 +474,7 @@ public struct VirtualMemoryManager {
         
         let gicDistributorBase  = Kernel.platformInfo.gic.gicdBase
         let gicCpuInterfaceBase = Kernel.platformInfo.gic.giccBase
+        
         try map(
             table   : table,
             virtual : gicDistributorBase,
@@ -480,6 +483,7 @@ public struct VirtualMemoryManager {
             flags   : [],
             defaultFlags: []
         )
+        
         try map(
             table   : table,
             virtual : gicCpuInterfaceBase,
@@ -537,12 +541,32 @@ public struct VirtualMemoryManager {
         )
 
         let uartBase = Kernel.platformInfo.uart.baseAddr
-        try map(table: table, virtual: uartBase, physical: uartBase, type: .device)
+        try map(
+            table   : table,
+            virtual : uartBase,
+            physical: uartBase,
+            type    : .device,
+            flushTLB: false
+        )
 
         let gicDistributorBase  = Kernel.platformInfo.gic.gicdBase
         let gicCpuInterfaceBase = Kernel.platformInfo.gic.giccBase
-        try map(table: table, virtual: gicDistributorBase, physical: gicDistributorBase, type: .device)
-        try map(table: table, virtual: gicCpuInterfaceBase, physical: gicCpuInterfaceBase, type: .device)
+        
+        try map(
+            table   : table,
+            virtual : gicDistributorBase,
+            physical: gicDistributorBase,
+            type    : .device,
+            flushTLB: false
+        )
+        
+        try map(
+            table   : table,
+            virtual : gicCpuInterfaceBase,
+            physical: gicCpuInterfaceBase,
+            type    : .device,
+            flushTLB: false
+        )
     }
     
 
@@ -563,7 +587,8 @@ public struct VirtualMemoryManager {
                 virtual : currentAddr,
                 physical: currentAddr,
                 type    : type,
-                flags   : flags
+                flags   : flags,
+                flushTLB: false
             )
 
             currentAddr += Self.pageSize

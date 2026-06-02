@@ -31,10 +31,6 @@ public struct SplitProcessSyscall: SyscallProvider {
             let childMetadata  = childProcess.pointee.metadata!
             let parentMetadata = currentProcess.pointee.metadata!
             
-            // The child's pages are private anonymous copies, released
-            // per-page by `VMAManager.teardown`. It must NOT inherit — and
-            // later free — the parent's shared contiguous ELF image block,
-            // or teardown would double-free it.
             childMetadata.pointee.elfImage     = nil
             childMetadata.pointee.elfLoadBase  = parentMetadata.pointee.elfLoadBase
             childMetadata.pointee.elfLoadEnd   = parentMetadata.pointee.elfLoadEnd

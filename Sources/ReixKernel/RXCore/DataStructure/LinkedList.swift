@@ -26,13 +26,7 @@ public struct LinkedList<T: RXEntry> {
         self.minAddress = nil
         self.maxAddress = nil
         
-        if head != nil {
-            self.count += 1
-        }
-        
-        if tail != nil {
-            self.count += 1
-        }
+        self.count += 1
     }
     
     public mutating func pushBack(_ element: UnsafeMutablePointer<T>) {
@@ -130,7 +124,6 @@ public struct LinkedList<T: RXEntry> {
         while let element = current {
             if element.pointee.entryID == id {
                 remove(element: element)
-                count -= 1
                 return element
             }
             

@@ -387,7 +387,63 @@ public struct VMAManager: RXObject {
                     address: address
                 )
 
-            case .permission        : return false
+            case .permission:
+                guard vma.mappingFlags.contains(.copyOnWrite) && vma.permissions.contains(.write) else {
+                    return false
+                }
+                
+                
+                let aligned = address & ~(UserSpaceLayout.pageSize - 1)
+                
+                guard let phys = vmm.pointee.physicalAddressOf(
+                    rootTable: rootTablePhysical,
+                    virtual  : aligned
+                ) else { return false }
+                
+                
+                let flags = vma.permissions.toPageFlags()
+                
+                if ppm.pointee.refCount(of: phys) == 1 {
+
+                    do {
+                        try vmm.pointee.protectUserPage(
+                            rootTable: rootTablePhysical,
+                            virtual  : aligned,
+                            flags    : flags
+                        )
+                    } catch { return false }
+
+                } else {
+
+                    let page: PhysicalPage
+                    do {
+                        page = try ppm.pointee.alloc(4096)
+                    } catch { return false }
+
+                    let src: UnsafeMutablePointer<UInt8> = vmm.pointee.physToVirt(phys)
+                    let dst: UnsafeMutablePointer<UInt8> = vmm.pointee.physToVirt(page.address)
+                    
+                    dst.update(from: src, count: Int(UserSpaceLayout.pageSize))
+
+                    do {
+                        try vmm.pointee.mapUserPage(
+                            rootTable: rootTablePhysical,
+                            virtual  : aligned,
+                            physical : page.address,
+                            flags    : flags,
+                            flushTLB : false
+                        )
+                    } catch {
+                        try? ppm.pointee.free(page)
+                        return false
+                    }
+
+                    try? ppm.pointee.free(PhysicalPage(address: phys, order: 0))
+                }
+
+                Arch.MMU.flushTLB()
+                return true
+                
             case .alignment, .access: return false
         }
     }
@@ -495,48 +551,90 @@ public struct VMAManager: RXObject {
         var current = parent.vmaList.head
 
         while let nodePtr = current {
-            let vma  = nodePtr.pointee
-            let size = vma.endAddress - vma.startAddress
+            let vma        = nodePtr.pointee
+            let size       = vma.endAddress - vma.startAddress
 
+            let isShared   = (vma.backingType == .shared)
+            let isWritable = vma.permissions.contains(.write)
+            
+            
+            var childMappingFlags = vma.mappingFlags
+            if !isShared && isWritable {
+                nodePtr.pointee.mappingFlags.insert(.copyOnWrite)
+                childMappingFlags.insert(.copyOnWrite)
+            }
+            
+            
             try registerRegion(
                 start      : vma.startAddress,
                 size       : size,
                 permissions: vma.permissions,
-                backing    : .anonymous,
-                flags      : vma.mappingFlags
+                backing    : vma.backingType,
+                flags      : childMappingFlags
             )
 
+            
             if nodePtr == parent.brkVMA {
                 self.brkVMA = self.vmaList.search(at: vma.startAddress)
             }
 
-            let flags = vma.permissions.toPageFlags()
-            var va    = vma.startAddress
+
+            var va = vma.startAddress
             while va < vma.endAddress {
+                
                 if let parentPhys = vmm.pointee.physicalAddressOf(
                     rootTable: parent.rootTablePhysical,
                     virtual  : va
                 ) {
-                    let page: PhysicalPage
-                    do {
-                        page = try ppm.pointee.alloc(4096)
-                    } catch { throw .allocationFailed(error) }
+                    let pageFlags                 : VirtualPageFlags
+                    let downgradeParentPermissions: Bool
 
-                    let src: UnsafeMutablePointer<UInt8> = vmm.pointee.physToVirt(parentPhys)
-                    let dst: UnsafeMutablePointer<UInt8> = vmm.pointee.physToVirt(page.address)
-                    dst.update(from: src, count: Int(UserSpaceLayout.pageSize))
-
+                    if isShared {
+                        pageFlags = vma.permissions.toPageFlags()
+                        downgradeParentPermissions = false
+                        
+                    } else if isWritable {
+                        var permissionsNotWritable = vma.permissions
+                        
+                        permissionsNotWritable.remove(.write)
+                        
+                        pageFlags                  = permissionsNotWritable.toPageFlags()
+                        downgradeParentPermissions = true
+                        
+                    } else {
+                        pageFlags = vma.permissions.toPageFlags()
+                        downgradeParentPermissions = false
+                    }
+                        
                     do {
-                        try vmm.pointee.mapUserPage(
-                            rootTable: rootTablePhysical,
-                            virtual  : va,
-                            physical : page.address,
-                            flags    : flags,
-                            flushTLB : false
-                        )
+                        try ppm.pointee.retain(parentPhys)
+                        
+                        do {
+                            try vmm.pointee.mapUserPage(
+                                rootTable: rootTablePhysical,
+                                virtual  : va,
+                                physical : parentPhys,
+                                flags    : pageFlags,
+                                flushTLB : false
+                            )
+                                            
+                            if downgradeParentPermissions {
+                                try vmm.pointee.mapUserPage(
+                                    rootTable: parent.rootTablePhysical,
+                                    virtual  : va,
+                                    physical : parentPhys,
+                                    flags    : pageFlags,
+                                    flushTLB : false
+                                )
+                            }
+                            
+                        } catch {
+                            try? ppm.pointee.free(PhysicalPage(address: parentPhys, order: 0))
+//                            throw error
+                        }
+                                        
                     } catch {
-                        try? ppm.pointee.free(page)
-                        throw .mappingFailed(error)
+                        // throw .mappingFailed(error)
                     }
                 }
 
@@ -545,5 +643,7 @@ public struct VMAManager: RXObject {
 
             current = vma.next
         }
+        
+        Arch.MMU.flushTLB()
     }
 }
