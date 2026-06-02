@@ -26,8 +26,8 @@ public struct SpawnProcessSyscall: SyscallProvider {
 
 
         let length = Int(frame.pointee.x1)
-
         var childProcess: UnsafeMutablePointer<Process>?
+        
         if length != 0 {
             withUnsafeTemporaryAllocation(
                 byteCount: length + 1,
@@ -46,7 +46,23 @@ public struct SpawnProcessSyscall: SyscallProvider {
         if let childProcess = childProcess {
             childProcess.pointee.family.parent = currentProcess
             currentProcess.pointee.family.pushChild(childProcess)
-
+            
+            let handleIPC = context.ipc.pointee.spawnEndpoint(
+                for: currentProcess,
+                and: childProcess
+            )
+            
+            // Set on reg 1 the handle endpoint
+            switch handleIPC {
+                case .success(let success):
+                    frame.pointee.x1 = UInt64(success)
+                    
+                    
+                case .failure(_):
+                    frame.pointee.x1 = UInt64(UInt32.max)
+            }
+            
+            // Set on reg 0 the pid for parent process
             try? context.scheduler.pointee.addTask(childProcess)
             frame.pointee.x0 = childProcess.pointee.pid
         }

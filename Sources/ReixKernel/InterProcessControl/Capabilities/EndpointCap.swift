@@ -7,7 +7,7 @@
 
 public typealias Badge = UInt32
 
-public struct EndpointCap {
+public struct EndpointCap: Equatable {
     public var endpoint: UnsafeMutablePointer<Endpoint> // 8 Byte
     public var badge   : Badge                          // 4 Byte
     public var rights  : CapRights                      // 1 Byte

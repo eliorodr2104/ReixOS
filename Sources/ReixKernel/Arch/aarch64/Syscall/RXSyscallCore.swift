@@ -44,6 +44,14 @@ public func _asm_call_raw(
     _ buffer: UnsafeMutableRawPointer
 ) -> UInt64
 
+@_silgen_name("_asm_spawn")
+public func _asm_spawn_raw(
+    _ number: UInt64,
+    _ path  : UInt64,
+    _ length: UInt64,
+    _ buffer: UnsafeMutableRawPointer
+) -> UInt64
+
 
 public func _syscall(_ type: SyscallNumber) -> UInt64 {
     _asm_syscall_raw(type.rawValue, 0, 0, 0, 0, 0, 0, 0)

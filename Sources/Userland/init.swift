@@ -14,12 +14,13 @@ enum TestIPCLabel: UInt32, IPCLabel {
 @_cdecl("_start")
 public func main() {
     
-    var pidsChildren: InlineArray<100, PID> = InlineArray(repeating: 0)
-    for i in 0..<100 {
+    let processCount = 1000
+    var pidsChildren: InlineArray<1000, PID> = InlineArray(repeating: 0)
+    for i in 0..<processCount {
         let pid = split()
                 
         if pid == 0 {
-            for _ in 0..<10000 {
+            for _ in 0..<670 {
                 yield()
             }
             
@@ -32,7 +33,7 @@ public func main() {
     
     // Need create a reap childrens syscall, this reap all childrens
     
-    for i in 0..<100 {
+    for i in 0..<processCount {
         _ = reapChild(for: pidsChildren[i])
     }
     
@@ -42,9 +43,8 @@ public func main() {
     
 //    print("Hi, this is init process!")
 //
-//    let firstEndpoint = spawnEndpoint()
-//    let childPid = split()
-//
+//    let spawn = spawnProcess(path: "child.elf")
+
 //    if childPid == 0 {
 //        let receivedMessage = receive(handle: firstEndpoint)
 //        
@@ -62,21 +62,11 @@ public func main() {
 //        
 //        exit(code: 0)
 //    }
-//
-//    
-//    let secondEndpoint = spawnEndpoint()
-//
-//    let emptyWords = InlineArray<4, UInt32>(repeating: 0)
-//    _ = send(
-//        handle : firstEndpoint,
-//        message: Message(tag: MessageTag(TestIPCLabel.open, length: 0), words: emptyWords),
-//        grant  : secondEndpoint
-//    )
-//
+
 //    var dataWords = InlineArray<4, UInt32>(repeating: 0)
-//    dataWords[0] = 99
+//    dataWords[0] = 67
 //    _ = send(
-//        handle : secondEndpoint,
+//        handle : spawn.handle,
 //        message: Message(tag: MessageTag(TestIPCLabel.open, length: 1), words: dataWords)
 //    )
 //

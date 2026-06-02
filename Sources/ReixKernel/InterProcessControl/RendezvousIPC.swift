@@ -314,10 +314,77 @@ public struct RendezvousIPC: IPCInterface {
             endpoints[id] = nil
             endpoint.deinitialize(count: 1)
             heap.pointee.kfree(UnsafeMutableRawPointer(endpoint))
+            
             return .failure(.outOfEndpoints)
         }
 
         return .success(handle)
+    }
+    
+    
+    public mutating func spawnEndpoint(
+        for parent: UnsafeMutablePointer<Process>,
+        and child : UnsafeMutablePointer<Process>
+    ) -> Result<UInt32, IPCError> {
+        
+        var endpointID: Int? = nil
+        for i in 0..<endpoints.count {
+            
+            if endpoints[i] == nil {
+                endpointID = i
+                break
+            }
+        }
+        
+        guard let id = endpointID else {
+            return .failure(.notFoundFreeEndpoint)
+        }
+    
+        let endpoint = heap.pointee.kmalloc(Endpoint.self)
+        endpoint.initialize(
+            to: Endpoint(
+                state: .idle,
+                queue: LinkedList(head: nil, tail: nil),
+                owner: parent.pointee.pid
+            )
+        )
+
+        endpoints[id] = endpoint
+        
+        let parentCapability = EndpointCap(
+            endpoint: endpoint,
+            badge   : Badge(0),
+            rights  : [.send, .receive, .grant]
+        )
+
+        guard let parentEndpointHandle = parent.pointee.metadata.pointee.capsTable.install(parentCapability) else {
+            endpoints[id] = nil
+            endpoint.deinitialize(count: 1)
+            heap.pointee.kfree(UnsafeMutableRawPointer(endpoint))
+
+            return .failure(.outOfEndpoints)
+        }
+
+        let childCapability = EndpointCap(
+            endpoint: endpoint,
+            badge   : Badge(0),
+            rights  : [.send, .receive]
+        )
+        guard let childEndpointHandle = child.pointee.metadata.pointee.capsTable.install(childCapability) else {
+            _ = parent.pointee.metadata.pointee.capsTable.remove(parentCapability)
+
+            endpoints[id] = nil
+            endpoint.deinitialize(count: 1)
+            heap.pointee.kfree(UnsafeMutableRawPointer(endpoint))
+
+            return .failure(.outOfEndpoints)
+        }
+
+        // Record the seeded handle so the child can discover it through the
+        // `parentEndpoint` syscall, instead of relying on a fixed slot.
+        child.pointee.metadata.pointee.parentEndpoint = childEndpointHandle
+
+        return .success(parentEndpointHandle)
     }
 
 

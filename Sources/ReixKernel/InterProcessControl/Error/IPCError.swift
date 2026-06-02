@@ -18,7 +18,7 @@ public enum IPCError: Error {
     
     
     var status: IPCStatus {
-        return switch self {
+        switch self {
             case .wouldBlock                           : .wouldBlock
             case .notEnoughRights                      : .notEnoughRights
             case .invalidCapability                    : .invalidCapability

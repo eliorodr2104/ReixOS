@@ -21,8 +21,16 @@ public struct ProcessMetadata: RXObject {
     public static var errorMessageAllocation = "Failed to allocate ProcessMetadata on the kernel heap"
     
     public var capsTable: CapsTable         // (16 * 13) 208 Byte
-    
-    
+
+
+    /// Handle of the bootstrap endpoint shared with the parent, as seen by
+    /// THIS process. Seeded by the kernel at spawn time (`spawnEndpoint`);
+    /// `nil` when the process has no parent channel. Read back from userland
+    /// through the `parentEndpoint` syscall, so a freshly spawned child can
+    /// discover its handle instead of assuming a fixed capsTable slot.
+    public var parentEndpoint: UInt32?      // 4 Byte
+
+
     /// Current program break. Populated by the brk milestone (step 5);
     /// kept at zero until the VMA chain is wired so that any consumer
     /// reading it before step 5 sees a clearly invalid value.
@@ -68,8 +76,9 @@ public struct ProcessMetadata: RXObject {
         self.waitingChildPid = waitingChildPid
         self.exitCode        = exitCode
         self.capsTable       = CapsTable()
+        self.parentEndpoint  = nil
     }
-    
+
     public init() {
         self.elfImage        = nil
         self.elfLoadBase     = 0
@@ -78,6 +87,7 @@ public struct ProcessMetadata: RXObject {
         self.waitingChildPid = nil
         self.exitCode        = nil
         self.capsTable       = CapsTable()
+        self.parentEndpoint  = nil
     }
     
 }

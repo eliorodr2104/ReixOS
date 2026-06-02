@@ -6,6 +6,7 @@
 
 .global _asm_syscall
 .global _asm_recv
+.global _asm_spawn
 .global _asm_call
 .global _asm_recv_timeout
 
@@ -32,6 +33,27 @@ _asm_syscall:
     
     svc #0
     ret
+
+
+_asm_spawn:
+    // x0: syscall number
+    // x1: path ptr
+    // x2: length
+    // x3: output buffer ptr
+
+    mov x8, x0          // syscall number -> x8
+    mov x9, x3          // save output buffer ptr (survives the svc)
+
+    mov x0, x1          // path ptr -> kernel arg0 (x0)
+    mov x1, x2          // length   -> kernel arg1 (x1)
+
+    svc #0
+
+    // Return from kernel: x0 = pid, x1 = handleEndpoint
+    str x0, [x9]        // buffer[0] = pid
+    str x1, [x9, #8]    // buffer[1] = handleEndpoint
+
+    ret // x0 = pid (ignored; caller reads the buffer)
 
 
 _asm_recv:

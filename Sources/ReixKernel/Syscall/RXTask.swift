@@ -8,6 +8,25 @@ public typealias PID      = UInt64
 public typealias ExitCode = UInt64
 
 
+/// Raw layout written by `_asm_spawn` into the output buffer.
+/// Two contiguous 64-bit words to match the `str x0/x1` stores exactly.
+private struct SpawnResultRaw {
+    var pid   : UInt64 = 0
+    var handle: UInt64 = 0
+}
+
+/// Result handed back to userland: the child PID and the handle of the
+/// endpoint the kernel seeded into BOTH parent and child at spawn time.
+/// `handle == UInt32.max` means the process was spawned but no endpoint
+/// could be installed (capsTable/endpoint table full).
+public struct SpawnResult {
+    public let pid   : PID
+    public let handle: UInt32
+
+    public var hasEndpoint: Bool { handle != UInt32.max }
+}
+
+
 @inline(__always)
 public func exit(code: Int32) -> Never {
     _ = _syscall(.exit, UInt64(code))
@@ -30,6 +49,12 @@ public func getParentPID() -> UInt64 {
 }
 
 @inline(__always)
+public func parentEndpoint() -> UInt32? {
+    let parentHandle = UInt32(truncatingIfNeeded: _syscall(.parentEndpoint))
+    return parentHandle == UInt32.max ? nil : parentHandle
+}
+
+@inline(__always)
 public func split() -> PID {
     _syscall(.split)
 }
@@ -40,20 +65,44 @@ public func exec(path: StaticString) {
 }
 
 @inline(__always)
-public func spawnProcess(path: StaticString) -> UInt64 {
-    _syscall(
-        .spawnProcess,
-        UInt64(UInt(bitPattern: path.utf8Start)),
-        UInt64(path.utf8CodeUnitCount)
+public func spawnProcess(path: StaticString) -> SpawnResult {
+
+    var raw = SpawnResultRaw()
+
+    withUnsafeMutablePointer(to: &raw) { ptr in
+        _ = _asm_spawn_raw(
+            SyscallNumber.spawnProcess.rawValue,
+            UInt64(UInt(bitPattern: path.utf8Start)),
+            UInt64(path.utf8CodeUnitCount),
+            UnsafeMutableRawPointer(ptr)
+        )
+    }
+
+    return SpawnResult(
+        pid   : raw.pid,
+        handle: UInt32(truncatingIfNeeded: raw.handle)
     )
 }
 
 @inline(__always)
-public func spawnProcess() -> UInt64 {
-    _syscall(
-        .spawnProcess,
-        0,
-        0
+public func spawnProcess() -> SpawnResult {
+    
+    var raw = SpawnResultRaw()
+
+    withUnsafeMutablePointer(to: &raw) { ptr in
+        _ = _asm_spawn_raw(
+            SyscallNumber.spawnProcess.rawValue,
+            0,
+            0,
+            UnsafeMutableRawPointer(ptr)
+        )
+    }
+    
+    
+
+    return SpawnResult(
+        pid   : raw.pid,
+        handle: UInt32(truncatingIfNeeded: raw.handle)
     )
 }
 

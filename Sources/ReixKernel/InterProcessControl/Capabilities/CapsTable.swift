@@ -34,6 +34,21 @@ public struct CapsTable {
     }
     
     
+    public mutating func remove(_ cap: EndpointCap) -> Bool {
+        
+        for i in 0..<caps.count {
+
+            if caps[i] == cap {
+                caps[i] = nil
+                if counterElements > 0 { counterElements &-= 1 }
+                return true
+            }
+        }
+
+        return false
+    }
+    
+    
     public func resolve(_ handle: UInt32) -> EndpointCap? {
         guard handle < caps.count else { return nil }
 

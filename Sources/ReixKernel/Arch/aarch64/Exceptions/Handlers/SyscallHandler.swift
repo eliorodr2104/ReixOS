@@ -47,6 +47,7 @@ public struct SyscallHandler: RXObject {
             case .putchar      : PutcharSyscall      .handle(frame: frame, context: context)
             case .getPid       : GetPIDSyscall       .handle(frame: frame, context: context)
             case .getParentPid : GetParentPIDSyscall .handle(frame: frame, context: context)
+            case .parentEndpoint: GetParentEndpointSyscall.handle(frame: frame, context: context)
             case .reapChild    : ReapChildSyscall    .handle(frame: frame, context: context)
             case .spawnProcess : SpawnProcessSyscall .handle(frame: frame, context: context)
             case .split        : SplitProcessSyscall .handle(frame: frame, context: context)
