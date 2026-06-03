@@ -150,7 +150,7 @@ public struct Kernel {
         kprint(.info, in: "Kernel is running.", by: .kern)
 
         do {
-            try testProcessLaunch()
+            try jumpUserLand()
         } catch { throw KernelError(error) }
 
         while true {
@@ -163,32 +163,26 @@ public struct Kernel {
         Arch.CPU.triggerTrap()
     }
 
-    private static func testProcessLaunch() throws (ProcessManagerError) {
+    private static func jumpUserLand() throws (ProcessManagerError) {
         kprint(.info, in: "Starting process launch test.", by: .proc)
         
-        let firstProcessPath: StaticString = "idle.elf"
+        let firstProcessPath: StaticString = "Init.elf"
         let firstProcessPathPtr = UnsafeRawPointer(
             firstProcessPath.utf8Start
         ).assumingMemoryBound(to: CChar.self)
-        
-        
-        let secondProcessPath: StaticString = "init.elf"
-        let secondProcessPathPtr = UnsafeRawPointer(
-            secondProcessPath.utf8Start
-        ).assumingMemoryBound(to: CChar.self)
 
-        let firstProcess  = try processManager.pointee.spawnProcess(path: firstProcessPathPtr)
-        let secondProcess = try processManager.pointee.spawnProcess(path: secondProcessPathPtr)
+        let firstProcess = try processManager.pointee.spawnProcess(path: firstProcessPathPtr)
         
+         _ = ipc.pointee.spawnEndpoint(
+            for   : firstProcess,
+            rights: [.send, .receive, .grant, .spawn],
+            owner : Endpoint.kernelOwner
+        )
 
         kprint(.info, in: "Handing control to user space.", by: .proc)
         kprint()
 
         let trapFramePtr = firstProcess.pointee.context!
-
-        do {
-            try scheduler.pointee.addTask(secondProcess)
-        } catch { Arch.CPU.panic(error.description) }
 
         firstProcess.pointee.status = .running
         Arch.CPU.setCurrentProcess(

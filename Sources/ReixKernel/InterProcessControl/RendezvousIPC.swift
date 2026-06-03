@@ -277,7 +277,9 @@ public struct RendezvousIPC: IPCInterface {
 
     
     public mutating func spawnEndpoint(
-        for process: UnsafeMutablePointer<Process>
+        for process: UnsafeMutablePointer<Process>,
+            rights : CapRights = [.send, .receive, .grant],
+            owner  : PID?      = nil
     ) -> Result<UInt32, IPCError> {
         
         var endpointID: Int? = nil
@@ -298,7 +300,7 @@ public struct RendezvousIPC: IPCInterface {
             to: Endpoint(
                 state: .idle,
                 queue: LinkedList(head: nil, tail: nil),
-                owner: process.pointee.pid
+                owner: owner ?? process.pointee.pid
             )
         )
 
@@ -307,7 +309,7 @@ public struct RendezvousIPC: IPCInterface {
         let capability = EndpointCap(
             endpoint: endpoint,
             badge   : Badge(0),
-            rights  : [.send, .receive, .grant]
+            rights  : rights
         )
         
         guard let handle = process.pointee.metadata.pointee.capsTable.install(capability) else {
@@ -426,16 +428,18 @@ public struct RendezvousIPC: IPCInterface {
             return .failure(.notEnoughRights)
         }
         
+        
+        let receiverCap = EndpointCap(
+            endpoint: capability.endpoint,
+            badge   : capability.badge,
+            rights  : capability.rights.subtracting([.grant, .receive])
+        )
+        
+        
         let receiverMetadata = receiverProcess.pointee.metadata!
-        guard let receiverHandle = receiverMetadata.pointee.capsTable.install(capability) else {
+        guard let receiverHandle = receiverMetadata.pointee.capsTable.install(receiverCap) else {
             return .failure(.outOfEndpoints)
         }
-
-        // MOVE, not copy: revoke the capability from the sender now that the
-        // receiver holds it. Otherwise `grant` duplicated authority — both
-        // processes kept the cap (with full rights, including `.grant`), which
-        // let a granted capability be re-granted unboundedly.
-        senderMetadata.pointee.capsTable.remove(handler)
 
         return .success(receiverHandle)
     }

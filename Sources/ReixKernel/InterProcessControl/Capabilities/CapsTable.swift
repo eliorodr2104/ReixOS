@@ -54,6 +54,21 @@ public struct CapsTable {
 
         return caps[Int(handle)]
     }
+    
+    
+    public func findFirst(for right: CapRights) -> UInt32? {
+        
+        var result: UInt32? = nil
+        for i in 0..<caps.count {
+
+            if let endpoint = caps[i], endpoint.rights.contains(right) {
+                result = UInt32(i)
+                break
+            }
+        }
+        
+        return result
+    }
 
 
     /// Revoke the capability at `handle`, freeing the slot. Used to implement
