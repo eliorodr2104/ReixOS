@@ -46,13 +46,14 @@ public struct Process: RXEntry {
     
     
     public var ipcBadge      : Badge?                                 // 4 Byte
-    public var pendingGrant  : UInt32? = nil                          // 4 Byte
+    public var pendingGrant  : UInt32?    = nil                       // 4 Byte
     
     public var status        : ProcessStatus                          // 9 Byte  -> (8 + 1) Enum with param
     public var priority      : UInt8                                  // 1 Byte
     public var depth         : UInt8                                  // 1 Byte
     public var type          : ProcessType                            // 1 Byte
     public var expectsReply  : Bool = false                           // 1 Byte
+    public var pendingRights : CapRights? = nil
     
     
     

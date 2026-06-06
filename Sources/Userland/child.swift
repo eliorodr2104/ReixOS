@@ -16,7 +16,14 @@ public func main() {
     
     print("Hi, this is child process!")
 
-    
+    if spawnService() == nil {
+        print("Child: Eunuch [OK]")
+        
+    } else {
+        print("Child: Not Eunuch [FAIL]")
+    }
+
+
     guard let parentHandle = parentEndpoint() else {
         print("Child has no parent endpoint!")
         exit(code: 1)

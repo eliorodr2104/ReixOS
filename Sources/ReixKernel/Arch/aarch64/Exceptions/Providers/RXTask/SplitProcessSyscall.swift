@@ -13,7 +13,6 @@ public struct SplitProcessSyscall: SyscallProvider {
         context: SyscallContext
     ) {
         
-        // TODO: Add first Eunuch control and add Error launch
         guard let currentProcess = Arch.CPU.getCurrentProcess(),
               currentProcess.pointee.family.parent == nil else {
             return // throw .eunuch

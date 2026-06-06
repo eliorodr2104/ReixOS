@@ -31,11 +31,16 @@ public struct ReceivedMessage {
 
 @inline(__always)
 public func send(
-    handle : UInt32,
-    message: Message,
-    grant  : UInt32? = nil
+    handle     : UInt32,
+    message    : Message,
+    grant      : UInt32?    = nil,
+    grantRights: CapRights  = [.send, .receive]
 ) -> IPCStatus {
-     IPCStatus(
+    
+    let grantHandle = grant ?? UInt32.max
+    let grantWord   = (UInt64(grantRights.rawValue) << 32) | UInt64(grantHandle)
+
+     return IPCStatus(
         rawValue: _syscall(
             .send,
             UInt64(handle),
@@ -44,7 +49,7 @@ public func send(
             UInt64(message.words[1]),
             UInt64(message.words[2]),
             UInt64(message.words[3]),
-            UInt64(grant ?? UInt32.max)
+            grantWord
         )
      ) ?? .invalidMessage
 }
@@ -242,4 +247,12 @@ public func tryReceive(handle: UInt32) -> ReceivedMessage? {
         grantedCap: UInt32(raw.grantedHandle)
     )
     
+}
+
+
+@inline(__always)
+public func spawnService() -> UInt32? {
+    let handle = UInt32(truncatingIfNeeded: _syscall(.spawnService))
+    
+    return handle == UInt32.max ? nil : handle
 }

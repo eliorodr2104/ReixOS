@@ -60,15 +60,17 @@ public struct SyscallHandler: RXObject {
                 
                 
             // ICP
-            case .send         : SendSyscall         .handle(frame: frame, context: context)
-            case .receive      : ReceiveSyscall      .handle(frame: frame, context: context)
-            case .spawnEndpoint: SpawnEndpointSyscall.handle(frame: frame, context: context)
-            case .call         : CallSyscall         .handle(frame: frame, context: context)
-            case .reply        : ReplySyscall        .handle(frame: frame, context: context)
-            case .replyRecv    : ReplyRecvSyscall    .handle(frame: frame, context: context)
-            case .trySend      : TrySendSyscall      .handle(frame: frame, context: context)
-            case .tryReceive   : TryReceiveSyscall   .handle(frame: frame, context: context)
+            case .send          : SendSyscall          .handle(frame: frame, context: context)
+            case .receive       : ReceiveSyscall       .handle(frame: frame, context: context)
+            case .spawnEndpoint : SpawnEndpointSyscall .handle(frame: frame, context: context)
+            case .call          : CallSyscall          .handle(frame: frame, context: context)
+            case .reply         : ReplySyscall         .handle(frame: frame, context: context)
+            case .replyRecv     : ReplyRecvSyscall     .handle(frame: frame, context: context)
+            case .trySend       : TrySendSyscall       .handle(frame: frame, context: context)
+            case .tryReceive    : TryReceiveSyscall    .handle(frame: frame, context: context)
             case .receiveTimeout: ReceiveTimeoutSyscall.handle(frame: frame, context: context)
+            case .spawnService  : SpawnServiceSyscall  .handle(frame: frame, context: context)
+                
 
             default: break
         }

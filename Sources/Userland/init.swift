@@ -16,18 +16,18 @@ public func main() {
     
     print("Hi, this is init process!")
     
-
-    let serverProcess = spawnProcess(path: "ServerProcess.elf")
-    let firstChild    = spawnProcess(path: "Child.elf")
+    let serverProcess = spawnProcess(path: "ProcessServer.elf")
     
-
-    var dataWords = InlineArray<4, UInt32>(repeating: 0)
-    dataWords[0] = 67
-    _ = send(
-        handle : firstChild.handle,
-        message: Message(tag: MessageTag(TestIPCLabel.open, length: 1), words: dataWords),
-        grant  : serverProcess.handle
-    )
+    if let grantHandle = spawnService() {
+        var dataWords = InlineArray<4, UInt32>(repeating: 0)
+        dataWords[0] = 67
+        _ = send(
+            handle : serverProcess.handle,
+            message: Message(tag: MessageTag(TestIPCLabel.open, length: 1), words: dataWords),
+            grant      : grantHandle,
+            grantRights: [.spawn, .grant]
+        )
+    }
     
     while true { yield() }
 

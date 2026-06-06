@@ -12,10 +12,7 @@ public struct SpawnProcessSyscall: SyscallProvider {
         frame  : UnsafeMutablePointer<Arch.TrapFrame>,
         context: SyscallContext
     ) {
-        
-        // TODO: Add first Eunuch control and add Error launch
-        
-        // REMOVED: currentProcess.pointee.family.parent == nil, because add CapRight
+                
         guard let currentProcess = Arch.CPU.getCurrentProcess(),
               let _              = currentProcess.pointee.metadata.pointee.capsTable.findFirst(for: .spawn) else {
             return

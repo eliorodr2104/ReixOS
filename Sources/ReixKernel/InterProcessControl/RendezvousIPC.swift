@@ -37,7 +37,9 @@ public struct RendezvousIPC: IPCInterface {
         }
         
         let endpointPtr = capability.endpoint
-        let grantHandle = UInt32(frame.x6)
+        let grantWord   = frame.x6
+        let grantHandle = UInt32(truncatingIfNeeded: grantWord)
+        let grantRights = CapRights(rawValue: UInt8(truncatingIfNeeded: grantWord >> 32))
         
         if endpointPtr.pointee.state == .recvBlocked {
             
@@ -56,7 +58,8 @@ public struct RendezvousIPC: IPCInterface {
                 transferResult = transferCapability(
                     from   : currentProcess,
                     handler: grantHandle,
-                    to     : receiverProcess
+                    to     : receiverProcess,
+                    rights : grantRights
                 )
             }
             
@@ -91,10 +94,11 @@ public struct RendezvousIPC: IPCInterface {
         }
         
         // Iplement Build Message
-        currentProcess.pointee.message      = Message(from: frame)
-        currentProcess.pointee.ipcBadge     = capability.badge
-        currentProcess.pointee.pendingGrant = grantHandle == UInt32.max ? nil : grantHandle
-        currentProcess.pointee.ipcDeadline  = nil
+        currentProcess.pointee.message       = Message(from: frame)
+        currentProcess.pointee.ipcBadge      = capability.badge
+        currentProcess.pointee.pendingGrant  = grantHandle == UInt32.max ? nil : grantHandle
+        currentProcess.pointee.pendingRights = grantRights 
+        currentProcess.pointee.ipcDeadline   = nil
 
         endpointPtr.pointee.queue.pushBack(currentProcess)
 
@@ -132,18 +136,20 @@ public struct RendezvousIPC: IPCInterface {
             
             
             var transferResult: Result<UInt32, IPCError>?
-            if let pendingGrant = senderProcess.pointee.pendingGrant {
+            if let pendingGrant  = senderProcess.pointee.pendingGrant {
                 transferResult = transferCapability(
                     from   : senderProcess,
                     handler: pendingGrant,
-                    to     : currentProcess
+                    to     : currentProcess,
+                    rights : senderProcess.pointee.pendingRights ?? [.send, .receive]
                 )
             }
             
             switch transferResult {
                 case .success(let newGrantHandle):
                     frame.pointee.x7 = UInt64(newGrantHandle)
-                    senderProcess.pointee.pendingGrant = nil
+                    senderProcess.pointee.pendingGrant  = nil
+                    senderProcess.pointee.pendingRights = nil
                     
                 case .failure(_), nil:
                     frame.pointee.x7 = UInt64(UInt32.max)
@@ -416,7 +422,8 @@ public struct RendezvousIPC: IPCInterface {
     public func transferCapability(
         from senderProcess  : UnsafeMutablePointer<Process>,
              handler        : UInt32,
-        to   receiverProcess: UnsafeMutablePointer<Process>
+        to   receiverProcess: UnsafeMutablePointer<Process>,
+             rights         : CapRights
         
     ) -> Result<UInt32, IPCError> {
         let senderMetadata = senderProcess.pointee.metadata!
@@ -428,11 +435,11 @@ public struct RendezvousIPC: IPCInterface {
             return .failure(.notEnoughRights)
         }
         
-        
+        let effective = rights.intersection(capability.rights)
         let receiverCap = EndpointCap(
             endpoint: capability.endpoint,
             badge   : capability.badge,
-            rights  : capability.rights.subtracting([.grant, .receive])
+            rights  : effective
         )
         
         

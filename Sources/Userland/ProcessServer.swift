@@ -21,18 +21,28 @@ public func main() {
         exit(code: 1)
     }
     
+    let parentMessage = receive(
+        handle : parentHandle
+    )
+    
+    if parentMessage.message.words[0] == 67 {
+        print("Message arrived")
+    }
+    
+    let child = spawnProcess(path: "Child.elf")
+    
+    var dataWords = InlineArray<4, UInt32>(repeating: 0)
+    dataWords[0] = 67
+    _ = send(
+        handle : child.handle,
+        message: Message(tag: MessageTag(TestIPCLabel.open, length: 1), words: dataWords)
+    )
+    
+    
     while true {
-        let req = receive(
+        let _ = receive(
             handle : parentHandle
         )
         
-        if req.message.words[0] == 67 {
-            print("Message arrived")
-        }
     }
-                    
-    
-    
-    print("Receive: ", terminator: " ")
-//    print(String(req.message.words[0]))
 }
