@@ -55,9 +55,19 @@ ALL_USER_MODS := $(MOD_REIX_MOD)
 ALL_USER_OBJS := $(MOD_REIX_OBJ)
 
 # App sources Userland
-USER_APPS_SRCS := $(wildcard $(USER_DIR)/*.swift)
-USER_APPS_ELFS := $(patsubst $(USER_DIR)/%.swift, $(USER_DIR)/%.elf, $(USER_APPS_SRCS))
-USER_STUBS_OBJ := $(USER_DIR)/user_stubs.o
+#
+# Due tipi di app, entrambi producono un singolo <nome>.elf:
+#   * single-file : un *.swift direttamente sotto Sources/Userland (es. Child, Init)
+#   * directory   : una sottocartella con uno o piu *.swift (es. NameServer,
+#                   ProcessServer); tutti i suoi sorgenti compilano insieme (-wmo).
+USER_SINGLE_SRCS := $(wildcard $(USER_DIR)/*.swift)
+USER_SINGLE_ELFS := $(patsubst $(USER_DIR)/%.swift, $(USER_DIR)/%.elf, $(USER_SINGLE_SRCS))
+
+USER_APP_DIRS    := $(filter-out Modules, $(notdir $(shell find $(USER_DIR) -mindepth 1 -maxdepth 1 -type d)))
+USER_DIR_ELFS    := $(patsubst %, $(USER_DIR)/%.elf, $(USER_APP_DIRS))
+
+USER_APPS_ELFS   := $(USER_SINGLE_ELFS) $(USER_DIR_ELFS)
+USER_STUBS_OBJ   := $(USER_DIR)/user_stubs.o
 
 
 # =============================================================================
@@ -100,6 +110,17 @@ $(USER_DIR)/%.elf: $(USER_DIR)/%.swift $(ALL_USER_MODS) $(USER_STUBS_OBJ) $(USER
 	$(SWIFTC) $(SWIFT_FLAGS) -I $(USER_MOD_DIR) -c $< -o $(@:.elf=.o)
 	$(LD) -T user.ld -o $@ $(@:.elf=.o) $(USER_STUBS_OBJ) $(USER_LIB_OBJS) $(ALL_USER_OBJS)
 	rm $(@:.elf=.o)
+
+# Directory apps: tutti i *.swift della cartella compilano insieme in un solo elf.
+# Una regola esplicita per ogni cartella (override del pattern single-file sopra).
+define USER_DIR_APP_RULE
+$(USER_DIR)/$(1).elf: $$(wildcard $(USER_DIR)/$(1)/*.swift) $$(ALL_USER_MODS) $$(USER_STUBS_OBJ) $$(USER_LIB_OBJS)
+	@echo "Compilazione Userland ELF (dir): $$@"
+	$$(SWIFTC) $$(SWIFT_FLAGS) -I $$(USER_MOD_DIR) -c $$(wildcard $(USER_DIR)/$(1)/*.swift) -o $$(@:.elf=.o)
+	$$(LD) -T user.ld -o $$@ $$(@:.elf=.o) $$(USER_STUBS_OBJ) $$(USER_LIB_OBJS) $$(ALL_USER_OBJS)
+	rm $$(@:.elf=.o)
+endef
+$(foreach app,$(USER_APP_DIRS),$(eval $(call USER_DIR_APP_RULE,$(app))))
 
 userland: $(USER_APPS_ELFS)
 

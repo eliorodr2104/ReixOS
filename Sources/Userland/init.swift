@@ -7,27 +7,34 @@
 
 import Reix
 
-enum TestIPCLabel: UInt32, IPCLabel {
-    case open = 0
-}
-
 @_cdecl("_start")
 public func main() {
     
-    print("Hi, this is init process!")
+    print("[ INIT  ] Hi, this is init process!\n")
+    print("[ INIT  ] Launching Name Server")
     
-    let serverProcess = spawnProcess(path: "ProcessServer.elf")
+    let nameServer = spawnProcess(path: "NameServer.elf")
+    let capPublic  = receive(handle: nameServer.handle)
     
-    if let grantHandle = spawnService() {
-        var dataWords = InlineArray<4, UInt32>(repeating: 0)
-        dataWords[0] = 67
-        _ = send(
-            handle : serverProcess.handle,
-            message: Message(tag: MessageTag(TestIPCLabel.open, length: 1), words: dataWords),
-            grant      : grantHandle,
-            grantRights: [.spawn, .grant]
-        )
+    guard let nsCapability = capPublic.grantedCap else {
+        return
     }
+    
+    
+    let processServer = spawnProcess(path: "ProcessServer.elf")
+    _ = send(
+        handle     : processServer.handle,
+        message    : NameServerResponse.ok.message,
+        grant      : spawnService(),
+        grantRights: [.spawn, .grant]
+    )
+
+    _ = send(
+        handle     : processServer.handle,
+        message    : NameServerResponse.ok.message,
+        grant      : nsCapability,
+        grantRights: [.send, .grant, .derive]
+    )
     
     while true { yield() }
 

@@ -14,34 +14,35 @@ enum TestIPCLabel: UInt32, IPCLabel {
 @_cdecl("_start")
 public func main() {
     
-    print("Hi, this is child process!")
+    print("[ CHILD ] Hi, this is child process!\n")
 
     if spawnService() == nil {
-        print("Child: Eunuch [OK]")
+        print("[ CHILD ] Is Eunuch")
         
     } else {
-        print("Child: Not Eunuch [FAIL]")
+        print("[ CHILD ] Have balls")
     }
 
 
     guard let parentHandle = parentEndpoint() else {
-        print("Child has no parent endpoint!")
+        print("[ CHILD ] Don't have parent endpoint!")
         exit(code: 1)
     }
     
     
     let received = receive(handle: parentHandle)
-    if let serverCap = received.grantedCap {
-        var dataWords = InlineArray<4, UInt32>(repeating: 0)
-        dataWords[0] = 67
-        _ = send(
-            handle : serverCap,
-            message: Message(tag: MessageTag(TestIPCLabel.open, length: 1), words: dataWords)
-        )
+    guard let nsCap = received.grantedCap else {
+        print("[ CHILD ] no NS cap")
+        exit(code: 1)
     }
+
     
+    let request = call(handle: nsCap, message: NameServerOperation.lookup.message(for: .fileSystem))
+    
+    if request.grantedCap != nil {
+        print("[ CHILD ] lookup OK, Have key dummy server")
+    }
+        
     
     while true { yield() }
-
-//    exit(code: 0)
 }

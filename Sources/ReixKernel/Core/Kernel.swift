@@ -189,6 +189,15 @@ public struct Kernel {
             VirtualAddress(UInt(bitPattern: firstProcess))
         )
 
+        
+        kprint("=================================================")
+        kprint()
+        kprint("                    USER LAND                    ")
+        kprint()
+        kprint("=================================================")
+        kprint()
+
+        
         jump_to_user_mode(
             trapFrame: trapFramePtr,
             rootTable: firstProcess.pointee.addressSpace.rootTablePhysical.address

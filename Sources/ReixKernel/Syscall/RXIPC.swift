@@ -18,13 +18,16 @@ private struct ReceivedMessageRaw {
 public struct ReceivedMessage {
     public var message   : Message
     public var grantedCap: UInt32?
+    public var badge     : UInt32
     
     init(
         message   : Message,
-        grantedCap: UInt32
+        grantedCap: UInt32,
+        badge     : UInt32
     ) {
         self.message    = message
         self.grantedCap = grantedCap == UInt32.max ? nil : UInt32(grantedCap)
+        self.badge      = badge
     }
 }
 
@@ -75,7 +78,8 @@ public func receive(handle: UInt32) -> ReceivedMessage {
 
     return ReceivedMessage(
         message   : Message(tag: MessageTag(packed: raw.tag), words: w),
-        grantedCap: UInt32(raw.grantedHandle)
+        grantedCap: UInt32(raw.grantedHandle),
+        badge     : UInt32(raw.badge)
     )
 }
 
@@ -106,7 +110,8 @@ public func receive(
 
     return ReceivedMessage(
         message   : Message(tag: MessageTag(packed: raw.tag), words: w),
-        grantedCap: UInt32(raw.grantedHandle)
+        grantedCap: UInt32(raw.grantedHandle),
+        badge     : UInt32(raw.badge)
     )
 }
 
@@ -145,13 +150,22 @@ public func call(
 
     return ReceivedMessage(
         message   : Message(tag: MessageTag(packed: raw.tag), words: w),
-        grantedCap: UInt32(raw.grantedHandle)
+        grantedCap: UInt32(raw.grantedHandle),
+        badge     : UInt32(raw.badge)
     )
 }
 
 
 @inline(__always)
-public func reply(message: Message) -> IPCStatus {
+public func reply(
+    message    : Message,
+    grant      : UInt32?   = nil,
+    grantRights: CapRights = [.send]
+) -> IPCStatus {
+    
+    let grantHandle = grant ?? UInt32.max
+    let grantWord   = (UInt64(grantRights.rawValue) << 32) | UInt64(grantHandle)
+    
     return IPCStatus(
         rawValue: _syscall(
             .reply,
@@ -161,7 +175,7 @@ public func reply(message: Message) -> IPCStatus {
             UInt64(message.words[1]),
             UInt64(message.words[2]),
             UInt64(message.words[3]),
-            UInt64(UInt32.max)
+            grantWord
         )
     ) ?? .invalidMessage
 }
@@ -194,7 +208,8 @@ public func replyRecv(
 
     return ReceivedMessage(
         message   : Message(tag: MessageTag(packed: raw.tag), words: w),
-        grantedCap: UInt32(raw.grantedHandle)
+        grantedCap: UInt32(raw.grantedHandle),
+        badge     : UInt32(raw.badge)
     )
 }
 
@@ -244,7 +259,8 @@ public func tryReceive(handle: UInt32) -> ReceivedMessage? {
 
     return ReceivedMessage(
         message   : Message(tag: MessageTag(packed: raw.tag), words: w),
-        grantedCap: UInt32(raw.grantedHandle)
+        grantedCap: UInt32(raw.grantedHandle),
+        badge     : UInt32(raw.badge)
     )
     
 }
@@ -253,6 +269,24 @@ public func tryReceive(handle: UInt32) -> ReceivedMessage? {
 @inline(__always)
 public func spawnService() -> UInt32? {
     let handle = UInt32(truncatingIfNeeded: _syscall(.spawnService))
-    
+
     return handle == UInt32.max ? nil : handle
+}
+
+
+@inline(__always)
+public func derive(
+    handle: UInt32,
+    badge : UInt32,
+    rights: CapRights
+) -> UInt32? {
+    let result = UInt32(truncatingIfNeeded: _syscall(
+        .derive,
+        UInt64(handle),
+        UInt64(badge),
+        UInt64(rights.rawValue),
+        0, 0, 0, 0
+    ))
+
+    return result == UInt32.max ? nil : result
 }

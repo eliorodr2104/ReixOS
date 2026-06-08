@@ -57,7 +57,7 @@ public struct CapsTable {
     
     
     public func findFirst(for right: CapRights) -> UInt32? {
-        
+
         var result: UInt32? = nil
         for i in 0..<caps.count {
 
@@ -66,8 +66,33 @@ public struct CapsTable {
                 break
             }
         }
-        
+
         return result
+    }
+
+
+    /// Derive a new capability to the same endpoint with a fresh `badge` and a
+    /// (reduced) `rights` set. Gated by `.derive` on the source cap; the derived
+    /// copy never carries `.derive`, so it can't re-derive identities.
+    public mutating func derive(
+        from handle: UInt32,
+        badge      : Badge,
+        rights     : CapRights
+    ) -> UInt32? {
+        guard let source = resolve(handle),
+              source.rights.contains(.derive) else {
+            return nil
+        }
+
+        let effective = rights.intersection(source.rights).subtracting(.derive)
+
+        return install(
+            EndpointCap(
+                endpoint: source.endpoint,
+                badge   : badge,
+                rights  : effective
+            )
+        )
     }
 
 

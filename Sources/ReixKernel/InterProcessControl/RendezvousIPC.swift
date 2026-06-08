@@ -249,18 +249,71 @@ public struct RendezvousIPC: IPCInterface {
         return .success(.blocked)
     }
     
-            
+    
     public mutating func reply(
         frame: AArch64.TrapFrame
     ) -> Result<CommunicationMessageResult, IPCError> {
-                    
+        let grantWord = frame.x6
+        
+        return replyInternal(
+            frame      : frame,
+            grantHandle: UInt32(truncatingIfNeeded: grantWord),
+            grantRights: CapRights(rawValue: UInt8(truncatingIfNeeded: grantWord >> 32))
+        )
+    }
+    
+    public mutating func replyRecv(
+        capability: EndpointCap,
+        frame     : UnsafeMutablePointer<AArch64.TrapFrame>
+    ) -> Result<CommunicationMessageResult, IPCError> {
+        guard capability.rights.contains(.receive) else { return .failure(.notEnoughRights) }
+
+        _ = replyInternal(
+            frame      : frame.pointee,
+            grantHandle: UInt32.max,
+            grantRights: []
+        )
+        
+        return receive(capability: capability, frame: frame)
+    }
+    
+    
+    @inline(__always)
+    private mutating func replyInternal(
+        frame      : AArch64.TrapFrame,
+        grantHandle: UInt32,
+        grantRights: CapRights
+    ) -> Result<CommunicationMessageResult, IPCError> {
+        
         guard let currentProcess = Arch.CPU.getCurrentProcess(),
               let replyProcess = currentProcess.pointee.replyTo else {
             
             return .failure(.noReply)
         }
-                
+        
+        let grantWord   = frame.x6
+        let grantHandle = UInt32(truncatingIfNeeded: grantWord)
+        let grantRights = CapRights(rawValue: UInt8(truncatingIfNeeded: grantWord >> 32))
+
         Message(from: frame).write(to: replyProcess.pointee.context!)
+
+        var transferResult: Result<UInt32, IPCError>? = nil
+        if grantHandle != UInt32.max {
+            transferResult = transferCapability(
+                from   : currentProcess,
+                handler: grantHandle,
+                to     : replyProcess,
+                rights : grantRights
+            )
+        }
+        
+        switch transferResult {
+            case .success(let newHandle):
+                replyProcess.pointee.context!.pointee.x7 = UInt64(newHandle)
+            
+            case .failure(_), nil:
+                replyProcess.pointee.context!.pointee.x7 = UInt64(UInt32.max)
+        }
         
         scheduler.pointee.resume(replyProcess)
         currentProcess.pointee.replyTo = nil
@@ -268,23 +321,10 @@ public struct RendezvousIPC: IPCInterface {
         return .success(.sended)
     }
     
-    public mutating func replyRecv(
-        capability: EndpointCap,
-        frame     : UnsafeMutablePointer<AArch64.TrapFrame>
-    ) -> Result<CommunicationMessageResult, IPCError> {
-        guard capability.rights.contains(.receive) else {
-            return .failure(.notEnoughRights)
-        }
-        
-        _ = reply(frame: frame.pointee)
-        
-        return receive(capability: capability, frame: frame)
-    }
-
     
     public mutating func spawnEndpoint(
         for process: UnsafeMutablePointer<Process>,
-            rights : CapRights = [.send, .receive, .grant],
+            rights : CapRights = [.send, .receive, .grant, .derive],
             owner  : PID?      = nil
     ) -> Result<UInt32, IPCError> {
         
@@ -394,8 +434,8 @@ public struct RendezvousIPC: IPCInterface {
 
         return .success(parentEndpointHandle)
     }
-
-
+    
+    
     /// Reclaim every endpoint created by `pid`, freeing its table slot and heap
     /// block. Called from the exit path so a process that spawned endpoints and
     /// then exited doesn't permanently leak slots out of the fixed 64-entry

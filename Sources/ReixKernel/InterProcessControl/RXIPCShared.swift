@@ -70,6 +70,7 @@ public struct CapRights: OptionSet {
     public static let receive = CapRights(rawValue: 1 << 1)
     public static let grant   = CapRights(rawValue: 1 << 2)
     public static let spawn   = CapRights(rawValue: 1 << 3)
+    public static let derive  = CapRights(rawValue: 1 << 4)
 }
 
 

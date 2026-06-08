@@ -38,4 +38,5 @@ public enum SyscallNumber: UInt64 {
     case tryReceive
     case receiveTimeout
     case spawnService
+    case derive
 }
