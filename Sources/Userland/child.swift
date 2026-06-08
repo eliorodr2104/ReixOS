@@ -7,15 +7,11 @@
 
 import Reix
 
-enum TestIPCLabel: UInt32, IPCLabel {
-    case open = 0
-}
-
 @_cdecl("_start")
 public func main() {
     
     print("[ CHILD ] Hi, this is child process!\n")
-
+    
     if spawnService() == nil {
         print("[ CHILD ] Is Eunuch")
         
@@ -36,13 +32,19 @@ public func main() {
         exit(code: 1)
     }
 
-    
-    let request = call(handle: nsCap, message: NameServerOperation.lookup.message(for: .fileSystem))
-    
-    if request.grantedCap != nil {
-        print("[ CHILD ] lookup OK, Have key dummy server")
+    // API ergonomica: niente piu call/message a mano.
+    let nameServer = NameServerClient(endpoint: nsCap)
+
+    guard let processServer = ProcessServerClient(via: nameServer) else {
+        print("[ CHILD ] no process server")
+        exit(code: 1)
     }
-        
-    
+    print("[ CHILD ] lookup OK, Have process server key")
+
+    if let spawned = processServer.spawn(.child2) {
+        print("[ CHILD ] Child Pid: ", terminator: " ")
+        print(String(spawned.pid))
+    }
+
     while true { yield() }
 }

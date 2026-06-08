@@ -29,7 +29,7 @@ RX_CORE_SRCS  := $(wildcard $(SYSCALL_ARCH_DIR)/*.swift)
 # Shared IPC data structures: compiled into BOTH the kernel (picked up by the
 # KERNEL_SWIFT_SRCS find below, since it lives under Sources/ReixKernel) and the
 # Reix module, so userland and kernel agree on the same Message/MessageTag ABI.
-IPC_SHARED_SRCS := Sources/ReixKernel/InterProcessControl/RXIPCShared.swift
+IPC_SHARED_SRCS := $(wildcard Sources/ReixKernel/InterProcessControl/IPC/*.swift)
 
 KERNEL_SWIFT_SRCS_ALL := $(shell find Sources -name "*.swift" -not -path "$(USER_DIR)/*")
 KERNEL_C_SRCS_ALL     := $(shell find Sources -name "*.c" -not -path "$(USER_DIR)/*")
