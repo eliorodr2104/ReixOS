@@ -248,7 +248,7 @@ public func tryReceive(handle: UInt32) -> ReceivedMessage? {
     }
     
     
-    guard resultAsm != 2 else { return nil }
+    guard resultAsm != IPCStatus.wouldBlock.rawValue else { return nil }
     
 
     var w = InlineArray<4, UInt32>(repeating: 0)

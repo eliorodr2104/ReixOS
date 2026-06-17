@@ -7,6 +7,7 @@
 
 import Reix
 
+
 @_cdecl("_start")
 public func main() {
     
@@ -32,7 +33,6 @@ public func main() {
         exit(code: 1)
     }
 
-    // API ergonomica: niente piu call/message a mano.
     let nameServer = NameServerClient(endpoint: nsCap)
 
     guard let processServer = ProcessServerClient(via: nameServer) else {

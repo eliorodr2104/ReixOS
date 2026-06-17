@@ -29,7 +29,7 @@ public struct ExitSyscall: SyscallProvider {
 
             // Reclaim any IPC endpoints this process owned, otherwise its slots
             // in the fixed 64-entry endpoint table leak on every exit.
-            context.ipc.pointee.releaseEndpoints(of: oldProcess.pointee.pid)
+            context.ipc.pointee.releaseCapabilities(of: oldProcess)
 
             let exitingCode = UInt32(frame.pointee.x0)
             do {

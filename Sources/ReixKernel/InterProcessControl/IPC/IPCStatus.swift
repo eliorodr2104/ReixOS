@@ -6,9 +6,9 @@
 //
 
 public enum IPCStatus: UInt64 {
-    case ok = 0
-    case wouldBlock
-    case notEnoughRights
+    case ok              = 0
+    case wouldBlock      = 1
+    case notEnoughRights = 2
     case invalidCapability
     case timeout
     case noReply

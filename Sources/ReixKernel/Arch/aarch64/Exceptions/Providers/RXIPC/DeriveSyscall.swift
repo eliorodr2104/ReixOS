@@ -17,8 +17,6 @@ public struct DeriveSyscall: SyscallProvider {
         frame  : UnsafeMutablePointer<Arch.TrapFrame>,
         context: SyscallContext
     ) {
-        _ = context
-
         guard let current = Arch.CPU.getCurrentProcess() else {
             frame.pointee.x0 = UInt64(UInt32.max)
             return
@@ -35,6 +33,10 @@ public struct DeriveSyscall: SyscallProvider {
         ) else {
             frame.pointee.x0 = UInt64(UInt32.max)
             return
+        }
+
+        if let source = current.pointee.metadata.pointee.capsTable.resolve(handle) {
+            context.ipc.pointee.retain(source.endpoint)
         }
 
         frame.pointee.x0 = UInt64(newHandle)

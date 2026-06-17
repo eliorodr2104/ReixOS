@@ -290,10 +290,6 @@ public struct RendezvousIPC: IPCInterface {
             
             return .failure(.noReply)
         }
-        
-        let grantWord   = frame.x6
-        let grantHandle = UInt32(truncatingIfNeeded: grantWord)
-        let grantRights = CapRights(rawValue: UInt8(truncatingIfNeeded: grantWord >> 32))
 
         Message(from: frame).write(to: replyProcess.pointee.context!)
 
@@ -365,6 +361,8 @@ public struct RendezvousIPC: IPCInterface {
             
             return .failure(.outOfEndpoints)
         }
+        
+        retain(endpoint)
 
         return .success(handle)
     }
@@ -412,6 +410,8 @@ public struct RendezvousIPC: IPCInterface {
 
             return .failure(.outOfEndpoints)
         }
+        
+        retain(endpoint)
 
         let childCapability = EndpointCap(
             endpoint: endpoint,
@@ -421,13 +421,12 @@ public struct RendezvousIPC: IPCInterface {
         guard let childEndpointHandle = child.pointee.metadata.pointee.capsTable.install(childCapability) else {
             _ = parent.pointee.metadata.pointee.capsTable.remove(parentCapability)
 
-            endpoints[id] = nil
-            endpoint.deinitialize(count: 1)
-            heap.pointee.kfree(UnsafeMutableRawPointer(endpoint))
-
+            release(endpoint)
             return .failure(.outOfEndpoints)
         }
-
+        
+        retain(endpoint)
+        
         // Record the seeded handle so the child can discover it through the
         // `parentEndpoint` syscall, instead of relying on a fixed slot.
         child.pointee.metadata.pointee.parentEndpoint = childEndpointHandle
@@ -436,30 +435,7 @@ public struct RendezvousIPC: IPCInterface {
     }
     
     
-    /// Reclaim every endpoint created by `pid`, freeing its table slot and heap
-    /// block. Called from the exit path so a process that spawned endpoints and
-    /// then exited doesn't permanently leak slots out of the fixed 64-entry
-    /// table.
-    ///
-    /// NOTE: this is owner-based reclamation. A capability `grant`ed to another
-    /// process points at the same endpoint, so freeing it on the owner's exit
-    /// leaves that grantee with a dangling capability — acceptable until the
-    /// IPC ownership/lifetime policy is finalized, but worth revisiting (e.g.
-    /// refcount endpoints, or block exit while endpoints are still referenced).
-    public mutating func releaseEndpoints(of pid: PID) {
-        for i in 0..<endpoints.count {
-            guard let endpoint = endpoints[i], endpoint.pointee.owner == pid else {
-                continue
-            }
-
-            endpoints[i] = nil
-            endpoint.deinitialize(count: 1)
-            heap.pointee.kfree(UnsafeMutableRawPointer(endpoint))
-        }
-    }
-    
-    
-    public func transferCapability(
+    public mutating func transferCapability(
         from senderProcess  : UnsafeMutablePointer<Process>,
              handler        : UInt32,
         to   receiverProcess: UnsafeMutablePointer<Process>,
@@ -487,6 +463,8 @@ public struct RendezvousIPC: IPCInterface {
         guard let receiverHandle = receiverMetadata.pointee.capsTable.install(receiverCap) else {
             return .failure(.outOfEndpoints)
         }
+        
+        retain(receiverCap.endpoint)
 
         return .success(receiverHandle)
     }
@@ -520,6 +498,41 @@ public struct RendezvousIPC: IPCInterface {
                     endpoint.pointee.state = .idle
                 }
             }
+        }
+    }
+    
+    
+    // MARK: - Helpers
+    
+    @inline(__always)
+    mutating func retain(_ ep: UnsafeMutablePointer<Endpoint>) {
+        ep.pointee.references &+= 1
+    }
+    
+    
+    private mutating func release(_ ep: UnsafeMutablePointer<Endpoint>) {
+        
+        guard ep.pointee.references > 0 else { return }
+        ep.pointee.references &-= 1
+        guard ep.pointee.references == 0 else { return }
+        
+        for i in 0..<endpoints.count where endpoints[i] == ep {
+            endpoints[i] = nil
+            break
+        }
+        
+        ep.deinitialize(count: 1)
+        heap.pointee.kfree(UnsafeMutableRawPointer(ep))
+    }
+    
+    public mutating func releaseCapabilities(of process: UnsafeMutablePointer<Process>) {
+        guard let metadata = process.pointee.metadata else { return }
+        
+        for i in 0..<metadata.pointee.capsTable.caps.count where metadata.pointee.capsTable.caps[i] != nil {
+            let endpointCap = metadata.pointee.capsTable.caps[i]!
+
+            release(endpointCap.endpoint)
+            metadata.pointee.capsTable.remove(handle: i)
         }
     }
 }

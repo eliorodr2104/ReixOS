@@ -16,6 +16,7 @@ public struct ElfParser {
     private static let PF_R: UInt32 = 0x4
 
     private init() {}
+    
 
     public static func loadSegments(
         handle      : FileHandle,
@@ -73,10 +74,17 @@ public struct ElfParser {
             if case .failure(_) = phdrRead {
                 throw .noLoadableSegments /*.readError(err)*/
             }
-
+            
             if phdr.p_type == PT_LOAD {
+                
+                // Control user space address
+                guard phdr.p_vaddr >= UserSpaceLayout.userMin &&
+                        phdr.p_vaddr <= UserSpaceLayout.userMax else {
+                    throw .malformedLayout
+                }
+                
                 let segmentStart = phdr.p_vaddr & ~(Self.pageSize - 1)
-                let segmentEnd = (phdr.p_vaddr + phdr.p_memsz + Self.pageSize - 1) & ~(Self.pageSize - 1)
+                let segmentEnd = (phdr.p_vaddr + phdr.p_memsz &+ Self.pageSize - 1) & ~(Self.pageSize - 1)
 
                 if segmentStart < loadBase { loadBase = segmentStart }
                 if segmentEnd > loadEnd { loadEnd = segmentEnd }
@@ -88,6 +96,7 @@ public struct ElfParser {
         }
 
         let imageSize = loadEnd - loadBase
+        
 
         // Load the image as individual page-sized, reference-counted frames
         // (one `ppm.alloc(4096)` per page) rather than one contiguous block.
