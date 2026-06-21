@@ -45,6 +45,36 @@ public func main() {
         print("[ CHILD ] Child Pid: ", terminator: " ")
         print(String(spawned.pid))
     }
+    
+    print("[ CHILD ] Allocate Array of UInt32 for test `malloc`")
+    let buf = UnsafeMutablePointer<UInt32>.allocate(capacity: 64)
+    buf.initialize(repeating: 0, count: 64)
+    buf[3] = 7
+    buf.deinitialize(count: 64)
+    buf.deallocate()
+    
+    
+    print("[ CHILD ] Instance Object for test `malloc`")
+    let roundedRectangle = RoundedRectangle(width: 167, height: 275, cornerRadius: 8)
+    roundedRectangle.width        = 17
+    roundedRectangle.height       = 27
+    roundedRectangle.cornerRadius = 2
 
     while true { yield() }
+}
+
+class RoundedRectangle {
+    var width       : UInt
+    var height      : UInt
+    var cornerRadius: UInt
+    
+    init(
+        width       : UInt,
+        height      : UInt,
+        cornerRadius: UInt
+    ) {
+        self.width        = width
+        self.height       = height
+        self.cornerRadius = cornerRadius
+    }
 }
