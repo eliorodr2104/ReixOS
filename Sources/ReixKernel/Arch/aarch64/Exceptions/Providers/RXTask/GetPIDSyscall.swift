@@ -8,6 +8,8 @@
 /// `getpid()` syscall provider. Writes the running process PID into
 /// `x0`. Returns `0` when no current process is set, which only
 /// happens during the kernel idle state.
+import ReixABI
+
 public struct GetPIDSyscall: SyscallProvider {
 
     public static let number: SyscallNumber = .getPid

@@ -5,6 +5,8 @@
 //  Created by Eliomar on 01/06/2026.
 //
 
+import ReixABI
+
 public struct TrySendSyscall: SyscallProvider {
     
     public static let number: SyscallNumber = .trySend

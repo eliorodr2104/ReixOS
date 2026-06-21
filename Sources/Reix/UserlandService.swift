@@ -7,6 +7,8 @@
 //  receive loop comes for free from the default `run()`.
 //
 
+import ReixABI
+
 public protocol UserlandService {
     associatedtype Operation: IPCLabel
 

@@ -5,6 +5,8 @@
 //  Process Server reply codes (carried in the tag label).
 //
 
+import ReixABI
+
 public enum ProcessServerResponse: UInt32, IPCLabel {
     case ok = 0
 

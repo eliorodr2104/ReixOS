@@ -6,6 +6,8 @@
 //
 
 
+import ReixABI
+
 public enum IPCError: Error {
     case invalidCapability
     case notEnoughRights

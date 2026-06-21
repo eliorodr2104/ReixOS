@@ -5,6 +5,8 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 03/05/2026.
 //
 
+import ReixABI
+
 @_silgen_name("_asm_syscall")
 private func _asm_syscall_raw(
     _ type: UInt64,

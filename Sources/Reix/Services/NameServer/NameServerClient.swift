@@ -5,6 +5,8 @@
 //  Client-side stub for the Name Server: a human-level API over the IPC.
 //
 
+import ReixABI
+
 public struct NameServerClient {
 
     let endpoint: UInt32

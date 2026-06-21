@@ -17,6 +17,8 @@
 ///
 /// - Important: This function uses `@_cdecl` to maintain a stable C-compatible
 ///   calling convention, as it is invoked from Assembly.
+import ReixABI
+
 @_cdecl("swift_exception_handler")
 public func exceptionVirtualTableHandler(
     rawFramePointer: UnsafeMutableRawPointer,

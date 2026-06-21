@@ -5,6 +5,8 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 22/04/2026.
 //
 
+import ReixABI
+
 public struct Kernel {
     private static var ppm: KernelPPM?
     private static var vmm: VirtualMemoryManager?

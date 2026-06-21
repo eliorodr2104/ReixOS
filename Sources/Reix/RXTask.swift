@@ -4,6 +4,8 @@
 //
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 03/05/2026.
 
+import ReixABI
+
 public typealias PID      = UInt64
 public typealias ExitCode = UInt64
 

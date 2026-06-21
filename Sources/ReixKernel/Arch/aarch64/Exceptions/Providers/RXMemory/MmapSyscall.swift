@@ -11,6 +11,8 @@
 /// pages are not allocated here: the page-fault handler materialises
 /// them lazily. Returns the base address of the new region, or `0` on
 /// failure (no aligned gap, invalid size).
+import ReixABI
+
 public struct MmapSyscall: SyscallProvider {
 
     public static let number: SyscallNumber = .mmap

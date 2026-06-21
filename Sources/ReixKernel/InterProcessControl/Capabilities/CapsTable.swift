@@ -6,6 +6,8 @@
 //
 
 
+import ReixABI
+
 @frozen
 public struct CapsTable {
     

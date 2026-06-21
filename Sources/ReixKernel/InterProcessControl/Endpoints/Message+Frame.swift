@@ -6,6 +6,8 @@
 //
 
 
+import ReixABI
+
 extension Message {
 
     public init(from frame: AArch64.TrapFrame) {

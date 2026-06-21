@@ -6,6 +6,8 @@
 //
 
 
+import ReixABI
+
 public struct ReplySyscall: SyscallProvider {
     
     public static let number: SyscallNumber = .reply

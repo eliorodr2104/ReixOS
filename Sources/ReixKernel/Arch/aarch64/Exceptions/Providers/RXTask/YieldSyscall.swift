@@ -10,6 +10,8 @@
 /// Saves the running context, asks the scheduler for the next ready
 /// task, and if one exists swaps the address space + trap frame so the
 /// return-from-syscall lands on the new task.
+import ReixABI
+
 public struct YieldSyscall: SyscallProvider {
 
     public static let number: SyscallNumber = .yield

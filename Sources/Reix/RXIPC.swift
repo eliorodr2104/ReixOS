@@ -5,6 +5,8 @@
 //  Created by Eliomar on 31/05/2026.
 //
 
+import ReixABI
+
 private struct ReceivedMessageRaw {
     public var tag          : UInt64 = 0
     public var word0        : UInt64 = 0

@@ -5,6 +5,8 @@
 //  Created by Eliomar on 29/05/2026.
 //
 
+import ReixABI
+
 public struct SpawnProcessSyscall: SyscallProvider {
     public static let number: SyscallNumber = .spawnProcess
     

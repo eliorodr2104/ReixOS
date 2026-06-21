@@ -8,6 +8,8 @@
 /// `putchar(ch)` syscall provider. Writes a single byte to the serial
 /// console. Used as the bootstrap user-space stdout while a real I/O
 /// stack does not yet exist.
+import ReixABI
+
 public struct PutcharSyscall: SyscallProvider {
 
     public static let number: SyscallNumber = .putchar

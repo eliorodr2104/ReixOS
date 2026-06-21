@@ -11,6 +11,8 @@
 /// mode). Otherwise asks the VMA manager to extend the brk VMA up to
 /// the requested address. Returns the resulting break, or
 /// `UInt64.max` on failure.
+import ReixABI
+
 public struct BrkSyscall: SyscallProvider {
 
     public static let number: SyscallNumber = .brk

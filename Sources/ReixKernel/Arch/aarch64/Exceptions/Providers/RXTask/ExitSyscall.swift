@@ -13,6 +13,8 @@
 /// scheduler has nothing else to run the CPU unmasks IRQs and parks in
 /// WFI so the next timer tick or device interrupt can re-enter the
 /// scheduler once a task becomes runnable again.
+import ReixABI
+
 public struct ExitSyscall: SyscallProvider {
 
     public static let number: SyscallNumber = .exit

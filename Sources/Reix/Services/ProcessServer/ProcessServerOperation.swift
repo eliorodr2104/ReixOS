@@ -5,6 +5,8 @@
 //  Process Server request verbs (carried in the message tag label).
 //
 
+import ReixABI
+
 public enum ProcessServerOperation: UInt32, IPCLabel {
     case spawn = 0
 

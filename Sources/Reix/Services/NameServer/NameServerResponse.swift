@@ -5,6 +5,8 @@
 //  Name Server reply codes (carried in the tag label).
 //
 
+import ReixABI
+
 public enum NameServerResponse: UInt32, IPCLabel {
     case ok            = 0
     case ack           = 1

@@ -8,6 +8,8 @@
 /// `getParentPid()` syscall provider. Writes the parent process PID into
 /// `x0`. Returns `0` when no current process is set, which only
 /// happens during the kernel idle state.
+import ReixABI
+
 public struct GetParentPIDSyscall: SyscallProvider {
 
     public static let number: SyscallNumber = .getPid

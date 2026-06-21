@@ -6,6 +6,8 @@
 //
 
 
+import ReixABI
+
 public struct RendezvousIPC: IPCInterface {
     
     public static var errorMessageAllocation = "Failed to allocate IPC on the kernel heap"

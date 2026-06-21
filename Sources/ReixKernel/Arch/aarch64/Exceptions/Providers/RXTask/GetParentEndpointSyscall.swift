@@ -9,6 +9,8 @@
 /// endpoint shared with the parent into `x0`, as recorded by the kernel at
 /// spawn time. Returns `UInt32.max` when the process has no parent channel
 /// (no current process, or none was seeded), so userland can map it to `nil`.
+import ReixABI
+
 public struct GetParentEndpointSyscall: SyscallProvider {
 
     public static let number: SyscallNumber = .parentEndpoint

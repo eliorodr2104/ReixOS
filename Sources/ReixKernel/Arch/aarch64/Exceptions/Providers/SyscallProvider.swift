@@ -13,6 +13,8 @@
 /// from the `SyscallNumber` via a single compile-time switch, so the
 /// protocol is consumed only as a shared shape — no existential
 /// indirection is involved.
+import ReixABI
+
 public protocol SyscallProvider {
     static var  number: SyscallNumber { get }
     static func handle(

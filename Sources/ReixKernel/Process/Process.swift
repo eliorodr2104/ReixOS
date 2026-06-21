@@ -5,6 +5,8 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 24/04/2026.
 //
 
+import ReixABI
+
 public typealias PID = UInt64
 
 /// Hot state of a kernel-managed process.

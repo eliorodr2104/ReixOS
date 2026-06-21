@@ -11,6 +11,8 @@
 /// and frees the zombie. Otherwise the parent is parked in the waiting
 /// queue with `waitingChildPid` set and a yield is performed so the
 /// scheduler can pick someone else.
+import ReixABI
+
 public struct ReapChildSyscall: SyscallProvider {
 
     public static let number: SyscallNumber = .reapChild

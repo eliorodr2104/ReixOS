@@ -11,6 +11,8 @@
 /// only full-region unmap is supported: `addr` must match the VMA start
 /// and `size` must match the VMA size. Returns `0` on success or
 /// `UInt64.max` on failure.
+import ReixABI
+
 public struct MunmapSyscall: SyscallProvider {
 
     public static let number: SyscallNumber = .munmap

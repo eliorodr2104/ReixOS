@@ -5,6 +5,8 @@
 //  Name Server request verbs (carried in the message tag label).
 //
 
+import ReixABI
+
 public enum NameServerOperation: UInt32, IPCLabel {
     case register = 0
     case lookup   = 1

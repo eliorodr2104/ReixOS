@@ -6,6 +6,8 @@
 //
 
 
+import ReixABI
+
 public struct SpawnServiceSyscall: SyscallProvider {
 
     public static let number: SyscallNumber = .spawnService

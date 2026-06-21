@@ -9,6 +9,8 @@
 /// to the same endpoint with a fresh badge and reduced rights, gated by the
 /// `.derive` right on the source cap. Writes the new handle into `x0`, or
 /// `UInt32.max` on failure (missing `.derive`, bad handle, table full).
+import ReixABI
+
 public struct DeriveSyscall: SyscallProvider {
 
     public static let number: SyscallNumber = .derive

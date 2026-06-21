@@ -13,6 +13,8 @@
 /// `Arch/aarch64/Syscall/Providers/`, conforming to `SyscallProvider`.
 /// The dispatcher is intentionally a single compile-time switch — no
 /// existential indirection, no dynamic table.
+import ReixABI
+
 public struct SyscallHandler: RXObject {
     
     public static var errorMessageAllocation = "Failed to allocate SyscallHandler on the kernel heap"
