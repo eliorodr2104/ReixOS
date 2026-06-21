@@ -5,6 +5,9 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 24/04/2026.
 //
 
+import ReixABI
+
+
 public typealias ASID = UInt16
 
 /// Per-process virtual address space handle.

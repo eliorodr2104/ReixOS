@@ -37,8 +37,10 @@ public struct ReapChildSyscall: SyscallProvider {
                 case .terminated:
                     if child.pointee.family.parent?.pointee.pid == current.pointee.pid {
                         
-                        let childExit = child.pointee.metadata?.pointee.exitCode ?? 0
-                        frame.pointee.x0 = UInt64(childExit)
+                        if case .exited(let code)? = child.pointee.metadata?.pointee.exitReason {
+                            frame.pointee.x0 = UInt64(code)
+                            
+                        } else { frame.pointee.x0 = 0 }
                         
                         _ = context.scheduler.pointee.reapChild(child)
                         context.processManager.pointee.releaseProcess(child)

@@ -88,7 +88,10 @@ func handleExceptionType(
                     Arch.CPU.panic("Breakpoint", exc: .breakpoint, fp: frame)
                     
                 case 0x00: // UDF
-                    Arch.CPU.panic(exc: .unknown, fp: frame)
+                    if frame.spsr & 0xF == 0 {
+                        Kernel.syscallHandler.pointee.killCurrent(frame: framePointer, reason: .illegalInstruction)
+               
+                    } else { Arch.CPU.panic(exc: .unknown, fp: frame) }
                     
                 default:
                     Arch.CPU.panic("EXC Unknown, Exception Class: ", fp: frame)
@@ -131,11 +134,15 @@ func userAbortHandle(
         cause: cause
     ) { return }
 
+    
     kprintf(
         "[SEGFAULT] pid=%d far=0x%x elr=0x%x\n",
         process.pointee.pid,
         faultAddress,
         frame.pointee.elr
     )
-    Kernel.syscallHandler.pointee.handle(type: .exit, frame: frame)
+    Kernel.syscallHandler.pointee.killCurrent(
+        frame : frame,
+        reason: .memoryFault(cause)
+    )
 }

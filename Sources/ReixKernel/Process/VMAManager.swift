@@ -5,6 +5,8 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 10/05/2026.
 //
 
+import ReixABI
+
 /// Per-address-space owner of the Virtual Memory Areas.
 ///
 /// One instance per process is allocated by `ProcessManager` right after

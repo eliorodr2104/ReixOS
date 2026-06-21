@@ -53,6 +53,7 @@ public struct SyscallHandler: RXObject {
             case .reapChild    : ReapChildSyscall    .handle(frame: frame, context: context)
             case .spawnProcess : SpawnProcessSyscall .handle(frame: frame, context: context)
             case .split        : SplitProcessSyscall .handle(frame: frame, context: context)
+            case .terminate    : TerminateSyscall    .handle(frame: frame, context: context)
                 
             
             // VMA
@@ -80,4 +81,21 @@ public struct SyscallHandler: RXObject {
         }
     }
     
+    @inline(__always)
+    public func killCurrent(
+        frame : UnsafeMutablePointer<Arch.TrapFrame>,
+        reason: ExitReason
+    ) {
+        let context = SyscallContext(
+            processManager: processManager,
+            scheduler     : scheduler,
+            ipc           : ipc
+        )
+        
+        processManager.pointee.killCurrent(
+            frame  : frame,
+            reason : reason,
+            context: context
+        )
+    }
 }

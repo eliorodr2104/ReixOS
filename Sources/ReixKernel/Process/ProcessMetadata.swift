@@ -5,6 +5,9 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 27/05/2026.
 //
 
+
+import ReixABI
+
 /// Out-of-line cold state of a process.
 ///
 /// Holds the fields that are not touched on the scheduler hot path
@@ -53,7 +56,7 @@ public struct ProcessMetadata: RXObject {
     
     /// Exit code written by the exiting process. Read by the parent
     /// when reaping the zombie.
-    public var exitCode: UInt32?            // 4 Byte
+    public var exitReason: ExitReason?      // 4 Byte
     
     
     /// Backing physical page of the ELF image. Allocated by `ElfParser`,
@@ -67,14 +70,14 @@ public struct ProcessMetadata: RXObject {
         elfLoadEnd     : UInt64         = 0,
         programBreak   : VirtualAddress = 0,
         waitingChildPid: PID?           = nil,
-        exitCode       : UInt32?        = nil
+        exitReason     : ExitReason?    = nil
     ) {
         self.elfImage        = elfImage
         self.elfLoadBase     = elfLoadBase
         self.elfLoadEnd      = elfLoadEnd
         self.programBreak    = programBreak
         self.waitingChildPid = waitingChildPid
-        self.exitCode        = exitCode
+        self.exitReason      = exitReason
         self.capsTable       = CapsTable()
         self.parentEndpoint  = nil
     }
@@ -85,7 +88,7 @@ public struct ProcessMetadata: RXObject {
         self.elfLoadEnd      = 0
         self.programBreak    = 0
         self.waitingChildPid = nil
-        self.exitCode        = nil
+        self.exitReason      = nil
         self.capsTable       = CapsTable()
         self.parentEndpoint  = nil
     }

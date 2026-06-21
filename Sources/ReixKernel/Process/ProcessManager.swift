@@ -5,6 +5,8 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 26/04/2026.
 //
 
+import ReixABI
+
 /// Owns the lifecycle of every kernel-managed process.
 ///
 /// Built as an instance struct so its mutable state (PID counter, injected
@@ -14,15 +16,15 @@
 public struct ProcessManager: RXObject {
     
     public static var errorMessageAllocation = "Failed to allocate ProcessManager on the kernel heap"
-
+    
     /// Monotonically increasing PID source. Never reused within a boot.
     private var pidCounter: PID = 0
-
+    
     private let vmm       : UnsafeMutablePointer<VirtualMemoryManager>
     private let ppm       : UnsafeMutablePointer<KernelPPM>
     private let heap      : UnsafeMutablePointer<BucketsHeap>
     private let fileSystem: UnsafeMutablePointer<KernelInternalFileSystem>
-
+    
     
     public init(
         vmm       : UnsafeMutablePointer<VirtualMemoryManager>,
@@ -35,8 +37,8 @@ public struct ProcessManager: RXObject {
         self.heap       = heap
         self.fileSystem = fileSystem
     }
-
-
+    
+    
     public mutating func spawnProcess(path: UnsafePointer<CChar>) throws(ProcessManagerError) -> UnsafeMutablePointer<Process> {
         
         switch fileSystem.pointee.open(
@@ -50,9 +52,9 @@ public struct ProcessManager: RXObject {
                 do {
                     addressSpace = try vmm.pointee.createAddressSpace()
                 } catch { throw .creationProcessFailed(error) }
-
+                
                 let vmaManagerPtr = try attachVMAManager(to: &addressSpace)
-
+                
                 var elf: LoadedELF
                 do {
                     elf = try ElfParser.loadSegments(
@@ -71,12 +73,12 @@ public struct ProcessManager: RXObject {
                 
                 _ = fileSystem.pointee.close(handle: handle)
                 
-
+                
                 let stackPage: PhysicalPage
                 do {
                     stackPage = try ppm.pointee.alloc(4096)
                 } catch { throw .allocationPageFailed(error) }
-
+                
                 let userStackTop   = UserSpaceLayout.stackTop
                 let firstStackPage = userStackTop - UserSpaceLayout.pageSize
                 do {
@@ -87,7 +89,7 @@ public struct ProcessManager: RXObject {
                         flags       : [.present, .userAccess, .pxn, .uxn]
                     )
                 } catch { throw .mappingFailed(error) }
-
+                
                 try? vmaManagerPtr.pointee.registerRegion(
                     start      : firstStackPage,
                     size       : UserSpaceLayout.pageSize,
@@ -95,21 +97,21 @@ public struct ProcessManager: RXObject {
                     backing    : .anonymous,
                     flags      : .growDown
                 )
-
+                
                 let trapFramePtr = heap.pointee.kmalloc(Arch.TrapFrame.self)
                 trapFramePtr.initialize(to: Arch.TrapFrame()) // Create constructor limited
                 trapFramePtr.pointee.elr   = elf.entryPoint
                 trapFramePtr.pointee.spsr  = 0x0
                 trapFramePtr.pointee.spel0 = userStackTop
-
+                
                 let pid = self.pidCounter
                 self.pidCounter += 1
-
+                
                 let kStackRaw = heap.pointee.kmalloc(4096)
                 let kStackTop = kStackRaw.advanced(by: 4096)
-
+                
                 let initialBreak = (elf.loadEnd + UserSpaceLayout.pageSize - 1) & ~(UserSpaceLayout.pageSize - 1)
-
+                
                 
                 let metadataPtr = heap.pointee.kmalloc(ProcessMetadata.self)
                 metadataPtr.initialize(to: ProcessMetadata(
@@ -118,21 +120,21 @@ public struct ProcessManager: RXObject {
                     elfLoadEnd  : elf.loadEnd,
                     programBreak: initialBreak
                 ))
-
+                
                 let processPtr = heap.pointee.kmalloc(Process.self)
                 processPtr.initialize(to: Process(
                     pid           : pid,
                     addressSpace  : addressSpace,
-
+                    
                     context       : trapFramePtr,
                     kernelStackTop: kStackTop,
                     kernelStackRaw: kStackRaw,
-
+                    
                     metadata      : metadataPtr,
                 ))
-
+                
                 vmaManagerPtr.pointee.setInitialBreak(initialBreak)
-
+                
                 return processPtr
                 
                 
@@ -156,49 +158,49 @@ public struct ProcessManager: RXObject {
         // must NOT pre-map or pre-register a stack here: doing so would
         // collide with the parent's stack VMA during the clone and abort it.
         _ = try attachVMAManager(to: &addressSpace)
-
+        
         let trapFramePtr = heap.pointee.kmalloc(Arch.TrapFrame.self)
         
         trapFramePtr.initialize(to: Arch.TrapFrame())
         trapFramePtr.pointee.elr   = 0
         trapFramePtr.pointee.spsr  = 0x0
         trapFramePtr.pointee.spel0 = UserSpaceLayout.stackTop
-
+        
         let pid = self.pidCounter
         self.pidCounter += 1
-
+        
         let kStackRaw = heap.pointee.kmalloc(4096)
         let kStackTop = kStackRaw.advanced(by: 4096)
-
+        
         let metadataPtr = heap.pointee.kmalloc(ProcessMetadata.self)
         metadataPtr.initialize(to: ProcessMetadata())
-
+        
         let processPtr = heap.pointee.kmalloc(Process.self)
         processPtr.initialize(to: Process(
             pid           : pid,
             addressSpace  : addressSpace,
-
+            
             context       : trapFramePtr,
             kernelStackTop: kStackTop,
             kernelStackRaw: kStackRaw,
-
+            
             metadata      : metadataPtr,
         ))
-
+        
         return processPtr
     }
-
-
+    
+    
     public func releaseAddressSpace(_ process: UnsafeMutablePointer<Process>) throws(PPMError) {
-
+        
         if let vmaManager = process.pointee.addressSpace.vmaManager {
             vmaManager.pointee.teardown()
             vmaManager.deinitialize(count: 1)
-
+            
             heap.pointee.kfree(UnsafeMutableRawPointer(vmaManager))
             process.pointee.addressSpace.vmaManager = nil
         }
-
+        
         // The ELF image is no longer a single contiguous block: it is loaded as
         // individual `.anonymous` pages, already released per page by
         // `teardown` above. So there is no block to free here — doing so would
@@ -208,23 +210,23 @@ public struct ProcessManager: RXObject {
             metadata.pointee.elfLoadBase = 0
             metadata.pointee.elfLoadEnd  = 0
         }
-
+        
         if let trapFrame = process.pointee.context {
             heap.pointee.kfree(UnsafeMutableRawPointer(trapFrame))
             process.pointee.context = nil
         }
-
+        
         if let stackAddress = process.pointee.kernelStackRaw {
             heap.pointee.kfree(UnsafeMutableRawPointer(stackAddress))
             process.pointee.kernelStackRaw = nil
             process.pointee.kernelStackTop = nil
         }
-
+        
         try vmm.pointee.destroyAddressSpace(
             addressSpace: process.pointee.addressSpace
         )
     }
-
+    
     /// Final teardown of a process struct after every consumer has read
     /// the exit code from its metadata. Frees the metadata block and the
     /// `Process` struct itself. Callers must ensure the process is no
@@ -238,18 +240,87 @@ public struct ProcessManager: RXObject {
         if let parent = process.pointee.family.parent {
             parent.pointee.family.removeChild(process)
         }
-
+        
         if let metadata = process.pointee.metadata {
             metadata.deinitialize(count: 1)
             heap.pointee.kfree(UnsafeMutableRawPointer(metadata))
             process.pointee.metadata = nil
         }
-
+        
         process.deinitialize(count: 1)
         heap.pointee.kfree(UnsafeMutableRawPointer(process))
     }
-
-
+    
+    
+    // ProcessManager
+    public func killCurrent(
+        frame  : UnsafeMutablePointer<Arch.TrapFrame>,
+        reason : ExitReason,
+        context: SyscallContext
+    ) {
+        if let oldProcess = Arch.CPU.getCurrentProcess() {
+            Arch.CPU.setCurrentProcess(0)
+            killProcess(oldProcess, reason: reason, context: context)
+            
+            if let parentPtr  = oldProcess.pointee.family.parent,
+               let parentMeta = parentPtr.pointee.metadata,
+               parentMeta.pointee.waitingChildPid == oldProcess.pointee.pid {
+                parentPtr.pointee.context?.pointee.x0 = frame.pointee.x0
+                releaseProcess(oldProcess)
+                try? context.scheduler.pointee.wakeUp(parentPtr.pointee.pid)
+                
+            } else { context.scheduler.pointee.removeTask(oldProcess) }
+            
+        }
+        
+        if let trapFrame = context.scheduler.pointee.yield() {
+            if let next = Arch.CPU.getCurrentProcess() {
+                Arch.MMU.switchUserAddressSpace(next.pointee.addressSpace.rootTablePhysical.address)
+            }
+            frame.pointee = trapFrame.pointee
+            
+        } else {
+            Arch.CPU.setCurrentProcess(0)
+            Arch.CPU.enableInterrupts()
+            
+            while true { Arch.CPU.waitForInterrupt() }
+        }
+    }
+    
+    public func killProcess(
+        _ process: UnsafeMutablePointer<Process>,
+        reason : ExitReason,
+        context: SyscallContext
+    ) {
+        
+        let status = process.pointee.status
+        process.pointee.status                       = .terminated
+        process.pointee.metadata?.pointee.exitReason = reason
+        
+        
+        switch status {
+            case .blockedOnSend(let ep?), .blockedOnReceive(let ep?):
+                ep.pointee.queue.remove(element: process)
+                
+            case .blockedOnReply:
+                clearReplyPartner(of: process)
+                
+            case .ready, .waiting:
+                context.scheduler.pointee.removeTask(process)
+                
+            default: break
+        }
+        
+        context.ipc.pointee.releaseCapabilities(of: process)
+        try? context.processManager.pointee.releaseAddressSpace(process)
+    }
+    
+    
+    private func clearReplyPartner(of process: UnsafeMutablePointer<Process>) {
+        process.pointee.replyPartner?.pointee.replyTo = nil
+        process.pointee.replyPartner = nil
+    }
+    
     private func attachVMAManager(
         to addressSpace: inout AddressSpace
     ) throws(ProcessManagerError) -> UnsafeMutablePointer<VMAManager> {

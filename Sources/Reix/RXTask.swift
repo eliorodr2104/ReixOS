@@ -6,9 +6,7 @@
 
 import ReixABI
 
-public typealias PID      = UInt64
-public typealias ExitCode = UInt64
-
+public typealias PID = UInt64
 
 /// Raw layout written by `_asm_spawn` into the output buffer.
 /// Two contiguous 64-bit words to match the `str x0/x1` stores exactly.
@@ -120,23 +118,6 @@ public func sleep(for value: Int) {
 }
 
 @inline(__always)
-public func terminate(
-    pid : UInt64,
-    type: TerminateType
-) -> Bool {
-    return false // _syscall(.terminate, pid, type) == 0
-}
-
-
-public enum TerminateType {
-    case terminate
-    case interrupt
-    case kill
-    case segmentationFault
-    case illegalInstruction
-    case arithmeticError
-    case stackOverflow
-    case badSyscall
-    case abort(parent: PID)
-    case suicide
+public func terminate(pid: PID) -> Bool {
+    _syscall(.terminate, pid) == 0
 }

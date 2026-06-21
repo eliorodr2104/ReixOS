@@ -44,6 +44,7 @@ public struct Process: RXEntry {
     public var prev          : UnsafeMutablePointer<Self>?            // 8 Byte
     public var next          : UnsafeMutablePointer<Self>?            // 8 Byte
     public var replyTo       : UnsafeMutablePointer<Self>? = nil      // 8 Byte
+    public var replyPartner  : UnsafeMutablePointer<Self>? = nil
     public var ipcDeadline   : UInt64?                     = nil      // 8 Byte
     
     
