@@ -59,6 +59,7 @@ public struct SyscallHandler: RXObject {
             case .brk          : BrkSyscall          .handle(frame: frame, context: context)
             case .mmap         : MmapSyscall         .handle(frame: frame, context: context)
             case .munmap       : MunmapSyscall       .handle(frame: frame, context: context)
+            case .decommit     : DecommitSyscall     .handle(frame: frame, context: context)
                 
                 
             // ICP

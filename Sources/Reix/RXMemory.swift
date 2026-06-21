@@ -66,3 +66,11 @@ public func mmap(size: UInt64) -> UInt64 {
 public func munmap(addr: UInt64, size: UInt64) -> UInt64 {
     _syscall(.munmap, addr, size)
 }
+
+
+/// Drop the physical backing of the pages in [addr, addr+size)
+/// the VMA stays mapped lazily and the pages re-fault on next touch.
+@inline(__always)
+public func decommit(addr: UInt64, size: UInt64) -> UInt64 {
+    _syscall(.decommit, addr, size)
+}

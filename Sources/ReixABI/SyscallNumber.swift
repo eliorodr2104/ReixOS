@@ -25,6 +25,7 @@ public enum SyscallNumber: UInt64 {
     case brk
     case mmap
     case munmap
+    case decommit
     
     
     // IPC

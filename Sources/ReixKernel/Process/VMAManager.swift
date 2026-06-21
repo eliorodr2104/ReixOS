@@ -118,6 +118,21 @@ public struct VMAManager: RXObject {
             heap.pointee.kfree(UnsafeMutableRawPointer(removed))
         }
     }
+    
+    /// Decommit the passed page and return this into PPM
+    public func decommit(
+        addr: VirtualAddress,
+        size: UInt64
+    ) {
+        
+        var va = addr & ~(UserSpaceLayout.pageSize - 1)
+        while va < addr + size {
+            try? vmm.pointee.unmapAndFreeUserPage(rootTable: rootTablePhysical, virtual: va)
+            va += UserSpaceLayout.pageSize
+        }
+        
+        Arch.MMU.flushTLB()
+    }
 
 
     /// Decide what to do with a synchronous abort raised at `address`.

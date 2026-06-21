@@ -5,14 +5,15 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 28/05/2026.
 //
 
+
+import ReixABI
+
 /// `munmap(addr, size)` syscall provider.
 ///
 /// Releases a region previously returned by `mmap`. In this milestone
 /// only full-region unmap is supported: `addr` must match the VMA start
 /// and `size` must match the VMA size. Returns `0` on success or
 /// `UInt64.max` on failure.
-import ReixABI
-
 public struct MunmapSyscall: SyscallProvider {
 
     public static let number: SyscallNumber = .munmap
