@@ -16,17 +16,6 @@ void __stack_chk_fail(void) {
     while (1); // Blocco totale se lo stack è corrotto
 }
 
-// --- Memory Management ---
-// Per ora le app non hanno un heap (malloc/free).
-// Li stubbiamo a vuoto o a errore.
-void free(void *ptr) {
-    // Nulla da fare
-}
-
-int posix_memalign(void **memptr, size_t alignment, size_t size) {
-    return -1; // Ritorna errore (niente memoria)
-}
-
 // --- Utility ---
 // Il compilatore genera spesso chiamate a memset per azzerare le struct
 void* memset(void* s, int c, size_t n) {

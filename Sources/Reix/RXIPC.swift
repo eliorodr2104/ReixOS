@@ -34,6 +34,7 @@ public struct ReceivedMessage {
 }
 
 
+@discardableResult
 @inline(__always)
 public func send(
     handle     : UInt32,

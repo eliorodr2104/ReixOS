@@ -22,14 +22,14 @@ public func main() {
     
     
     let processServer = spawnProcess(path: "ProcessServer.elf")
-    _ = send(
+    send(
         handle     : processServer.handle,
         message    : NameServerResponse.ok.message,
         grant      : spawnService(),
         grantRights: [.spawn, .grant]
     )
 
-    _ = send(
+    send(
         handle     : processServer.handle,
         message    : NameServerResponse.ok.message,
         grant      : nsCapability,
