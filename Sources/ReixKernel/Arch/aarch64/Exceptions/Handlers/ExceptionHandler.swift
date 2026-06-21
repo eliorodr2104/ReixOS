@@ -141,8 +141,13 @@ func userAbortHandle(
         faultAddress,
         frame.pointee.elr
     )
+    
+    let guardLow = UserSpaceLayout.stackLimit - UInt64(UserSpaceLayout.guardPageCount) * UserSpaceLayout.pageSize
+    let reason: ExitReason = (faultAddress >= guardLow && faultAddress < UserSpaceLayout.stackLimit)
+        ? .stackOverflow : .memoryFault(cause)
+    
     Kernel.syscallHandler.pointee.killCurrent(
         frame : frame,
-        reason: .memoryFault(cause)
+        reason: reason
     )
 }

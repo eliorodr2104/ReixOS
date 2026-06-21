@@ -167,6 +167,7 @@ public struct RendezvousIPC: IPCInterface {
                         
             if senderProcess.pointee.expectsReply {
                 currentProcess.pointee.replyTo      = senderProcess
+                senderProcess.pointee.replyPartner  = currentProcess
                 senderProcess.pointee.status        = .blockedOnReply
                 senderProcess.pointee.expectsReply  = false
                 
@@ -222,7 +223,8 @@ public struct RendezvousIPC: IPCInterface {
                 return .failure(.noReply)
             }
             
-            receiverProcess.pointee.replyTo = currentProcess
+            receiverProcess.pointee.replyTo     = currentProcess
+            currentProcess.pointee.replyPartner = receiverProcess
             
             currentProcess.pointee.status = .blockedOnReply
 
@@ -314,7 +316,8 @@ public struct RendezvousIPC: IPCInterface {
         }
         
         scheduler.pointee.resume(replyProcess)
-        currentProcess.pointee.replyTo = nil
+        currentProcess.pointee.replyTo    = nil
+        replyProcess.pointee.replyPartner = nil
         
         return .success(.sended)
     }
