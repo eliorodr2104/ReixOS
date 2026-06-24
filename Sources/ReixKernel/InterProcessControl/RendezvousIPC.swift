@@ -28,7 +28,7 @@ public struct RendezvousIPC: IPCInterface {
     
     
     public mutating func send(
-        capability: EndpointCap,
+        capability: Capability,
         frame     : AArch64.TrapFrame,
         blocking  : Bool = true
         
@@ -38,7 +38,11 @@ public struct RendezvousIPC: IPCInterface {
             return .failure(.notEnoughRights)
         }
         
-        let endpointPtr = capability.endpoint
+        guard case .endpoint(let ep) = capability.target else {
+            return .failure(.invalidCapability)
+        }
+        
+        let endpointPtr = ep
         let grantWord   = frame.x6
         let grantHandle = UInt32(truncatingIfNeeded: grantWord)
         let grantRights = CapRights(rawValue: UInt8(truncatingIfNeeded: grantWord >> 32))
@@ -113,7 +117,7 @@ public struct RendezvousIPC: IPCInterface {
     
     
     public mutating func receive(
-        capability: EndpointCap,
+        capability  : Capability,
         frame       : UnsafeMutablePointer<AArch64.TrapFrame>,
         blocking    : Bool = true,
         timeoutTicks: UInt64? = nil
@@ -124,7 +128,10 @@ public struct RendezvousIPC: IPCInterface {
             return .failure(.notEnoughRights)
         }
         
-        let endpointPtr  = capability.endpoint
+        guard case .endpoint(let ep) = capability.target else {
+            return .failure(.invalidCapability)
+        }
+        let endpointPtr = ep
         
         if endpointPtr.pointee.state == .sendBlocked {
             
@@ -195,14 +202,18 @@ public struct RendezvousIPC: IPCInterface {
     
 
     public mutating func call(
-        capability: EndpointCap,
+        capability: Capability,
         frame     : AArch64.TrapFrame
     ) -> Result<CommunicationMessageResult, IPCError> {
+        
         guard capability.rights.contains(.send) else {
             return .failure(.notEnoughRights)
         }
         
-        let endpointPtr = capability.endpoint
+        guard case .endpoint(let ep) = capability.target else {
+            return .failure(.invalidCapability)
+        }
+        let endpointPtr = ep
         
         // Server is waiting message
         if endpointPtr.pointee.state == .recvBlocked {
@@ -267,7 +278,7 @@ public struct RendezvousIPC: IPCInterface {
     }
     
     public mutating func replyRecv(
-        capability: EndpointCap,
+        capability: Capability,
         frame     : UnsafeMutablePointer<AArch64.TrapFrame>
     ) -> Result<CommunicationMessageResult, IPCError> {
         guard capability.rights.contains(.receive) else { return .failure(.notEnoughRights) }
@@ -344,19 +355,15 @@ public struct RendezvousIPC: IPCInterface {
     
         let endpoint = heap.pointee.kmalloc(Endpoint.self)
         endpoint.initialize(
-            to: Endpoint(
-                state: .idle,
-                queue: LinkedList(head: nil, tail: nil),
-                owner: owner ?? process.pointee.pid
-            )
+            to: Endpoint(queue: LinkedList(head: nil, tail: nil))
         )
 
         endpoints[id] = endpoint
         
-        let capability = EndpointCap(
-            endpoint: endpoint,
-            badge   : Badge(0),
-            rights  : rights
+        let capability = Capability(
+            target: .endpoint(endpoint),
+            badge : Badge(0),
+            rights: rights
         )
         
         guard let handle = process.pointee.metadata.pointee.capsTable.install(capability) else {
@@ -367,7 +374,7 @@ public struct RendezvousIPC: IPCInterface {
             return .failure(.outOfEndpoints)
         }
         
-        retain(endpoint)
+        retain(capability)
 
         return .success(handle)
     }
@@ -393,19 +400,15 @@ public struct RendezvousIPC: IPCInterface {
     
         let endpoint = heap.pointee.kmalloc(Endpoint.self)
         endpoint.initialize(
-            to: Endpoint(
-                state: .idle,
-                queue: LinkedList(head: nil, tail: nil),
-                owner: parent.pointee.pid
-            )
+            to: Endpoint(queue: LinkedList(head: nil, tail: nil))
         )
 
         endpoints[id] = endpoint
         
-        let parentCapability = EndpointCap(
-            endpoint: endpoint,
-            badge   : Badge(0),
-            rights  : [.send, .receive, .grant]
+        let parentCapability = Capability(
+            target: .endpoint(endpoint),
+            badge : Badge(0),
+            rights: [.send, .receive, .grant]
         )
 
         guard let parentEndpointHandle = parent.pointee.metadata.pointee.capsTable.install(parentCapability) else {
@@ -416,21 +419,21 @@ public struct RendezvousIPC: IPCInterface {
             return .failure(.outOfEndpoints)
         }
         
-        retain(endpoint)
+        retain(parentCapability)
 
-        let childCapability = EndpointCap(
-            endpoint: endpoint,
-            badge   : Badge(0),
-            rights  : [.send, .receive]
+        let childCapability = Capability(
+            target: .endpoint(endpoint),
+            badge : Badge(0),
+            rights: [.send, .receive]
         )
         guard let childEndpointHandle = child.pointee.metadata.pointee.capsTable.install(childCapability) else {
             _ = parent.pointee.metadata.pointee.capsTable.remove(parentCapability)
 
-            release(endpoint)
+            release(parentCapability)
             return .failure(.outOfEndpoints)
         }
         
-        retain(endpoint)
+        retain(childCapability)
         
         // Record the seeded handle so the child can discover it through the
         // `parentEndpoint` syscall, instead of relying on a fixed slot.
@@ -457,10 +460,10 @@ public struct RendezvousIPC: IPCInterface {
         }
         
         let effective = rights.intersection(capability.rights)
-        let receiverCap = EndpointCap(
-            endpoint: capability.endpoint,
-            badge   : capability.badge,
-            rights  : effective
+        let receiverCap = Capability(
+            target: capability.target,
+            badge : capability.badge,
+            rights: effective
         )
         
         
@@ -469,8 +472,8 @@ public struct RendezvousIPC: IPCInterface {
             return .failure(.outOfEndpoints)
         }
         
-        retain(receiverCap.endpoint)
-
+        retain(receiverCap)
+        
         return .success(receiverHandle)
     }
     
@@ -510,34 +513,48 @@ public struct RendezvousIPC: IPCInterface {
     // MARK: - Helpers
     
     @inline(__always)
-    mutating func retain(_ ep: UnsafeMutablePointer<Endpoint>) {
-        ep.pointee.references &+= 1
+    mutating func retain(_ cap: Capability) {
+        
+        switch cap.target {
+            case .endpoint(let endpointPtr):
+                endpointPtr.pointee.references &+= 1
+                
+            case .shared(let sharedMemoryPtr):
+                return
+        }
     }
     
     
-    private mutating func release(_ ep: UnsafeMutablePointer<Endpoint>) {
+    private mutating func release(_ cap: Capability) {
         
-        guard ep.pointee.references > 0 else { return }
-        ep.pointee.references &-= 1
-        guard ep.pointee.references == 0 else { return }
-        
-        for i in 0..<endpoints.count where endpoints[i] == ep {
-            endpoints[i] = nil
-            break
+        switch cap.target {
+            case .endpoint(let endpointPtr):
+                guard endpointPtr.pointee.references > 0 else { return }
+                endpointPtr.pointee.references &-= 1
+                guard endpointPtr.pointee.references == 0 else { return }
+                
+                for i in 0..<endpoints.count where endpoints[i] == endpointPtr {
+                    endpoints[i] = nil
+                    break
+                }
+                
+                endpointPtr.deinitialize(count: 1)
+                heap.pointee.kfree(UnsafeMutableRawPointer(endpointPtr))
+                
+            case .shared(let sharedMemoryPtr):
+                return
         }
-        
-        ep.deinitialize(count: 1)
-        heap.pointee.kfree(UnsafeMutableRawPointer(ep))
     }
     
     public mutating func releaseCapabilities(of process: UnsafeMutablePointer<Process>) {
         guard let metadata = process.pointee.metadata else { return }
         
         for i in 0..<metadata.pointee.capsTable.caps.count where metadata.pointee.capsTable.caps[i] != nil {
-            let endpointCap = metadata.pointee.capsTable.caps[i]!
+            let capability = metadata.pointee.capsTable.caps[i]!
 
-            release(endpointCap.endpoint)
+            release(capability)
             metadata.pointee.capsTable.remove(handle: i)
+            
         }
     }
 }

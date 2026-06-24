@@ -8,20 +8,20 @@
 public protocol IPCInterface: RXObject {
     
     mutating func send(
-        capability: EndpointCap,
+        capability: Capability,
         frame     : AArch64.TrapFrame,
         blocking  : Bool
     ) -> Result<CommunicationMessageResult, IPCError> // Send mess, block if not receive the mess
     
     mutating func receive(
-        capability  : EndpointCap,
+        capability  : Capability,
         frame       : UnsafeMutablePointer<AArch64.TrapFrame>,
         blocking    : Bool,
         timeoutTicks: UInt64?
     ) -> Result<CommunicationMessageResult, IPCError> // wait, block if not send mess
     
     mutating func call(
-        capability: EndpointCap,
+        capability: Capability,
         frame     : AArch64.TrapFrame
     ) -> Result<CommunicationMessageResult, IPCError> // send + wait-reply, is atomic
     
@@ -30,7 +30,7 @@ public protocol IPCInterface: RXObject {
     ) -> Result<CommunicationMessageResult, IPCError> // Server respond to call process
     
     mutating func replyRecv(
-        capability: EndpointCap,
+        capability: Capability,
         frame     : UnsafeMutablePointer<AArch64.TrapFrame>
     ) -> Result<CommunicationMessageResult, IPCError> // reply + receive fuse (server loop)
 }

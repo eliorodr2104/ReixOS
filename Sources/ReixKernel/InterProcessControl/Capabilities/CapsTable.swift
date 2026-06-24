@@ -11,14 +11,14 @@ import ReixABI
 @frozen
 public struct CapsTable {
     
-    private(set) var caps: InlineArray = InlineArray<16, EndpointCap?>(
+    private(set) var caps: InlineArray = InlineArray<16, Capability?>(
         repeating: nil
     ) // (16 * 13) 208 Byte
     
     private var counterElements: UInt = 0 // 8 Byte
     
     
-    public mutating func install(_ cap: EndpointCap) -> UInt32? {
+    public mutating func install(_ cap: Capability) -> UInt32? {
         var indexFounded: UInt32?
         for i in 0..<caps.count {
             
@@ -36,7 +36,7 @@ public struct CapsTable {
     }
     
     
-    public mutating func remove(_ cap: EndpointCap) -> Bool {
+    public mutating func remove(_ cap: Capability) -> Bool {
         
         for i in 0..<caps.count {
 
@@ -54,7 +54,7 @@ public struct CapsTable {
     /// *move* semantics for `grant`: the sender loses the capability once it is
     /// transferred, instead of both processes ending up holding it.
     @discardableResult
-    public mutating func remove(handle: Int) -> EndpointCap? {
+    public mutating func remove(handle: Int) -> Capability? {
         guard handle < caps.count, let cap = caps[handle] else { return nil }
 
         caps[handle] = nil
@@ -62,7 +62,7 @@ public struct CapsTable {
         return cap
     }
     
-    public func resolve(_ handle: UInt32) -> EndpointCap? {
+    public func resolve(_ handle: UInt32) -> Capability? {
         guard handle < caps.count else { return nil }
 
         return caps[Int(handle)]
@@ -100,10 +100,10 @@ public struct CapsTable {
         let effective = rights.intersection(source.rights).subtracting(.derive)
 
         return install(
-            EndpointCap(
-                endpoint: source.endpoint,
-                badge   : badge,
-                rights  : effective
+            Capability(
+                target: source.target,
+                badge : badge,
+                rights: effective
             )
         )
     }

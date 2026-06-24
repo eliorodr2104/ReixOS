@@ -32,13 +32,14 @@ public struct DeriveSyscall: SyscallProvider {
             from : handle,
             badge: badge,
             rights: rights
+            
         ) else {
             frame.pointee.x0 = UInt64(UInt32.max)
             return
         }
 
-        if let source = current.pointee.metadata.pointee.capsTable.resolve(handle) {
-            context.ipc.pointee.retain(source.endpoint)
+        if let capability = current.pointee.metadata.pointee.capsTable.resolve(handle) {
+            context.ipc.pointee.retain(capability)
         }
 
         frame.pointee.x0 = UInt64(newHandle)
