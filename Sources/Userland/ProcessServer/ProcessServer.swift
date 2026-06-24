@@ -31,7 +31,7 @@ public struct ProcessServer: UserlandService {
             exit(code: 1)
         }
         self.nameServerCap = nsCap
-        print("[ SERVE ] have spawn-cap e NS-cap")
+        print("[ SERVE ] holding spawn-cap and NS-cap")
 
         // Crea l'endpoint di servizio e si registra in rubrica come .processServer.
         self.endpoint = spawnEndpoint()

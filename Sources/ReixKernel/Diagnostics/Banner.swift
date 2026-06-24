@@ -8,13 +8,13 @@
 /// Plain-ASCII boot banner. Printed once by `Kernel.boot` before the
 /// first subsystem comes up.
 ///
-/// The figlet is hand-tuned standard ASCII so it renders identically on
-/// any 7-bit serial terminal (no UTF-8 box-drawing, no escape codes).
+/// Deliberately understated, in the same `[ tag ]` column style as the boot
+/// log that follows. Pure 7-bit ASCII so it renders identically on any serial
+/// terminal (no UTF-8 box-drawing, no escape codes).
 public func printBootBanner() {
     kprint()
     kprint()
-    kprint(" ReixOS 0.1.5  AArch64 / Embedded Swift")
-    kprint(" (c) 2026 Eliomar Alejandro Rodriguez Ferrer")
-    kprint(" Micro Kernel Writed in Embedded Swift for fun!")
+    kprint(" [ reix ] ReixOS 0.1.5 / AArch64 / Embedded Swift")
+    kprint(" [ reix ] (c) 2026 Eliomar Alejandro Rodriguez Ferrer - GPLv3")
     kprint()
 }

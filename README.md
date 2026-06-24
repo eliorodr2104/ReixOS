@@ -15,7 +15,7 @@ ReixOS is an experimental microkernel written in **Embedded Swift** for the **AR
 
 It began as a personal challenge, a style exercise to push the limits of my Swift knowledge... but it has grown into something with a clear thesis behind it: **bringing Protocol-Oriented Programming (POP) to the bare metal to fix the historical flaws of traditional operating systems.**
 
-Despite its experimental, single-author nature, ReixOS is no longer a toy. It already boots on QEMU, brings up its own physical and virtual memory managers, schedules processes with real context switches, loads ELF binaries into isolated address spaces, and lets those processes talk to each other through a synchronous, capability-based IPC mechanism. It is small, it is honest about what it can't yet do, but it *runs*.
+Despite its experimental, single-author nature, ReixOS is no longer a toy. It already boots on QEMU, brings up its own physical and virtual memory managers, schedules processes with real context switches, loads ELF binaries into isolated address spaces, and lets those processes talk to each other through a synchronous, capability-based IPC mechanism — including its own **Name Server** and **Process Server**, which already run as ordinary userland processes reached over that IPC. It is small, it is honest about what it can't yet do, but it *runs*.
 
 ---
 
@@ -31,7 +31,7 @@ ReixOS is built around a few core, deliberately radical ideas. Each one is a rea
 
 * **Absolute Isolation.** A pure microkernel approach where every process is fully isolated not only in its virtual address space, but down at the storage level as well. Every process is its own **container** with its own private filesystem. A central FS manager unifies these private filesystems into one global namespace, and paths make the boundaries explicit: in `/reix::terminal/folder`, `reix` is the device's root container, `::` marks a crossing *into* another container (here, `terminal`), and the slashes navigate folders inside it. You always know when a path leaves your own container and enters someone else's.
 
-* **The Kernel Does As Little As Possible.** Everything that *can* be a userland process eventually *will* be one, talking to the rest of the system over IPC. Today some services still live inside the kernel for bootstrapping convenience (process spawning, and a future name server), exposed through syscalls but these are deliberately **temporary**. As the microkernel matures, they migrate out into dedicated userland servers (a **Process Server**, a **Name Server**), and the corresponding syscalls collapse into thin IPC calls to those servers.
+* **The Kernel Does As Little As Possible.** Everything that *can* be a userland process eventually *will* be one, talking to the rest of the system over IPC. This has already begun: the **Name Server** and **Process Server** now run as ordinary userland processes, reached over IPC through thin client SDKs. The kernel keeps only a low-level `spawnProcess` primitive to bootstrap them, plus a `spawnService` capability that the Process Server holds; process- and name-management *policy* lives entirely in userland. The remaining in-kernel conveniences will follow the same path out.
 
 * **Flat Process Tree.** Child processes are terminal: they cannot fork or spawn children of their own. The hierarchy is strictly one level deep (Parent → Children). This kills entire classes of complexity and security problems that come from deep, mutable process trees, and it makes the lifecycle of every process easy to reason about.
 
@@ -96,7 +96,8 @@ Sources/ReixKernel/
 ├── Platform/ELFParser/  # ELF64 PT_LOAD loader
 └── Diagnostics/         # Subsystem-tagged kernel logging
 
-Sources/Userland/        # Init, Child, ServerProcess + the Reix syscall module
+Sources/Userland/        # Init, Child, Name Server, Process Server (userland)
+Sources/Reix/            # Userland SDK: syscall wrappers, user heap, service clients
 ```
 
 The key protocols that hold this together `Allocator`, `KernelHeapInterface`, `SchedulerInterface`, `IPCInterface`, `FileSystemInterface`, `VMAStructure`, `SerialDriver`, `InterruptController`, `KernelArchitecture` are what make each box above independently understandable and replaceable.
@@ -129,12 +130,20 @@ The foundational subsystems are in place and working:
 * **IPC:** `send`, `receive`, `receiveTimeout`, `call`, `reply`, `replyRecv`, `trySend`, `tryReceive`.
 * **I/O:** `putchar`.
 
-> **Note:** some of these syscalls are scaffolding, not the final design. Services like process spawning (and an upcoming name server) currently live in the kernel to get the system off the ground; following the microkernel approach properly, they will move into userland servers and these syscalls will become thin IPC calls to them.
+> **Note:** some of these syscalls are scaffolding, not the final design. The Name Server and Process Server have already moved out into userland; `spawnProcess`/`spawnService` remain as the low-level primitives the Process Server is built on, and other in-kernel conveniences will likewise collapse into thin IPC calls to userland servers.
 
 **IPC**
 * Synchronous **rendezvous** message passing: senders block until a receiver is ready and vice-versa.
 * **Capability transfer** — a sender can grant a capability handle across an endpoint.
 * Parent endpoint seeded at spawn and recoverable via the `parentEndpoint()` syscall.
+
+**Userland Servers**
+* **Name Server** (userland) registers and looks up capabilities by name, so processes find each other without hardcoded handles.
+* **Process Server** (userland) spawns processes on behalf of others, gated by a `spawn` capability handed to it at boot by `Init`.
+* Thin client SDKs (`NameServerClient`, `ProcessServerClient`) wrap the raw IPC behind a typed, human-level API.
+
+**Userland Heap**
+* A slab allocator over `sbrk`/`brk` (`Sources/Reix/Heap`) now backs `malloc`/`free`, replacing the old C stubs (currently being hardened).
 
 **Filesystem & Drivers**
 * Read-only **TAR filesystem** parsed from the initrd, with `open`/`close`/`read`/`seek`/`getInfo`.
@@ -150,9 +159,9 @@ The foundational subsystems are in place and working:
 
 In the spirit of being honest about the state of things:
 
-* **Servers still live in the kernel the headline gap.** A true microkernel keeps services in userland; ReixOS currently keeps a few (process spawning, the future **Name Server** and **Process Server**) inside the kernel, reached through temporary syscalls. Moving these out into dedicated userland servers is the single most important architectural step still ahead, and the rest of the design is built to make it possible.
+* **Not everything is in userland yet.** The **Name Server** and **Process Server** have moved out and run as userland processes — the headline microkernel milestone — but the kernel still owns the low-level `spawnProcess` primitive and a few bootstrap conveniences. Pushing the remaining policy out of the kernel and slimming those primitives is the ongoing architectural work.
 * **Per-container filesystem isolation** is a design goal, not a reality yet. Today there is a single read-only TAR filesystem; the per-process containerized FS unified under one namespace (the `/reix::container/...` model above) is not implemented.
-* **Userland `malloc`/`free`** are still stubs (`user_stubs.c`); the real user heap on top of `brk`/`mmap` isn't wired yet.
+* **The userland heap is new and not yet battle-tested.** A slab allocator over `sbrk`/`brk` (`Sources/Reix/Heap`) now backs `malloc`/`free`, replacing the old C stubs, but it's still being stabilized.
 * **The filesystem is read-only** — `write()` is not implemented.
 * **`exec`, `fork`/`split`, and child reaping** exist as syscalls but are incomplete.
 * **Copy-on-write** infrastructure is partly present but not fully connected.
@@ -172,6 +181,38 @@ make clean && make run
 
 This boots `kernel.bin` on `qemu-system-aarch64` (machine `virt`, `cortex-a53`, GICv2) with the initrd attached. You'll see the boot banner, each subsystem coming up with its tagged log line, and the `Init` process starting and spawning its children over IPC all on the serial console.
 
+On the serial console you'll see (trimmed):
+
+```text
+ [ reix ] ReixOS 0.1.5 / AArch64 / Embedded Swift
+ [ reix ] (c) 2026 Eliomar Alejandro Rodriguez Ferrer - GPLv3
+
+[ BOOT  ][PPM ] Physical Page Manager ready.
+[ BOOT  ][VMM ] Virtual Memory Manager ready.
+[ BOOT  ][HEAP] Kernel heap ready.
+[ BOOT  ][GIC ] Generic Interrupt Controller ready.
+[ BOOT  ][FS  ] Internal File System ready.
+[ BOOT  ][PROC] Process Manager ready.
+[ BOOT  ][SCHD] Scheduler ready.
+[ BOOT  ][IPC ] IPC ready.
+[ BOOT  ][SYS ] Syscall Handler ready.
+[ BOOT  ][TIM ] Virtual Timer enabled.
+
+[ INFO  ][KERN] Kernel is running.
+[ INFO  ][PROC] Handing control to user space.
+
+=================================================
+                    USER LAND
+=================================================
+
+[ INIT  ] Hi, this is init process!
+[ INIT  ] Launching Name Server
+[ SERVE ] Hi, Process Server is running!
+[ NS    ] badge request: 1
+[ CHILD ] lookup OK, Have process server key
+[ CHILD ] Child Pid:  4
+```
+
 ---
 
 ## Roadmap
@@ -183,9 +224,10 @@ The next milestones move ReixOS from "boots and runs user-space" toward a genuin
 - [x] Functional user-space execution
 - [x] Robust heap allocation in the kernel
 - [x] Inter-process communication (rendezvous + capabilities)
-- [ ] **Move core services out of the kernel into userland (Process Server, Name Server)** — the main microkernel milestone
+- [x] **Move the Name Server and Process Server into userland** — the main microkernel milestone
+- [ ] Slim the remaining bootstrap primitives (`spawnProcess`) toward pure IPC
 - [ ] Per-container filesystems unified under one namespace (`/reix::container/...`)
-- [ ] Real userland heap (`malloc`/`free` on top of `brk`/`mmap`)
+- [x] Userland heap (`malloc`/`free` over `sbrk`/`brk`) — implemented, now hardening
 - [ ] Complete `exec` and child reaping
 - [ ] Writable filesystem
 - [ ] Better I/O handling

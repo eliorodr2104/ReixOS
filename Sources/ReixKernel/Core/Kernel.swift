@@ -116,6 +116,7 @@ public struct Kernel {
             let ipcPtr = heap.pointee.kmalloc(KernelIPC.self)
             ipcPtr.initialize(
                 to: KernelIPC(
+                    ppm      : &self.ppm!,
                     scheduler: self.scheduler,
                     heap     : self.heap
                 )

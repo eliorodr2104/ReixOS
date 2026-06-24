@@ -13,15 +13,18 @@ public struct RendezvousIPC: IPCInterface {
     public static var errorMessageAllocation = "Failed to allocate IPC on the kernel heap"
     
     var endpoints: InlineArray<64, UnsafeMutablePointer<Endpoint>?>
+    var ppm      : UnsafeMutablePointer<KernelPPM>
     var scheduler: UnsafeMutablePointer<KernelScheduler>
     var heap     : UnsafeMutablePointer<KernelHeap>
     
     
     init(
+        ppm      : UnsafeMutablePointer<KernelPPM>,
         scheduler: UnsafeMutablePointer<KernelScheduler>,
         heap     : UnsafeMutablePointer<KernelHeap>
     ) {
         self.endpoints = InlineArray(repeating: nil)
+        self.ppm       = ppm
         self.scheduler = scheduler
         self.heap      = heap
     }
@@ -520,7 +523,7 @@ public struct RendezvousIPC: IPCInterface {
                 endpointPtr.pointee.references &+= 1
                 
             case .shared(let sharedMemoryPtr):
-                return
+                sharedMemoryPtr.pointee.references &+= 1
         }
     }
     
@@ -538,11 +541,20 @@ public struct RendezvousIPC: IPCInterface {
                     break
                 }
                 
+                
                 endpointPtr.deinitialize(count: 1)
                 heap.pointee.kfree(UnsafeMutableRawPointer(endpointPtr))
                 
             case .shared(let sharedMemoryPtr):
-                return
+                guard sharedMemoryPtr.pointee.references > 0 else { return }
+                sharedMemoryPtr.pointee.references &-= 1
+                guard sharedMemoryPtr.pointee.references == 0 else { return }
+                
+                // TODO: Manage the PPM error
+                try? ppm.pointee.free(sharedMemoryPtr.pointee.physicalPage)
+                sharedMemoryPtr.deinitialize(count: 1)
+                heap.pointee.kfree(UnsafeMutableRawPointer(sharedMemoryPtr))
+                
         }
     }
     

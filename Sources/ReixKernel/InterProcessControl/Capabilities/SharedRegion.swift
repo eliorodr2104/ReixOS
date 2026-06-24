@@ -7,4 +7,7 @@
 
 public struct SharedRegion {
     
+    public var physicalPage: PhysicalPage
+    public var references  : UInt64
+    
 }
