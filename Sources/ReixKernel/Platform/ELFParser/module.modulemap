@@ -1,4 +1,0 @@
-module CElf {
-    header "elf_types.h"
-    export *
-}

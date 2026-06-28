@@ -5,8 +5,6 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 03/05/2026.
 //
 
-import CElf
-
 public struct ElfParser {
     private static let PT_LOAD : UInt32 = 1
     private static let pageSize: UInt64 = 4096
@@ -44,10 +42,10 @@ public struct ElfParser {
             case .failure(_): throw  .noLoadableSegments // .readError(err)
         }
 
-        guard ehdr.e_ident.0 == 0x7F,
-              ehdr.e_ident.1 == 0x45, // 'E'
-              ehdr.e_ident.2 == 0x4C, // 'L'
-              ehdr.e_ident.3 == 0x46
+        guard ehdr.e_ident[0] == 0x7F,
+              ehdr.e_ident[1] == 0x45, // 'E'
+              ehdr.e_ident[2] == 0x4C, // 'L'
+              ehdr.e_ident[3] == 0x46
         else { throw .invalidMagicNumber }
 
         var loadBase: UInt64 = UInt64.max

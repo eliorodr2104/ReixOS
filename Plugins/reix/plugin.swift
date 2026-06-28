@@ -34,9 +34,6 @@ struct ReixPlugin: CommandPlugin {
         "Sources/ReixKernel/Arch/aarch64/Exceptions/Handlers/ContextSaving.S",
         "Sources/ReixKernel/Arch/aarch64/MMU/Handlers/AArch64MMUHandlers.S",
         "Sources/ReixKernel/Arch/aarch64/Timer/Handlers/VirtualTimer.S",
-        "Sources/ReixKernel/Core/Stubs.c",
-        "Sources/ReixKernel/Platform/TarParser/tar_parser.c",
-        "Sources/ReixKernel/Support/C/fdt_parser.c",
     ]
     // Userland native: runtime stubs + svc wrappers, linked into every app.
     let reixNative = [

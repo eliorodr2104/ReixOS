@@ -36,13 +36,6 @@ let kernelNativeExclude: [String] = [
     "Arch/aarch64/Exceptions/Handlers/ContextSaving.S",
     "Arch/aarch64/MMU/Handlers/AArch64MMUHandlers.S",
     "Arch/aarch64/Timer/Handlers/VirtualTimer.S",
-    "Core/Stubs.c",
-    "Platform/ELFParser/elf_types.h",
-    "Platform/ELFParser/module.modulemap",
-    "Platform/TarParser/tar_parser.c",
-    "Platform/TarParser/tar_types.h",
-    "Support/C/fdt_parser.c",
-    "Support/C/fdt_parser.h",
 ]
 
 func app(_ name: String, _ settings: [SwiftSetting]) -> Target {
@@ -77,7 +70,7 @@ let package = Package(
             dependencies: ["ReixABI"],
             path: "Sources/ReixKernel",
             exclude: kernelNativeExclude,
-            swiftSettings: bareMetal + [.unsafeFlags(["-I", "Sources/ReixKernel/Platform/ELFParser"])]
+            swiftSettings: bareMetal
         ),
 
         // Userland apps: one ELF each, depend only on Reix.
