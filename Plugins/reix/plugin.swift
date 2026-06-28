@@ -29,7 +29,6 @@ struct ReixPlugin: CommandPlugin {
     let kernelNative = [
         "Sources/ReixKernel/Arch/aarch64/Boot/boot.S",
         "Sources/ReixKernel/Arch/aarch64/CPU/Handlers/CpuHandlers.S",
-        "Sources/ReixKernel/Arch/aarch64/CPU/Handlers/Mem.S",
         "Sources/ReixKernel/Arch/aarch64/ContextSwitch/ContextSwitch.S",
         "Sources/ReixKernel/Arch/aarch64/Exceptions/Handlers/ContextSaving.S",
         "Sources/ReixKernel/Arch/aarch64/MMU/Handlers/AArch64MMUHandlers.S",
@@ -37,7 +36,6 @@ struct ReixPlugin: CommandPlugin {
     ]
     // Userland native: runtime stubs + svc wrappers, linked into every app.
     let reixNative = [
-        "Native/reix/user_stubs.c",
         "Native/reix/AsmSyscall.S",
     ]
 
