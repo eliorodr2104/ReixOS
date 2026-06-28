@@ -129,7 +129,8 @@ public struct Kernel {
             syscallHandlerPtr.initialize(to: SyscallHandler(
                 processManager: self.processManager,
                 scheduler     : self.scheduler,
-                ipc           : self.ipc
+                ipc           : self.ipc,
+                ppm           : &self.ppm!
             ))
             self.syscallHandler = syscallHandlerPtr
             kprint(.boot, in: "Syscall Handler ready.", by: .sys)

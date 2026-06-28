@@ -445,6 +445,38 @@ public struct RendezvousIPC: IPCInterface {
         return .success(parentEndpointHandle)
     }
     
+    public mutating func createShared(
+        for process  : UnsafeMutablePointer<Process>,
+            page     : PhysicalPage,
+            pageCount: UInt32
+    ) -> Result<UInt32, IPCError> {
+    
+        let sharedRegion = heap.pointee.kmalloc(SharedRegion.self)
+        sharedRegion.initialize(
+            to: SharedRegion(
+                physicalPage: page,
+                references  : 0,
+                pageCount   : pageCount
+            )
+        )
+        
+        let capability = Capability(
+            target: .shared(sharedRegion),
+            badge : Badge(0),
+            rights: [.send, .receive, .grant]
+        )
+        
+        guard let handle = process.pointee.metadata.pointee.capsTable.install(capability) else {
+            sharedRegion.deinitialize(count: 1)
+            heap.pointee.kfree(UnsafeMutableRawPointer(sharedRegion))
+            
+            return .failure(.outOfEndpoints)
+        }
+        
+        retain(capability)
+
+        return .success(handle)
+    }
     
     public mutating func transferCapability(
         from senderProcess  : UnsafeMutablePointer<Process>,

@@ -55,9 +55,11 @@ struct UserHeap {
 }
 
 
-nonisolated(unsafe) var gHeap = UserHeap()
+// MARK: - Public API Heap for Swift
 
-@_cdecl("posix_memalign")
+private nonisolated(unsafe) var gHeap = UserHeap()
+
+@_cdecl("reix_posix_memalign")
 func reix_posix_memalign(
     _ memptr   : UnsafeMutablePointer<UnsafeMutableRawPointer?>,
     _ alignment: UInt,
@@ -71,12 +73,12 @@ func reix_posix_memalign(
     return 0
 }
 
-@_cdecl("free")
+@_cdecl("reix_free")
 func reix_free(_ ptr: UnsafeMutableRawPointer?) {
     if let p = ptr { gHeap.free(p) }
 }
 
-@_cdecl("malloc")
+@_cdecl("reix_malloc")
 func reix_malloc(_ size: UInt) -> UnsafeMutableRawPointer? {
     gHeap.alloc(size: max(size, 1), alignment: 16)
 }

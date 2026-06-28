@@ -22,15 +22,18 @@ public struct SyscallHandler: RXObject {
     private let processManager: UnsafeMutablePointer<ProcessManager>
     private let scheduler     : UnsafeMutablePointer<KernelScheduler>
     private let ipc           : UnsafeMutablePointer<KernelIPC>
+    private let ppm           : UnsafeMutablePointer<KernelPPM>
 
     public init(
         processManager: UnsafeMutablePointer<ProcessManager>,
         scheduler     : UnsafeMutablePointer<KernelScheduler>,
-        ipc           : UnsafeMutablePointer<KernelIPC>
+        ipc           : UnsafeMutablePointer<KernelIPC>,
+        ppm           : UnsafeMutablePointer<KernelPPM>
     ) {
         self.processManager = processManager
         self.scheduler      = scheduler
         self.ipc            = ipc
+        self.ppm            = ppm
     }
 
     public func handle(
@@ -40,7 +43,8 @@ public struct SyscallHandler: RXObject {
         let context = SyscallContext(
             processManager: processManager,
             scheduler     : scheduler,
-            ipc           : ipc
+            ipc           : ipc,
+            ppm           : ppm
         )
 
         switch type {
@@ -77,6 +81,10 @@ public struct SyscallHandler: RXObject {
             case .derive        : DeriveSyscall        .handle(frame: frame, context: context)
                 
 
+            // SHM
+            case .shmCreate     : ShmCreate            .handle(frame: frame, context: context)
+            case .shmMap        : ShmMap               .handle(frame: frame, context: context)
+                
             default: break
         }
     }
@@ -89,7 +97,8 @@ public struct SyscallHandler: RXObject {
         let context = SyscallContext(
             processManager: processManager,
             scheduler     : scheduler,
-            ipc           : ipc
+            ipc           : ipc,
+            ppm           : ppm
         )
         
         processManager.pointee.killCurrent(

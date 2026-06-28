@@ -44,6 +44,18 @@ public func main() {
     if let spawned = processServer.spawn(.child2) {
         print("[ CHILD ] Child Pid: ", terminator: " ")
         print(String(spawned.pid))
+
+        let shm = shmCreate(pageCount: 1)
+        if shm.isValid, let peer = spawned.cap {
+            UnsafeMutableRawPointer(bitPattern: UInt(shm.address))!
+                .storeBytes(of: UInt32(0xCAFE), as: UInt32.self) // I drink coffee 30 min ago
+            _ = send(
+                handle     : peer,
+                message    : NameServerResponse.ok.message,
+                grant      : shm.handle,
+                grantRights: [.send]
+            )
+        }
     }
     
     print("[ CHILD ] Allocate Array of UInt32 for test `malloc`")

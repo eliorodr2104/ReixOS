@@ -74,3 +74,51 @@ public func munmap(addr: UInt64, size: UInt64) -> UInt64 {
 public func decommit(addr: UInt64, size: UInt64) -> UInt64 {
     _syscall(.decommit, addr, size)
 }
+
+// TODO: - Move this struct on each single file
+
+/// Raw two-word layout the kernel writes back: x0 = cap handle, x1 = base VA.
+/// Field order MUST match the kernel provider's `frame.x0`/`frame.x1` stores.
+private struct ShmCreateRaw {
+    var handle : UInt64 = 0
+    var address: UInt64 = 0
+}
+
+/// A shared-memory region returned by `shmCreate`: the capability `handle`
+/// (grant it to a peer over an endpoint, the peer maps it with `shmMap`) and
+/// the `address` it is mapped at in *this* process.
+public struct SharedMemory {
+    public let handle : UInt32
+    public let address: UInt64
+
+    /// `true` when the region was created and mapped successfully.
+    public var isValid: Bool { handle != UInt32.max }
+}
+
+/// Create a shared-memory region of `pageCount` 4 KiB pages, mapped read/write
+/// into the caller. Returns the cap handle and the base virtual address;
+/// `handle == UInt32.max` means creation failed (no memory, no VA gap).
+@inline(__always)
+public func shmCreate(pageCount: UInt64) -> SharedMemory {
+
+    var raw = ShmCreateRaw()
+
+    withUnsafeMutablePointer(to: &raw) { ptr in
+        _ = _asm_spawn_raw(
+            SyscallNumber.shmCreate.rawValue,
+            pageCount,
+            0,
+            UnsafeMutableRawPointer(ptr)
+        )
+    }
+
+    return SharedMemory(
+        handle : UInt32(truncatingIfNeeded: raw.handle),
+        address: raw.address
+    )
+}
+
+@inline(__always)
+public func shmMap(handle: UInt32) -> UInt64 {
+    _syscall(.shmMap, UInt64(handle))
+}

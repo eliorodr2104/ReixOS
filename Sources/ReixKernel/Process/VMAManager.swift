@@ -288,6 +288,45 @@ public struct VMAManager: RXObject {
         currentBreak = aligned
         return currentBreak
     }
+    
+    public mutating func mapShared(
+        physicalBase: PhysicalAddress,
+        pageCount   : Int
+    ) throws(VMAError) -> VirtualAddress {
+        
+        guard pageCount > 0 else { throw .invalidLayout }
+
+        let alignedSize = (UInt64(pageCount) + UserSpaceLayout.pageSize - 1) & ~(UserSpaceLayout.pageSize - 1)
+
+        guard let start = vmaList.findFreeGAPInRange(
+            min      : UserSpaceLayout.mmapMin,
+            max      : UserSpaceLayout.mmapBase,
+            size     : alignedSize,
+            alignment: UserSpaceLayout.pageSize,
+            direction: .downward
+        ) else { throw .noFreeGap }
+
+        try registerRegion(
+            start      : start,
+            size       : alignedSize,
+            permissions: [.read, .write, .user],
+            backing    : .shared,
+            flags      : .none
+        )
+        
+        for i in 0..<pageCount {
+            let currentVirtualPage: UInt64 = UInt64(i) * UserSpaceLayout.pageSize
+            
+            try? vmm.pointee.mapUserPage(
+                rootTable: rootTablePhysical,
+                virtual  : start        + currentVirtualPage,
+                physical : physicalBase + currentVirtualPage,
+                flags    : [.userAccess, .uxn]
+            )
+        }
+
+        return start
+    }
 
 
     /// Reserve an anonymous read/write region in the mmap area.
