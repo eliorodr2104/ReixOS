@@ -111,13 +111,13 @@ public struct VMAManager: RXAllocatable {
         if let prev = survivor.pointee.prev,
            let removed = vmaList.mergeAdjacent(prev, survivor) {
             if removed == brkVMA { brkVMA = prev }
-            heap.pointee.kfree(UnsafeMutableRawPointer(removed))
+            heap.pointee.kfree(removed)
             survivor = prev
         }
         if let next = survivor.pointee.next,
            let removed = vmaList.mergeAdjacent(survivor, next) {
             if removed == brkVMA { brkVMA = survivor }
-            heap.pointee.kfree(UnsafeMutableRawPointer(removed))
+            heap.pointee.kfree(removed)
         }
     }
     
@@ -411,7 +411,7 @@ public struct VMAManager: RXAllocatable {
 
         Arch.MMU.flushTLB()
         vmaList.remove(element: vmaPtr)
-        heap.pointee.kfree(UnsafeMutableRawPointer(vmaPtr))
+        heap.pointee.kfree(vmaPtr)
     }
 
 
@@ -446,7 +446,7 @@ public struct VMAManager: RXAllocatable {
             }
 
             let nextPtr = node.next
-            heap.pointee.kfree(UnsafeMutableRawPointer(nodePtr))
+            heap.pointee.kfree(nodePtr)
             current = nextPtr
         }
 

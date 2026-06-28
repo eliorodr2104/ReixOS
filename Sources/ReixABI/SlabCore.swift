@@ -28,22 +28,33 @@ public struct SlabCore<Backend: SlabBackend> {
         return pop(i) ?? carve(shift: shift, index: i)
     }
 
-    public mutating func free(_ ptr: UnsafeMutableRawPointer) {
+    /// Returns `false` when `ptr` is not a live heap block: a bound page always
+    /// carries a `shift` in `[minShift, log2(pageSize)]`, while a released or
+    /// never-carved page reports `0`. Callers turn `false` into an invalid- /
+    /// double-free diagnostic; the free list is left untouched.
+    @discardableResult
+    public mutating func free(_ ptr: UnsafeMutableRawPointer) -> Bool {
         let page  = Self.pageBase(ptr)
         let shift = backend.shift(ofPage: page)
-        let i     = Int(shift - Self.minShift)
+
+        guard shift >= Self.minShift,
+              shift <= UInt8(Self.pageSize.trailingZeroBitCount) else { return false }
+
+        let i = Int(shift - Self.minShift)
 
         ptr.storeBytes(of: buckets[i], as: UnsafeMutableRawPointer?.self)
         buckets[i] = ptr
 
         if backend.onFreeBlock(page: page) { reclaim(page: page, index: i) }
+
+        return true
     }
     
 
     // MARK: - internals
 
     @inline(__always)
-    static func pageBase(_ p: UnsafeMutableRawPointer) -> UnsafeMutableRawPointer {
+    public static func pageBase(_ p: UnsafeMutableRawPointer) -> UnsafeMutableRawPointer {
         UnsafeMutableRawPointer(bitPattern: UInt(bitPattern: p) & ~UInt(0xFFF))!
     }
 

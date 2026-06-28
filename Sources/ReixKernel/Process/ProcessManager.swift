@@ -195,9 +195,8 @@ public struct ProcessManager: RXAllocatable {
         
         if let vmaManager = process.pointee.addressSpace.vmaManager {
             vmaManager.pointee.teardown()
-            vmaManager.deinitialize(count: 1)
-            
-            heap.pointee.kfree(UnsafeMutableRawPointer(vmaManager))
+
+            heap.pointee.kfree(vmaManager)
             process.pointee.addressSpace.vmaManager = nil
         }
         
@@ -212,12 +211,12 @@ public struct ProcessManager: RXAllocatable {
         }
         
         if let trapFrame = process.pointee.context {
-            heap.pointee.kfree(UnsafeMutableRawPointer(trapFrame))
+            heap.pointee.kfree(trapFrame)
             process.pointee.context = nil
         }
-        
+
         if let stackAddress = process.pointee.kernelStackRaw {
-            heap.pointee.kfree(UnsafeMutableRawPointer(stackAddress))
+            heap.pointee.kfree(stackAddress)
             process.pointee.kernelStackRaw = nil
             process.pointee.kernelStackTop = nil
         }
@@ -242,13 +241,11 @@ public struct ProcessManager: RXAllocatable {
         }
         
         if let metadata = process.pointee.metadata {
-            metadata.deinitialize(count: 1)
-            heap.pointee.kfree(UnsafeMutableRawPointer(metadata))
+            heap.pointee.kfree(metadata)
             process.pointee.metadata = nil
         }
-        
-        process.deinitialize(count: 1)
-        heap.pointee.kfree(UnsafeMutableRawPointer(process))
+
+        heap.pointee.kfree(process)
     }
     
     

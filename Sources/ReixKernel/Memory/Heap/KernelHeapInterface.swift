@@ -26,4 +26,9 @@ public protocol KernelHeapInterface {
     ) -> UnsafeMutablePointer<Object>
     
     mutating func kfree(_ ptr: UnsafeMutableRawPointer)
+
+    mutating func kfree<Object: ~Copyable>(
+        _ ptr: UnsafeMutablePointer<Object>,
+        count: Int
+    )
 }

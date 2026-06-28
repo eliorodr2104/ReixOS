@@ -371,12 +371,11 @@ public struct RendezvousIPC: IPCInterface {
         
         guard let handle = process.pointee.metadata.pointee.capsTable.install(capability) else {
             endpoints[id] = nil
-            endpoint.deinitialize(count: 1)
-            heap.pointee.kfree(UnsafeMutableRawPointer(endpoint))
-            
+            heap.pointee.kfree(endpoint)
+
             return .failure(.outOfEndpoints)
         }
-        
+
         retain(capability)
 
         return .success(handle)
@@ -416,8 +415,7 @@ public struct RendezvousIPC: IPCInterface {
 
         guard let parentEndpointHandle = parent.pointee.metadata.pointee.capsTable.install(parentCapability) else {
             endpoints[id] = nil
-            endpoint.deinitialize(count: 1)
-            heap.pointee.kfree(UnsafeMutableRawPointer(endpoint))
+            heap.pointee.kfree(endpoint)
 
             return .failure(.outOfEndpoints)
         }
@@ -568,8 +566,7 @@ public struct RendezvousIPC: IPCInterface {
                     break
                 }
 
-                endpointPtr.deinitialize(count: 1)
-                heap.pointee.kfree(UnsafeMutableRawPointer(endpointPtr))
+                heap.pointee.kfree(endpointPtr)
 
             case .shared(let sharedMemoryPtr):
                 guard rxRelease(sharedMemoryPtr) else { return }
