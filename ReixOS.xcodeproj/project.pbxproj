@@ -19,6 +19,11 @@
 			path = Sources;
 			sourceTree = "<group>";
 		};
+		1F5244AA2F95352500E5E2C8 /* Plugins */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Plugins;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXGroup section */
@@ -46,6 +51,7 @@
 				1F52448D2F95369500E5E2C8 /* Makefile */,
 				1F52448C2F95364400E5E2C8 /* linker.ld */,
 				1F5244872F95357500E5E2C8 /* Sources */,
+				1F5244AA2F95352500E5E2C8 /* Plugins */,
 			);
 			sourceTree = "<group>";
 		};

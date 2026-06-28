@@ -30,11 +30,8 @@ if isFreestanding {
 // mixing Swift and C/asm in one target, so they are excluded here.
 let kernelNativeExclude: [String] = [
     "Arch/aarch64/Boot/boot.S",
-    "Arch/aarch64/CPU/Handlers/CpuHandlers.S",
     "Arch/aarch64/ContextSwitch/ContextSwitch.S",
     "Arch/aarch64/Exceptions/Handlers/ContextSaving.S",
-    "Arch/aarch64/MMU/Handlers/AArch64MMUHandlers.S",
-    "Arch/aarch64/Timer/Handlers/VirtualTimer.S",
 ]
 
 func app(_ name: String, _ settings: [SwiftSetting]) -> Target {
