@@ -100,8 +100,8 @@ public struct Kernel {
             processManagerPtr.initialize(to: ProcessManager(
                 vmm       : &vmm!,
                 ppm       : &ppm!,
-                heap      : heap,
-                fileSystem: fileSystem
+                heap      :  heap,
+                fileSystem:  fileSystem
             ))
             self.processManager = processManagerPtr
             kprint(.boot, "Process Manager ready.", by: .proc)
@@ -182,6 +182,21 @@ public struct Kernel {
             rights: [.send, .receive, .grant, .spawn],
             owner : Endpoint.kernelOwner
         )
+        
+        let deviceRegion = DeviceRegion(
+            address: Kernel.platformInfo.uart.baseAddr,
+            size   : UserSpaceLayout.pageSize
+        )
+        
+        let grantHandle = firstProcess.pointee.metadata.pointee.capsTable.install(
+            Capability(
+                target: .device(deviceRegion),
+                badge : Badge(0),
+                rights: [.grant]
+            )
+        )
+        
+        firstProcess.pointee.metadata.pointee.deviceCap = grantHandle
 
         kprint(.info, "Handing control to user space.", by: .proc)
         kprint()

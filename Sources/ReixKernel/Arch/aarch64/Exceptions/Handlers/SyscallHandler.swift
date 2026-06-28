@@ -85,6 +85,11 @@ public struct SyscallHandler: RXAllocatable {
             case .shmCreate     : ShmCreate            .handle(frame: frame, context: context)
             case .shmMap        : ShmMap               .handle(frame: frame, context: context)
                 
+                
+            // Device
+            case .deviceCap     : DeviceCapSyscall     .handle(frame: frame, context: context)
+            case .mapDevice     : MapDeviceSyscall     .handle(frame: frame, context: context)
+                
             default: break
         }
     }

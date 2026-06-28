@@ -549,8 +549,11 @@ public struct RendezvousIPC: IPCInterface {
     mutating func retain(_ cap: Capability) {
 
         switch cap.target {
-            case .endpoint(let endpointPtr): rxRetain(endpointPtr)
+            case .endpoint(let endpointPtr)    : rxRetain(endpointPtr)
             case .shared  (let sharedMemoryPtr): rxRetain(sharedMemoryPtr)
+            
+            default: break // This because DeviceRegion is not a object
+                
         }
     }
 
@@ -573,6 +576,9 @@ public struct RendezvousIPC: IPCInterface {
 
                 sharedMemoryPtr.move().releaseFrame(ppm: ppm)
                 heap.pointee.kfree(UnsafeMutableRawPointer(sharedMemoryPtr))
+                
+                
+            default: break // This because DeviceRegion is not a object
         }
     }
     

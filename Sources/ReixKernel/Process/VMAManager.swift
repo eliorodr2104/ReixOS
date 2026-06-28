@@ -289,14 +289,15 @@ public struct VMAManager: RXAllocatable {
         return currentBreak
     }
     
-    public mutating func mapShared(
+    public mutating func mapRegion(
         physicalBase: PhysicalAddress,
-        pageCount   : Int
+        pageCount   : Int,
+        kind        : RegionKind
     ) throws(VMAError) -> VirtualAddress {
         
         guard pageCount > 0 else { throw .invalidLayout }
 
-        let alignedSize = (UInt64(pageCount) + UserSpaceLayout.pageSize - 1) & ~(UserSpaceLayout.pageSize - 1)
+        let alignedSize = UInt64(pageCount) * UserSpaceLayout.pageSize
 
         guard let start = vmaList.findFreeGAPInRange(
             min      : UserSpaceLayout.mmapMin,
@@ -310,7 +311,7 @@ public struct VMAManager: RXAllocatable {
             start      : start,
             size       : alignedSize,
             permissions: [.read, .write, .user],
-            backing    : .shared,
+            backing    : kind.backing,
             flags      : .none
         )
         
@@ -321,13 +322,13 @@ public struct VMAManager: RXAllocatable {
                 rootTable: rootTablePhysical,
                 virtual  : start        + currentVirtualPage,
                 physical : physicalBase + currentVirtualPage,
-                flags    : [.userAccess, .uxn]
+                flags    : [.userAccess, .uxn],
+                type     : kind.memoryType
             )
         }
 
         return start
     }
-
 
     /// Reserve an anonymous read/write region in the mmap area.
     ///
@@ -400,7 +401,7 @@ public struct VMAManager: RXAllocatable {
                         virtual  : va
                     )
 
-                case .fileBacked, .shared:
+                case .fileBacked, .shared, .device:
                     try? vmm.pointee.unmapUserPage(
                         rootTable: rootTablePhysical,
                         virtual  : va
@@ -436,7 +437,7 @@ public struct VMAManager: RXAllocatable {
                             virtual  : va
                         )
 
-                    case .fileBacked, .shared:
+                    case .fileBacked, .shared, .device:
                         try? vmm.pointee.unmapUserPage(
                             rootTable: rootTablePhysical,
                             virtual  : va

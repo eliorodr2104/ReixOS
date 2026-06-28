@@ -44,9 +44,10 @@ public struct ShmCreate: SyscallProvider {
         
         let regionAddress: VirtualAddress
         do {
-            regionAddress = try vmaManager.pointee.mapShared(
+            regionAddress = try vmaManager.pointee.mapRegion(
                 physicalBase: physicalPage.address,
-                pageCount   : Int(pageCount)
+                pageCount   : Int(pageCount),
+                kind        : .shared
             )
         } catch {
             try? context.ppm.pointee.free(physicalPage)

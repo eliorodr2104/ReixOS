@@ -9,4 +9,5 @@ public enum BackingType {
     case anonymous
     case fileBacked
     case shared
+    case device
 }

@@ -45,4 +45,9 @@ public enum SyscallNumber: UInt64 {
     // SMH
     case shmCreate
     case shmMap
+    
+    
+    // Device
+    case deviceCap
+    case mapDevice
 }

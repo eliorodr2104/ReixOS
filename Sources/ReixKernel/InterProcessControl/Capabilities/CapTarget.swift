@@ -8,4 +8,5 @@
 public enum CapTarget: Equatable {
     case endpoint(UnsafeMutablePointer<Endpoint>)
     case shared  (UnsafeMutablePointer<SharedRegion>)
+    case device  (DeviceRegion)
 }

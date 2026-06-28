@@ -293,3 +293,15 @@ public func derive(
 
     return result == UInt32.max ? nil : result
 }
+
+
+@inline(__always)
+public func deviceCap() -> UInt32? {
+    let parentDeviceHandle = UInt32(truncatingIfNeeded: _syscall(.deviceCap))
+    return parentDeviceHandle == UInt32.max ? nil : parentDeviceHandle
+}
+
+@inline(__always)
+public func mapDevice(handle: UInt32) -> UInt64 {
+    _syscall(.mapDevice, UInt64(handle))
+}

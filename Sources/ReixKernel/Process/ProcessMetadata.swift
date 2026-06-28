@@ -32,6 +32,8 @@ public struct ProcessMetadata: RXAllocatable {
     /// through the `parentEndpoint` syscall, so a freshly spawned child can
     /// discover its handle instead of assuming a fixed capsTable slot.
     public var parentEndpoint: UInt32?      // 4 Byte
+    
+    public var deviceCap     : UInt32?
 
 
     /// Current program break. Populated by the brk milestone (step 5);
@@ -80,6 +82,7 @@ public struct ProcessMetadata: RXAllocatable {
         self.exitReason      = exitReason
         self.capsTable       = CapsTable()
         self.parentEndpoint  = nil
+        self.deviceCap       = nil
     }
 
     public init() {
@@ -91,6 +94,7 @@ public struct ProcessMetadata: RXAllocatable {
         self.exitReason      = nil
         self.capsTable       = CapsTable()
         self.parentEndpoint  = nil
+        self.deviceCap       = nil
     }
     
 }

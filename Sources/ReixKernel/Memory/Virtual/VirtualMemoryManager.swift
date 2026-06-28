@@ -261,7 +261,8 @@ public struct VirtualMemoryManager {
         rootTable: PhysicalAddress,
         virtual  : VirtualAddress,
         physical : PhysicalAddress,
-        flags    : VirtualPageFlags
+        flags    : VirtualPageFlags,
+        type     : MemoryType        = .normal
     ) throws(PPMError) {
         let tablePointer: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable)
 
@@ -269,7 +270,7 @@ public struct VirtualMemoryManager {
             table   : tablePointer,
             virtual : virtual,
             physical: physical,
-            type    : .normal,
+            type    : type,
             flags   : flags
         )
     }

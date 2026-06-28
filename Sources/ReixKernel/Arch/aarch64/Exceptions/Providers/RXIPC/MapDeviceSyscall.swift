@@ -1,5 +1,5 @@
 //
-//  ShmMap.swift
+//  MapDeviceSyscall.swift
 //  ReixOS
 //
 //  Created by Eliomar on 28/06/2026.
@@ -7,9 +7,9 @@
 
 import ReixABI
 
-public struct ShmMap: SyscallProvider {
+public struct MapDeviceSyscall: SyscallProvider {
     
-    public static let number: SyscallNumber = .shmMap
+    public static let number: SyscallNumber = .mapDevice
 
     public static func handle(
         frame  : UnsafeMutablePointer<Arch.TrapFrame>,
@@ -27,16 +27,16 @@ public struct ShmMap: SyscallProvider {
             return
         }
 
-        guard case .shared(let region) = cap.target else {
+        guard case .device(let device) = cap.target else {
             frame.pointee.x0 = 0
             return
         }
 
         do {
             let vaddr = try vmaManager.pointee.mapRegion(
-                physicalBase: region.pointee.physicalPage.address,
-                pageCount   : Int(region.pointee.pageCount),
-                kind        : .shared
+                physicalBase: device.address,
+                pageCount   : Int((device.size + UserSpaceLayout.pageSize - 1) / UserSpaceLayout.pageSize),
+                kind        : .device
             )
             frame.pointee.x0 = vaddr
             
