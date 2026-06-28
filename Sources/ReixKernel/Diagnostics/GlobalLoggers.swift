@@ -45,6 +45,10 @@ public func kprint(_ s: String) {
     _logger.kprint(s)
 }
 
+public func kprintStatic(_ s: StaticString) {
+    _logger.kprintStatic(s)
+}
+
 public func kprint() {
     _logger.kprint()
 }

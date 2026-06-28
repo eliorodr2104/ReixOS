@@ -14,7 +14,7 @@
 /// during a merge is O(1). `entryID` is unused: the buddy never does id-based
 /// lookups, only `pushBack`/`popFront`/`remove(element:)`.
 public struct FreeBlock: RXEntry {
-    public static var errorMessageAllocation = "FreeBlock"
+    public static var errorMessageAllocation: StaticString = "FreeBlock"
     public var prev: UnsafeMutablePointer<FreeBlock>?
     public var next: UnsafeMutablePointer<FreeBlock>?
     public var entryID: UInt64 { 0 }

@@ -10,9 +10,9 @@
 /// Holds the MMIO register windows for the Distributor (GICD) and the
 /// CPU Interface (GICC) as stored properties. The single live instance
 /// is composed by `Kernel.boot` and reached through `Kernel.gic`.
-public struct GICv2: RXObject, InterruptController {
-    
-    public static var errorMessageAllocation = "Failed to allocate GICv2 on the kernel heap"
+public struct GICv2: RXAllocatable, InterruptController {
+
+    public static var errorMessageAllocation: StaticString = "Failed to allocate GICv2 on the kernel heap"
 
     private let gicd: UnsafeMutablePointer<UInt32>
     private let gicc: UnsafeMutablePointer<UInt32>

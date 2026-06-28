@@ -63,7 +63,7 @@ public struct AArch64CPU: CPUInterface {
     /// dedicated `panic(report:formattedBy:finishedBy:)` overload.
     @inline(__always)
     public static func panic(
-        _   reason   : String?         = nil,
+        _   reason   : StaticString?   = nil,
         exc exception: Exception?      = nil,
         fp  frame    : Arch.TrapFrame? = nil
     ) -> Never {

@@ -24,14 +24,14 @@ public struct BucketsHeap: KernelHeapInterface {
 
     public mutating func kmalloc(
         _ size: UInt,
-        errorMessage: String = "Kmalloc Failed"
+        errorMessage: StaticString = "Kmalloc Failed"
     ) -> UnsafeMutableRawPointer {
         guard let pointer = core.alloc(size: size) else { Arch.CPU.panic(errorMessage) }
         
         return pointer
     }
     
-    public mutating func kmalloc<Object: RXObject>(
+    public mutating func kmalloc<Object: RXAllocatable>(
         _ type    : Object.Type,
         _ capacity: Int = 1
     ) -> UnsafeMutablePointer<Object> {

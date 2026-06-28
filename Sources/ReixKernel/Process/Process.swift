@@ -23,7 +23,7 @@ public typealias PID = UInt64
 @frozen
 public struct Process: RXEntry {
 
-    public static var errorMessageAllocation = "Failed to allocate Process on the kernel heap"
+    public static var errorMessageAllocation: StaticString = "Failed to allocate Process on the kernel heap"
     
     public var family        : ProcessRelations                      // 32 Byte -> (8 + 8 + 8 + 8)
     public var message       : Message? = nil                        // 21 Byte -> (4 * 4) + (4 + 1)

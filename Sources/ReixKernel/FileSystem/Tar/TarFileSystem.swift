@@ -8,7 +8,7 @@
 
 public struct TarFileSystem: FileSystemInterface {
     
-    public static var errorMessageAllocation = "Failed to allocate TarFileSystem on the kernel heap"
+    public static var errorMessageAllocation: StaticString = "Failed to allocate TarFileSystem on the kernel heap"
         
     var openedFiles = InlineArray<32, OpenFileDescription>(repeating: OpenFileDescription())
     let tarAddress  = Kernel.platformInfo.initrdStart

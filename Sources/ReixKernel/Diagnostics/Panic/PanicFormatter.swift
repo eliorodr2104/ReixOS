@@ -57,7 +57,7 @@ public struct DefaultPanicFormatter: PanicFormatter {
         guard let reason = report.reason else { return }
 
         kprint("Reason:    ")
-        kprint(reason)
+        kprintStatic(reason)
     }
 
 

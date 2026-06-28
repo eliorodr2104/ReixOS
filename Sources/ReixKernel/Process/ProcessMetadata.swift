@@ -19,9 +19,9 @@ import ReixABI
 /// The instance is allocated on the kernel heap by `ProcessManager`
 /// at spawn time and released at teardown.
 @frozen
-public struct ProcessMetadata: RXObject {
+public struct ProcessMetadata: RXAllocatable {
 
-    public static var errorMessageAllocation = "Failed to allocate ProcessMetadata on the kernel heap"
+    public static var errorMessageAllocation: StaticString = "Failed to allocate ProcessMetadata on the kernel heap"
     
     public var capsTable: CapsTable         // (16 * 13) 208 Byte
 

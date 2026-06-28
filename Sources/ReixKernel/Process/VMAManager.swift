@@ -18,9 +18,9 @@ import ReixABI
 /// All dependencies (kernel heap, VMM, PPM) and the root page table
 /// physical reference are injected at construction time so the type is
 /// free of static facades.
-public struct VMAManager: RXObject {
-    
-    public static var errorMessageAllocation = "Failed to allocate VMAManager on the kernel heap"
+public struct VMAManager: RXAllocatable {
+
+    public static var errorMessageAllocation: StaticString = "Failed to allocate VMAManager on the kernel heap"
     
     private var vmaList: LinkedList<VirtualMemoryArea> // 40 Byte (All ptr 8 Bytes var)
     

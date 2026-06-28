@@ -67,7 +67,13 @@ public struct Logger<Driver: SerialDriver> {
         kprintf(val)
         driver.write(10)
     }
-    
+
+    @_transparent
+    func kprintStatic(_ val: StaticString) {
+        driver.writeString(val)
+        driver.write(10)
+    }
+
     @_transparent
     func kprint() {
         driver.write(10)

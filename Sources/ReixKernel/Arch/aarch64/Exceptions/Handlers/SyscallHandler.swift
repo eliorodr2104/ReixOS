@@ -15,9 +15,9 @@
 /// existential indirection, no dynamic table.
 import ReixABI
 
-public struct SyscallHandler: RXObject {
-    
-    public static var errorMessageAllocation = "Failed to allocate SyscallHandler on the kernel heap"
+public struct SyscallHandler: RXAllocatable {
+
+    public static var errorMessageAllocation: StaticString = "Failed to allocate SyscallHandler on the kernel heap"
 
     private let processManager: UnsafeMutablePointer<ProcessManager>
     private let scheduler     : UnsafeMutablePointer<KernelScheduler>

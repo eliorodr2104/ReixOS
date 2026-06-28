@@ -10,7 +10,7 @@ import ReixABI
 
 public struct RendezvousIPC: IPCInterface {
     
-    public static var errorMessageAllocation = "Failed to allocate IPC on the kernel heap"
+    public static var errorMessageAllocation: StaticString = "Failed to allocate IPC on the kernel heap"
     
     var endpoints: InlineArray<64, UnsafeMutablePointer<Endpoint>?>
     var ppm      : UnsafeMutablePointer<KernelPPM>
@@ -549,44 +549,35 @@ public struct RendezvousIPC: IPCInterface {
     
     @inline(__always)
     mutating func retain(_ cap: Capability) {
-        
+
         switch cap.target {
-            case .endpoint(let endpointPtr):
-                endpointPtr.pointee.references &+= 1
-                
-            case .shared(let sharedMemoryPtr):
-                sharedMemoryPtr.pointee.references &+= 1
+            case .endpoint(let endpointPtr): rxRetain(endpointPtr)
+            case .shared  (let sharedMemoryPtr): rxRetain(sharedMemoryPtr)
         }
     }
-    
-    
+
+
     private mutating func release(_ cap: Capability) {
-        
+
         switch cap.target {
             case .endpoint(let endpointPtr):
-                guard endpointPtr.pointee.references > 0 else { return }
-                endpointPtr.pointee.references &-= 1
-                guard endpointPtr.pointee.references == 0 else { return }
-                
+                guard rxRelease(endpointPtr) else { return }
+
                 for i in 0..<endpoints.count where endpoints[i] == endpointPtr {
                     endpoints[i] = nil
                     break
                 }
-                
-                
+
                 endpointPtr.deinitialize(count: 1)
                 heap.pointee.kfree(UnsafeMutableRawPointer(endpointPtr))
-                
+
             case .shared(let sharedMemoryPtr):
-                guard sharedMemoryPtr.pointee.references > 0 else { return }
-                sharedMemoryPtr.pointee.references &-= 1
-                guard sharedMemoryPtr.pointee.references == 0 else { return }
-                
+                guard rxRelease(sharedMemoryPtr) else { return }
+
                 // TODO: Manage the PPM error
                 try? ppm.pointee.free(sharedMemoryPtr.pointee.physicalPage)
                 sharedMemoryPtr.deinitialize(count: 1)
                 heap.pointee.kfree(UnsafeMutableRawPointer(sharedMemoryPtr))
-                
         }
     }
     

@@ -5,7 +5,7 @@
 //  Created by Eliomar on 30/05/2026.
 //
 
-public protocol IPCInterface: RXObject {
+public protocol IPCInterface: RXAllocatable {
     
     mutating func send(
         capability: Capability,

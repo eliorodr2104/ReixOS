@@ -11,7 +11,7 @@ public typealias Badge = UInt32
 
 public struct Endpoint: RXObject {
     
-    public static var errorMessageAllocation: String = "Failed to allocate IPC endpoint"
+    public static var errorMessageAllocation: StaticString = "Failed to allocate IPC endpoint"
     public static var kernelOwner           : PID    = PID.max
     
     public var queue     : LinkedList<Process>   // 8 Byte

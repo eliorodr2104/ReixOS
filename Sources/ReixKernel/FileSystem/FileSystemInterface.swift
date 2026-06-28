@@ -7,7 +7,7 @@
 
 public typealias Size = Int
 
-public protocol FileSystemInterface: RXObject {
+public protocol FileSystemInterface: RXAllocatable {
     
     mutating func open(
         path : UnsafePointer<CChar>,

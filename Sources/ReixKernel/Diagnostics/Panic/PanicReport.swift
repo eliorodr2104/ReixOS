@@ -13,13 +13,13 @@
 /// allocating or invoking other subsystems.
 public struct PanicReport {
 
-    public let reason   : String?
+    public let reason   : StaticString?
     public let exception: Exception?
     public let frame    : Arch.TrapFrame?
     public let pid      : PID?
 
     public init(
-        reason   : String?         = nil,
+        reason   : StaticString?   = nil,
         exception: Exception?      = nil,
         frame    : Arch.TrapFrame? = nil,
         pid      : PID?            = nil

@@ -15,7 +15,13 @@ extension SerialDriver {
     func writeString(_ s: String) {
         for b in s.utf8 { write(b) }
     }
-    
+
+    func writeString(_ s: StaticString) {
+        s.withUTF8Buffer { buffer in
+            for b in buffer { write(b) }
+        }
+    }
+
     func writeLine(_ s: String) {
         writeString(s)
         write(10) // \n

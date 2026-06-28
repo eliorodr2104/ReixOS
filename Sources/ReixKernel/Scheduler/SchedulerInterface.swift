@@ -5,7 +5,7 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 30/04/2026.
 //
 
-public protocol SchedulerInterface: RXObject {
+public protocol SchedulerInterface: RXAllocatable {
     mutating func addTask(_ process: borrowing UnsafeMutablePointer<Process>) throws(SchedulerError)
     mutating func removeTask(_ process: UnsafeMutablePointer<Process>)
     mutating func selectNextTask() -> UnsafeMutablePointer<Process>?

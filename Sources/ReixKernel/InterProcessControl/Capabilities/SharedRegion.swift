@@ -7,10 +7,10 @@
 
 public struct SharedRegion: RXObject {
     
-    public static var errorMessageAllocation = "Shared Region error allocation"
-    
+    public static var errorMessageAllocation: StaticString = "Shared Region error allocation"
+
     public var physicalPage: PhysicalPage
-    public var references  : UInt64
+    public var references  : UInt32
     public var pageCount   : UInt32
     
 }

@@ -17,10 +17,10 @@ public protocol KernelHeapInterface {
     
     mutating func kmalloc(
         _ size        : UInt,
-          errorMessage: String
+          errorMessage: StaticString
     ) -> UnsafeMutableRawPointer
 
-    mutating func kmalloc<Object: RXObject>(
+    mutating func kmalloc<Object: RXAllocatable>(
         _ type    : Object.Type,
         _ capacity: Int
     ) -> UnsafeMutablePointer<Object>

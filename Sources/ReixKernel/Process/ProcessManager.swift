@@ -13,9 +13,9 @@ import ReixABI
 /// VMM/PPM/Heap pointers) is explicit and testable. The single live
 /// instance is composed by `Kernel.boot` and reached through
 /// `Kernel.processManager`.
-public struct ProcessManager: RXObject {
-    
-    public static var errorMessageAllocation = "Failed to allocate ProcessManager on the kernel heap"
+public struct ProcessManager: RXAllocatable {
+
+    public static var errorMessageAllocation: StaticString = "Failed to allocate ProcessManager on the kernel heap"
     
     /// Monotonically increasing PID source. Never reused within a boot.
     private var pidCounter: PID = 0

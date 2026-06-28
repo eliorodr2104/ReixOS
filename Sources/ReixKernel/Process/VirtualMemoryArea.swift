@@ -13,7 +13,7 @@
 @frozen
 public struct VirtualMemoryArea: RXEntry {
     
-    public static var errorMessageAllocation = "Failed to allocate VirtualMemoryArea on the kernel heap"
+    public static var errorMessageAllocation: StaticString = "Failed to allocate VirtualMemoryArea on the kernel heap"
 
     public let startAddress: VirtualAddress      // 8 Byte
     public let endAddress  : VirtualAddress      // 8 Byte
