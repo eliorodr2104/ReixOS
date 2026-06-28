@@ -135,12 +135,7 @@ func userAbortHandle(
     ) { return }
 
     
-    kprintf(
-        "[SEGFAULT] pid=%d far=0x%x elr=0x%x\n",
-        process.pointee.pid,
-        faultAddress,
-        frame.pointee.elr
-    )
+    kprint("[SEGFAULT] pid=\(process.pointee.pid) far=0x\(hex: faultAddress) elr=0x\(hex: frame.pointee.elr)")
     
     let guardLow = UserSpaceLayout.stackLimit - UInt64(UserSpaceLayout.guardPageCount) * UserSpaceLayout.pageSize
     let reason: ExitReason = (faultAddress >= guardLow && faultAddress < UserSpaceLayout.stackLimit)

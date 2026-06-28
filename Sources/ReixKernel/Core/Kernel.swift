@@ -54,20 +54,20 @@ public struct Kernel {
 
         do {
             if !QemuVirtPlatform.discover(into: &platformInfo, at: dtbRawAddress) {
-                kprint(.error, in: "DTB Tree not found.", by: .boot)
+                kprint(.error, "DTB Tree not found.", by: .boot)
                 Arch.CPU.waitForInterrupt()
             }
 
             printBootBanner()
 
             self.ppm = try PhysicalPageManager<BuddyAllocator>()
-            kprint(.boot, in: "Physical Page Manager ready.", by: .ppm)
+            kprint(.boot, "Physical Page Manager ready.", by: .ppm)
 
             self.vmm = try VirtualMemoryManager(ppmPtr: &ppm!)
-            kprint(.boot, in: "Virtual Memory Manager ready.", by: .vmm)
+            kprint(.boot, "Virtual Memory Manager ready.", by: .vmm)
 
             self.ppm?.applyFramesMetadataVirtualOffset(VirtualMemoryManager.physicalOffset)
-            kprint(.boot, in: "Frame metadata mapped into high-half.", by: .ppm)
+            kprint(.boot, "Frame metadata mapped into high-half.", by: .ppm)
 
 
             let heapPage     = try ppm!.alloc(4096, flag: .kernel)
@@ -76,7 +76,7 @@ public struct Kernel {
             let heapPtr      = heapRaw.bindMemory(to: BucketsHeap.self, capacity: 1)
             heapPtr.initialize(to: BucketsHeap(ppmPtr: &ppm!))
             self.heap = heapPtr
-            kprint(.boot, in: "Kernel heap ready.", by: .heap)
+            kprint(.boot, "Kernel heap ready.", by: .heap)
 
                     
             let gicPtr = heap.pointee.kmalloc(GICv2.self)
@@ -85,7 +85,7 @@ public struct Kernel {
                 cBase: platformInfo.gic.giccBase
             ))
             self.gic = gicPtr
-            kprint(.boot, in: "Generic Interrupt Controller ready.", by: .gic)
+            kprint(.boot, "Generic Interrupt Controller ready.", by: .gic)
             
             
             let tarFileSystemPtr = heap.pointee.kmalloc(KernelInternalFileSystem.self)
@@ -93,7 +93,7 @@ public struct Kernel {
                 to: TarFileSystem()
             )
             self.fileSystem = tarFileSystemPtr
-            kprint(.boot, in: "Internal File System ready.", by: .fs)
+            kprint(.boot, "Internal File System ready.", by: .fs)
             
 
             let processManagerPtr = heap.pointee.kmalloc(ProcessManager.self)
@@ -104,13 +104,13 @@ public struct Kernel {
                 fileSystem: fileSystem
             ))
             self.processManager = processManagerPtr
-            kprint(.boot, in: "Process Manager ready.", by: .proc)
+            kprint(.boot, "Process Manager ready.", by: .proc)
             
             
             let schedulerPtr = heap.pointee.kmalloc(KernelScheduler.self)
             schedulerPtr.initialize(to: RoundRobin())
             self.scheduler = schedulerPtr
-            kprint(.boot, in: "Scheduler ready.", by: .sched)
+            kprint(.boot, "Scheduler ready.", by: .sched)
 
             
             let ipcPtr = heap.pointee.kmalloc(KernelIPC.self)
@@ -122,7 +122,7 @@ public struct Kernel {
                 )
             )
             self.ipc = ipcPtr
-            kprint(.boot, in: "IPC ready.", by: .ipc)
+            kprint(.boot, "IPC ready.", by: .ipc)
             
 
             let syscallHandlerPtr = heap.pointee.kmalloc(SyscallHandler.self)
@@ -133,11 +133,11 @@ public struct Kernel {
                 ppm           : &self.ppm!
             ))
             self.syscallHandler = syscallHandlerPtr
-            kprint(.boot, in: "Syscall Handler ready.", by: .sys)
+            kprint(.boot, "Syscall Handler ready.", by: .sys)
 
 
             AArch64VirtualTimer.ect()
-            kprint(.boot, in: "Virtual Timer enabled.", by: .tim)
+            kprint(.boot, "Virtual Timer enabled.", by: .tim)
             kprint()
 
         } catch { internalPanic(error) }
@@ -151,7 +151,7 @@ public struct Kernel {
 
     private static func run() throws(KernelError) {
 
-        kprint(.info, in: "Kernel is running.", by: .kern)
+        kprint(.info, "Kernel is running.", by: .kern)
 
         do {
             try jumpUserLand()
@@ -168,7 +168,7 @@ public struct Kernel {
     }
 
     private static func jumpUserLand() throws (ProcessManagerError) {
-        kprint(.info, in: "Starting process launch test.", by: .proc)
+        kprint(.info, "Starting process launch test.", by: .proc)
         
         let firstProcessPath: StaticString = "Init.elf"
         let firstProcessPathPtr = UnsafeRawPointer(
@@ -183,7 +183,7 @@ public struct Kernel {
             owner : Endpoint.kernelOwner
         )
 
-        kprint(.info, in: "Handing control to user space.", by: .proc)
+        kprint(.info, "Handing control to user space.", by: .proc)
         kprint()
 
         let trapFramePtr = firstProcess.pointee.context!

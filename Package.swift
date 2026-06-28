@@ -41,7 +41,6 @@ let kernelNativeExclude: [String] = [
     "Platform/ELFParser/module.modulemap",
     "Platform/TarParser/tar_parser.c",
     "Platform/TarParser/tar_types.h",
-    "Support/C/Printf.c",
     "Support/C/fdt_parser.c",
     "Support/C/fdt_parser.h",
 ]

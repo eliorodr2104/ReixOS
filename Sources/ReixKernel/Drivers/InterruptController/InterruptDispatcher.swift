@@ -32,7 +32,7 @@ public struct InterruptDispatcher {
 
 
     private static func handleSpurious(id: UInt32) {
-        kprintf("[ WARN  ][GIC ] spurious IRQ id=%d\n", UInt64(id))
+        kprint(.warning, "spurious IRQ id=\(id)", by: .gic)
         Kernel.gic.pointee.endOfInterrupt(id: id)
     }
 }

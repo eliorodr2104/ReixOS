@@ -13,68 +13,102 @@ public func putchar(ch: UInt8) {
     _logger.kputc(ch)
 }
 
+
+// MARK: - Streaming interpolation
+
+/// Builds a kernel log line by streaming every segment straight to the serial
+/// driver as it is appended — no intermediate `String`, no heap. Literal
+/// segments are `StaticString` (read-only storage); interpolations are written
+/// digit-by-digit. Because appends happen while the argument is constructed,
+/// tagged log calls take the message as an `@autoclosure` so the prefix is
+/// emitted first.
+public struct LogInterpolation: StringInterpolationProtocol {
+    public typealias StringLiteralType = StaticString
+
+    public init(literalCapacity: Int, interpolationCount: Int) {}
+
+    @inline(__always)
+    public mutating func appendLiteral(_ literal: StaticString) { _logger.writeStatic(literal) }
+
+    @inline(__always)
+    public mutating func appendInterpolation(_ value: StaticString) { _logger.writeStatic(value) }
+
+    @inline(__always)
+    public mutating func appendInterpolation(_ value: String) { _logger.writeString(value) }
+
+    @inline(__always)
+    public mutating func appendInterpolation<T: FixedWidthInteger>(_ value: T) {
+        if T.isSigned, value < 0 {
+            _logger.kputc(45) // '-'
+            _logger.writeDec(UInt64(value.magnitude))
+        } else {
+            _logger.writeDec(UInt64(value))
+        }
+    }
+
+    @inline(__always)
+    public mutating func appendInterpolation<T: FixedWidthInteger>(
+        hex value: T,
+        uppercase: Bool = false
+    ) {
+        _logger.writeHex(UInt64(truncatingIfNeeded: value), uppercase: uppercase)
+    }
+}
+
+public struct LogMessage: ExpressibleByStringInterpolation {
+    public typealias StringLiteralType = StaticString
+    public typealias StringInterpolation = LogInterpolation
+
+    @inline(__always)
+    public init(stringLiteral value: StaticString) { _logger.writeStatic(value) }
+
+    @inline(__always)
+    public init(stringInterpolation: LogInterpolation) {}
+}
+
+
+// MARK: - kprint
+
+/// Streams `message` followed by a newline.
+@inline(__always)
+public func kprint(_ message: LogMessage) {
+    _logger.kputc(10)
+}
+
+/// Tagged line: `[LEVEL  ] message`. `message` is an autoclosure so the prefix
+/// streams before the message segments do.
+@inline(__always)
 public func kprint(
-    _  type     : PrintType = .message,
-    in str      : String
+    _ type     : PrintType = .message,
+    _ message  : @autoclosure () -> LogMessage
 ) {
-    _logger.kprintf(type.message)
-    _logger.kprintf(" ")
-    _logger.kprint(str)
+    _logger.writeString(type.message)
+    _logger.kputc(32) // ' '
+    _ = message()
+    _logger.kputc(10)
 }
 
-
-/// Tagged log line. Format:
-///     `[LEVEL  ][SYS ] message`
-///
-/// Both prefixes use fixed-width brackets so consecutive lines align in
-/// any serial terminal. Use the un-tagged overload when the line is not
-/// attributable to a single subsystem.
+/// Tagged line: `[LEVEL  ][SYS ] message`. Both prefixes are fixed-width so
+/// columns stay aligned across the log.
+@inline(__always)
 public func kprint(
-    _   type     : PrintType,
-    in  str      : String,
-    by  subsystem: Subsystem
+    _ type     : PrintType,
+    _ message  : @autoclosure () -> LogMessage,
+    by subsystem: Subsystem
 ) {
-    _logger.kprintf(type.message)
-    _logger.kprintf(subsystem.tag)
-    _logger.kprintf(" ")
-    _logger.kprint(str)
+    _logger.writeString(type.message)
+    _logger.writeString(subsystem.tag)
+    _logger.kputc(32) // ' '
+    _ = message()
+    _logger.kputc(10)
 }
 
-
-public func kprint(_ s: String) {
-    _logger.kprint(s)
-}
-
-public func kprintStatic(_ s: StaticString) {
-    _logger.kprintStatic(s)
-}
-
+@inline(__always)
 public func kprint() {
     _logger.kprint()
 }
 
-
-public func kprint(_ val: UInt64) {
-    _logger.kprint(val)
-}
-
+@inline(__always)
 public func kputc(_ val: UInt8) {
     _logger.kputc(val)
-}
-
-
-public func kprintf(_ fmt: String, _ a: UInt64) {
-    _logger.kprintf(fmt, a)
-}
-
-public func kprintf(_ fmt: String, _ a: UInt64, _ b: UInt64) {
-    _logger.kprintf(fmt, a, b)
-}
-
-public func kprintf(_ fmt: String, _ a: UInt64, _ b: UInt64, _ c: UInt64) {
-    _logger.kprintf(fmt, a, b, c)
-}
-
-public func kprintf(_ fmt: String, _ a: UInt64, _ b: UInt64, _ c: UInt64, _ d: UInt64) {
-    _logger.kprintf(fmt, a, b, c, d)
 }

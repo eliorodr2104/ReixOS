@@ -45,11 +45,7 @@ public struct DefaultPanicFormatter: PanicFormatter {
               let exception = report.exception
         else { return }
 
-        kprintf(
-            "Trap Type: Exception Class 0x%x (ESR: 0x%x)\n",
-            exception.rawValue,
-            frame.esr
-        )
+        kprint("Trap Type: Exception Class 0x\(hex: exception.rawValue) (ESR: 0x\(hex: frame.esr))")
     }
 
 
@@ -57,18 +53,14 @@ public struct DefaultPanicFormatter: PanicFormatter {
         guard let reason = report.reason else { return }
 
         kprint("Reason:    ")
-        kprintStatic(reason)
+        kprint("\(reason)")
     }
 
 
     private static func formatAddresses(_ report: PanicReport) {
         guard let frame = report.frame else { return }
 
-        kprintf(
-            "Address:   PC [0x%x] | FAR [0x%x]\n",
-            frame.elr,
-            frame.far
-        )
+        kprint("Address:   PC [0x\(hex: frame.elr)] | FAR [0x\(hex: frame.far)]")
     }
 
 
@@ -78,10 +70,7 @@ public struct DefaultPanicFormatter: PanicFormatter {
             return
         }
 
-        kprintf(
-            "Context:   PID: ###### | Core: 0 | PSTATE: 0x%x\n",
-            frame.spsr
-        )
+        kprint("Context:   PID: ###### | Core: 0 | PSTATE: 0x\(hex: frame.spsr)")
     }
 
 
@@ -91,15 +80,15 @@ public struct DefaultPanicFormatter: PanicFormatter {
         kprint()
         kprint("GPR State:")
 
-        kprintf(" x0-x3  : 0x%x - 0x%x - 0x%x - 0x%x\n", frame.x0, frame.x1, frame.x2, frame.x3)
-        kprintf(" x4-x7  : 0x%x - 0x%x - 0x%x - 0x%x\n", frame.x4, frame.x5, frame.x6, frame.x7)
-        kprintf(" x8-x11 : 0x%x - 0x%x - 0x%x - 0x%x\n", frame.x8, frame.x9, frame.x10, frame.x11)
-        kprintf(" x12-x15: 0x%x - 0x%x - 0x%x - 0x%x\n", frame.x12, frame.x13, frame.x14, frame.x15)
-        kprintf(" x16-x19: 0x%x - 0x%x - 0x%x - 0x%x\n", frame.x16, frame.x17, frame.x18, frame.x19)
-        kprintf(" x20-x23: 0x%x - 0x%x - 0x%x - 0x%x\n", frame.x20, frame.x21, frame.x22, frame.x23)
-        kprintf(" x24-x27: 0x%x - 0x%x - 0x%x - 0x%x\n", frame.x24, frame.x25, frame.x26, frame.x27)
-        kprintf(" x28-x29: 0x%x - 0x%x\n", frame.x28, frame.x29)
-        kprintf(" lr(x30): 0x%x\n", frame.x30)
+        kprint(" x0-x3  : 0x\(hex: frame.x0) - 0x\(hex: frame.x1) - 0x\(hex: frame.x2) - 0x\(hex: frame.x3)")
+        kprint(" x4-x7  : 0x\(hex: frame.x4) - 0x\(hex: frame.x5) - 0x\(hex: frame.x6) - 0x\(hex: frame.x7)")
+        kprint(" x8-x11 : 0x\(hex: frame.x8) - 0x\(hex: frame.x9) - 0x\(hex: frame.x10) - 0x\(hex: frame.x11)")
+        kprint(" x12-x15: 0x\(hex: frame.x12) - 0x\(hex: frame.x13) - 0x\(hex: frame.x14) - 0x\(hex: frame.x15)")
+        kprint(" x16-x19: 0x\(hex: frame.x16) - 0x\(hex: frame.x17) - 0x\(hex: frame.x18) - 0x\(hex: frame.x19)")
+        kprint(" x20-x23: 0x\(hex: frame.x20) - 0x\(hex: frame.x21) - 0x\(hex: frame.x22) - 0x\(hex: frame.x23)")
+        kprint(" x24-x27: 0x\(hex: frame.x24) - 0x\(hex: frame.x25) - 0x\(hex: frame.x26) - 0x\(hex: frame.x27)")
+        kprint(" x28-x29: 0x\(hex: frame.x28) - 0x\(hex: frame.x29)")
+        kprint(" lr(x30): 0x\(hex: frame.x30)")
     }
 
 
@@ -108,8 +97,8 @@ public struct DefaultPanicFormatter: PanicFormatter {
 
         kprint()
         kprint("Call Trace:")
-        kprintf("  [<0x%x>] (PC/ELR)\n", frame.elr)
-        kprintf("  [<0x%x>] (LR/x30)\n", frame.x30)
+        kprint("  [<0x\(hex: frame.elr)>] (PC/ELR)")
+        kprint("  [<0x\(hex: frame.x30)>] (LR/x30)")
 
         Arch.CPU.printStackTrace(frame.x29)
     }

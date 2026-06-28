@@ -117,7 +117,7 @@ public struct AArch64CPU: CPUInterface {
 
             if returnAddress == 0 { break }
 
-            kprintf("  [<0x%x>]\n", returnAddress)
+            kprint("  [<0x\(hex: returnAddress)>]")
             fp = previousFP
         }
     }
