@@ -13,17 +13,17 @@
 /// kernel object becomes capability-targetable simply by conforming here:
 /// the refcount mechanics come for free and only the type-specific teardown
 /// stays at the single `CapTarget` switch.
-public protocol RXObject: RXAllocatable {
+public protocol RXObject: RXAllocatable, ~Copyable {
     var references: UInt32 { get set }
 }
 
 @inline(__always)
-func rxRetain<Object: RXObject>(_ ptr: UnsafeMutablePointer<Object>) {
+func rxRetain<Object: RXObject & ~Copyable>(_ ptr: UnsafeMutablePointer<Object>) {
     ptr.pointee.references &+= 1
 }
 
 @inline(__always)
-func rxRelease<Object: RXObject>(_ ptr: UnsafeMutablePointer<Object>) -> Bool {
+func rxRelease<Object: RXObject & ~Copyable>(_ ptr: UnsafeMutablePointer<Object>) -> Bool {
     guard ptr.pointee.references > 0 else { return false }
 
     ptr.pointee.references &-= 1

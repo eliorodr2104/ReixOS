@@ -37,7 +37,7 @@ public struct VMAManager: RXAllocatable {
     private var brkVMA: UnsafeMutablePointer<VirtualMemoryArea>? = nil  // 8 Byte
     
     
-    private let rootTablePhysical: PhysicalPage // 9 Byte
+    private let rootTablePhysical: PhysicalAddress // 8 Byte
     
     
     private let asid: ASID // 2 Byte
@@ -47,7 +47,7 @@ public struct VMAManager: RXAllocatable {
         heap             : UnsafeMutablePointer<BucketsHeap>,
         vmm              : UnsafeMutablePointer<VirtualMemoryManager>,
         ppm              : UnsafeMutablePointer<KernelPPM>,
-        rootTablePhysical: PhysicalPage,
+        rootTablePhysical: PhysicalAddress,
         asid             : ASID
     ) {
         self.heap              = heap

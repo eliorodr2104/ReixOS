@@ -31,7 +31,7 @@ public struct VirtualTimerInterruptHandler: InterruptHandler {
 
         if let nextProcess = Kernel.scheduler.pointee.selectNextTask() {
             Arch.MMU.switchUserAddressSpace(
-                nextProcess.pointee.addressSpace.rootTablePhysical.address
+                nextProcess.pointee.addressSpace.rootTablePhysical
             )
             frame.pointee = nextProcess.pointee.context!.pointee
         }

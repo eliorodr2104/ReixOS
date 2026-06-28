@@ -20,7 +20,7 @@ public protocol KernelHeapInterface {
           errorMessage: StaticString
     ) -> UnsafeMutableRawPointer
 
-    mutating func kmalloc<Object: RXAllocatable>(
+    mutating func kmalloc<Object: RXAllocatable & ~Copyable>(
         _ type    : Object.Type,
         _ capacity: Int
     ) -> UnsafeMutablePointer<Object>

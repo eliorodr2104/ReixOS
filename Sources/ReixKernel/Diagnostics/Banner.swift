@@ -14,7 +14,7 @@
 public func printBootBanner() {
     kprint()
     kprint()
-    kprint(" [ reix ] ReixOS 0.1.5 / AArch64 / Embedded Swift")
-    kprint(" [ reix ] (c) 2026 Eliomar Alejandro Rodriguez Ferrer - GPLv3")
+    kprint("[ reix ] ReixOS 0.1.5 / AArch64 / Embedded Swift")
+    kprint("[ reix ] (c) 2026 Eliomar Alejandro Rodriguez Ferrer - GPLv3")
     kprint()
 }

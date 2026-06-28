@@ -275,7 +275,7 @@ public struct ProcessManager: RXAllocatable {
         
         if let trapFrame = context.scheduler.pointee.yield() {
             if let next = Arch.CPU.getCurrentProcess() {
-                Arch.MMU.switchUserAddressSpace(next.pointee.addressSpace.rootTablePhysical.address)
+                Arch.MMU.switchUserAddressSpace(next.pointee.addressSpace.rootTablePhysical)
             }
             frame.pointee = trapFrame.pointee
             

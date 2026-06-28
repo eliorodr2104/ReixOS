@@ -179,7 +179,7 @@ public struct VirtualMemoryManager {
         }
 
         return AddressSpace(
-            rootTablePhysical: page,
+            rootTablePhysical: page.address,
             asid             : asid,
             vmaManager       : nil
         )
@@ -210,7 +210,9 @@ public struct VirtualMemoryManager {
         // is no longer installed in TTBR0, so walking and freeing it is safe.
         freePageTables(rootTable: addressSpace.rootTablePhysical)
 
-        try ppmPtr.pointee.freeOwnedKernelPage(addressSpace.rootTablePhysical)
+        try ppmPtr.pointee.freeOwnedKernelPage(
+            PhysicalPage(address: addressSpace.rootTablePhysical, order: 0)
+        )
         Arch.MMU.flushTLB()
     }
 
@@ -219,8 +221,8 @@ public struct VirtualMemoryManager {
     /// Walks the L0 root and recurses through table descriptors only; the L0
     /// root page itself is freed by the caller. Leaf (block/page) descriptors
     /// point at data frames owned elsewhere and are deliberately left alone.
-    private func freePageTables(rootTable: PhysicalPage) {
-        let l0          : UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable.address)
+    private func freePageTables(rootTable: PhysicalAddress) {
+        let l0          : UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable)
         let kernelMaster: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(self.identityTableAddress)
 
         for index in 0..<512 {
@@ -256,12 +258,12 @@ public struct VirtualMemoryManager {
 
 
     public func mapUserPage(
-        rootTable: PhysicalPage,
+        rootTable: PhysicalAddress,
         virtual  : VirtualAddress,
         physical : PhysicalAddress,
         flags    : VirtualPageFlags
     ) throws(PPMError) {
-        let tablePointer: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable.address)
+        let tablePointer: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable)
 
         try map(
             table   : tablePointer,
@@ -274,7 +276,7 @@ public struct VirtualMemoryManager {
     
     
     public func protectUserPage(
-        rootTable: PhysicalPage,
+        rootTable: PhysicalAddress,
         virtual  : VirtualAddress,
         flags    : VirtualPageFlags
     ) throws(PPMError) {
@@ -299,7 +301,7 @@ public struct VirtualMemoryManager {
         flags       : VirtualPageFlags
     ) throws(PPMError) {
         let rootTable = addressSpace.rootTablePhysical
-        let tablePointer: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable.address)
+        let tablePointer: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable)
 
         try map(
             table   : tablePointer,
@@ -312,10 +314,10 @@ public struct VirtualMemoryManager {
     
 
     public func unmapUserPage(
-        rootTable: PhysicalPage,
+        rootTable: PhysicalAddress,
         virtual  : VirtualAddress
     ) throws(PPMError) {
-        let tablePointer: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable.address)
+        let tablePointer: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable)
         guard let leafTable = lookupLeafTable(table: tablePointer, virtual: virtual) else {
             return
         }
@@ -336,10 +338,10 @@ public struct VirtualMemoryManager {
 
 
     public func physicalAddressOf(
-        rootTable: PhysicalPage,
+        rootTable: PhysicalAddress,
         virtual  : VirtualAddress
     ) -> PhysicalAddress? {
-        let tablePointer: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable.address)
+        let tablePointer: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable)
         guard let leafTable = lookupLeafTable(table: tablePointer, virtual: virtual) else {
             return nil
         }
@@ -352,7 +354,7 @@ public struct VirtualMemoryManager {
 
 
     public func unmapAndFreeUserPage(
-        rootTable: PhysicalPage,
+        rootTable: PhysicalAddress,
         virtual  : VirtualAddress
     ) throws(PPMError) {
         guard let phys = physicalAddressOf(

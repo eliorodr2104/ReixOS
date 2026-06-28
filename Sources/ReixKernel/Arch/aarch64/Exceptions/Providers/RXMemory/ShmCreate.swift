@@ -69,7 +69,6 @@ public struct ShmCreate: SyscallProvider {
                     addr: regionAddress,
                     size: pageCount * UserSpaceLayout.pageSize
                 )
-                try? context.ppm.pointee.free(physicalPage)
                 frame.pointee.x0 = UInt64.max
         }
     }

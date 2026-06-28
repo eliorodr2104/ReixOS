@@ -17,7 +17,7 @@ public struct LoadedELF {
     /// block to free. Each page is released per-VMA by `VMAManager.teardown`,
     /// which is also what lets a forked child share the pages copy-on-write
     /// and release them cleanly on exit.
-    public let image     : PhysicalPage?
+    public let image     : PhysicalAddress?
 
     public let loadBase  : UInt64
     public let loadEnd   : UInt64

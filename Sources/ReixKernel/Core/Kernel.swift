@@ -204,7 +204,7 @@ public struct Kernel {
         
         jump_to_user_mode(
             trapFrame: trapFramePtr,
-            rootTable: firstProcess.pointee.addressSpace.rootTablePhysical.address
+            rootTable: firstProcess.pointee.addressSpace.rootTablePhysical
         )
     }
 }

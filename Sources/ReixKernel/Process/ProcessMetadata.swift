@@ -61,11 +61,11 @@ public struct ProcessMetadata: RXAllocatable {
     
     /// Backing physical page of the ELF image. Allocated by `ElfParser`,
     /// kept alive for the whole process lifetime, freed by the teardown.
-    public var elfImage: PhysicalPage?      // (8 + 1) 9 Byte
+    public var elfImage: PhysicalAddress?      // 8 Byte
     
 
     public init(
-        elfImage       : PhysicalPage?  = nil,
+        elfImage       : PhysicalAddress?  = nil,
         elfLoadBase    : UInt64         = 0,
         elfLoadEnd     : UInt64         = 0,
         programBreak   : VirtualAddress = 0,

@@ -12,10 +12,10 @@
 /// so the text lives in read-only storage and needs no allocation on the
 /// out-of-memory path. A default is provided; conformers override it only
 /// to add type-specific detail.
-public protocol RXAllocatable {
+public protocol RXAllocatable: ~Copyable {
     static var errorMessageAllocation: StaticString { get }
 }
 
-public extension RXAllocatable {
+public extension RXAllocatable where Self: ~Copyable {
     static var errorMessageAllocation: StaticString { "Kernel heap allocation failed" }
 }

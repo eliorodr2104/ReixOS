@@ -447,7 +447,7 @@ public struct RendezvousIPC: IPCInterface {
     
     public mutating func createShared(
         for process  : UnsafeMutablePointer<Process>,
-            page     : PhysicalPage,
+            page     : consuming PhysicalPage,
             pageCount: UInt32
     ) -> Result<UInt32, IPCError> {
     
@@ -467,9 +467,9 @@ public struct RendezvousIPC: IPCInterface {
         )
         
         guard let handle = process.pointee.metadata.pointee.capsTable.install(capability) else {
-            sharedRegion.deinitialize(count: 1)
+            sharedRegion.move().releaseFrame(ppm: ppm)
             heap.pointee.kfree(UnsafeMutableRawPointer(sharedRegion))
-            
+
             return .failure(.outOfEndpoints)
         }
         
@@ -574,9 +574,7 @@ public struct RendezvousIPC: IPCInterface {
             case .shared(let sharedMemoryPtr):
                 guard rxRelease(sharedMemoryPtr) else { return }
 
-                // TODO: Manage the PPM error
-                try? ppm.pointee.free(sharedMemoryPtr.pointee.physicalPage)
-                sharedMemoryPtr.deinitialize(count: 1)
+                sharedMemoryPtr.move().releaseFrame(ppm: ppm)
                 heap.pointee.kfree(UnsafeMutableRawPointer(sharedMemoryPtr))
         }
     }

@@ -31,7 +31,7 @@ public struct BucketsHeap: KernelHeapInterface {
         return pointer
     }
     
-    public mutating func kmalloc<Object: RXAllocatable>(
+    public mutating func kmalloc<Object: RXAllocatable & ~Copyable>(
         _ type    : Object.Type,
         _ capacity: Int = 1
     ) -> UnsafeMutablePointer<Object> {

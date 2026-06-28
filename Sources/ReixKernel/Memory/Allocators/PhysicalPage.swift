@@ -5,8 +5,8 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 21/04/2026.
 //
 
-public struct PhysicalPage {
-    
+public struct PhysicalPage: ~Copyable {
+
     public let address: PhysicalAddress // 8 Byte
     public let order  : UInt8           // 1 Byte
     
