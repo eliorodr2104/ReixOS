@@ -10,30 +10,17 @@ import Reix
 
 @_cdecl("_start")
 public func main() {
-    
+
+    let environment = Runtime.bootstrap()
+
     print("[ CHILD ] Hi, this is child process!\n")
-    
-    if spawnService() == nil {
-        print("[ CHILD ] Is Eunuch")
-        
-    } else {
-        print("[ CHILD ] Have balls")
-    }
 
-
-    guard let parentHandle = parentEndpoint() else {
-        print("[ CHILD ] Don't have parent endpoint!")
-        exit(code: 1)
-    }
-    
-    
-    let received = receive(handle: parentHandle)
-    guard let nsCap = received.grantedCap else {
+    guard let nameServerCap = environment.nameServer else {
         print("[ CHILD ] no NS cap")
         exit(code: 1)
     }
 
-    let nameServer = NameServerClient(endpoint: nsCap)
+    let nameServer = NameServerClient(endpoint: nameServerCap)
 
     guard let processServer = ProcessServerClient(via: nameServer) else {
         print("[ CHILD ] no process server")
@@ -48,7 +35,7 @@ public func main() {
         let shm = shmCreate(pageCount: 1)
         if shm.isValid, let peer = spawned.cap {
             UnsafeMutableRawPointer(bitPattern: UInt(shm.address))!
-                .storeBytes(of: UInt32(0xCAFE), as: UInt32.self) // I drink coffee 30 min ago
+                .storeBytes(of: UInt32(0xCAFE), as: UInt32.self)
             _ = send(
                 handle     : peer,
                 message    : NameServerResponse.ok.message,
@@ -57,15 +44,15 @@ public func main() {
             )
         }
     }
-    
+
     print("[ CHILD ] Allocate Array of UInt32 for test `malloc`")
     let buf = UnsafeMutablePointer<UInt32>.allocate(capacity: 64)
     buf.initialize(repeating: 0, count: 64)
     buf[3] = 7
     buf.deinitialize(count: 64)
     buf.deallocate()
-    
-    
+
+
     print("[ CHILD ] Instance Object for test `malloc`")
     let roundedRectangle = RoundedRectangle(width: 167, height: 275, cornerRadius: 8)
     roundedRectangle.width        = 17
@@ -79,7 +66,7 @@ class RoundedRectangle {
     var width       : UInt
     var height      : UInt
     var cornerRadius: UInt
-    
+
     init(
         width       : UInt,
         height      : UInt,

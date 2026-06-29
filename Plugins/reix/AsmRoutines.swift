@@ -100,3 +100,22 @@ func generatedKernelAsm() -> [(name: String, source: String)] {
         ("VirtualTimer.gen.S",       renderAsmFile(virtualTimer())),
     ]
 }
+
+
+// MARK: - Userland
+
+/// Trivial wrappers linked into every userland ELF (alongside Native/reix).
+private func reixRoutines() -> [AsmRoutine] {
+    [
+        // Inner-shareable memory barrier — orders the SPSC ring's data vs index
+        // accesses (release on push, acquire on pop). See Reix `dmbISH()`.
+        fn("dmb_ish") { dmb("ish"); ret() },
+    ]
+}
+
+/// The generated userland assembly files (filename, rendered source).
+func generatedUserlandAsm() -> [(name: String, source: String)] {
+    [
+        ("ReixAsm.gen.S", renderAsmFile(reixRoutines())),
+    ]
+}

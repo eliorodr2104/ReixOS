@@ -22,7 +22,7 @@ struct ReixPlugin: CommandPlugin {
     let tarTool = "/usr/bin/tar"
 
     let triple = "aarch64-none-none-elf"
-    let apps = ["Init", "Child", "Child2", "NameServer", "ProcessServer"]
+    let apps = ["Init", "Child", "Child2", "NameServer", "ProcessServer", "ConsoleServer"]
     
     let kernelNative = [
         "Sources/ReixKernel/Arch/aarch64/Boot/boot.S",
@@ -77,6 +77,16 @@ struct ReixPlugin: CommandPlugin {
         }
         print("✓ generated asm (\(generatedObjs.count) files)")
 
+        var reixGeneratedObjs: [URL] = []
+        for (name, source) in generatedUserlandAsm() {
+            let src = work.appending(path: name)
+            try source.write(to: src, atomically: true, encoding: .utf8)
+            let o = work.appending(path: name + ".o")
+            try run(clang, ["-target", triple, "-c", src.path, "-o", o.path], cwd: root)
+            reixGeneratedObjs.append(o)
+        }
+        print("✓ generated userland asm (\(reixGeneratedObjs.count) files)")
+
         let kernelElf = root.appending(path: "kernel.elf")
         try run(lld, [
             "-T", root.appending(path: "linker.ld").path, "--nmagic",
@@ -92,7 +102,7 @@ struct ReixPlugin: CommandPlugin {
         try run(objcopy, ["-O", "binary", kernelElf.path, kernelBin.path], cwd: root)
         print("✓ kernel.bin")
 
-        let reixObjs = reixNative.map { obj($0).path }
+        let reixObjs = reixNative.map { obj($0).path } + reixGeneratedObjs.map { $0.path }
         for app in apps {
             try run(lld, [
                 "-T", root.appending(path: "user.ld").path,

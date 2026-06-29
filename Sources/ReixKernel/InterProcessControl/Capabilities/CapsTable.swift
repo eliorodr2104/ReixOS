@@ -21,18 +21,29 @@ public struct CapsTable {
     public mutating func install(_ cap: Capability) -> UInt32? {
         var indexFounded: UInt32?
         for i in 0..<caps.count {
-            
+
             if caps[i] == nil {
                 indexFounded = UInt32(i)
                 caps[i]      = cap
-                
+
                 counterElements &+= 1
                 break
             }
-            
+
         }
-        
+
         return indexFounded
+    }
+
+
+    @discardableResult
+    public mutating func install(at slot: UInt32, _ cap: Capability) -> Bool {
+        guard slot < caps.count else { return false }
+
+        if caps[Int(slot)] == nil { counterElements &+= 1 }
+        caps[Int(slot)] = cap
+
+        return true
     }
     
     

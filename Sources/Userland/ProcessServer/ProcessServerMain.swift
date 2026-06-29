@@ -9,9 +9,5 @@ import Reix
 
 @_cdecl("_start")
 public func main() {
-
-    var server = ProcessServer()
-    server.run()
-
-    while true { yield() }
+    ServiceRuntime.run(ProcessServer.self)
 }

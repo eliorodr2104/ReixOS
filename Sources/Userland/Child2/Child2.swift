@@ -9,10 +9,12 @@ import Reix
 
 @_cdecl("_start")
 public func main() {
-    
+
+    let environment = Runtime.bootstrap()
+
     print("[ NCHIL ] Spawned and kill my self")
 
-    if let parent = parentEndpoint(), let cap = receive(handle: parent).grantedCap {
+    if let parent = environment.parentEndpoint, let cap = receive(handle: parent).grantedCap {
         let va = shmMap(handle: cap)
         if va != 0, let p = UnsafeRawPointer(bitPattern: UInt(va)) {
             print(p.load(as: UInt32.self) == 0xCAFE ? "[ NCHIL ] SHM OK" : "[ NCHIL ] SHM FAIL")

@@ -50,4 +50,8 @@ public enum SyscallNumber: UInt64 {
     // Device
     case deviceCap
     case mapDevice
+
+
+    // Caps
+    case capExists
 }

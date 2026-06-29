@@ -55,6 +55,7 @@ func ldrImm(_ reg: String, _ value: UInt64) -> String { "\(ind)ldr \(reg), =0x\(
 func tlbi(_ op: String) -> String { "\(ind)tlbi \(op)" }
 func ic(_ op: String)   -> String { "\(ind)ic \(op)" }
 func dsb(_ opt: String) -> String { "\(ind)dsb \(opt)" }
+func dmb(_ opt: String) -> String { "\(ind)dmb \(opt)" }
 
 func label(_ name: String) -> String { "\(name):" }
 func raw(_ line: String)   -> String { line }

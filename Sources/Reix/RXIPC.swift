@@ -81,8 +81,8 @@ public func receive(handle: UInt32) -> ReceivedMessage {
 
     return ReceivedMessage(
         message   : Message(tag: MessageTag(packed: raw.tag), words: w),
-        grantedCap: UInt32(raw.grantedHandle),
-        badge     : UInt32(raw.badge)
+        grantedCap: UInt32(truncatingIfNeeded: raw.grantedHandle),
+        badge     : UInt32(truncatingIfNeeded: raw.badge)
     )
 }
 
@@ -113,8 +113,8 @@ public func receive(
 
     return ReceivedMessage(
         message   : Message(tag: MessageTag(packed: raw.tag), words: w),
-        grantedCap: UInt32(raw.grantedHandle),
-        badge     : UInt32(raw.badge)
+        grantedCap: UInt32(truncatingIfNeeded: raw.grantedHandle),
+        badge     : UInt32(truncatingIfNeeded: raw.badge)
     )
 }
 
@@ -153,8 +153,8 @@ public func call(
 
     return ReceivedMessage(
         message   : Message(tag: MessageTag(packed: raw.tag), words: w),
-        grantedCap: UInt32(raw.grantedHandle),
-        badge     : UInt32(raw.badge)
+        grantedCap: UInt32(truncatingIfNeeded: raw.grantedHandle),
+        badge     : UInt32(truncatingIfNeeded: raw.badge)
     )
 }
 
@@ -211,8 +211,8 @@ public func replyRecv(
 
     return ReceivedMessage(
         message   : Message(tag: MessageTag(packed: raw.tag), words: w),
-        grantedCap: UInt32(raw.grantedHandle),
-        badge     : UInt32(raw.badge)
+        grantedCap: UInt32(truncatingIfNeeded: raw.grantedHandle),
+        badge     : UInt32(truncatingIfNeeded: raw.badge)
     )
 }
 
@@ -262,8 +262,8 @@ public func tryReceive(handle: UInt32) -> ReceivedMessage? {
 
     return ReceivedMessage(
         message   : Message(tag: MessageTag(packed: raw.tag), words: w),
-        grantedCap: UInt32(raw.grantedHandle),
-        badge     : UInt32(raw.badge)
+        grantedCap: UInt32(truncatingIfNeeded: raw.grantedHandle),
+        badge     : UInt32(truncatingIfNeeded: raw.badge)
     )
     
 }
@@ -304,4 +304,9 @@ public func deviceCap() -> UInt32? {
 @inline(__always)
 public func mapDevice(handle: UInt32) -> UInt64 {
     _syscall(.mapDevice, UInt64(handle))
+}
+
+@inline(__always)
+public func capExists(_ handle: UInt32) -> Bool {
+    _syscall(.capExists, UInt64(handle)) != 0
 }

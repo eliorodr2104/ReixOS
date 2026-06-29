@@ -89,7 +89,11 @@ public struct SyscallHandler: RXAllocatable {
             // Device
             case .deviceCap     : DeviceCapSyscall     .handle(frame: frame, context: context)
             case .mapDevice     : MapDeviceSyscall     .handle(frame: frame, context: context)
-                
+
+
+            // Caps
+            case .capExists     : CapExistsSyscall     .handle(frame: frame, context: context)
+
             default: break
         }
     }

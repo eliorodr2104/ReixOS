@@ -39,13 +39,17 @@ _asm_spawn:
     // x0: syscall number
     // x1: path ptr
     // x2: length
-    // x3: output buffer ptr
+    // x3: grants ptr
+    // x4: grants count
+    // x5: output buffer ptr
 
     mov x8, x0          // syscall number -> x8
-    mov x9, x3          // save output buffer ptr (survives the svc)
+    mov x9, x5          // save output buffer ptr (survives the svc)
 
-    mov x0, x1          // path ptr -> kernel arg0 (x0)
-    mov x1, x2          // length   -> kernel arg1 (x1)
+    mov x0, x1          // path ptr     -> kernel arg0 (x0)
+    mov x1, x2          // length       -> kernel arg1 (x1)
+    mov x2, x3          // grants ptr   -> kernel arg2 (x2)
+    mov x3, x4          // grants count -> kernel arg3 (x3)
 
     svc #0
 

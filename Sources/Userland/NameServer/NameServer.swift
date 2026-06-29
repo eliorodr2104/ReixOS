@@ -8,7 +8,9 @@
 import Reix
 
 
-public struct NameServer: UserlandService {
+public struct NameServer: Service {
+
+    public static let manifest = ServiceManifest(provides: .parent)
 
     private var servicesTable = InlineArray<3, UInt32?>(repeating: nil)
     private let endpoint: UInt32
@@ -16,20 +18,18 @@ public struct NameServer: UserlandService {
     public var serviceEndpoint: UInt32 { endpoint }
 
 
-    init() {
-        endpoint = spawnEndpoint()
-
-        // Pubblica l'endpoint di servizio al padre (init), che lo distribuira.
-        _ = send(
-            handle     : parentEndpoint()!,
-            message    : NameServerResponse.ok.message,
-            grant      : endpoint,
-            grantRights: [.send, .grant, .derive]
-        )
+    public init(
+        environment: Environment,
+        endpoint   : UInt32
+    ) {
+        self.endpoint = endpoint
     }
 
 
-    public mutating func handle(_ operation: NameServerOperation, request: ReceivedMessage) {
+    public mutating func handle(
+        _ operation: NameServerOperation,
+          request  : ReceivedMessage
+    ) {
 
         print("[ NS    ] badge request:", terminator: " ")
         print(String(UInt64(request.badge)))

@@ -504,14 +504,44 @@ public struct RendezvousIPC: IPCInterface {
         guard let receiverHandle = receiverMetadata.pointee.capsTable.install(receiverCap) else {
             return .failure(.outOfEndpoints)
         }
-        
+
         retain(receiverCap)
-        
+
         return .success(receiverHandle)
     }
-    
-    
-    public func checkTimeouts(now: UInt64) {        
+
+
+    @discardableResult
+    public mutating func injectCapability(
+        from parent: UnsafeMutablePointer<Process>,
+             handle: UInt32,
+        to   child : UnsafeMutablePointer<Process>,
+             slot  : UInt32,
+             rights: CapRights
+    ) -> Bool {
+        guard let capability = parent.pointee.metadata.pointee.capsTable.resolve(handle),
+              capability.rights.contains(.grant) else {
+            return false
+        }
+
+        let effective = rights.intersection(capability.rights)
+        let childCap  = Capability(
+            target: capability.target,
+            badge : capability.badge,
+            rights: effective
+        )
+
+        guard child.pointee.metadata.pointee.capsTable.install(at: slot, childCap) else {
+            return false
+        }
+
+        retain(childCap)
+
+        return true
+    }
+
+
+    public func checkTimeouts(now: UInt64) {
         
         for i in 0..<endpoints.count {
             

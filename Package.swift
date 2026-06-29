@@ -52,6 +52,7 @@ let package = Package(
         .library(name: "Child2",        type: .static, targets: ["Child2"]),
         .library(name: "NameServer",    type: .static, targets: ["NameServer"]),
         .library(name: "ProcessServer", type: .static, targets: ["ProcessServer"]),
+        .library(name: "ConsoleServer", type: .static, targets: ["ConsoleServer"]),
     ],
     targets: [
         // Shared ABI: IPC types + syscall numbers. No dependencies.
@@ -71,7 +72,7 @@ let package = Package(
 
         // Userland apps: one ELF each, depend only on Reix.
         app("Init", bareMetal), app("Child", bareMetal), app("Child2", bareMetal),
-        app("NameServer", bareMetal), app("ProcessServer", bareMetal),
+        app("NameServer", bareMetal), app("ProcessServer", bareMetal), app("ConsoleServer", bareMetal),
 
         // Bare-metal orchestrator: link + objcopy + tar + qemu over the .a files
         // produced by `FREESTANDING=1 swift build --triple aarch64-none-none-elf`.

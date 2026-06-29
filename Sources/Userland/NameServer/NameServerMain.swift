@@ -9,10 +9,5 @@ import Reix
 
 @_cdecl("_start")
 public func main() {
-    
-    var server = NameServer()
-    
-    server.run()
-    
-    while true { yield() }
+    ServiceRuntime.run(NameServer.self)
 }

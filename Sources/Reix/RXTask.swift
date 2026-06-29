@@ -74,6 +74,34 @@ public func spawnProcess(path: StaticString) -> SpawnResult {
             SyscallNumber.spawnProcess.rawValue,
             UInt64(UInt(bitPattern: path.utf8Start)),
             UInt64(path.utf8CodeUnitCount),
+            0,
+            0,
+            UnsafeMutableRawPointer(ptr)
+        )
+    }
+
+    return SpawnResult(
+        pid   : raw.pid,
+        handle: UInt32(truncatingIfNeeded: raw.handle)
+    )
+}
+
+@inline(__always)
+public func spawnProcess(
+    path  : StaticString,
+    grants: UnsafePointer<CapGrant>,
+    count : Int
+) -> SpawnResult {
+
+    var raw = SpawnResultRaw()
+
+    withUnsafeMutablePointer(to: &raw) { ptr in
+        _ = _asm_spawn_raw(
+            SyscallNumber.spawnProcess.rawValue,
+            UInt64(UInt(bitPattern: path.utf8Start)),
+            UInt64(path.utf8CodeUnitCount),
+            UInt64(UInt(bitPattern: grants)),
+            UInt64(count),
             UnsafeMutableRawPointer(ptr)
         )
     }
@@ -86,7 +114,7 @@ public func spawnProcess(path: StaticString) -> SpawnResult {
 
 @inline(__always)
 public func spawnProcess() -> SpawnResult {
-    
+
     var raw = SpawnResultRaw()
 
     withUnsafeMutablePointer(to: &raw) { ptr in
@@ -94,11 +122,11 @@ public func spawnProcess() -> SpawnResult {
             SyscallNumber.spawnProcess.rawValue,
             0,
             0,
+            0,
+            0,
             UnsafeMutableRawPointer(ptr)
         )
     }
-    
-    
 
     return SpawnResult(
         pid   : raw.pid,

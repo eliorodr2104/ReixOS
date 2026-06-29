@@ -108,6 +108,8 @@ public func shmCreate(pageCount: UInt64) -> SharedMemory {
             SyscallNumber.shmCreate.rawValue,
             pageCount,
             0,
+            0,
+            0,
             UnsafeMutableRawPointer(ptr)
         )
     }

@@ -27,8 +27,21 @@ public struct SpawnProcessSyscall: SyscallProvider {
 
 
         let length = Int(frame.pointee.x1)
+
+        var grants      = InlineArray<8, CapGrant>(repeating: CapGrant())
+        var grantsCount = 0
+
+        if let grantsBase = UnsafeRawPointer(bitPattern: UInt(frame.pointee.x2)),
+           frame.pointee.x3 > 0 {
+            let count = min(Int(frame.pointee.x3), grants.count)
+            let typed = grantsBase.assumingMemoryBound(to: CapGrant.self)
+
+            for i in 0..<count { grants[i] = typed[i] }
+            grantsCount = count
+        }
+
         var childProcess: UnsafeMutablePointer<Process>?
-        
+
         if length != 0 {
             withUnsafeTemporaryAllocation(
                 byteCount: length + 1,
@@ -57,12 +70,22 @@ public struct SpawnProcessSyscall: SyscallProvider {
             switch handleIPC {
                 case .success(let success):
                     frame.pointee.x1 = UInt64(success)
-                    
-                    
+
+
                 case .failure(_):
                     frame.pointee.x1 = UInt64(UInt32.max)
             }
-            
+
+            for i in 0..<grantsCount {
+                context.ipc.pointee.injectCapability(
+                    from  : currentProcess,
+                    handle: grants[i].sourceHandle,
+                    to    : childProcess,
+                    slot  : grants[i].targetSlot,
+                    rights: CapRights(rawValue: UInt8(truncatingIfNeeded: grants[i].rights))
+                )
+            }
+
             // Set on reg 0 the pid for parent process
             try? context.scheduler.pointee.addTask(childProcess)
             frame.pointee.x0 = childProcess.pointee.pid
