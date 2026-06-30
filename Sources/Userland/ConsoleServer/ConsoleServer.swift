@@ -75,6 +75,29 @@ public struct ConsoleServer: Service {
                 }
                 
                 indexClient = (indexClient + 1) % clients.count
+                
+                
+            case .flush:
+                let flagRegister = uartBase + 0x18
+                let client       = request.message.words[0]
+                
+                if let slot = slot(for: client), let ring = rings[slot] {
+                    
+                    while let length = ring.nextLineLength() {
+                        
+                        for _ in 0..<length {
+                            if let byte = ring.pop() {
+                                
+                                while (flagRegister.load(as: UInt32.self) & 0x20) != 0 { }
+                                uartBase.storeBytes(of: byte, as: UInt8.self)
+                                
+                            }
+                        }
+                    }
+                    
+                }
+                
+                _ = reply(message: ConsoleOperation.flush.message(client: 0))
         }
     }
 

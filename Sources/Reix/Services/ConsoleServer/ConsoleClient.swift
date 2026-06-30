@@ -36,7 +36,10 @@ public struct ConsoleClient {
     }
 
     public func write(_ byte: UInt8) {
-        _ = ring.push(byte)
+        
+        if !ring.push(byte) {
+            _ = call(handle: endpoint, message: ConsoleOperation.flush.message(client: client))
+        }
 
         if byte == UInt8(ascii: "\n") {
             _ = send(handle: endpoint, message: ConsoleOperation.kick.message(client: client))

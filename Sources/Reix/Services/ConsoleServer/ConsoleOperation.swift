@@ -8,6 +8,7 @@
 public enum ConsoleOperation: UInt32, IPCLabel {
     case register
     case kick
+    case flush
 
     public func message(client: UInt32) -> Message {
         var words = InlineArray<4, UInt32>(repeating: 0)
