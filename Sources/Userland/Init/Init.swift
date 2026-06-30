@@ -38,8 +38,15 @@ public func main() {
     Console.attach(console: consoleEndpoint)
 
     print("[ INIT  ] Console attached, launching Name Server")
-
-    let nameServer = spawnProcess(path: "NameServer.elf")
+    
+    let nameServer = launch(
+        "NameServer.elf",
+        environment: Environment(
+            console   : consoleEndpoint,
+            nameServer: nil,
+            spawn     : nil
+        )
+    )
     guard let nameServerEndpoint = receive(
         handle: nameServer.handle
     ).grantedCap else { return }

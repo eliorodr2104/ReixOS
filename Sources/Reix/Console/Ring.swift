@@ -21,7 +21,7 @@ public struct Ring {
         self.base = base
         self.cap  = regionSize - Self.dataOffset
     }
-
+    
     private var head: UInt32 {
         get { base.load(fromByteOffset: 0, as: UInt32.self) }
         
@@ -50,15 +50,42 @@ public struct Ring {
         return true
     }
     
+    /// Removes and returns the next byte from the ring buffer.
+    ///
+    /// This method dequeues a single byte from the head of the ring buffer.
+    /// A memory barrier (`dmbISH`) ensures proper ordering when the buffer
+    /// is shared between processes via shared memory.
+    ///
+    /// - Returns: The next byte in the buffer, or `nil` if the buffer is empty.
     public func pop() -> UInt8? {
         
         guard head != tail else { return nil }
-
+        
         dmbISH()
         let byte = base.load(fromByteOffset: Self.dataOffset + Int(head), as: UInt8.self)
         head = (head + 1) % UInt32(cap)
         
         return byte
+    }
+    
+    public func nextLineLength() -> Int? {
+        
+        guard head != tail else { return nil }
+        
+        let end                = tail
+        var safeIteratorString = head
+        var lenghtString       = 0
+        while safeIteratorString != end {
+            
+            let byte = base.load(fromByteOffset: Self.dataOffset + Int(safeIteratorString), as: UInt8.self)
+            lenghtString += 1
+            
+            if byte == UInt8(ascii: "\n") { return lenghtString }
+            
+            safeIteratorString = (safeIteratorString + 1) % UInt32(cap)
+        }
+        
+        return nil
     }
     
     public func reset() {

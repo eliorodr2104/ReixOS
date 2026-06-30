@@ -13,10 +13,11 @@ public struct ConsoleServer: Service {
 
     private static let pageSize = 4096
 
-    private let endpoint: UInt32
-    private let uartBase: UnsafeMutableRawPointer
-    private var clients : InlineArray<32, UInt32?> = InlineArray(repeating: nil)
-    private var rings   : InlineArray<32, Ring?>   = InlineArray(repeating: nil)
+    private let endpoint   : UInt32
+    private let uartBase   : UnsafeMutableRawPointer
+    private var clients    : InlineArray<32, UInt32?> = InlineArray(repeating: nil)
+    private var rings      : InlineArray<32, Ring?>   = InlineArray(repeating: nil)
+    private var indexClient: Int = 0
 
     public var serviceEndpoint: UInt32 { endpoint }
 
@@ -42,10 +43,9 @@ public struct ConsoleServer: Service {
         _ operation: ConsoleOperation,
           request  : ReceivedMessage
     ) {
-        let client = request.message.words[0]
-
         switch operation {
             case .register:
+                let client = request.message.words[0]
                 guard let slot = slot(for: client) ?? freeSlot() else { return }
 
                 clients[slot] = client
@@ -55,15 +55,26 @@ public struct ConsoleServer: Service {
                 )
 
             case .kick:
-                guard let slot = slot(for: client) else { return }
-
                 let flagRegister = uartBase + 0x18
 
-                while let byte = rings[slot]?.pop() {
-                    while (flagRegister.load(as: UInt32.self) & 0x20) != 0 { }
+                for offset in 0..<clients.count {
+                    let slot = (indexClient + offset) % clients.count
+                    guard let ring = rings[slot] else { continue }
 
-                    uartBase.storeBytes(of: byte, as: UInt8.self)
+                    while let length = ring.nextLineLength() {
+                        
+                        for _ in 0..<length {
+                            if let byte = ring.pop() {
+                                
+                                while (flagRegister.load(as: UInt32.self) & 0x20) != 0 { }
+                                uartBase.storeBytes(of: byte, as: UInt8.self)
+                                
+                            }
+                        }
+                    }
                 }
+                
+                indexClient = (indexClient + 1) % clients.count
         }
     }
 
