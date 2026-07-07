@@ -25,49 +25,31 @@ public struct ReapChildSyscall: SyscallProvider {
         let childPid   = frame.pointee.x0
 
         // TODO: - Add throws for all case
-        guard let current = Arch.CPU.getCurrentProcess() else {
-            frame.pointee.x0 = 0
-            return
+        guard let current = AArch64CPU.getCurrentProcess() else { return }
+        guard let child = current.pointee.family.findChild(id: childPid) else {
+            frame.pointee.x0 = 0; return
         }
         
-        if let child = current.pointee.family.removeChild(id: childPid) {
-            switch child.pointee.status {
-                    
-                // Case 1 — the child is already a zombie: reap it and return its code.
-                case .terminated:
-                    if child.pointee.family.parent?.pointee.pid == current.pointee.pid {
-                        
-                        if case .exited(let code)? = child.pointee.metadata?.pointee.exitReason {
-                            frame.pointee.x0 = UInt64(code)
-                            
-                        } else { frame.pointee.x0 = 0 }
-                        
-                        _ = context.scheduler.pointee.reapChild(child)
-                        context.processManager.pointee.releaseProcess(child)
-                        return
-                    }
-                    
-                // Case 2 — the child is still alive (ready or waiting): park the caller
-                // until it exits. `ExitSyscall` sees `waitingChildPid`, releases the
-                // child and wakes us with its exit code in x0. This is the backpressure
-                // a split()/reapChild() loop relies on: without it the parent forks
-                // without ever yielding, so children pile up live in the ready queue
-                // and exhaust physical memory long before they get to run.
-                case .ready, .waiting:
-                    current.pointee.metadata.pointee.waitingChildPid = childPid
-
-                    // TODO: Add Error handler
-                    try? context.scheduler.pointee.block(current.pointee.pid)
-
-                    YieldSyscall.handle(frame: frame, context: context)
-                    return
+        switch child.pointee.status {
                 
-                default: break
-            }
+            // Case 1 — the child is already a zombie: reap it and return its code.
+            case .terminated:
+                if case .exited(let code)? = child.pointee.metadata?.pointee.exitReason {
+                    frame.pointee.x0 = UInt64(code)
+                    
+                } else { frame.pointee.x0 = 0 }
+                
+                _ = context.scheduler.pointee.reapChild(child)
+                context.processManager.pointee.releaseProcess(child)
+                return
+                
+            default:
+                current.pointee.metadata.pointee.waitingChildPid = childPid
+
+                try? context.scheduler.pointee.block(current.pointee.pid)
+                YieldSyscall.handle(frame: frame, context: context)
+                return
         }
                 
-
-        // Case 3 — no such child anywhere: nothing to reap.
-        frame.pointee.x0 = 0
     }
 }

@@ -12,6 +12,7 @@ public enum ProcessManagerError: KernelDiagnostic {
     case creationProcessFailed  (PPMError)
     case allocationPageFailed   (PPMError)
     case mappingFailed          (PPMError)
+    case registerRegionError    (VMAError)
 
     public var description: String {
         switch self {
@@ -32,6 +33,9 @@ public enum ProcessManagerError: KernelDiagnostic {
 
             case .mappingFailed(let inner):
                 "Process Manager Error: user page mapping failed (" + inner.description + ")"
+                
+            case .registerRegionError(let inner):
+                "Virtual Memory Area Error: register area failed (" + inner.description + ")"
                 
         }
     }

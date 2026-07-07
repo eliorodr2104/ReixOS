@@ -158,7 +158,7 @@ public struct Kernel {
         } catch { throw KernelError(error) }
 
         while true {
-            Arch.CPU.waitForInterrupt()
+            Arch.CPU.idleLoop()
         }
     }
 

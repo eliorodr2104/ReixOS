@@ -61,4 +61,32 @@ public enum UserSpaceLayout {
     /// a guard page raises a permission fault that the kernel turns into
     /// a deterministic stack-overflow segfault.
     public static let guardPageCount: Int = 1
+    
+    public static func checkedUserRange(
+        address: UInt64,
+        size   : UInt64
+    ) -> (start: UInt64, end: UInt64)? {
+        
+        guard size > 0,
+              address >= userMin,
+              address <= userMax, size <= userMax - address else {
+            return nil
+        }
+        return (address, address + size)
+    }
+    
+    public static func checkedPageRange(
+        address: UInt64,
+        size   : UInt64
+    ) -> (start: VirtualAddress, end: VirtualAddress)? {
+        
+        guard let range = Self.checkedUserRange(address: address, size: size) else {
+            return nil
+        }
+ 
+        let start = range.start & ~(Self.pageSize - 1)
+        let end   = (range.end + Self.pageSize - 1) & ~(Self.pageSize - 1)
+        
+        return (start, end)
+     }
 }

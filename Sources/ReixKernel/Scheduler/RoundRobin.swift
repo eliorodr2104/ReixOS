@@ -30,7 +30,16 @@ public struct RoundRobin: SchedulerInterface {
     }
     
     
-    public mutating func removeTask(_ process: UnsafeMutablePointer<Process>) {
+    public mutating func unlink(_ process: UnsafeMutablePointer<Process>) {
+        switch process.pointee.status {
+                
+            case .ready  : ready.remove(element: process)
+            case .waiting: waiting.remove(element: process)
+            default: break
+        }
+    }
+    
+    public mutating func addZombie(_ process: UnsafeMutablePointer<Process>) {
         terminated.pushBack(process)
     }
     

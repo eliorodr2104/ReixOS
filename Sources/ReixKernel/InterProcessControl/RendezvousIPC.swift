@@ -623,4 +623,17 @@ public struct RendezvousIPC: IPCInterface {
             
         }
     }
+    
+    public mutating func cloneCapsTable(
+        from parentMeta: UnsafeMutablePointer<ProcessMetadata>,
+        to   childMeta : UnsafeMutablePointer<ProcessMetadata>
+    ) {
+        childMeta.pointee.capsTable = parentMeta.pointee.capsTable
+        
+        for i in 0..<childMeta.pointee.capsTable.caps.count {
+            if let cap = childMeta.pointee.capsTable.caps[i] {
+                retain(cap)
+            }
+        }
+    }
 }

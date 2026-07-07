@@ -66,6 +66,17 @@ public struct ProcessRelations {
         return nil
     }
     
+    public func findChild(id: PID) -> UnsafeMutablePointer<Process>? {
+        var current = firstChild
+        
+        while let element = current {
+            if element.pointee.pid == id { return element }
+            current = element.pointee.family.nextSibling
+        }
+        
+        return nil
+    }
+    
     public mutating func reparent(newParent: UnsafeMutablePointer<Process>) {
         guard let head = firstChild else { return }
         

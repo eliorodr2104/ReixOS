@@ -14,35 +14,32 @@
 /// on unmapped pages or that lack the requested permissions.
 public struct UserMemory {
 
-    static func validateRegion(
-        addr: UInt64,
-        size: Int
-    ) -> Bool {
-        let endAddr = addr + UInt64(size)
-        return endAddr < 0x0001_0000_0000_0000 && addr != 0
+    static func validateRegion(addr: UInt64, size: Int) -> Bool {
+        guard size > 0 else { return false }
+        
+        return UserSpaceLayout.checkedUserRange(
+            address: addr,
+            size   : UInt64(size)
+        ) != nil
     }
-
-
     static func validateRegion(
         addr       : UInt64,
         size       : Int,
         permissions: VMAPermissions
     ) -> Bool {
-        guard validateRegion(addr: addr, size: size) else { return false }
-        guard size > 0 else { return false }
-
-        guard let process = Arch.CPU.getCurrentProcess() else {
-            return false
-        }
-
-        guard let vmaManager = process.pointee.addressSpace.vmaManager else {
-            return false
-        }
-
-        let end = addr + UInt64(size)
+        guard size > 0,
+              let range = UserSpaceLayout.checkedUserRange(
+                address: addr,
+                size   : UInt64(size)
+              ) else { return false }
+        
+        guard let process    = Arch.CPU.getCurrentProcess(),
+              let vmaManager = process.pointee.addressSpace.vmaManager
+        else { return false }
+        
         return vmaManager.pointee.contains(
-            start      : addr,
-            end        : end,
+            start      : range.start,
+            end        : range.end,
             permissions: permissions
         )
     }

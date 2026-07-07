@@ -265,13 +265,13 @@ public struct VirtualMemoryManager {
         type     : MemoryType        = .normal
     ) throws(PPMError) {
         let tablePointer: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable)
-
+        
         try map(
             table   : tablePointer,
             virtual : virtual,
             physical: physical,
             type    : type,
-            flags   : flags
+            flags   : flags.union([.notGlobal])
         )
     }
     
@@ -309,7 +309,7 @@ public struct VirtualMemoryManager {
             virtual : virtual,
             physical: physical,
             type    : .normal,
-            flags   : flags
+            flags   : flags.union([.notGlobal])
         )
     }
     
@@ -363,7 +363,7 @@ public struct VirtualMemoryManager {
             virtual  : virtual
         ) else { return }
 
-        try ppmPtr.pointee.free(PhysicalPage(address: phys, order: 0))
+        try? ppmPtr.pointee.release(phys)
         try unmapUserPage(
             rootTable: rootTable,
             virtual  : virtual

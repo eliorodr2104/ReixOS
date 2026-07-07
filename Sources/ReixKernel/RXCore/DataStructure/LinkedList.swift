@@ -32,6 +32,13 @@ public struct LinkedList<T: RXEntry> {
     }
     
     public mutating func pushBack(_ element: UnsafeMutablePointer<T>) {
+        assert(
+            element.pointee.next == nil &&
+            element.pointee.prev == nil &&
+            head != element,
+            "pushBack of a node still linked in a list"
+        )
+        
         element.pointee.next = nil
         element.pointee.prev = tail
         

@@ -7,7 +7,8 @@
 
 public protocol SchedulerInterface: RXAllocatable {
     mutating func addTask(_ process: borrowing UnsafeMutablePointer<Process>) throws(SchedulerError)
-    mutating func removeTask(_ process: UnsafeMutablePointer<Process>)
+    mutating func unlink(_ process: UnsafeMutablePointer<Process>)
+    mutating func addZombie(_ process: UnsafeMutablePointer<Process>)
     mutating func selectNextTask() -> UnsafeMutablePointer<Process>?
     mutating func resume(_ process: UnsafeMutablePointer<Process>)
     mutating func onTick() -> Bool

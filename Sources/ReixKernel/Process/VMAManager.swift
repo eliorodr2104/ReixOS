@@ -245,11 +245,10 @@ public struct VMAManager: RXAllocatable {
         to newBreak: VirtualAddress
     ) throws(VMAError) -> VirtualAddress {
 
+        guard newBreak >= UserSpaceLayout.userMin,
+              newBreak <= UserSpaceLayout.mmapBase else { throw .invalidLayout }
+        
         let aligned = (newBreak + UserSpaceLayout.pageSize - 1) & ~(UserSpaceLayout.pageSize - 1)
-
-        guard aligned >= UserSpaceLayout.userMin,
-              aligned <= UserSpaceLayout.mmapBase
-        else { throw .invalidLayout }
 
         if aligned <= currentBreak {
             return currentBreak
@@ -341,8 +340,10 @@ public struct VMAManager: RXAllocatable {
         permissions: VMAPermissions
     ) throws(VMAError) -> VirtualAddress {
 
-        guard size > 0 else { throw .invalidLayout }
-
+        guard size > 0, size <= UserSpaceLayout.mmapBase - UserSpaceLayout.mmapMin else {
+            throw .invalidLayout
+        }
+        
         let alignedSize = (size + UserSpaceLayout.pageSize - 1) & ~(UserSpaceLayout.pageSize - 1)
 
         guard let start = vmaList.findFreeGAPInRange(
@@ -377,15 +378,17 @@ public struct VMAManager: RXAllocatable {
 
         guard size > 0 else { throw .invalidLayout }
 
-        let alignedSize = (size + UserSpaceLayout.pageSize - 1) & ~(UserSpaceLayout.pageSize - 1)
-        let end         = addr + alignedSize
+        guard let range = UserSpaceLayout.checkedPageRange(
+            address: addr,
+            size   : size
+        ) else { throw .invalidLayout }
 
         guard let vmaPtr = vmaList.search(at: addr) else {
             throw .invalidLayout
         }
 
         guard vmaPtr.pointee.startAddress == addr,
-              vmaPtr.pointee.endAddress   == end
+              vmaPtr.pointee.endAddress   == range.end
         else { throw .invalidLayout }
 
         if brkVMA == vmaPtr {
@@ -528,7 +531,7 @@ public struct VMAManager: RXAllocatable {
                         return false
                     }
 
-                    try? ppm.pointee.free(PhysicalPage(address: phys, order: 0))
+                    try? ppm.pointee.release(phys)
                 }
 
                 Arch.MMU.flushTLB()
@@ -726,7 +729,7 @@ public struct VMAManager: RXAllocatable {
                         }
 
                     } catch {
-                        try? ppm.pointee.free(PhysicalPage(address: parentPhys, order: 0))
+                        try? ppm.pointee.release(parentPhys)
                         throw .mappingFailed(error)
                     }
                 }

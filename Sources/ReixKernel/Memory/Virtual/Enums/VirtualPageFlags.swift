@@ -19,4 +19,5 @@ public struct VirtualPageFlags: OptionSet {
     public static let readOnly   = VirtualPageFlags(rawValue: 1 << 7)
     public static let pxn        = VirtualPageFlags(rawValue: 1 << 53) // Privileged Execute Never
     public static let uxn        = VirtualPageFlags(rawValue: 1 << 54) // Unprivileged Execute Never
+    public static let notGlobal  = VirtualPageFlags(rawValue: 1 << 11)  // nG, stage-1 page/block
 }

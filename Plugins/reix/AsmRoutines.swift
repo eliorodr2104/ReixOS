@@ -29,6 +29,17 @@ private func cpuHandlers() -> [AsmRoutine] {
         fn("set_vbar")             { msr("vbar_el1", "x0"); ret() },
         fn("set_current_process")  { msr("tpidr_el1", "x0"); ret() },
         fn("get_current_process")  { mrs("x0", "tpidr_el1"); ret() },
+
+        fn("kernel_idle_loop") {
+            raw("    ldr x0, =stack_top")
+            raw("    ldr x1, =0xFFFF800000000000")
+            add("x0", "x0", "x1")
+            mov("sp", "x0")  
+            msr("daifclr", 3)
+            label(".L_idle")
+            wfi()
+            b(".L_idle")
+        }
     ]
 }
 

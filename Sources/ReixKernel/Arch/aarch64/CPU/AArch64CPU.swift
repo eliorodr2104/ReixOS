@@ -36,6 +36,9 @@ public struct AArch64CPU: CPUInterface {
 
     @_silgen_name("get_current_process")
     public static func getCurrentProcessRaw() -> VirtualAddress
+    
+    @_silgen_name("kernel_idle_loop")
+    public static func idleLoop() -> Never
 
 
     // MARK: - Function used on protocol CPUInterface

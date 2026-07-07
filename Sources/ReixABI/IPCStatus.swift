@@ -14,4 +14,5 @@ public enum IPCStatus: UInt64 {
     case noReply
     case invalidMessage
     case outOfEndpoints
+    case peerDied
 }

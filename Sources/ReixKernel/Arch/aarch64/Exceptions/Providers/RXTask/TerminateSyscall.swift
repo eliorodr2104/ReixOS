@@ -20,7 +20,18 @@ public struct TerminateSyscall: SyscallProvider {
         else { frame.pointee.x0 = UInt64.max; return } 
 
         child.pointee.family.parent = nil
-        context.processManager.pointee.killProcess(child, reason: .killed, context: context)
+        
+        if case .terminated = child.pointee.status {
+            _ = context.scheduler.pointee.reapChild(child)
+            
+        } else {
+            context.processManager.pointee.killProcess(
+                child,
+                reason : .killed,
+                context: context
+            )
+        }
+        
         context.processManager.pointee.releaseProcess(child)
         frame.pointee.x0 = 0
     }

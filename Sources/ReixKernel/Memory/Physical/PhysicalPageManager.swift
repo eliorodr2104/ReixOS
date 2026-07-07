@@ -118,6 +118,16 @@ public struct PhysicalPageManager<A: Allocator> {
         let indexMetadata = Int((address - ramStart) / 4096)
         framesMetadata!.advanced(by: indexMetadata).pointee.refCount += 1
     }
+    
+    public mutating func release(_ address: PhysicalAddress) throws(PPMError) {
+        
+        guard address >= ramStart, address < ramStart + ramSize else {
+            throw .invalidRefCount(Int(bitPattern: UInt(address)))
+        }
+        
+        let meta = framesMetadata!.advanced(by: Int((address - ramStart) / 4096))
+        try free(PhysicalPage(address: address, order: meta.pointee.order))
+    }
 
 
     public mutating func refCount(of address: PhysicalAddress) -> UInt32 {
