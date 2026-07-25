@@ -44,9 +44,15 @@ private func cpuHandlers() -> [AsmRoutine] {
 }
 
 private func mmuHandlers() -> [AsmRoutine] {
-    let tcr: UInt64 = (16 << 0) | (16 << 16) | (3 << 12) | (3 << 28)
-                    | (1 << 8)  | (1 << 10)  | (1 << 24) | (1 << 26)
-                    | (0 << 14) | (2 << 30)
+    // Kept as separate typed constants on purpose: as a single ten-term
+    // expression the type checker has to explore every integer-literal
+    // overload and blows its budget on Swift 6.2.x.
+    let addressSizes: UInt64 = (16 << 0)  | (16 << 16)
+    let shareability: UInt64 = (3  << 12) | (3  << 28)
+    let cacheability: UInt64 = (1  << 8)  | (1  << 10) | (1 << 24) | (1 << 26)
+    let granuleSizes: UInt64 = (0  << 14) | (2  << 30)
+
+    let tcr: UInt64 = addressSizes | shareability | cacheability | granuleSizes
 
     return [
         fn("enable_mmu") {

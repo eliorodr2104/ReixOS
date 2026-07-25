@@ -17,26 +17,43 @@ public struct SpawnProcessSyscall: SyscallProvider {
                 
         guard let currentProcess = Arch.CPU.getCurrentProcess(),
               let _              = currentProcess.pointee.metadata.pointee.capsTable.findFirst(for: .spawn) else {
+            frame.pointee.x0 = UInt64.max
             return
         }
-        
-        // TODO: Add control pointer user space
+    
         guard let source = UnsafeRawPointer(bitPattern: UInt(frame.pointee.x0)) else {
+            frame.pointee.x0 = UInt64.max
             return // throw .nullPointer
         }
 
+        guard frame.pointee.x1 <= 100 else {
+            frame.pointee.x0 = UInt64.max
+            return
+        }
 
         let length = Int(frame.pointee.x1)
 
         var grants      = InlineArray<8, CapGrant>(repeating: CapGrant())
         var grantsCount = 0
+        
+        guard frame.pointee.x3 <= 8 else {
+            frame.pointee.x0 = UInt64.max
+            return
+        }
 
         if let grantsBase = UnsafeRawPointer(bitPattern: UInt(frame.pointee.x2)),
            frame.pointee.x3 > 0 {
-            let count = min(Int(frame.pointee.x3), grants.count)
-            let typed = grantsBase.assumingMemoryBound(to: CapGrant.self)
+            let count = Int(frame.pointee.x3)
+            
+            guard UserMemory.validateRegion(
+                addr       : frame.pointee.x2,
+                size       : count * MemoryLayout<CapGrant>.stride,
+                permissions: [.read, .user]
+            ) else { frame.pointee.x0 = UInt64.max; return }
 
+            let typed = grantsBase.assumingMemoryBound(to: CapGrant.self)
             for i in 0..<count { grants[i] = typed[i] }
+            
             grantsCount = count
         }
 
@@ -48,14 +65,20 @@ public struct SpawnProcessSyscall: SyscallProvider {
                 alignment: MemoryLayout<CChar>.alignment
             ) { buffer in
                 let base = buffer.baseAddress!
-                base.copyMemory(from: source, byteCount: length)
+                
+                guard UserMemory.copyFromUser(
+                    kernelDest: base,
+                    userSrc   : frame.pointee.x0,
+                    count     : length
+                ) else { frame.pointee.x0 = UInt64.max; return }
+                
                 base.storeBytes(of: 0, toByteOffset: length, as: CChar.self)
                 let cPath = base.assumingMemoryBound(to: CChar.self)
 
                 childProcess = try? context.processManager.pointee.spawnProcess(path: cPath)
             }
             
-        } else { childProcess =  try? context.processManager.pointee.spawnProcess() }
+        }
         
         if let childProcess = childProcess {
             childProcess.pointee.family.parent = currentProcess

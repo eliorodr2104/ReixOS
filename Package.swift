@@ -81,7 +81,7 @@ let package = Package(
             capability: .command(
                 intent: .custom(verb: "reix", description: "Link kernel.bin + initrd.tar from the SPM modules (optionally run QEMU)"),
                 permissions: [
-                    .writeToPackageDirectory(reason: "writes kernel.elf/kernel.bin/*.elf/initrd.tar into the project directory")
+                    .writeToPackageDirectory(reason: "writes kernel.elf/kernel.bin/*.elf/initrd.tar into .reix/")
                 ]
             ),
             path: "Plugins/reix"

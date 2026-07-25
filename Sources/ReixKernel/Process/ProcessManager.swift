@@ -283,16 +283,13 @@ public struct ProcessManager: RXAllocatable {
     
     public func killProcess(
         _ process: UnsafeMutablePointer<Process>,
-        reason : ExitReason,
-        context: SyscallContext
+          reason : ExitReason,
+          context: SyscallContext
     ) {
         
         let status = process.pointee.status
         
         guard case .terminated = status else {
-            
-            process.pointee.status                       = .terminated
-            process.pointee.metadata?.pointee.exitReason = reason
             
             switch status {
                 case .blockedOnSend(let ep?), .blockedOnReceive(let ep?):
@@ -300,13 +297,17 @@ public struct ProcessManager: RXAllocatable {
                     if ep.pointee.queue.isEmpty() { ep.pointee.state = .idle }
                     
                 case .ready, .waiting:
-                    context.scheduler.pointee.unlink(process)
+                    context.scheduler.pointee.unlink(process, in: status)
                     
                 default: break
             }
-            
+                        
             severReplyLinks(of: process, context)
             context.ipc.pointee.releaseCapabilities(of: process)
+            
+            process.pointee.status                       = .terminated
+            process.pointee.metadata?.pointee.exitReason = reason
+            
             try? context.processManager.pointee.releaseAddressSpace(process)
             
             return
