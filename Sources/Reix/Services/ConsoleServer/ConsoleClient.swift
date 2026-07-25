@@ -37,7 +37,7 @@ public struct ConsoleClient {
 
     public func write(_ byte: UInt8) {
         
-        if !ring.push(byte) {
+        while !ring.push(byte) {
             _ = call(handle: endpoint, message: ConsoleOperation.flush.message(client: client))
         }
 

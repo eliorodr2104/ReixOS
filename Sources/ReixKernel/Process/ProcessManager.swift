@@ -291,6 +291,10 @@ public struct ProcessManager: RXAllocatable {
         
         guard case .terminated = status else {
             
+            if let grandparent = process.pointee.family.parent {
+                process.pointee.family.reparent(newParent: grandparent)
+            }
+            
             switch status {
                 case .blockedOnSend(let ep?), .blockedOnReceive(let ep?):
                     ep.pointee.queue.remove(element: process)

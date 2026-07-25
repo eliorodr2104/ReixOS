@@ -13,13 +13,21 @@ public struct Ring {
     
     private var base: UnsafeMutableRawPointer // SHM Buffer
     private let cap : Int
+    private let mask: UInt32
     
     public init(
         base      : UnsafeMutableRawPointer,
         regionSize: Int
     ) {
+        
+        
+        let usable = regionSize - Self.dataOffset
+        var size   = 1
+        while size * 2 <= usable { size *= 2 }
+
         self.base = base
-        self.cap  = regionSize - Self.dataOffset
+        self.cap  = size
+        self.mask = UInt32(size - 1)
     }
     
     private var head: UInt32 {
@@ -35,18 +43,28 @@ public struct Ring {
     }
     
     public var isEmpty: Bool {
-        head == tail
+        (head & mask) == (tail & mask)
+    }
+    
+    public var count: Int {
+        Int((tail &- head) & mask)
+    }
+
+    public var isFull: Bool {
+        count == cap - 1
     }
     
     public func push(_ byte: UInt8) -> Bool {
         
-        let next = (tail + 1) % UInt32(cap)
-        guard next != head else { return false }
-        
-        base.storeBytes(of: byte, toByteOffset: Self.dataOffset + Int(tail), as: UInt8.self)
+        let currentTail = tail & mask
+        let next        = (currentTail + 1) & mask
+
+        guard next != (head & mask) else { return false }
+
+        base.storeBytes(of: byte, toByteOffset: Self.dataOffset + Int(currentTail), as: UInt8.self)
         dmbISH()
         tail = next
-        
+
         return true
     }
     
@@ -59,32 +77,33 @@ public struct Ring {
     /// - Returns: The next byte in the buffer, or `nil` if the buffer is empty.
     public func pop() -> UInt8? {
         
-        guard head != tail else { return nil }
+        let currentHead = head & mask
+        guard currentHead != (tail & mask) else { return nil }
         
         dmbISH()
-        let byte = base.load(fromByteOffset: Self.dataOffset + Int(head), as: UInt8.self)
-        head = (head + 1) % UInt32(cap)
+        let byte = base.load(fromByteOffset: Self.dataOffset + Int(currentHead), as: UInt8.self)
+        head = (currentHead + 1) & mask
         
         return byte
     }
     
     public func nextLineLength() -> Int? {
         
-        guard head != tail else { return nil }
+        let end      = tail & mask
+        var iterator = head & mask
+
+        guard iterator != end else { return nil }
         
-        let end                = tail
-        var safeIteratorString = head
-        var lenghtString       = 0
-        while safeIteratorString != end {
-            
-            let byte = base.load(fromByteOffset: Self.dataOffset + Int(safeIteratorString), as: UInt8.self)
-            lenghtString += 1
-            
-            if byte == UInt8(ascii: "\n") { return lenghtString }
-            
-            safeIteratorString = (safeIteratorString + 1) % UInt32(cap)
+        var length = 0
+        while iterator != end {
+            let byte = base.load(fromByteOffset: Self.dataOffset + Int(iterator), as: UInt8.self)
+            length += 1
+
+            if byte == UInt8(ascii: "\n") { return length }
+
+            iterator = (iterator + 1) & mask
         }
-        
+
         return nil
     }
     

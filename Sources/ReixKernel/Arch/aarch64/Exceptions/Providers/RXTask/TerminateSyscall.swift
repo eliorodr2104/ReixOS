@@ -18,8 +18,6 @@ public struct TerminateSyscall: SyscallProvider {
         guard let current = Arch.CPU.getCurrentProcess(),
               let child   = current.pointee.family.removeChild(id: frame.pointee.x0)
         else { frame.pointee.x0 = UInt64.max; return } 
-
-        child.pointee.family.parent = nil
         
         if case .terminated = child.pointee.status {
             _ = context.scheduler.pointee.reapChild(child)

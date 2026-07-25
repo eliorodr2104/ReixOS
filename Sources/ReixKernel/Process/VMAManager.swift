@@ -316,14 +316,20 @@ public struct VMAManager: RXAllocatable {
         
         for i in 0..<pageCount {
             let currentVirtualPage: UInt64 = UInt64(i) * UserSpaceLayout.pageSize
-            
-            try? vmm.pointee.mapUserPage(
-                rootTable: rootTablePhysical,
-                virtual  : start        + currentVirtualPage,
-                physical : physicalBase + currentVirtualPage,
-                flags    : [.userAccess, .uxn],
-                type     : kind.memoryType
-            )
+
+            do {
+                try vmm.pointee.mapUserPage(
+                    rootTable: rootTablePhysical,
+                    virtual  : start        + currentVirtualPage,
+                    physical : physicalBase + currentVirtualPage,
+                    flags    : [.userAccess, .uxn],
+                    type     : kind.memoryType
+                )
+
+            } catch {
+                try? munmapRegion(addr: start, size: alignedSize)
+                throw .mappingFailed(error)
+            }
         }
 
         return start
