@@ -8,7 +8,7 @@
 /// Terminal step of the panic flow.
 ///
 /// Invoked right after the formatter has finished printing the report.
-/// `execute()` must never return — it is the kernel's last instruction
+/// `execute()` must never return: it is the kernel's last instruction
 /// path. Alternative actions (reboot, core dump, kernel debugger entry)
 /// can implement the protocol without touching the formatter.
 public protocol PanicAction {

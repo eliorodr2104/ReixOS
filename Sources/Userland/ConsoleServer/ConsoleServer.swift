@@ -81,7 +81,7 @@ public struct ConsoleServer: Service {
     ///
     /// The grant is only *inspected* until the ring is mapped and a slot is
     /// committed to it, so every refusal can simply return: `run()` releases what
-    /// was never taken. `takeGrant()` marks the single point of no return — past
+    /// was never taken. `takeGrant()` marks the single point of no return: past
     /// it the capability belongs to `grantedCaps` and `release(slot:)` owns it.
     private mutating func register(_ request: inout ReceivedMessage) {
 

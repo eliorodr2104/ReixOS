@@ -2,13 +2,14 @@
 import Foundation
 import PackageDescription
 
-// FREESTANDING=1 is exported by the build (see Makefile) to compile the real
-// bare-metal image: Embedded mode, whole-module, strict alignment, etc.
-//
-// Without it — e.g. when SourceKit-LSP or Xcode index the package for the host
-// (arm64-apple-macosx) — those flags are dropped so the editor can load the
-// macOS standard library and provide code intelligence.
-// (0xKSor, thanks)
+/// True when the build is producing the real bare-metal image: Embedded mode,
+/// whole-module, strict alignment, and so on. `FREESTANDING=1` is exported by
+/// the build (see Makefile).
+///
+/// Without it, for instance when SourceKit-LSP or Xcode index the package for
+/// the host (arm64-apple-macosx), those flags are dropped so the editor can load
+/// the macOS standard library and provide code intelligence.
+/// (0xKSor, thanks)
 let isFreestanding = ProcessInfo.processInfo.environment["FREESTANDING"] == "1"
 
 // @_extern stays on in both modes so the editor resolves the @_extern(c) shims.
@@ -18,16 +19,15 @@ var bareMetal: [SwiftSetting] = [
 if isFreestanding {
     bareMetal += [
         .enableExperimentalFeature("Embedded"),
-        // -Xcc -mstrict-align injects +strict-align into Swift codegen, so LLVM
-        // never emits unaligned multi-register accesses; those fault while the
-        // MMU is off in early boot (before the VMM maps RAM as Normal memory).
+        // -Xcc -mstrict-align is not optional: without it LLVM emits unaligned
+        // multi-register accesses, which fault with the MMU off in early boot.
         .unsafeFlags(["-Osize", "-wmo", "-parse-as-library", "-g", "-Xcc", "-mstrict-align"]),
     ]
 }
 
-// Non-Swift files that live under Sources/ReixKernel but are NOT part of the
-// kernel's Swift module: the `reix` plugin compiles them with clang. SPM forbids
-// mixing Swift and C/asm in one target, so they are excluded here.
+/// Non-Swift files that live under `Sources/ReixKernel` but are not part of the
+/// kernel's Swift module: the `reix` plugin compiles them with clang. SPM forbids
+/// mixing Swift and C/asm in one target, so they are excluded here.
 let kernelNativeExclude: [String] = [
     "Arch/aarch64/Boot/boot.S",
     "Arch/aarch64/ContextSwitch/ContextSwitch.S",
@@ -40,7 +40,7 @@ func app(_ name: String, _ settings: [SwiftSetting]) -> Target {
 
 let package = Package(
     name: "ReixOS",
-    // Only affects host (editor/SourceKit) builds — the bare-metal triple
+    // Only affects host (editor/SourceKit) builds; the bare-metal triple
     // ignores it. macOS 26 makes InlineArray & co. available for indexing.
     platforms: [.macOS("26.0")],
     products: [

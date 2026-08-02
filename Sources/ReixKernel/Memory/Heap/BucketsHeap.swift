@@ -3,6 +3,9 @@
 //  ReixOS
 //
 
+import ReixABI
+
+
 /// Bucket-based slab allocator backed by the Physical Page Manager.
 ///
 /// Allocates 4 KiB pages from the PPM and slices them into power-of-two
@@ -11,15 +14,17 @@
 /// pointer) is explicit and the manager is reachable from every consumer
 /// through a stable pointer composed by `Kernel`.
 ///
-
-import ReixABI
-
-public struct BucketsHeap: KernelHeapInterface {
+public struct BucketsHeap: KernelHeapInterface, Loggable {
+    
+    public static let nameLog : StaticString = "[HEAP]"
+    public static let logLevel: LogLevel     = .info
     
     private var core: SlabCore<PPMBackend>
 
     public init(ppmPtr: UnsafeMutablePointer<KernelPPM>) {
         core = SlabCore(backend: PPMBackend(ppmPtr: ppmPtr))
+
+        Self.boot("Kernel heap ready.")
     }
 
     public mutating func kmalloc(

@@ -9,7 +9,7 @@ import ReixABI
 
 
 struct UserHeap {
-    var slab  = SlabCore<SbrkBackend>(backend: SbrkBackend())
+    var slab  = SlabCore<UserArena>(backend: UserArena())
     var large = InlineArray<32, LargeRegion>(repeating: LargeRegion())
 
     mutating func alloc(size: UInt, alignment: UInt) -> UnsafeMutableRawPointer? {

@@ -33,6 +33,10 @@ public struct VirtualTimerInterruptHandler: InterruptHandler {
             Kernel.ipc.pointee.checkTimeouts(now: systemTicks)
         }
 
+        // The one periodic path already holding the CPU with IRQs masked, which is
+        // what `LogRing` needs; bounded by the UART being slower than the tick.
+        LogSink.drain(budget: LogSink.tickBudget)
+
         guard quantumExpired else { return }
 
         let outgoingRoot = Arch.CPU.getCurrentProcess()? .pointee.addressSpace.rootTablePhysical

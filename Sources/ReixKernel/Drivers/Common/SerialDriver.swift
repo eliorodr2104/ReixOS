@@ -21,9 +21,4 @@ extension SerialDriver {
             for b in buffer { write(b) }
         }
     }
-
-    func writeLine(_ s: String) {
-        writeString(s)
-        write(10) // \n
-    }
 }

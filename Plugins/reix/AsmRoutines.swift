@@ -1,6 +1,6 @@
 //
 //  AsmRoutines.swift
-//  ReixOS — reix plugin
+//  ReixOS
 //
 //  The trivial AArch64 wrappers, expressed with the AsmDSL. Rendered to `.S`
 //  by the plugin at build time. Faithful ports of the former CpuHandlers.S,
@@ -155,6 +155,29 @@ private func virtualTimer() -> [AsmRoutine] {
             raw("    .quad 0")
             raw(".section .text")
         },
+
+        // The only clock Swift can read. `RoundRobin.systemTicks` has 10 ms
+        // granularity; the virtual counter ~16 ns (~62.5 MHz on QEMU virt).
+        fn("read_virtual_counter") {
+            // `isb` first, or CNTVCT_EL0 reads get speculated ahead of the work
+            // being timed and two stamps around a short region come back reordered.
+            isb()
+            mrs("x0", "cntvct_el0")
+            ret()
+        },
+
+        // The same read without the barrier, for a stamp nobody subtracts from
+        // another: a log line does not care about a few cycles of skew.
+        fn("read_virtual_counter_unordered") {
+            mrs("x0", "cntvct_el0")
+            ret()
+        },
+
+        // Ticks per second, so a counter delta can be turned into a duration.
+        fn("read_counter_frequency") {
+            mrs("x0", "cntfrq_el0")
+            ret()
+        },
     ]
 }
 
@@ -173,7 +196,7 @@ func generatedKernelAsm() -> [(name: String, source: String)] {
 /// Trivial wrappers linked into every userland ELF (alongside Native/reix).
 private func reixRoutines() -> [AsmRoutine] {
     [
-        // Inner-shareable memory barrier — orders the SPSC ring's data vs index
+        // Inner-shareable memory barrier: orders the SPSC ring's data vs index
         // accesses (release on push, acquire on pop). See Reix `dmbISH()`.
         fn("dmb_ish") { dmb("ish"); ret() },
     ]

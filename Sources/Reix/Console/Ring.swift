@@ -193,7 +193,7 @@ public struct Ring {
     /// end of the buffer. It must consume the bytes before returning: the slots
     /// go back to the producer as soon as this method returns.
     ///
-    /// - Returns: `false` when the ring holds no complete line — a partial line
+    /// - Returns: `false` when the ring holds no complete line. A partial line
     ///            stays queued until the producer writes its newline.
     public func consumeLine(_ sink: (UnsafeRawPointer, Int) -> Void) -> Bool {
 

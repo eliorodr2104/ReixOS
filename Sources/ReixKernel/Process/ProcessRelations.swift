@@ -36,10 +36,6 @@ public struct ProcessRelations {
             previousNode.pointee.family.nextSibling = next
 
         } else if firstChild == element {
-            // Only advance the head if `element` actually was the head. Without
-            // this guard, calling removeChild on a node that isn't in the list
-            // (e.g. a child whose `pushChild` never ran) would wipe firstChild
-            // and orphan every real child.
             firstChild = next
         }
 

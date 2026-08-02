@@ -13,9 +13,12 @@ import ReixABI
 /// VMM/PPM/Heap pointers) is explicit and testable. The single live
 /// instance is composed by `Kernel.boot` and reached through
 /// `Kernel.processManager`.
-public struct ProcessManager: RXAllocatable {
+public struct ProcessManager: RXAllocatable, Loggable {
 
     public static var errorMessageAllocation: StaticString = "Failed to allocate ProcessManager on the kernel heap"
+    
+    public static let nameLog : StaticString = "[PROC]"
+    public static let logLevel: LogLevel     = .info
     
     /// Monotonically increasing PID source. Never reused within a boot.
     private var pidCounter: PID = 0
@@ -27,7 +30,7 @@ public struct ProcessManager: RXAllocatable {
     /// holding it would be indistinguishable, to every server keying state on the
     /// badge, from a message carrying no principal at all. Counting separately
     /// from the PID is what keeps identities from aliasing if PIDs are ever
-    /// reused — see `Process.identity`.
+    /// reused, see `Process.identity`.
     private var identityCounter: Badge = 1
 
     /// Root of the process tree, published once by `Kernel.jumpUserLand`.
@@ -56,9 +59,23 @@ public struct ProcessManager: RXAllocatable {
         self.ppm        = ppm
         self.heap       = heap
         self.fileSystem = fileSystem
+
+        Self.boot("Process Manager ready.")
     }
     
     
+    /// Loads `path` and builds a runnable process out of it: address space, VMA
+    /// manager, ELF segments, first stack page, trap frame, metadata, `Process`.
+    ///
+    /// ## Unwinding a half-built process
+    ///
+    /// Every step below has to undo the blocks allocated before it, innermost
+    /// first, and only then the address space. What makes that tractable is that
+    /// everything mapped along the way, the ELF segments and the first stack
+    /// page, carries a registered VMA: the VMA list is the only thing
+    /// `destroyPartialAddressSpace` can see, because walking it is all it does.
+    /// No step past the stack mapping maps a page, so the invariant holds on
+    /// every rung of the ladder.
     public mutating func spawnProcess(path: UnsafePointer<CChar>) throws(ProcessManagerError) -> UnsafeMutablePointer<Process> {
         
         switch fileSystem.pointee.open(
@@ -75,9 +92,8 @@ public struct ProcessManager: RXAllocatable {
                 } catch { throw .creationProcessFailed(error) }
 
                 guard let vmaManagerPtr = attachVMAManager(to: &addressSpace) else {
-                    // Only the fresh root table is live at this point, and
-                    // `vmaManager` is still `nil`, so the partial teardown
-                    // reduces to destroying the address space.
+                    // Only the fresh root table is live and `vmaManager` is still
+                    // `nil`, so teardown is just destroying the address space.
                     destroyPartialAddressSpace(&addressSpace)
                     throw .heapAllocationFailed
                 }
@@ -132,12 +148,8 @@ public struct ProcessManager: RXAllocatable {
                     throw .registerRegionError(error)
                 }
 
-                // From here on every failure has to undo the blocks allocated
-                // before it, innermost first, and only then the address space.
-                // Everything mapped so far — the ELF segments and the first
-                // stack page — carries a registered VMA, which is the only thing
-                // `destroyPartialAddressSpace` can see: it walks the VMA list.
-                // Nothing below maps a page, so that stays true on every rung.
+                // Nothing below maps a page, which is what keeps the unwinding
+                // rule on `spawnProcess` true for every step from here down.
                 guard let trapFramePtr = heap.pointee.kmallocOrNil(Arch.TrapFrame.self) else {
                     destroyPartialAddressSpace(&addressSpace)
                     throw .heapAllocationFailed
@@ -154,17 +166,9 @@ public struct ProcessManager: RXAllocatable {
                 let identity = self.identityCounter
                 self.identityCounter += 1
 
-                guard let kStackRaw = heap.pointee.kmallocOrNil(4096) else {
-                    heap.pointee.kfree(trapFramePtr)
-                    destroyPartialAddressSpace(&addressSpace)
-                    throw .heapAllocationFailed
-                }
-
-                let kStackTop = kStackRaw.advanced(by: 4096)
                 let initialBreak = (elf.loadEnd + UserSpaceLayout.pageSize - 1) & ~(UserSpaceLayout.pageSize - 1)
 
                 guard let metadataPtr = heap.pointee.kmallocOrNil(ProcessMetadata.self) else {
-                    heap.pointee.kfree(kStackRaw)
                     heap.pointee.kfree(trapFramePtr)
                     destroyPartialAddressSpace(&addressSpace)
                     throw .heapAllocationFailed
@@ -175,13 +179,10 @@ public struct ProcessManager: RXAllocatable {
                     elfLoadEnd: elf.loadEnd, programBreak: initialBreak
                 ))
 
-                // The `Process` is the last block on purpose: it is the only one
-                // any other container can name, and it is still unknown to the
-                // scheduler, to every endpoint queue and to every family list, so
-                // freeing the partial set here can corrupt nothing.
+                // Last block on purpose: the scheduler, the endpoint queues and
+                // the family lists cannot name it yet, so this frees nothing live.
                 guard let processPtr = heap.pointee.kmallocOrNil(Process.self) else {
                     heap.pointee.kfree(metadataPtr)
-                    heap.pointee.kfree(kStackRaw)
                     heap.pointee.kfree(trapFramePtr)
                     destroyPartialAddressSpace(&addressSpace)
                     throw .heapAllocationFailed
@@ -189,8 +190,7 @@ public struct ProcessManager: RXAllocatable {
 
                 processPtr.initialize(to: Process(
                     pid: pid, identity: identity, addressSpace: addressSpace,
-                    context: trapFramePtr, kernelStackTop: kStackTop,
-                    kernelStackRaw: kStackRaw, metadata: metadataPtr
+                    context: trapFramePtr, metadata: metadataPtr
                 ))
 
                 vmaManagerPtr.pointee.setInitialBreak(initialBreak)
@@ -232,16 +232,7 @@ public struct ProcessManager: RXAllocatable {
         let identity = self.identityCounter
         self.identityCounter += 1
 
-        guard let kStackRaw = heap.pointee.kmallocOrNil(4096) else {
-            heap.pointee.kfree(trapFramePtr)
-            destroyPartialAddressSpace(&addressSpace)
-            throw .heapAllocationFailed
-        }
-
-        let kStackTop = kStackRaw.advanced(by: 4096)
-
         guard let metadataPtr = heap.pointee.kmallocOrNil(ProcessMetadata.self) else {
-            heap.pointee.kfree(kStackRaw)
             heap.pointee.kfree(trapFramePtr)
             destroyPartialAddressSpace(&addressSpace)
             throw .heapAllocationFailed
@@ -251,7 +242,6 @@ public struct ProcessManager: RXAllocatable {
 
         guard let processPtr = heap.pointee.kmallocOrNil(Process.self) else {
             heap.pointee.kfree(metadataPtr)
-            heap.pointee.kfree(kStackRaw)
             heap.pointee.kfree(trapFramePtr)
             destroyPartialAddressSpace(&addressSpace)
             throw .heapAllocationFailed
@@ -263,9 +253,6 @@ public struct ProcessManager: RXAllocatable {
             addressSpace  : addressSpace,
             
             context       : trapFramePtr,
-            kernelStackTop: kStackTop,
-            kernelStackRaw: kStackRaw,
-            
             metadata      : metadataPtr,
         ))
         
@@ -293,12 +280,6 @@ public struct ProcessManager: RXAllocatable {
             process.pointee.context = nil
         }
 
-        if let stackAddress = process.pointee.kernelStackRaw {
-            heap.pointee.kfree(stackAddress)
-            process.pointee.kernelStackRaw = nil
-            process.pointee.kernelStackTop = nil
-        }
-        
         defer { reinstallCurrentAddressSpace() }
 
         try vmm.pointee.destroyAddressSpace(
@@ -362,10 +343,10 @@ public struct ProcessManager: RXAllocatable {
     /// `exitReason` is the only field that records how a process died. The
     /// dying process's `x0` carries the code on the `exit(code)` route alone;
     /// on a fault or a `terminate` it is whatever user register happened to be
-    /// live, so reading it as a status is reading noise. Both reaps — the
+    /// live, so reading it as a status is reading noise. Both reaps, the
     /// synchronous one, where the child is already a zombie, and the
     /// asynchronous one, where the parent blocks first and the child dies
-    /// later — go through this single decoder, so one death can never be
+    /// later, go through this single decoder, so one death can never be
     /// reported to the parent as two different numbers.
     public static func exitStatus(of process: UnsafeMutablePointer<Process>) -> ExitCode {
 
@@ -407,8 +388,8 @@ public struct ProcessManager: RXAllocatable {
     
     /// Tears a process down and disposes of its corpse.
     ///
-    /// Returns `true` while the corpse is still reachable — parked on the
-    /// scheduler's `terminated` list — so a caller that wants it may reap and
+    /// Returns `true` while the corpse is still reachable, parked on the
+    /// scheduler's `terminated` list, so a caller that wants it may reap and
     /// release it. Returns `false` when it went to a parent already blocked in
     /// `reapChild`: that hand-off frees the `Process` block, so `process` is
     /// dangling on return and must not be touched again.
@@ -466,8 +447,8 @@ public struct ProcessManager: RXAllocatable {
 
     /// Hands a fresh corpse to whoever is entitled to it.
     ///
-    /// Every death route ends here — `exit`, a fault, `terminate`, a `split`
-    /// unwinding its half-built child — because the two outcomes are exclusive
+    /// Every death route ends here (`exit`, a fault, `terminate`, a `split`
+    /// unwinding its half-built child) because the two outcomes are exclusive
     /// and a route that performed neither was doubly broken: the parent parked
     /// in `reapChild` was never woken, and the unrecorded `Process` block was
     /// left unreachable by any later reap.

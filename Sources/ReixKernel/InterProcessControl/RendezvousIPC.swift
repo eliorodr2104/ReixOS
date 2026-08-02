@@ -8,9 +8,12 @@
 
 import ReixABI
 
-public struct RendezvousIPC: IPCInterface {
+public struct RendezvousIPC: IPCInterface, Loggable {
     
     public static var errorMessageAllocation: StaticString = "Failed to allocate IPC on the kernel heap"
+    
+    public static let nameLog : StaticString = "[IPC ]"
+    public static let logLevel: LogLevel     = .info
     
     var endpoints: InlineArray<64, UnsafeMutablePointer<Endpoint>?>
     var ppm      : UnsafeMutablePointer<KernelPPM>
@@ -45,6 +48,8 @@ public struct RendezvousIPC: IPCInterface {
         self.ppm       = ppm
         self.scheduler = scheduler
         self.heap      = heap
+
+        Self.boot("IPC ready.")
     }
     
     

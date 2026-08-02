@@ -8,7 +8,7 @@
 /// Intrusive free-list node overlaid on a free block's first 16 bytes.
 ///
 /// The buddy free lists thread through the free blocks themselves (no extra
-/// allocation — the allocator can't allocate to track its own free list), so
+/// allocation: the allocator can't allocate to track its own free list), so
 /// `FreeBlock` is materialised at a block's physical address and linked via a
 /// `LinkedList<FreeBlock>`. Being doubly linked, unlinking an arbitrary buddy
 /// during a merge is O(1). `entryID` is unused: the buddy never does id-based
@@ -29,14 +29,13 @@ public struct BuddyAllocator: Allocator {
 
     /// One free list per order (0...maxOrder), kept in a small reserved region.
     /// The list nodes live inside the free blocks (`FreeBlock`), so this only
-    /// stores the 12 list heads/tails — the heavy data is in the pages.
+    /// stores the 12 list heads/tails, the heavy data is in the pages.
     private let freeLists      : UnsafeMutablePointer<LinkedList<FreeBlock>>
 
     private static let pageSize: UInt64 = 4096
 
     private static let maxOrder: UInt8  = 11
 
-    
     public init(
         start           : PhysicalAddress,
         size            : UInt64,
@@ -51,12 +50,6 @@ public struct BuddyAllocator: Allocator {
         self.bitmap    = UnsafeMutablePointer<UInt8>(bitPattern: UInt(bitmapAddress))!
         self.freeLists = UnsafeMutablePointer<LinkedList<FreeBlock>>(bitPattern: UInt(freeListsAddress))!
 
-        // An empty LinkedList is all-zero (nil head/tail, count 0), so zero the
-        // whole region from its page-aligned base. We must NOT `initialize(to:)`
-        // each element: that memcpy's a 40-byte struct to 40-byte-strided (not
-        // 16-aligned) offsets, and this runs with the MMU still off — where
-        // memory is Device-typed and a 16-byte ldp/stp to a non-16-aligned
-        // address faults. A memset from the aligned base is safe.
         let listsBytes = (Int(Self.maxOrder) + 1) * MemoryLayout<LinkedList<FreeBlock>>.stride
         UnsafeMutableRawPointer(freeLists).initializeMemory(as: UInt8.self, repeating: 0, count: listsBytes)
 
@@ -300,10 +293,8 @@ public struct BuddyAllocator: Allocator {
     private func getFreeListHead(order: UInt8) throws(AllocatorError) -> UInt64 {
         guard order <= Self.maxOrder else { throw .pageOrderInvalid(order) }
 
-        // `.pointee` mutates/reads the list IN PLACE (an addressor), unlike the
-        // `freeLists[order]` subscript which copies the whole 40-byte struct in
-        // and out — fatal with the MMU off (unaligned 16-byte ldp on Device
-        // memory). All free-list access below goes through `.pointee` for this.
+        // `.pointee`, never the `freeLists[order]` subscript, here and in every
+        // free-list access below: see the note on `freeLists`.
         if let head = (freeLists + Int(order)).pointee.head {
             return UInt64(UInt(bitPattern: head))
         }

@@ -12,12 +12,11 @@ public typealias PID = UInt64
 /// Hot state of a kernel-managed process.
 ///
 /// Layout is tuned for the scheduler fast path: every field accessed on
-/// every tick (status, priority, context, addressSpace, kernel stack)
-/// stays inline. Cold fields (ELF image, exit code, waitingChildPid,
-/// program break, ...) live in a separate `ProcessMetadata` allocation
-/// pointed by `metadata`.
+/// every tick (status, priority, context, addressSpace) stays inline.
+/// Cold fields (ELF image, exit code, waitingChildPid, program break, ...)
+/// live in a separate `ProcessMetadata` allocation pointed by `metadata`.
 ///
-/// TODO: compact this struct further once the VMA chain is online and
+/// - TODO: compact this struct further once the VMA chain is online and
 /// we can profile real scheduler walks (consider bitfielding
 /// status/priority/type into a single UInt32 word).
 @frozen
@@ -33,7 +32,7 @@ public struct Process: RXEntry {
     /// `pendingRights` / `expectsReply` companions: those describe a single
     /// message, and keeping them separate meant every enqueue path had to
     /// remember to reset the ones it did not use. Never assign into it
-    /// piecemeal — replace it whole, or retire it with `takePending`.
+    /// piecemeal: replace it whole, or retire it with `takePending`.
     public var pending       : PendingMessage? = nil                 // 32 Byte -> 21 + 4 + 5 + 1 + 1
     public var addressSpace  : AddressSpace                          // 19 Byte -> ((1 + 8) + 8 + 2)
     
@@ -47,8 +46,6 @@ public struct Process: RXEntry {
     /// by `ProcessManager.spawnProcess`; any access before that point is a
     /// programming error and crashes deterministically.
     public var metadata      : UnsafeMutablePointer<ProcessMetadata>! // 8 Byte
-    public var kernelStackTop: UnsafeMutableRawPointer?               // 8 Byte
-    public var kernelStackRaw: UnsafeMutableRawPointer?               // 8 Byte
     public var prev          : UnsafeMutablePointer<Self>?            // 8 Byte
     public var next          : UnsafeMutablePointer<Self>?            // 8 Byte
     public var replyTo       : UnsafeMutablePointer<Self>? = nil      // 8 Byte
@@ -89,8 +86,6 @@ public struct Process: RXEntry {
         addressSpace  : AddressSpace,
         
         context       : UnsafeMutablePointer<Arch.TrapFrame>?,
-        kernelStackTop: UnsafeMutableRawPointer?,
-        kernelStackRaw: UnsafeMutableRawPointer?,
         family        : ProcessRelations = ProcessRelations(),
         
         type          : ProcessType      = .user,
@@ -108,8 +103,6 @@ public struct Process: RXEntry {
         self.depth          = depth
         self.type           = type
         self.context        = context
-        self.kernelStackTop = kernelStackTop
-        self.kernelStackRaw = kernelStackRaw
         self.metadata       = metadata
     }
 }

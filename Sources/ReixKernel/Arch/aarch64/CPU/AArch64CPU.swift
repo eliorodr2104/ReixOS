@@ -99,29 +99,4 @@ public struct AArch64CPU: CPUInterface {
         F.format(report)
         A.execute()
     }
-
-
-    /// Walk the saved frame-pointer chain and print every return
-    /// address. Public to the rest of the kernel so the panic formatter
-    /// can invoke it without exposing the unwinder publicly.
-    @inline(__always)
-    static func printStackTrace(_ framePointerAddress: UInt64) {
-        guard framePointerAddress != 0 else { return }
-
-        var fp = framePointerAddress
-        while fp != 0 {
-            let returnAddress = UnsafePointer<UInt64>(
-                bitPattern: UInt(fp + 8)
-            )?.pointee ?? 0
-
-            let previousFP = UnsafePointer<UInt64>(
-                bitPattern: UInt(fp)
-            )?.pointee ?? 0
-
-            if returnAddress == 0 { break }
-
-            kprint("  [<0x\(hex: returnAddress)>]")
-            fp = previousFP
-        }
-    }
 }

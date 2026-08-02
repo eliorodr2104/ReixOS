@@ -34,7 +34,9 @@ public struct InterruptDispatcher {
         
         guard id < GIC.reservedInterruptBase else { return }
 
-        kprint(.warning, "spurious IRQ id=\(id)", by: .gic)
+        // Tagged `[GIC ]`, not with a tag of the router's own: the line reports
+        // an INTID the controller presented, not one the dispatcher invented.
+        GIC.warning("spurious IRQ id=\(id)")
         Kernel.gic.pointee.endOfInterrupt(id: id)
     }
 }

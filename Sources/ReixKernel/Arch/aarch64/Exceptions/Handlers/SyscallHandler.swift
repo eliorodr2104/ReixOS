@@ -34,6 +34,8 @@ public struct SyscallHandler: RXAllocatable {
         self.scheduler      = scheduler
         self.ipc            = ipc
         self.ppm            = ppm
+
+        Self.boot("Syscall Handler ready.")
     }
 
     public func handle(
@@ -47,10 +49,8 @@ public struct SyscallHandler: RXAllocatable {
             ppm           : ppm
         )
 
-        // No `default` arm on purpose: it is what let `sleep` sit in
-        // `SyscallNumber` undispatched, silently returning with `x0`
-        // untouched. Exhaustive, a new syscall number is a compile error
-        // until somebody wires it up here.
+        // No `default` arm on purpose: one let `sleep` sit undispatched, silently
+        // returning with `x0` untouched. Exhaustive, a new number fails to compile.
         switch type {
             case .exit         : ExitSyscall         .handle(frame: frame, context: context)
             case .yield        : YieldSyscall        .handle(frame: frame, context: context)
@@ -120,4 +120,10 @@ public struct SyscallHandler: RXAllocatable {
             context: context
         )
     }
+}
+
+
+extension SyscallHandler: Loggable {
+    public static let nameLog : StaticString = "[SYS ]"
+    public static let logLevel: LogLevel     = .info
 }

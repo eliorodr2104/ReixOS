@@ -33,7 +33,7 @@ public struct AArch64MMU {
     @_silgen_name("flush_tlb_page_nosync")
     public static func flushTLBPageNoSync(_ virtual: VirtualAddress)
 
-    /// `dsb ish` + `isb` — completes a batch of `flushTLBPageNoSync(_:)`.
+    /// `dsb ish` + `isb`: completes a batch of `flushTLBPageNoSync(_:)`.
     @_silgen_name("flush_tlb_sync")
     public static func flushTLBSync()
 

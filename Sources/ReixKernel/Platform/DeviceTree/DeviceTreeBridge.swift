@@ -5,11 +5,11 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 20/04/2026.
 //
 
-// Pure-Swift flattened-device-tree parser (replaces the former C `fdt_parser.c`).
-// Walks the FDT struct block once, inheriting #address-cells/#size-cells from
-// parents, and fills `PlatformInfo` (RAM, UART, GIC, initrd, cpu count, bootargs).
-// All multi-byte fields in an FDT are big-endian; the blob is 4-byte aligned, so
-// every `UInt32` load lands on a 4-aligned address (safe under -mstrict-align).
+/// Walks the FDT struct block once, inheriting `#address-cells`/`#size-cells`
+/// from parents, and fills `PlatformInfo` (RAM, UART, GIC, initrd, cpu count,
+/// bootargs). All multi-byte fields in an FDT are big-endian; the blob is 4-byte
+/// aligned, so every `UInt32` load lands on a 4-aligned address and stays safe
+/// under `-mstrict-align`.
 private enum FDT {
     static let beginNode: UInt32 = 0x1
     static let endNode  : UInt32 = 0x2

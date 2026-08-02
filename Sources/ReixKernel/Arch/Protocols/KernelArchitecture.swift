@@ -8,6 +8,7 @@
 
 public protocol KernelArchitecture {
     associatedtype CPU: CPUInterface
+    associatedtype Timer: HardwareTimerInterface
     associatedtype MMU
     associatedtype TrapFrame
     associatedtype PageTableEntry

@@ -5,8 +5,11 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 23/04/2026.
 //
 
-public struct VirtualMemoryManager {
+public struct VirtualMemoryManager: Loggable {
     
+    public static let nameLog : StaticString = "[VMM ]"
+    public static let logLevel: LogLevel     = .info
+
     private let ppmPtr              : UnsafeMutablePointer<KernelPPM>
         
     /// Root (TTBR1 - Address 0xFFFF...)
@@ -20,6 +23,18 @@ public struct VirtualMemoryManager {
     
     static let physicalOffset       : UInt64 = 0xFFFF800000000000
     static let pageSize             : UInt64 = 4096
+
+    /// Span of a level-2 block descriptor with the 4 KiB granule.
+    ///
+    /// The linear map is the one region that fits a block exactly: contiguous,
+    /// aligned and uniformly attributed. Paying an L3 table for every 2 MiB of
+    /// it costs `RAM / 256` bytes twice over, once per root. On a 4 MiB machine
+    /// that is the difference between the mapping fitting and not.
+    ///
+    /// Level 1 (1 GiB) is deliberately not used: RAM here never spans a whole
+    /// aligned gigabyte, and a block that large would also map the hole above
+    /// RAM inside the same L1 slot as cacheable normal memory.
+    static let blockSize            : UInt64 = 2 * 1024 * 1024
 
     /// Largest physical address the high-half window can name.
     ///
@@ -47,6 +62,22 @@ public struct VirtualMemoryManager {
         return UnsafeMutablePointer<T>(bitPattern: UInt(virtAddr))!
     }
     
+    /// Build both translation roots, then enable the MMU on them.
+    ///
+    /// The order the sections are issued in is load-bearing. The kernel image
+    /// and the initrd are mapped first with their own permissions, and the
+    /// linear map that follows covers whatever is left of RAM. It must not run
+    /// over the top of them: a descriptor keeps whatever was written to it
+    /// last, so a linear map spanning the initrd silently replaces the
+    /// read-only mapping with a writable one, in both roots. The linear map is
+    /// therefore issued as two spans with the initrd's page-aligned extent cut
+    /// out between them.
+    ///
+    /// The hole costs nothing in page tables. Mapping the initrd at 4 KiB
+    /// already forces an L3 table into every 2 MiB span it touches, and
+    /// `canInstallBlock` already refuses a block over a span that is paged, so
+    /// those spans were being written page by page either way. Only the flags
+    /// that land in the descriptors change.
     init(ppmPtr: UnsafeMutablePointer<KernelPPM>) throws(PPMError) {
         self.ppmPtr               = ppmPtr
         let pageKernelTable       = try self.ppmPtr.pointee.alloc(4096)
@@ -107,21 +138,42 @@ public struct VirtualMemoryManager {
         let initrdEnd  = Kernel.platformInfo.initrdEnd
         try mapSection(
             startAddress: initrdBase,
-            endAddress: initrdEnd,
-            type: .normal,
-            flags: [.present, .readOnly, .pxn]
+            endAddress  : initrdEnd,
+            type        : .normal,
+            flags       : [.present, .readOnly, .pxn]
         )
-        
+
         flags = [.present, .pxn]
         let ramEnd = PhysicalAddress(self.ppmPtr.pointee.ramStart + self.ppmPtr.pointee.ramSize)
-        
+
         let safeRamStart = (kernelEnd + (Self.pageSize - 1)) & ~(Self.pageSize - 1)
+
+        // Rounded the same way `mapSection` rounds its own bounds, so the hole
+        // covers exactly the pages the read-only mapping above touched.
+        let initrdFirstPage = initrdBase & ~(Self.pageSize - 1)
+        let initrdLastPage  = (initrdEnd + (Self.pageSize - 1)) & ~(Self.pageSize - 1)
+
+        let initrdInLinearMap = initrdEnd       > initrdBase
+                             && initrdLastPage  > safeRamStart
+                             && initrdFirstPage < ramEnd
+
+        // Collapsed onto `ramEnd` when there is no initrd to skip: the first
+        // span then covers all of RAM and the second one is empty.
+        let holeStart = initrdInLinearMap ? max(initrdFirstPage, safeRamStart) : ramEnd
+        let holeEnd   = initrdInLinearMap ? min(initrdLastPage,  ramEnd)       : ramEnd
+
         try mapSection(
             startAddress: safeRamStart,
+            endAddress  : holeStart,
+            flags       : flags
+        )
+
+        try mapSection(
+            startAddress: holeEnd,
             endAddress  : ramEnd,
             flags       : flags
         )
-        
+
         let uartBase            = Kernel.platformInfo.uart.baseAddr
         let gicDistributorBase  = Kernel.platformInfo.gic.gicdBase
         let gicCpuInterfaceBase = Kernel.platformInfo.gic.giccBase
@@ -168,9 +220,11 @@ public struct VirtualMemoryManager {
         )
         
         Arch.MMU.flushTLB()
+
+        Self.boot("Virtual Memory Manager ready.")
     }
-    
-    
+
+
     public mutating func createAddressSpace() throws(PPMError) -> AddressSpace {
         let page = try ppmPtr.pointee.alloc(4096, flag: .kernel)
         let rootTable: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(page.address)
@@ -365,19 +419,40 @@ public struct VirtualMemoryManager {
     }
 
 
+    /// Resolve `virtual` in `rootTable`, terminating on whichever descriptor
+    /// actually maps it.
+    ///
+    /// Written as its own descent rather than on top of `lookupLeafTable`
+    /// because that helper can only ever hand back an L3 table, and the linear
+    /// map no longer ends at L3: a kernel-window address inside a 2 MiB block
+    /// would resolve to `nil`, a mapped address reported as unmapped, which
+    /// every caller reads as "nothing to do".
     public func physicalAddressOf(
         rootTable: PhysicalAddress,
         virtual  : VirtualAddress
     ) -> PhysicalAddress? {
-        
-        let tablePointer: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable)
-        
-        guard let leafTable = lookupLeafTable(
-            table  : tablePointer,
-            virtual: virtual
-        ) else { return nil }
 
-        let entry = leafTable[virtual.l3]
+        var currentTable: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable)
+
+        let indexes: InlineArray<3, Int> = [virtual.l0, virtual.l1, virtual.l2]
+        let shifts : InlineArray<3, Int> = [39, 30, 21]
+
+        for i in 0..<indexes.count {
+            let entry = currentTable[indexes[i]]
+            guard entry.isPresent else { return nil }
+
+            if !entry.isTableDescriptor {
+                // Block: the descriptor carries the block base, the low bits of
+                // the virtual address carry the offset into it.
+                let offsetMask = (UInt64(1) << UInt64(shifts[i])) - 1
+
+                return (entry.physicalAddress & ~offsetMask) | (virtual & offsetMask)
+            }
+
+            currentTable = physToVirt(entry.physicalAddress)
+        }
+
+        let entry = currentTable[virtual.l3]
         guard entry.isPresent else { return nil }
 
         return entry.physicalAddress
@@ -432,15 +507,87 @@ public struct VirtualMemoryManager {
         Arch.MMU.pageTableBarrier()
     }
 
+    /// Install a 2 MiB block descriptor at level 2.
+    ///
+    /// Only bit 1 separates a block from a table at L1/L2. The MAIR index, AP,
+    /// SH, AF, nG and PXN/UXN all sit in the same bits as in an L3 page
+    /// descriptor, so the caller's flags carry over untouched and only `.page`
+    /// has to come back out. Getting that one bit wrong does not fault: the
+    /// walker would follow the block's output address as if it were the next
+    /// table and read RAM as descriptors.
+    private func mapBlock(
+        table   : UnsafeMutablePointer<Arch.PageTableEntry>,
+        virtual : VirtualAddress,
+        physical: PhysicalAddress,
+        type    : MemoryType,
+        flags   : VirtualPageFlags
+    ) throws(PPMError) {
+
+        var currentTable = table
+        currentTable = try mapTable(current: currentTable, virtual.l0)
+        currentTable = try mapTable(current: currentTable, virtual.l1)
+
+        var entry = currentTable[virtual.l2]
+        entry.physicalAddress = physical
+
+        let attrs = type.attributes
+        entry.mairIndex    = attrs.mair
+        entry.shareability = attrs.share
+        entry.flags        = flags.union([.valid, .accessFlag]).subtracting(.page)
+
+        currentTable[virtual.l2] = entry
+
+        Arch.MMU.pageTableBarrier()
+    }
+
+
+    /// Whether a 2 MiB block may replace the L2 entry covering `virtual`.
+    ///
+    /// A block replaces that entry outright, so an L3 table already sitting
+    /// there would be orphaned together with every 4 KiB mapping inside it.
+    /// The kernel image and the initrd are mapped page by page before the
+    /// linear map runs and both live inside RAM, so their 2 MiB spans have to
+    /// stay paged. Anything else is fine: an absent level, or a block being
+    /// re-written.
+    private func canInstallBlock(
+        table  : UnsafeMutablePointer<Arch.PageTableEntry>,
+        virtual: VirtualAddress
+    ) -> Bool {
+        let level0 = table[virtual.l0]
+        guard level0.isPresent        else { return true  }
+        guard level0.isTableDescriptor else { return false }
+
+        let level1Table: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(level0.physicalAddress)
+        let level1 = level1Table[virtual.l1]
+        guard level1.isPresent         else { return true  }
+        guard level1.isTableDescriptor else { return false }
+
+        let level2Table: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(level1.physicalAddress)
+
+        return !level2Table[virtual.l2].isTableDescriptor
+    }
+
+
+    /// The next-level table under `current[index]`, allocated and zeroed when
+    /// the entry is absent.
+    ///
+    /// A present non-table entry there is a 2 MiB block, and descending into it
+    /// would hand back a slab of mapped RAM to be written as if it were 512
+    /// descriptors. Nothing in the kernel is supposed to page a span the linear
+    /// map already blocked, so this halts instead of corrupting it silently.
     private func mapTable(
         current: UnsafeMutablePointer<Arch.PageTableEntry>,
         _ index: Int
     ) throws(PPMError) -> UnsafeMutablePointer<Arch.PageTableEntry> {
         var entry = current[index]
-        
+
+        if entry.isPresent, !entry.isTableDescriptor {
+            Arch.CPU.panic("page-table walk hit a block descriptor where a table was required")
+        }
+
         if !entry.isPresent {
             let newPage = try ppmPtr.pointee.alloc(4096, flag: .kernel)
-            
+
             let newTablePtr: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(newPage.address)
             
             newTablePtr.initialize(
@@ -458,36 +605,87 @@ public struct VirtualMemoryManager {
         return physToVirt(entry.physicalAddress)
     }
 
+    /// Descend to the L3 table covering `virtual`, without creating anything.
+    ///
+    /// The `isTableDescriptor` test is what stops the descent at a 2 MiB block:
+    /// there is no L3 table under one, and following its output address would
+    /// reinterpret mapped RAM as descriptors. Callers that must resolve an
+    /// address inside a block go through `physicalAddressOf`, which terminates
+    /// on the block instead.
     private func lookupLeafTable(
         table  : UnsafeMutablePointer<Arch.PageTableEntry>,
         virtual: VirtualAddress
     ) -> UnsafeMutablePointer<Arch.PageTableEntry>? {
         var currentTable = table
-                
+
         let indexes: InlineArray<3, Int> = [virtual.l0, virtual.l1, virtual.l2]
 
         for i in 0..<indexes.count {
             let index = indexes[i]
             let entry = currentTable[index]
-            guard entry.isPresent else { return nil }
+
+            guard entry.isPresent, entry.isTableDescriptor else { return nil }
+
             currentTable = physToVirt(entry.physicalAddress)
         }
 
         return currentTable
     }
     
+    /// Map `[startAddress, endAddress)` identically in the low root and at
+    /// `physicalOffset` in the high root, in 2 MiB blocks where one fits and
+    /// 4 KiB pages otherwise.
+    ///
+    /// A block is taken only when the span is whole and aligned in both roots
+    /// and neither of them already pages it. `physicalOffset` is 2 MiB aligned,
+    /// so the two roots agree on alignment by construction; requiring them to
+    /// agree on the fallback too keeps the identity and high-half views
+    /// structurally identical, which is what every walker here assumes.
+    ///
+    /// Note that a span already mapped page by page stays paged, and that a
+    /// later call over the same addresses overwrites the earlier flags. Ranges
+    /// mapped with permissions of their own have to be excluded by the caller,
+    /// not relied on to survive.
     private func mapSection(
         startAddress: PhysicalAddress,
         endAddress  : PhysicalAddress,
         type        : MemoryType       = .normal,
         flags       : VirtualPageFlags = [.present]
     ) throws(PPMError) {
-        
+
         let alignedStart = startAddress & ~(Self.pageSize - 1)
         let alignedEnd   = (endAddress  +   Self.pageSize - 1) & ~(Self.pageSize - 1)
         var currentAddr  = alignedStart
-        
+
         while currentAddr < alignedEnd {
+            let highAddr = Self.physicalOffset + currentAddr
+
+            let blockFits = currentAddr & (Self.blockSize - 1) == 0
+                         && alignedEnd - currentAddr >= Self.blockSize
+                         && canInstallBlock(table: identityRootTable, virtual: currentAddr)
+                         && canInstallBlock(table: kernelRootTable,   virtual: highAddr)
+
+            if blockFits {
+                try mapBlock(
+                    table   : identityRootTable,
+                    virtual : currentAddr,
+                    physical: currentAddr,
+                    type    : type,
+                    flags   : flags
+                )
+
+                try mapBlock(
+                    table   : kernelRootTable,
+                    virtual : highAddr,
+                    physical: currentAddr,
+                    type    : type,
+                    flags   : flags
+                )
+
+                currentAddr += Self.blockSize
+                continue
+            }
+
             try map(
                 table   : identityRootTable,
                 virtual : currentAddr,
@@ -495,186 +693,10 @@ public struct VirtualMemoryManager {
                 type    : type,
                 flags   : flags
             )
-            
+
             try map(
                 table   : kernelRootTable,
-                virtual : Self.physicalOffset + currentAddr,
-                physical: currentAddr,
-                type    : type,
-                flags   : flags
-            )
-            
-            currentAddr += Self.pageSize
-        }
-    }
-
-    
-    private func unmapKernelIdentitySpace(
-        table: UnsafeMutablePointer<Arch.PageTableEntry>
-    ) throws(PPMError) {
-        let ramStart = PhysicalAddress(self.ppmPtr.pointee.ramStart)
-        let kernelStart = getOfaddressWithSymbol(of: &_kernel_start)
-        
-        if ramStart < kernelStart {
-            try mapUserRootSection(
-                table       : table,
-                startAddress: ramStart,
-                endAddress  : kernelStart,
-                flags       : []
-            )
-        }
-        
-        try mapUserRootSection(
-            table       : table,
-            startAddress: kernelStart,
-            endAddress  : getOfaddressWithSymbol(of: &_text_end),
-            flags       : []
-        )
-        
-        try mapUserRootSection(
-            table       : table,
-            startAddress: getOfaddressWithSymbol(of: &_rodata_start),
-            endAddress  : getOfaddressWithSymbol(of: &_rodata_end),
-            flags       : []
-        )
-        
-        let kernelEnd = getOfaddressWithSymbol(of: &_kernel_end)
-        try mapUserRootSection(
-            table       : table,
-            startAddress: getOfaddressWithSymbol(of: &_data_start),
-            endAddress  : kernelEnd,
-            flags       : []
-        )
-        
-        let ramEnd = PhysicalAddress(self.ppmPtr.pointee.ramStart + self.ppmPtr.pointee.ramSize)
-        let safeRamStart = (kernelEnd + (Self.pageSize - 1)) & ~(Self.pageSize - 1)
-        try mapUserRootSection(
-            table       : table,
-            startAddress: safeRamStart,
-            endAddress  : ramEnd,
-            flags       : []
-        )
-        
-        let uartBase = Kernel.platformInfo.uart.baseAddr
-        try map(
-            table       : table,
-            virtual     : uartBase,
-            physical    : uartBase,
-            type        : .normal,
-            flags       : [],
-            defaultFlags: []
-        )
-        
-        let gicDistributorBase  = Kernel.platformInfo.gic.gicdBase
-        let gicCpuInterfaceBase = Kernel.platformInfo.gic.giccBase
-        
-        try map(
-            table   : table,
-            virtual : gicDistributorBase,
-            physical: gicDistributorBase,
-            type    : .normal,
-            flags   : [],
-            defaultFlags: []
-        )
-        
-        try map(
-            table   : table,
-            virtual : gicCpuInterfaceBase,
-            physical: gicCpuInterfaceBase,
-            type    : .normal,
-            flags   : [],
-            defaultFlags: []
-        )
-    }
-    
-    private func mapKernelIdentitySpace(
-        table: UnsafeMutablePointer<Arch.PageTableEntry>
-    ) throws(PPMError) {
-        let ramStart = PhysicalAddress(self.ppmPtr.pointee.ramStart)
-        let kernelStart = getOfaddressWithSymbol(of: &_kernel_start)
-
-        if ramStart < kernelStart {
-            try mapIdentitySection(
-                table       : table,
-                startAddress: ramStart,
-                endAddress  : kernelStart,
-                flags       : [.present, .pxn]
-            )
-        }
-
-        try mapIdentitySection(
-            table       : table,
-            startAddress: kernelStart,
-            endAddress  : getOfaddressWithSymbol(of: &_text_end),
-            flags       : [.present, .readOnly]
-        )
-
-        try mapIdentitySection(
-            table       : table,
-            startAddress: getOfaddressWithSymbol(of: &_rodata_start),
-            endAddress  : getOfaddressWithSymbol(of: &_rodata_end),
-            flags       : [.present, .readOnly, .pxn]
-        )
-
-        let kernelEnd = getOfaddressWithSymbol(of: &_kernel_end)
-        try mapIdentitySection(
-            table       : table,
-            startAddress: getOfaddressWithSymbol(of: &_data_start),
-            endAddress  : kernelEnd,
-            flags       : [.present, .pxn]
-        )
-
-        let ramEnd = PhysicalAddress(self.ppmPtr.pointee.ramStart + self.ppmPtr.pointee.ramSize)
-        let safeRamStart = (kernelEnd + (Self.pageSize - 1)) & ~(Self.pageSize - 1)
-        try mapIdentitySection(
-            table       : table,
-            startAddress: safeRamStart,
-            endAddress  : ramEnd,
-            flags       : [.present, .pxn]
-        )
-
-        let uartBase = Kernel.platformInfo.uart.baseAddr
-        try map(
-            table   : table,
-            virtual : uartBase,
-            physical: uartBase,
-            type    : .device
-        )
-
-        let gicDistributorBase  = Kernel.platformInfo.gic.gicdBase
-        let gicCpuInterfaceBase = Kernel.platformInfo.gic.giccBase
-        
-        try map(
-            table   : table,
-            virtual : gicDistributorBase,
-            physical: gicDistributorBase,
-            type    : .device
-        )
-        
-        try map(
-            table   : table,
-            virtual : gicCpuInterfaceBase,
-            physical: gicCpuInterfaceBase,
-            type    : .device
-        )
-    }
-    
-
-    private func mapIdentitySection(
-        table       : UnsafeMutablePointer<Arch.PageTableEntry>,
-        startAddress: PhysicalAddress,
-        endAddress  : PhysicalAddress,
-        type        : MemoryType       = .normal,
-        flags       : VirtualPageFlags = [.present]
-    ) throws(PPMError) {
-        let alignedStart = startAddress & ~(Self.pageSize - 1)
-        let alignedEnd   = (endAddress + Self.pageSize - 1) & ~(Self.pageSize - 1)
-        var currentAddr  = alignedStart
-
-        while currentAddr < alignedEnd {
-            try map(
-                table   : table,
-                virtual : currentAddr,
+                virtual : highAddr,
                 physical: currentAddr,
                 type    : type,
                 flags   : flags
@@ -683,29 +705,5 @@ public struct VirtualMemoryManager {
             currentAddr += Self.pageSize
         }
     }
-    
-    private func mapUserRootSection(
-        table       : UnsafeMutablePointer<Arch.PageTableEntry>,
-        startAddress: PhysicalAddress,
-        endAddress  : PhysicalAddress,
-        type        : MemoryType       = .normal,
-        flags       : VirtualPageFlags = [.present]
-    ) throws(PPMError) {
-        let alignedStart = startAddress & ~(Self.pageSize - 1)
-        let alignedEnd   = (endAddress + Self.pageSize - 1) & ~(Self.pageSize - 1)
-        var currentAddr  = alignedStart
-        
-        while currentAddr < alignedEnd {
-            try map(
-                table       : table,
-                virtual     : currentAddr,
-                physical    : currentAddr,
-                type        : type,
-                flags       : flags,
-                defaultFlags: []
-            )
-            
-            currentAddr += Self.pageSize
-        }
-    }
+
 }

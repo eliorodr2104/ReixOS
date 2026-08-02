@@ -221,10 +221,6 @@ public struct VMAManager: RXAllocatable {
               end   <= UserSpaceLayout.userMax
         else { return false }
 
-        // Locate the VMA containing `start` once, then walk forward following
-        // `next`. The list is sorted, so adjacent coverage is just a contiguity
-        // check (`next.start == cursor`), O(n) total instead of restarting an
-        // O(n) `search(at:)` for every covered segment (previously O(k·n))
         guard var vmaPtr = vmaList.search(at: start) else { return false }
 
         var cursor = start
@@ -438,7 +434,7 @@ public struct VMAManager: RXAllocatable {
         size: UInt64
     ) throws(VMAError) {
 
-        // MARK: Phase 1 — validation only, the list is left exactly as it was.
+        // MARK: Phase 1, validation only: the list is left exactly as it was.
 
         guard size > 0 else { throw .invalidLayout }
 
@@ -466,7 +462,7 @@ public struct VMAManager: RXAllocatable {
             probe = nodePtr.pointee.next
         }
 
-        // MARK: Phase 2 — the only fallible mutations: at most two splits.
+        // MARK: Phase 2, the only fallible mutations: at most two splits.
 
         var first = overlapping
         if range.start > first.pointee.startAddress {
@@ -493,7 +489,7 @@ public struct VMAManager: RXAllocatable {
             )
         }
 
-        // MARK: Phase 3 — infallible from here on: every node is wholly inside.
+        // MARK: Phase 3, infallible from here on: every node is wholly inside.
 
         var current: UnsafeMutablePointer<VirtualMemoryArea>? = first
         while let nodePtr = current, nodePtr.pointee.startAddress < range.end {

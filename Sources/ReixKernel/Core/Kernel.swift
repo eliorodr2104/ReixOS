@@ -8,6 +8,7 @@
 import ReixABI
 
 public struct Kernel {
+    
     private static var ppm: KernelPPM?
     private static var vmm: VirtualMemoryManager?
 
@@ -50,24 +51,29 @@ public struct Kernel {
     public  static var platformInfo = PlatformInfo()
 
 
+    /// Brings the machine up: platform discovery, then every kernel subsystem in
+    /// dependency order, then `run`.
+    ///
+    /// Each subsystem announces itself at the end of its own initialisation, so
+    /// the boot log is ordered by this sequence of statements and by nothing
+    /// else. Reordering two constructions here reorders two lines on the serial
+    /// console, which is this project's regression test: there is no list of
+    /// expected boot messages left anywhere to keep in step with the code.
     public static func boot(dtbRawAddress: PhysicalAddress) {
 
         do {
             if !QemuVirtPlatform.discover(into: &platformInfo, at: dtbRawAddress) {
-                kprint(.error, "DTB Tree not found.", by: .boot)
+                QemuVirtPlatform.error("DTB Tree not found.")
                 Arch.CPU.waitForInterrupt()
             }
 
             printBootBanner()
 
             self.ppm = try PhysicalPageManager<BuddyAllocator>()
-            kprint(.boot, "Physical Page Manager ready.", by: .ppm)
 
             self.vmm = try VirtualMemoryManager(ppmPtr: &ppm!)
-            kprint(.boot, "Virtual Memory Manager ready.", by: .vmm)
 
             self.ppm?.applyFramesMetadataVirtualOffset(VirtualMemoryManager.physicalOffset)
-            kprint(.boot, "Frame metadata mapped into high-half.", by: .ppm)
 
 
             let heapPage     = try ppm!.alloc(4096, flag: .kernel)
@@ -76,25 +82,22 @@ public struct Kernel {
             let heapPtr      = heapRaw.bindMemory(to: BucketsHeap.self, capacity: 1)
             heapPtr.initialize(to: BucketsHeap(ppmPtr: &ppm!))
             self.heap = heapPtr
-            kprint(.boot, "Kernel heap ready.", by: .heap)
 
-                    
+
             let gicPtr = heap.pointee.kmalloc(GICv2.self)
             gicPtr.initialize(to: GICv2(
                 dBase: platformInfo.gic.gicdBase,
                 cBase: platformInfo.gic.giccBase
             ))
             self.gic = gicPtr
-            kprint(.boot, "Generic Interrupt Controller ready.", by: .gic)
-            
-            
+
+
             let tarFileSystemPtr = heap.pointee.kmalloc(KernelInternalFileSystem.self)
             tarFileSystemPtr.initialize(
                 to: TarFileSystem()
             )
             self.fileSystem = tarFileSystemPtr
-            kprint(.boot, "Internal File System ready.", by: .fs)
-            
+
 
             let processManagerPtr = heap.pointee.kmalloc(ProcessManager.self)
             processManagerPtr.initialize(to: ProcessManager(
@@ -104,15 +107,13 @@ public struct Kernel {
                 fileSystem:  fileSystem
             ))
             self.processManager = processManagerPtr
-            kprint(.boot, "Process Manager ready.", by: .proc)
-            
-            
+
+
             let schedulerPtr = heap.pointee.kmalloc(KernelScheduler.self)
             schedulerPtr.initialize(to: RoundRobin())
             self.scheduler = schedulerPtr
-            kprint(.boot, "Scheduler ready.", by: .sched)
 
-            
+
             let ipcPtr = heap.pointee.kmalloc(KernelIPC.self)
             ipcPtr.initialize(
                 to: KernelIPC(
@@ -122,8 +123,7 @@ public struct Kernel {
                 )
             )
             self.ipc = ipcPtr
-            kprint(.boot, "IPC ready.", by: .ipc)
-            
+
 
             let syscallHandlerPtr = heap.pointee.kmalloc(SyscallHandler.self)
             syscallHandlerPtr.initialize(to: SyscallHandler(
@@ -133,11 +133,9 @@ public struct Kernel {
                 ppm           : &self.ppm!
             ))
             self.syscallHandler = syscallHandlerPtr
-            kprint(.boot, "Syscall Handler ready.", by: .sys)
 
 
-            AArch64VirtualTimer.ect()
-            kprint(.boot, "Virtual Timer enabled.", by: .tim)
+            AArch64VirtualTimer.enable()
             kprint()
 
         } catch { internalPanic(error) }
@@ -151,7 +149,7 @@ public struct Kernel {
 
     private static func run() throws(KernelError) {
 
-        kprint(.info, "Kernel is running.", by: .kern)
+        Self.info("Kernel is running.")
 
         do {
             try jumpUserLand()
@@ -168,7 +166,8 @@ public struct Kernel {
     }
 
     private static func jumpUserLand() throws (ProcessManagerError) {
-        kprint(.info, "Starting process launch test.", by: .proc)
+        
+        ProcessManager.info("Starting process launch test.")
         
         let firstProcessPath: StaticString = "Init.elf"
         let firstProcessPathPtr = UnsafeRawPointer(
@@ -177,9 +176,6 @@ public struct Kernel {
 
         let firstProcess = try processManager.pointee.spawnProcess(path: firstProcessPathPtr)
 
-        // It never gets a `parent`, so the manager has to be told where
-        // the tree starts or it has nobody to
-        // hand the children of a parentless dying process to.
         processManager.pointee.initProcess = firstProcess
 
          _ = ipc.pointee.spawnEndpoint(
@@ -203,7 +199,7 @@ public struct Kernel {
         
         firstProcess.pointee.metadata.pointee.deviceCap = grantHandle
 
-        kprint(.info, "Handing control to user space.", by: .proc)
+        ProcessManager.info("Handing control to user space.")
         kprint()
 
         let trapFramePtr = firstProcess.pointee.context!
@@ -221,10 +217,20 @@ public struct Kernel {
         kprint("=================================================")
         kprint()
 
-        
+
+        // Last kernel statement before EL0: from here the timer tick exists to
+        // drain the ring, and no kernel line still has to beat user space out.
+        LogSink.mode = .deferred
+
         jump_to_user_mode(
             trapFrame: trapFramePtr,
             rootTable: firstProcess.pointee.addressSpace.rootTablePhysical
         )
     }
+}
+
+
+extension Kernel: Loggable {
+    public static let nameLog : StaticString = "[KERN]"
+    public static let logLevel: LogLevel     = .info
 }

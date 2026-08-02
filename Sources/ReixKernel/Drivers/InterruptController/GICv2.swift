@@ -10,9 +10,12 @@
 /// Holds the MMIO register windows for the Distributor (GICD) and the
 /// CPU Interface (GICC) as stored properties. The single live instance
 /// is composed by `Kernel.boot` and reached through `Kernel.gic`.
-public struct GICv2: RXAllocatable, InterruptController {
+public struct GICv2: RXAllocatable, InterruptController, Loggable {
 
     public static var errorMessageAllocation: StaticString = "Failed to allocate GICv2 on the kernel heap"
+    
+    public static let nameLog : StaticString = "[GIC ]"
+    public static let logLevel: LogLevel     = .info
 
     /// First INTID the architecture reserves (1020...1023).
     ///
@@ -93,6 +96,8 @@ public struct GICv2: RXAllocatable, InterruptController {
         Self.writeRegister(ptr: giccPtr, offset: Self.giccPMR, value: 0xFF)
 
         Self.writeRegister(ptr: giccPtr, offset: Self.giccCTLR, value: 1)
+
+        Self.boot("Generic Interrupt Controller ready.")
     }
 
     /// Arms `id` and, when it is an SPI, points it at this core first.
@@ -102,7 +107,7 @@ public struct GICv2: RXAllocatable, InterruptController {
     /// line that is live in the distributor and can never be delivered.
     public func enableInterrupt(id: UInt32) {
         guard id < interruptCount else {
-            kprint(.warning, "enable ignored, INTID \(id) not implemented", by: .gic)
+            Self.warning("enable ignored, INTID \(id) not implemented")
             return
         }
 
@@ -141,12 +146,12 @@ public struct GICv2: RXAllocatable, InterruptController {
         trigger: InterruptTrigger
     ) {
         guard id < interruptCount else {
-            kprint(.warning, "configure ignored, INTID \(id) not implemented", by: .gic)
+            Self.warning("configure ignored, INTID \(id) not implemented")
             return
         }
 
         guard id >= Self.firstSPI else {
-            kprint(.warning, "configure ignored, INTID \(id) has a fixed trigger", by: .gic)
+            Self.warning("configure ignored, INTID \(id) has a fixed trigger")
             return
         }
 
@@ -220,5 +225,6 @@ public struct GICv2: RXAllocatable, InterruptController {
         ptr.advanced(by: Int(offset / 4)).pointee = value
     }
 }
+
 
 public typealias GIC = GICv2

@@ -6,14 +6,25 @@
 //
 
 
-public struct TarFileSystem: FileSystemInterface {
+public struct TarFileSystem: FileSystemInterface, Loggable {
     
     public static var errorMessageAllocation: StaticString = "Failed to allocate TarFileSystem on the kernel heap"
+    
+    public static let nameLog : StaticString = "[FS  ]"
+    public static let logLevel: LogLevel     = .info
         
     var openedFiles = InlineArray<32, OpenFileDescription>(repeating: OpenFileDescription())
     let tarAddress  = Kernel.platformInfo.initrdStart
-    
-    
+
+
+    /// Written out rather than left implicit only so the boot line has
+    /// somewhere to live. Everything it initialises still comes from the
+    /// property declarations above.
+    public init() {
+        Self.boot("Internal File System ready.")
+    }
+
+
     public mutating func open(
         path : UnsafePointer<CChar>,
         flags: FileFlags

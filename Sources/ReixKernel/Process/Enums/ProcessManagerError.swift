@@ -31,20 +31,32 @@ public enum ProcessManagerError: KernelDiagnostic {
                 "Process Manager Error: program address resolved to zero."
 
             case .elfParsingFailed(let inner):
-                "Process Manager Error: ELF parsing failed (" + inner.description + ")"
+                inner.description
 
             case .creationProcessFailed(let inner):
-                "Process Manager Error: address space creation failed (" + inner.description + ")"
+                switch inner.reportedCause {
+                    case .outOfMemory    : "Process Manager Error: address space creation failed (no free physical memory)."
+                    case .requestRejected: "Process Manager Error: address space creation failed (the allocator rejected the request)."
+                    case .managerFault   : "Process Manager Error: address space creation failed (the physical page manager reported a fault)."
+                }
 
             case .allocationPageFailed(let inner):
-                "Process Manager Error: page allocation failed (" + inner.description + ")"
+                switch inner.reportedCause {
+                    case .outOfMemory    : "Process Manager Error: page allocation failed (no free physical memory)."
+                    case .requestRejected: "Process Manager Error: page allocation failed (the allocator rejected the request)."
+                    case .managerFault   : "Process Manager Error: page allocation failed (the physical page manager reported a fault)."
+                }
 
             case .mappingFailed(let inner):
-                "Process Manager Error: user page mapping failed (" + inner.description + ")"
-                
+                switch inner.reportedCause {
+                    case .outOfMemory    : "Process Manager Error: user page mapping failed (no free physical memory)."
+                    case .requestRejected: "Process Manager Error: user page mapping failed (the allocator rejected the request)."
+                    case .managerFault   : "Process Manager Error: user page mapping failed (the physical page manager reported a fault)."
+                }
+
             case .registerRegionError(let inner):
-                "Virtual Memory Area Error: register area failed (" + inner.description + ")"
-                
+                inner.description
+
             case .heapAllocationFailed:
                 "Process Manager Error: kernel heap exhausted while building the process."
 

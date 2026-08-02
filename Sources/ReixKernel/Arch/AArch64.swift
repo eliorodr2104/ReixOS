@@ -7,6 +7,7 @@
 
 public enum AArch64: KernelArchitecture {
     public typealias CPU            = AArch64CPU
+    public typealias Timer          = AArch64VirtualTimer
     public typealias MMU            = AArch64MMU
     public typealias TrapFrame      = AArch64TrapFrame
     public typealias PageTableEntry = AArch64PageTableEntry

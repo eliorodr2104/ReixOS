@@ -48,13 +48,25 @@ public enum VMAError: KernelDiagnostic {
                 "VMA Error: the frames behind this region are not owned by the caller."
 
             case .allocationFailed(let inner):
-                "VMA Error: physical allocation failed (" + inner.description + ")"
+                switch inner.reportedCause {
+                    case .outOfMemory    : "VMA Error: physical allocation failed (no free physical memory)."
+                    case .requestRejected: "VMA Error: physical allocation failed (the allocator rejected the request)."
+                    case .managerFault   : "VMA Error: physical allocation failed (the physical page manager reported a fault)."
+                }
 
             case .mappingFailed(let inner):
-                "VMA Error: PTE mapping failed (" + inner.description + ")"
+                switch inner.reportedCause {
+                    case .outOfMemory    : "VMA Error: PTE mapping failed (no free physical memory)."
+                    case .requestRejected: "VMA Error: PTE mapping failed (the allocator rejected the request)."
+                    case .managerFault   : "VMA Error: PTE mapping failed (the physical page manager reported a fault)."
+                }
 
             case .heapAllocationFailed(let inner):
-                "VMA Error: kernel heap allocation for a VMA node failed (" + inner.description + ")"
+                switch inner.reportedCause {
+                    case .outOfMemory    : "VMA Error: kernel heap allocation for a VMA node failed (heap is empty)."
+                    case .requestRejected: "VMA Error: kernel heap allocation for a VMA node failed (the allocator rejected the request)."
+                    case .managerFault   : "VMA Error: kernel heap allocation for a VMA node failed (the physical page manager reported a fault)."
+                }
         }
     }
 

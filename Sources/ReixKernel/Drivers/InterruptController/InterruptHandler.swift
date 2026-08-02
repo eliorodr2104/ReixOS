@@ -15,7 +15,7 @@
 /// Handlers are stateless static structs: each concrete type lives in
 /// a dedicated file under `Drivers/InterruptController/Handlers` and
 /// is registered in `InterruptDispatcher.dispatch(id:frame:)` via a
-/// single switch case — no existential indirection.
+/// single switch case, with no existential indirection.
 public protocol InterruptHandler {
     static var  id: UInt32 { get }
     static func handle(frame: UnsafeMutablePointer<Arch.TrapFrame>)

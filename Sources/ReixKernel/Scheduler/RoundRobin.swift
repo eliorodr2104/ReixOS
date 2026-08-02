@@ -5,9 +5,12 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 30/04/2026.
 //
 
-public struct RoundRobin: SchedulerInterface {
+public struct RoundRobin: SchedulerInterface, Loggable {
     
     public static var errorMessageAllocation: StaticString = "Failed to allocate Scheduler on the kernel heap"
+    
+    public static let nameLog : StaticString = "[SCHD]"
+    public static let logLevel: LogLevel     = .info
     
     private var ready     : LinkedList = LinkedList<Process>(head: nil, tail: nil)
     private var waiting   : LinkedList = LinkedList<Process>(head: nil, tail: nil)
@@ -18,8 +21,16 @@ public struct RoundRobin: SchedulerInterface {
     private let quantum     : UInt = 7 // One tick is 10ms
     
     private(set) var systemTicks: UInt64 = 0
-    
-    
+
+
+    /// Written out rather than left implicit only so the boot line has
+    /// somewhere to live. Every queue and counter above still starts from
+    /// its own declaration.
+    public init() {
+        Self.boot("Scheduler ready.")
+    }
+
+
     public mutating func addTask(_ process: UnsafeMutablePointer<Process>) throws(SchedulerError) {
         guard case .new = process.pointee.status else {
             throw .notNewerProcess

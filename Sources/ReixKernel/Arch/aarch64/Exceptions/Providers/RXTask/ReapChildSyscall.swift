@@ -34,7 +34,7 @@ public struct ReapChildSyscall: SyscallProvider {
         
         switch child.pointee.status {
                 
-            // Case 1 — the child is already a zombie: reap it and return its code.
+            // Case 1, the child is already a zombie: reap it and return its code.
             case .terminated:
                 frame.pointee.x0 = ProcessManager.exitStatus(of: child)
 

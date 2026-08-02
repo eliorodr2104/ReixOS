@@ -7,13 +7,29 @@
 
 import ReixABI
 
-struct SbrkBackend: SlabBackend {
-    static let maxArenaPages = 1024 // cap: 1024 * 4 KiB = 4 MiB heap
 
-    var shifts    : InlineArray = InlineArray<1024, UInt8 >(repeating: 0)
-    var freeCounts: InlineArray = InlineArray<1024, UInt16>(repeating: 0)
-    var freePages : InlineArray = InlineArray<1024, UInt  >(repeating: 0)
-    
+typealias UserArena = SbrkBackend<64>
+
+/// `sbrk` arena, carved into 4 KiB pages, at most `arenaPages` of them.
+///
+/// The page count is a value generic rather than a `static let` because the
+/// three bookkeeping arrays are all indexed by page number and must stay the
+/// same length: a generic parameter makes that agreement structural instead of
+/// three literals that have to be edited together. Value generics are also the
+/// only way to drive an `InlineArray` length from a name at all: a `static let`
+/// is rejected there.
+///
+/// Keep it at or below 65536: `freePages` holds page indices as `UInt16`.
+struct SbrkBackend<let arenaPages: Int>: SlabBackend {
+
+    var shifts    : InlineArray = InlineArray<arenaPages, UInt8 >(repeating: 0)
+    var freeCounts: InlineArray = InlineArray<arenaPages, UInt16>(repeating: 0)
+
+    /// Page indices, not addresses: the arena is contiguous from `arenaBase`, so
+    /// a full pointer per slot was re-storing `arenaBase` in every entry at four
+    /// times the cost, and an index cannot name a page outside the arena.
+    var freePages : InlineArray = InlineArray<arenaPages, UInt16>(repeating: 0)
+
     var arenaBase: UInt         = 0
     var arenaEnd : UInt         = 0
     var freeTop  : UInt         = 0
@@ -34,24 +50,32 @@ struct SbrkBackend: SlabBackend {
         
         if freeTop > 0 {
             freeTop -= 1
-            return UnsafeMutableRawPointer(bitPattern: freePages[Int(freeTop)])
+            let index = UInt(freePages[Int(freeTop)])
+
+            return UnsafeMutableRawPointer(bitPattern: arenaBase + (index << 12))
         }
-        
+
+        // Tested before growing: `sbrk` first leaves the break past the arena, and
+        // a page there passes `UserHeap.free`'s range test with an unholdable index.
+        guard (arenaEnd - arenaBase) >> 12 < UInt(arenaPages) else { return nil }
+
         let prev = sbrk(4096)
         if prev == RXMemoryError.memoryFailure { return nil }
-        
+
         arenaEnd = UInt(brk(0))
-        
-        let idx = (UInt(prev) - arenaBase) >> 12
-        guard idx < UInt(Self.maxArenaPages) else { return nil }
-        
+
         return UnsafeMutableRawPointer(bitPattern: UInt(prev))
     }
-    
+
     mutating func releasePage(_ page: UnsafeMutableRawPointer) {
         _ = decommit(addr: UInt64(UInt(bitPattern: page)), size: 4096)
-        
-        freePages[Int(freeTop)] = UInt(bitPattern: page)
+
+        // Unreachable from `SlabCore`, but the narrowing store below traps rather
+        // than corrupts, and dropping an already-decommitted page leaks only its VA.
+        let index = pageIndex(page)
+        guard index < arenaPages, freeTop < UInt(arenaPages) else { return }
+
+        freePages[Int(freeTop)] = UInt16(index)
         freeTop += 1
     }
     
