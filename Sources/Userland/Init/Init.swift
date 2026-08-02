@@ -21,7 +21,7 @@ public func main() {
         buffer[0] = CapGrant(
             source: device,
             slot  : BootCap.device.rawValue,
-            rights: [.grant]
+            rights: [.grant, .read, .write]
         )
         
         return spawnProcess(
@@ -51,6 +51,16 @@ public func main() {
         handle: nameServer.handle
     ).grantedCap else { return }
 
+    guard let registrar = derive(
+        handle : nameServerEndpoint,
+        session: NameServerSession.registrar,
+        rights : [.send, .grant]
+
+    ) else {
+        print("[ INIT  ] cannot mint the Name Server registrar capability")
+        return
+    }
+
     guard let spawnCap = spawnService() else { return }
 
     let environment = Environment(
@@ -59,7 +69,11 @@ public func main() {
         spawn     : spawnCap
     )
 
-    _ = launch("ProcessServer.elf", environment: environment)
+    _ = launch(
+        "ProcessServer.elf",
+        environment: environment,
+        registrar  : registrar
+    )
 
     while true { yield() }
 }

@@ -2,8 +2,6 @@
 //  IPCStatus.swift
 //  ReixOS
 //
-//  Shared IPC type (compiled into BOTH kernel and Reix module).
-//
 
 public enum IPCStatus: UInt64 {
     case ok              = 0
@@ -15,4 +13,15 @@ public enum IPCStatus: UInt64 {
     case invalidMessage
     case outOfEndpoints
     case peerDied
+    case grantRejected
+
+    public var isDelivered: Bool {
+        switch self {
+            case .ok, .grantRejected: true
+
+            case .wouldBlock, .notEnoughRights, .invalidCapability,
+                 .timeout, .noReply, .invalidMessage,
+                 .outOfEndpoints, .peerDied: false
+        }
+    }
 }

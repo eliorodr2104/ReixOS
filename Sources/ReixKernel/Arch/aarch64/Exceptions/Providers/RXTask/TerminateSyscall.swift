@@ -19,18 +19,15 @@ public struct TerminateSyscall: SyscallProvider {
               let child   = current.pointee.family.removeChild(id: frame.pointee.x0)
         else { frame.pointee.x0 = UInt64.max; return } 
         
-        if case .terminated = child.pointee.status {
+        if context.processManager.pointee.killProcess(
+            child,
+            reason : .killed,
+            context: context
+        ) {
             _ = context.scheduler.pointee.reapChild(child)
-            
-        } else {
-            context.processManager.pointee.killProcess(
-                child,
-                reason : .killed,
-                context: context
-            )
+            context.processManager.pointee.releaseProcess(child)
         }
-        
-        context.processManager.pointee.releaseProcess(child)
+
         frame.pointee.x0 = 0
     }
 }

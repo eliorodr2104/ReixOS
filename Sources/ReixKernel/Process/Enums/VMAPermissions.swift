@@ -5,6 +5,8 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 10/05/2026.
 //
 
+import ReixABI
+
 /// Logical access rights attached to a VMA.
 ///
 /// The set is translated to architectural PTE flags through
@@ -20,6 +22,28 @@ public struct VMAPermissions: OptionSet {
     public static let execute = VMAPermissions(rawValue: 1 << 2)
     public static let user    = VMAPermissions(rawValue: 1 << 3)
     public static let shared  = VMAPermissions(rawValue: 1 << 4)
+
+    /// Project the memory rights carried by a capability onto the permissions
+    /// of the mapping that capability authorises, or `nil` when it authorises
+    /// none at all.
+    ///
+    /// Lives here, and not inlined in `ShmMap`/`MapDeviceSyscall`, because both
+    /// of them have to answer the question identically: two copies of the rule
+    /// is two chances for one of them to drift into mapping a region more
+    /// permissively than its capability allows.
+    ///
+    /// A missing `.read` is `nil` rather than an empty set: a present PTE that
+    /// grants no access is a fault waiting to happen at the first touch, so the
+    /// syscall has to refuse instead of handing back an address. `.user` is
+    /// unconditional, everything reached through a capability is mapped for EL0.
+    public init?(mapping rights: CapRights) {
+        guard rights.contains(.read) else { return nil }
+
+        var permissions: VMAPermissions = [.read, .user]
+        if rights.contains(.write) { permissions.insert(.write) }
+
+        self = permissions
+    }
 
     /// Project the logical permissions onto the AArch64 PTE flags the
     /// VMM consumes.

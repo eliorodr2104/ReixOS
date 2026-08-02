@@ -140,9 +140,49 @@ public func reapChild(for pid: PID) -> ExitCode {
     return _syscall(.reapChild, pid)
 }
 
+/// Milliseconds in one scheduler tick.
+///
+/// Keep in sync with `RoundRobin.quantum`'s unit in the kernel. The syscall
+/// argument is a tick count, but a tick is a scheduler implementation
+/// detail.
+private let millisecondsPerTick: UInt64 = 10
+
+private let secondsPerTick: UInt64 = millisecondsPerTick * 60
+
+public enum SleepModality {
+    
+    case milliseconds(UInt64)
+    case seconds(UInt64)
+    
+}
+
+/// Parks the caller for at least `milliseconds`, then returns `true`.
+///
+/// Rounds the deadline up, so any non-zero request waits at least one full
+/// tick rather than silently becoming a plain yield. Returns `false` when
+/// the kernel could not park the caller, the sleeper table is finite and
+/// in that case no time has passed, so a caller that must wait has to retry
+/// rather than assume it slept.
 @inline(__always)
-public func sleep(for value: Int) {
-    return // _syscall()
+@discardableResult
+public func sleep(for mode: SleepModality) -> Bool {
+    
+    var ticks: UInt64 = 0
+    switch mode {
+        case .milliseconds(let val):
+            let whole     = val / millisecondsPerTick
+            let remainder = val % millisecondsPerTick
+            ticks         = remainder == 0 ? whole : whole + 1
+            
+        case .seconds(let val):
+            let whole     = val / secondsPerTick
+            let remainder = val % secondsPerTick
+            ticks         = remainder == 0 ? whole : whole + 1
+    }
+    
+    
+
+    return _syscall(.sleep, ticks) == 0
 }
 
 @inline(__always)

@@ -2,9 +2,6 @@
 //  CapRights.swift
 //  ReixOS
 //
-//  Capability rights bitset. Shared (kernel installs/checks, userland selects
-//  on grant/derive).
-//
 
 public struct CapRights: OptionSet {
 
@@ -19,4 +16,8 @@ public struct CapRights: OptionSet {
     public static let grant   = CapRights(rawValue: 1 << 2)
     public static let spawn   = CapRights(rawValue: 1 << 3)
     public static let derive  = CapRights(rawValue: 1 << 4)
+
+    public static let read    = CapRights(rawValue: 1 << 5)
+    public static let write   = CapRights(rawValue: 1 << 6)
+
 }

@@ -2,8 +2,6 @@
 //  Environment.swift
 //  ReixOS
 //
-//  The capabilities a process is born with, read once from its boot slots and
-//  handed to the service instead of reached for through a global.
 //
 
 import ReixABI
@@ -51,4 +49,9 @@ public struct Environment {
     public var nameServer    : UInt32? { handle(.nameServer) }
     public var spawn         : UInt32? { handle(.spawn) }
     public var device        : UInt32? { handle(.device) }
+
+    /// The Name Server capability this process may *register* through, if its
+    /// spawner granted it one. `nameServer` resolves names for everybody; this
+    /// one is the badged capability that also publishes them.
+    public var nameServerRegistrar: UInt32? { handle(.nameServerRegistrar) }
 }

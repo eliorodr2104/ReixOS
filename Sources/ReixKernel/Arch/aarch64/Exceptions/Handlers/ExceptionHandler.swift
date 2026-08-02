@@ -69,7 +69,9 @@ func handleExceptionType(
             
             switch exceptionClass {
                 case 0x15: // SVC Syscall
+                    
                     guard let type = SyscallNumber(rawValue: frame.x8) else {
+                        framePointer.pointee.x0 = UInt64.max
                         return
                     }
 

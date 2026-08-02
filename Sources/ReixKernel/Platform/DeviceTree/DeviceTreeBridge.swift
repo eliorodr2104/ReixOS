@@ -10,7 +10,6 @@
 // parents, and fills `PlatformInfo` (RAM, UART, GIC, initrd, cpu count, bootargs).
 // All multi-byte fields in an FDT are big-endian; the blob is 4-byte aligned, so
 // every `UInt32` load lands on a 4-aligned address (safe under -mstrict-align).
-
 private enum FDT {
     static let beginNode: UInt32 = 0x1
     static let endNode  : UInt32 = 0x2
@@ -19,6 +18,21 @@ private enum FDT {
     static let end      : UInt32 = 0x9
     static let maxDepth = 16
     static let magic    : UInt32 = 0xd00dfeed
+
+    /// Ceiling applied to `#address-cells` / `#size-cells`.
+    ///
+    /// The blob can claim any value, and the whole family of `pac * 4`,
+    /// `(pac + psc) * 4`, `stride * 2 * 4` expressions below is trapping
+    /// arithmetic on it, so an unbounded value is a boot-time panic on a
+    /// malformed DTB and, in `readCells`, a walk off the end of the blob.
+    /// Two is not an arbitrary bound: every consumer here folds the cells
+    /// into a `UInt64`, so a third cell could not be represented anyway.
+    static let maxCells: UInt32 = 2
+
+    /// First INTID the GIC reserves; nothing at or above it is a line a
+    /// device can own, so an `interrupts` cell that would land there is
+    /// dropped rather than wrapped into a plausible-looking INTID.
+    static let reservedInterrupt: UInt32 = 1020
 }
 
 @inline(__always)
@@ -46,11 +60,16 @@ private func ceq(_ a: UnsafePointer<UInt8>, _ b: StaticString) -> Bool {
 }
 
 /// Combines `n` consecutive big-endian cells at byte offset `off` into a value.
+///
+/// `n` is clamped here as well as at the two properties it comes from:
+/// this is the only place that turns a cell count into loads, so a bound
+/// that lives with the loop cannot be bypassed by a future caller.
 @inline(__always)
 private func readCells(_ base: UnsafeRawPointer, _ off: Int, _ n: UInt32) -> UInt64 {
     var v: UInt64 = 0
     var i = 0
-    while i < Int(n) {
+    let count = Int(min(n, FDT.maxCells))
+    while i < count {
         v = (v << 32) | UInt64(fdt32(base, off + i * 4))
         i += 1
     }
@@ -153,9 +172,13 @@ func parsePlatformInfo(fdt: UnsafeRawPointer, into out: inout PlatformInfo) -> I
             let psc: UInt32 = (depth > 0 && depth < FDT.maxDepth) ? sc[depth - 1] : 1
 
             if validName, ceq(propName, "#address-cells") {
-                if depth < FDT.maxDepth { ac[depth] = fdt32(fdt, dataOff) }
+                if depth < FDT.maxDepth, len >= 4 {
+                    ac[depth] = min(fdt32(fdt, dataOff), FDT.maxCells)
+                }
             } else if validName, ceq(propName, "#size-cells") {
-                if depth < FDT.maxDepth { sc[depth] = fdt32(fdt, dataOff) }
+                if depth < FDT.maxDepth, len >= 4 {
+                    sc[depth] = min(fdt32(fdt, dataOff), FDT.maxCells)
+                }
             } else if validName, ceq(propName, "reg") {
                 curReg = dataOff; curRegLen = len
             } else if validName, ceq(propName, "interrupts") {
@@ -164,11 +187,14 @@ func parsePlatformInfo(fdt: UnsafeRawPointer, into out: inout PlatformInfo) -> I
                 out.bootargs = fdt.advanced(by: dataOff)
             }
 
-            if isChosen, validName {
+            
+            if isChosen, validName, len >= 4 {
+                let cells = min(pac, len / 4)
+
                 if ceq(propName, "linux,initrd-start") {
-                    out.initrdStart = readCells(fdt, dataOff, pac)
+                    out.initrdStart = readCells(fdt, dataOff, cells)
                 } else if ceq(propName, "linux,initrd-end") {
-                    out.initrdEnd = readCells(fdt, dataOff, pac)
+                    out.initrdEnd = readCells(fdt, dataOff, cells)
                 }
             }
 
@@ -201,7 +227,14 @@ func parsePlatformInfo(fdt: UnsafeRawPointer, into out: inout PlatformInfo) -> I
                     out.uart.baseAddr = readCells(fdt, reg, pac)
                 }
                 if let intr = curIntr, curIntrLen >= 8 {
-                    out.uart.irq = fdt32(fdt, intr + 4) + 32
+                    
+                    let kind   = fdt32(fdt, intr)
+                    let base   = kind == 1 ? UInt32(16) : UInt32(32)
+                    let number = fdt32(fdt, intr + 4)
+
+                    if number < FDT.reservedInterrupt - base {
+                        out.uart.irq = number + base
+                    }
                 }
             } else if isGic, let reg = curReg {
                 let stride = pac + psc

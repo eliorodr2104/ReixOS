@@ -21,6 +21,20 @@ public struct VirtualMemoryManager {
     static let physicalOffset       : UInt64 = 0xFFFF800000000000
     static let pageSize             : UInt64 = 4096
 
+    /// Largest physical address the high-half window can name.
+    ///
+    /// Every translation into that window is `physicalOffset + physical`, so
+    /// anything past this wraps. Note how tight the bound is: the window
+    /// starts at `0xFFFF_8000_0000_0000`, which leaves exactly 47 bits, and
+    /// "below `physicalOffset`" is *not* the same test, `0x8000_0000_0000`
+    /// satisfies it and still overflows.
+    ///
+    /// The addresses that reach it come from the device tree, so the check
+    /// belongs wherever one is first believed. Under `-Osize` the overflow
+    /// check is live, and the add happens in early boot before anything can
+    /// report it: a bad base folds the machine silently instead of saying why.
+    static let maxPhysicalAddress: UInt64 = UInt64.max - physicalOffset
+
     /// Monotonically increasing ASID source for newly created address spaces.
     /// Wraps to `1` (skipping `0`, reserved for the kernel TTBR1 space) and
     /// flushes the TLB on wrap to avoid stale tagged entries.
@@ -108,12 +122,18 @@ public struct VirtualMemoryManager {
             flags       : flags
         )
         
-        let uartBase = Kernel.platformInfo.uart.baseAddr
-        try map(table: identityRootTable, virtual: uartBase, physical: uartBase, type: .device)
-        try map(table: kernelRootTable, virtual: Self.physicalOffset + uartBase, physical: uartBase, type: .device)
-        
+        let uartBase            = Kernel.platformInfo.uart.baseAddr
         let gicDistributorBase  = Kernel.platformInfo.gic.gicdBase
         let gicCpuInterfaceBase = Kernel.platformInfo.gic.giccBase
+
+        guard uartBase            <= Self.maxPhysicalAddress,
+              gicDistributorBase  <= Self.maxPhysicalAddress,
+              gicCpuInterfaceBase <= Self.maxPhysicalAddress else {
+            Arch.CPU.panic("MMIO base from the device tree cannot be mapped into the high half")
+        }
+
+        try map(table: identityRootTable, virtual: uartBase, physical: uartBase, type: .device)
+        try map(table: kernelRootTable, virtual: Self.physicalOffset + uartBase, physical: uartBase, type: .device)
         try map(
             table   : identityRootTable,
             virtual : gicDistributorBase,

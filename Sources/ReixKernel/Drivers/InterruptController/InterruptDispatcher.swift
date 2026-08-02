@@ -30,8 +30,10 @@ public struct InterruptDispatcher {
         }
     }
 
-
     private static func handleSpurious(id: UInt32) {
+        
+        guard id < GIC.reservedInterruptBase else { return }
+
         kprint(.warning, "spurious IRQ id=\(id)", by: .gic)
         Kernel.gic.pointee.endOfInterrupt(id: id)
     }

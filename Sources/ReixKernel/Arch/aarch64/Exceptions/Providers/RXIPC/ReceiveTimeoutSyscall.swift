@@ -15,7 +15,11 @@ public struct ReceiveTimeoutSyscall: SyscallProvider {
         frame  : UnsafeMutablePointer<Arch.TrapFrame>,
         context: SyscallContext
     ) {
-        guard let currentProcess = Arch.CPU.getCurrentProcess() else { return }
+        
+        guard let currentProcess = Arch.CPU.getCurrentProcess() else {
+            frame.pointee.x0 = IPCStatus.invalidCapability.rawValue
+            return
+        }
 
         let handle   = UInt32(truncatingIfNeeded: frame.pointee.x0)
         let ticks    = frame.pointee.x1

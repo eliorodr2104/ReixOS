@@ -90,15 +90,20 @@ public struct RendezvousIPC: IPCInterface {
                 )
             }
             
+            var grantRejected = false
             switch transferResult {
                 case .success(let newGrantHandle):
                     receiverProcess.pointee.context!.pointee.x7 = UInt64(newGrantHandle)
-            
-                case .failure(_), nil:
+
+                case .failure(_):
+                    receiverProcess.pointee.context!.pointee.x7 = UInt64(UInt32.max)
+                    grantRejected = true
+
+                case nil:
                     receiverProcess.pointee.context!.pointee.x7 = UInt64(UInt32.max)
             }
-            
-            
+
+
             if endpointPtr.pointee.queue.isEmpty() {
                 endpointPtr.pointee.state = .idle
             }
@@ -114,16 +119,19 @@ public struct RendezvousIPC: IPCInterface {
 
             scheduler.pointee.resume(receiverProcess)
 
-            return .success(.sended)
+            return .success(.sended(grantRejected: grantRejected))
         }
-        
+
         guard blocking else { return .failure(.wouldBlock) }
 
 
-        currentProcess.pointee.message       = Message(from: frame)
-        currentProcess.pointee.ipcSession    = capability.badge
-        currentProcess.pointee.pendingGrant  = grantHandle == UInt32.max ? nil : grantHandle
-        currentProcess.pointee.pendingRights = grantRights
+        currentProcess.pointee.pending = PendingMessage(
+            message     : Message(from: frame),
+            session     : capability.badge,
+            grant       : grantHandle == UInt32.max ? nil : grantHandle,
+            rights      : grantRights,
+            expectsReply: false
+        )
 
         disarmDeadline(on: currentProcess)
 
@@ -165,51 +173,59 @@ public struct RendezvousIPC: IPCInterface {
             }
 
 
-            var transferResult: Result<UInt32, IPCError>?
-            if let pendingGrant  = senderProcess.pointee.pendingGrant {
+            let pending = senderProcess.pointee.takePending()
+
+            var transferResult: Result<UInt32, IPCError>? = nil
+            if let pending, let grant = pending.grant {
                 transferResult = transferCapability(
                     from   : senderProcess,
-                    handler: pendingGrant,
+                    handler: grant,
                     to     : currentProcess,
-                    rights : senderProcess.pointee.pendingRights ?? [.send, .receive]
+                    rights : pending.rights
                 )
             }
-            
+
+            var grantRejected = false
             switch transferResult {
                 case .success(let newGrantHandle):
                     frame.pointee.x7 = UInt64(newGrantHandle)
-                    senderProcess.pointee.pendingGrant  = nil
-                    senderProcess.pointee.pendingRights = nil
-                    
-                case .failure(_), nil:
+
+                case .failure(_):
+                    frame.pointee.x7 = UInt64(UInt32.max)
+                    grantRejected    = true
+
+                case nil:
                     frame.pointee.x7 = UInt64(UInt32.max)
             }
-            
-        
+
+
             if endpointPtr.pointee.queue.isEmpty() {
                 endpointPtr.pointee.state = .idle
             }
-            
-            senderProcess.pointee.message?.write(to: frame)
+
+            pending?.message.write(to: frame)
 
             frame.pointee.x6 = ipcTag(
                 from   : senderProcess,
-                session: senderProcess.pointee.ipcSession ?? 0
+                session: pending?.session ?? 0
             )
 
+            if grantRejected {
+                senderProcess.pointee.context?.pointee.x0 = IPCStatus.grantRejected.rawValue
+            }
 
-            if senderProcess.pointee.expectsReply {
-                
+
+            if pending?.expectsReply == true {
+
                 displaceReplyLink(of: currentProcess, for: senderProcess)
 
-                currentProcess.pointee.replyTo      = senderProcess
-                senderProcess.pointee.replyPartner  = currentProcess
-                senderProcess.pointee.status        = .blockedOnReply
-                senderProcess.pointee.expectsReply  = false
-                
+                currentProcess.pointee.replyTo     = senderProcess
+                senderProcess.pointee.replyPartner = currentProcess
+                senderProcess.pointee.status       = .blockedOnReply
+
             } else { scheduler.pointee.resume(senderProcess) }
-            
-            return .success(.sended)
+
+            return .success(.sended(grantRejected: false))
         }
         
         guard blocking else { return .failure(.wouldBlock) }
@@ -287,10 +303,15 @@ public struct RendezvousIPC: IPCInterface {
         
         // Server not ready
 
-        currentProcess.pointee.message      = Message(from: frame)
-        currentProcess.pointee.ipcSession   = capability.badge
-        currentProcess.pointee.expectsReply = true
-        currentProcess.pointee.status       = .blockedOnSend(endpointPtr)
+        currentProcess.pointee.pending = PendingMessage(
+            message     : Message(from: frame),
+            session     : capability.badge,
+            grant       : nil,
+            rights      : [],
+            expectsReply: true
+        )
+
+        currentProcess.pointee.status = .blockedOnSend(endpointPtr)
 
         disarmDeadline(on: currentProcess)
 
@@ -359,19 +380,24 @@ public struct RendezvousIPC: IPCInterface {
             )
         }
         
+        var grantRejected = false
         switch transferResult {
             case .success(let newHandle):
                 replyProcess.pointee.context!.pointee.x7 = UInt64(newHandle)
-            
-            case .failure(_), nil:
+
+            case .failure(_):
+                replyProcess.pointee.context!.pointee.x7 = UInt64(UInt32.max)
+                grantRejected = true
+
+            case nil:
                 replyProcess.pointee.context!.pointee.x7 = UInt64(UInt32.max)
         }
-        
+
         scheduler.pointee.resume(replyProcess)
         currentProcess.pointee.replyTo    = nil
         replyProcess.pointee.replyPartner = nil
-        
-        return .success(.sended)
+
+        return .success(.sended(grantRejected: grantRejected))
     }
     
     
@@ -508,9 +534,9 @@ public struct RendezvousIPC: IPCInterface {
         let capability = Capability(
             target: .shared(sharedRegion),
             badge : Badge(0),
-            rights: [.send, .receive, .grant]
+            rights: [.send, .receive, .grant, .read, .write]
         )
-        
+
         guard let handle = process.pointee.metadata.pointee.capsTable.install(capability) else {
             sharedRegion.move().releaseFrame(ppm: ppm)
             heap.pointee.kfree(UnsafeMutableRawPointer(sharedRegion))
@@ -571,6 +597,10 @@ public struct RendezvousIPC: IPCInterface {
             return false
         }
 
+        guard child.pointee.metadata.pointee.parentEndpoint != slot else {
+            return false
+        }
+
         let effective = rights.intersection(capability.rights)
         let childCap  = Capability(
             target: capability.target,
@@ -578,11 +608,15 @@ public struct RendezvousIPC: IPCInterface {
             rights: effective
         )
 
-        guard child.pointee.metadata.pointee.capsTable.install(at: slot, childCap) else {
-            return false
-        }
+        let (installed, displaced) = child.pointee.metadata.pointee.capsTable.install(
+            at: slot,
+            childCap
+        )
+        guard installed else { return false }
 
         retain(childCap)
+
+        if let displaced { release(displaced) }
 
         return true
     }

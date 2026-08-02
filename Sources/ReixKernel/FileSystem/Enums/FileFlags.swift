@@ -12,6 +12,6 @@ public struct FileFlags: OptionSet {
 
     public static let read   = FileFlags(rawValue: 1 << 0)
     public static let write  = FileFlags(rawValue: 1 << 1)
-    public static let append = FileFlags(rawValue: 1 << 1)
-    public static let create = FileFlags(rawValue: 1 << 1)
+    public static let append = FileFlags(rawValue: 1 << 2)
+    public static let create = FileFlags(rawValue: 1 << 3)
 }

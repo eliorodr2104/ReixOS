@@ -355,8 +355,28 @@ public struct ProcessManager: RXAllocatable {
 
         heap.pointee.kfree(process)
     }
-    
-    
+
+
+    /// Decodes the status a parent observes when it reaps this corpse.
+    ///
+    /// `exitReason` is the only field that records how a process died. The
+    /// dying process's `x0` carries the code on the `exit(code)` route alone;
+    /// on a fault or a `terminate` it is whatever user register happened to be
+    /// live, so reading it as a status is reading noise. Both reaps — the
+    /// synchronous one, where the child is already a zombie, and the
+    /// asynchronous one, where the parent blocks first and the child dies
+    /// later — go through this single decoder, so one death can never be
+    /// reported to the parent as two different numbers.
+    public static func exitStatus(of process: UnsafeMutablePointer<Process>) -> ExitCode {
+
+        guard case .exited(let code)? = process.pointee.metadata?.pointee.exitReason else {
+            return 0
+        }
+
+        return code
+    }
+
+
     // ProcessManager
     public func killCurrent(
         frame  : UnsafeMutablePointer<Arch.TrapFrame>,
@@ -366,19 +386,8 @@ public struct ProcessManager: RXAllocatable {
         if let oldProcess = Arch.CPU.getCurrentProcess() {
             Arch.CPU.setCurrentProcess(0)
             killProcess(oldProcess, reason: reason, context: context)
-            
-            if let parentPtr  = oldProcess.pointee.family.parent,
-               let parentMeta = parentPtr.pointee.metadata,
-               parentMeta.pointee.waitingChildPid == oldProcess.pointee.pid {
-                
-                parentPtr.pointee.context?.pointee.x0 = frame.pointee.x0
-                releaseProcess(oldProcess)
-                try? context.scheduler.pointee.wakeUp(parentPtr.pointee.pid)
-                
-            } else { context.scheduler.pointee.addZombie(oldProcess) }
-            
         }
-        
+
         if let trapFrame = context.scheduler.pointee.yield() {
             if let next = Arch.CPU.getCurrentProcess() {
                 
@@ -396,14 +405,22 @@ public struct ProcessManager: RXAllocatable {
         }
     }
     
+    /// Tears a process down and disposes of its corpse.
+    ///
+    /// Returns `true` while the corpse is still reachable — parked on the
+    /// scheduler's `terminated` list — so a caller that wants it may reap and
+    /// release it. Returns `false` when it went to a parent already blocked in
+    /// `reapChild`: that hand-off frees the `Process` block, so `process` is
+    /// dangling on return and must not be touched again.
+    @discardableResult
     public func killProcess(
         _ process: UnsafeMutablePointer<Process>,
           reason : ExitReason,
           context: SyscallContext
-    ) {
-        
+    ) -> Bool {
+
         let status = process.pointee.status
-        
+
         guard case .terminated = status else {
 
             releaseOrphanedZombies(of: process, context)
@@ -436,13 +453,52 @@ public struct ProcessManager: RXAllocatable {
             
             process.pointee.status                       = .terminated
             process.pointee.metadata?.pointee.exitReason = reason
-            
+
             try? context.processManager.pointee.releaseAddressSpace(process)
-            
-            return
+
+            return deliverCorpse(process, context)
         }
+
+        // Already a zombie: somebody else ran the teardown and left the corpse
+        // on the `terminated` list, so it is still there to be reaped.
+        return true
     }
-    
+
+    /// Hands a fresh corpse to whoever is entitled to it.
+    ///
+    /// Every death route ends here — `exit`, a fault, `terminate`, a `split`
+    /// unwinding its half-built child — because the two outcomes are exclusive
+    /// and a route that performed neither was doubly broken: the parent parked
+    /// in `reapChild` was never woken, and the unrecorded `Process` block was
+    /// left unreachable by any later reap.
+    ///
+    /// `releaseProcess` has to run before `wakeUp`, since it is what clears the
+    /// parent's `waitingChildPid`. A parent resumed while still claiming to
+    /// wait on a pid whose `Process` is gone would carry that claim into its
+    /// next death or reap and walk a freed block.
+    private func deliverCorpse(
+        _ process: UnsafeMutablePointer<Process>,
+        _ context: SyscallContext
+    ) -> Bool {
+
+        guard let parent     = process.pointee.family.parent,
+              let parentMeta = parent.pointee.metadata,
+              parentMeta.pointee.waitingChildPid == process.pointee.pid
+        else {
+            context.scheduler.pointee.addZombie(process)
+            return true
+        }
+
+        // Read the status before `releaseProcess` frees the metadata block it
+        // lives in.
+        parent.pointee.context?.pointee.x0 = Self.exitStatus(of: process)
+
+        releaseProcess(process)
+        try? context.scheduler.pointee.wakeUp(parent.pointee.pid)
+
+        return false
+    }
+
     private func severReplyLinks(
         of process: UnsafeMutablePointer<Process>,
         _  context: SyscallContext

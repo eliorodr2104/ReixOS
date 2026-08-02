@@ -18,7 +18,8 @@ public struct TarFileSystem: FileSystemInterface {
         path : UnsafePointer<CChar>,
         flags: FileFlags
     ) -> Result<FileHandle, FSError> {
-        guard !flags.contains(.write) else {
+        
+        guard flags.isDisjoint(with: [.write, .append, .create]) else {
             return .failure(.readOnlyFileSystem)
         }
         

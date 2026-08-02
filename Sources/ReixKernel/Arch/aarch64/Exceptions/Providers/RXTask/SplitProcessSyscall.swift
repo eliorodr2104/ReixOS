@@ -43,12 +43,7 @@ public struct SplitProcessSyscall: SyscallProvider {
         guard let childVMM  = childProcess.pointee.addressSpace.vmaManager,
               let parentVMM = currentProcess.pointee.addressSpace.vmaManager
         else {
-            context.processManager.pointee.killProcess(
-                childProcess,
-                reason : .killed,
-                context: context
-            )
-            context.processManager.pointee.releaseProcess(childProcess)
+            discard(childProcess, context: context)
             frame.pointee.x0 = UInt64.max
 
             return
@@ -60,8 +55,7 @@ public struct SplitProcessSyscall: SyscallProvider {
             try childVMM.pointee.cloneRegions(from: parentVMM.pointee)
 
         } catch {
-            context.processManager.pointee.killProcess(childProcess, reason: .killed, context: context)
-            context.processManager.pointee.releaseProcess(childProcess)
+            discard(childProcess, context: context)
             frame.pointee.x0 = UInt64.max
 
             return
@@ -72,5 +66,19 @@ public struct SplitProcessSyscall: SyscallProvider {
         try? context.scheduler.pointee.addTask(childProcess)
 
         frame.pointee.x0 = childProcess.pointee.pid
+    }
+
+    private static func discard(
+        _ child: UnsafeMutablePointer<Process>,
+        context: SyscallContext
+    ) {
+        guard context.processManager.pointee.killProcess(
+            child,
+            reason : .killed,
+            context: context
+        ) else { return }
+
+        _ = context.scheduler.pointee.reapChild(child)
+        context.processManager.pointee.releaseProcess(child)
     }
 }

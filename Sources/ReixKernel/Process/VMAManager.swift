@@ -338,12 +338,23 @@ public struct VMAManager: RXAllocatable {
         return currentBreak
     }
     
+    /// Place `pageCount` pages of `physicalBase` in the mmap area with exactly
+    /// `permissions`.
+    ///
+    /// `permissions` is the caller's to choose because the two syscalls that
+    /// reach here derive it from the capability being mapped, and a region
+    /// capability that carries no `.write` has to produce a read-only window.
+    /// The hardcoded `[.read, .write, .user]` this replaces made that
+    /// unrepresentable: every shared region and every MMIO window came out
+    /// writable regardless of what its capability said.
+    /// 
     public mutating func mapRegion(
         physicalBase: PhysicalAddress,
         pageCount   : Int,
-        kind        : RegionKind
+        kind        : RegionKind,
+        permissions : VMAPermissions
     ) throws(VMAError) -> VirtualAddress {
-        
+
         guard pageCount > 0 else { throw .invalidLayout }
 
         let alignedSize = UInt64(pageCount) * UserSpaceLayout.pageSize
@@ -355,8 +366,6 @@ public struct VMAManager: RXAllocatable {
             alignment: UserSpaceLayout.pageSize,
             direction: .downward
         ) else { throw .noFreeGap }
-
-        let permissions: VMAPermissions = [.read, .write, .user]
 
         try registerRegion(
             start      : start,

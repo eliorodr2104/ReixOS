@@ -26,6 +26,9 @@ public struct VirtualTimerInterruptHandler: InterruptHandler {
         let quantumExpired = Kernel.scheduler.pointee.onTick()
 
         let systemTicks = Kernel.scheduler.pointee.systemTicks
+
+        SleepSyscall.wakeExpired(at: systemTicks)
+
         if Kernel.ipc.pointee.hasDeadlineDue(at: systemTicks) {
             Kernel.ipc.pointee.checkTimeouts(now: systemTicks)
         }

@@ -28,27 +28,46 @@ public struct NameServer: Service {
 
     public mutating func handle(
         _ operation: NameServerOperation,
-          request  : ReceivedMessage
+          request  : inout ReceivedMessage
     ) {
 
         print("[ NS    ] badge request:", terminator: " ")
         print(String(UInt64(request.identity)))
 
-        let id = Services(rawValue: request.message.words[0])
-
         switch operation {
 
             case .lookup:
+                let id = Services(rawValue: request.message.words[0])
+
                 if let id, let handle = servicesTable[Int(id.rawValue)] {
                     _ = reply(message: NameServerResponse.ack.message, grant: handle)
 
                 } else { _ = reply(message: NameServerResponse.errorLookup.message) }
 
             case .register:
-                if let id {
-                    servicesTable[Int(id.rawValue)] = request.grantedCap
-
-                } else { _ = reply(message: NameServerResponse.errorRegister.message) }
+                register(&request)
         }
+    }
+
+    private mutating func register(_ request: inout ReceivedMessage) {
+
+        guard request.session == NameServerSession.registrar else {
+            print("[ NS    ] register refused: not a registrar capability")
+            return
+        }
+
+        guard let id = Services(rawValue: request.message.words[0]) else {
+            print("[ NS    ] register refused: unknown service")
+            return
+        }
+
+        guard request.grantedCap != nil else {
+            print("[ NS    ] register refused: no endpoint granted")
+            return
+        }
+
+        if let stale = servicesTable[Int(id.rawValue)] { _ = capDrop(stale) }
+
+        servicesTable[Int(id.rawValue)] = request.takeGrant()
     }
 }

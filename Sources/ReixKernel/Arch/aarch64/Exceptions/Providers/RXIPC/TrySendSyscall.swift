@@ -16,7 +16,10 @@ public struct TrySendSyscall: SyscallProvider {
         context: SyscallContext
     ) {
         
-        guard let currentProcess = Arch.CPU.getCurrentProcess() else { return }
+        guard let currentProcess = Arch.CPU.getCurrentProcess() else {
+            frame.pointee.x0 = IPCStatus.invalidCapability.rawValue
+            return
+        }
         
         let handle   = UInt32(truncatingIfNeeded: frame.pointee.x0)
         let metadata = currentProcess.pointee.metadata!
@@ -34,11 +37,14 @@ public struct TrySendSyscall: SyscallProvider {
         switch resultSendMessage {
             case .success(let successType):
                 switch successType {
-                    case .sended:
-                        // TODO: OK temp value, need create a const
-                        frame.pointee.x0 = IPCStatus.ok.rawValue
-                        
-                    case .blocked: break
+                    
+                    case .sended(let grantRejected):
+                        frame.pointee.x0 = grantRejected
+                            ? IPCStatus.grantRejected.rawValue
+                            : IPCStatus.ok.rawValue
+
+                    case .blocked:
+                        frame.pointee.x0 = IPCStatus.wouldBlock.rawValue
                 }
                 
             case .failure(let error):

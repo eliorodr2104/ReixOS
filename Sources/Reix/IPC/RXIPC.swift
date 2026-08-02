@@ -7,6 +7,17 @@
 
 import ReixABI
 
+/// Send `message` on `handle`, blocking until somebody receives it.
+///
+/// `.grantRejected` means the message landed but `grant` did not: the receiver
+/// read no capability. It is an outcome of a *successful* send, so resending
+/// would duplicate the message; re-offer the capability instead, or use
+/// `IPCStatus.isDelivered` when only delivery matters.
+///
+/// Only a send that had to wait for a receiver can report it today. When a
+/// receiver was already parked on the endpoint the kernel still answers `.ok`
+/// even if it dropped the grant, so a caller that must be certain has to check
+/// the capability arrived by other means.
 @discardableResult
 @inline(__always)
 public func send(

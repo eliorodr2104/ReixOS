@@ -197,7 +197,7 @@ public struct Kernel {
             Capability(
                 target: .device(deviceRegion),
                 badge : Badge(0),
-                rights: [.grant]
+                rights: [.grant, .read, .write]
             )
         )
         

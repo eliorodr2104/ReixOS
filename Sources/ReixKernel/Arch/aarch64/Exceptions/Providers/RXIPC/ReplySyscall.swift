@@ -24,10 +24,12 @@ public struct ReplySyscall: SyscallProvider {
         switch resultSendMessage {
             case .success(let successType):
                 switch successType {
-                    case .sended:
-                        // TODO: OK temp value, need create a const
-                        frame.pointee.x0 = IPCStatus.ok.rawValue
-                        
+                    
+                    case .sended(let grantRejected):
+                        frame.pointee.x0 = grantRejected
+                            ? IPCStatus.grantRejected.rawValue
+                            : IPCStatus.ok.rawValue
+
                     case .blocked: break
                 }
                 

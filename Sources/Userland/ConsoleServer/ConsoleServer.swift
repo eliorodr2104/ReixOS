@@ -51,11 +51,11 @@ public struct ConsoleServer: Service {
 
     public mutating func handle(
         _ operation: ConsoleOperation,
-          request  : ReceivedMessage
+          request  : inout ReceivedMessage
     ) {
         switch operation {
             case .register:
-                register(request)
+                register(&request)
 
             case .kick:
                 for offset in 0..<clients.count {
@@ -77,13 +77,18 @@ public struct ConsoleServer: Service {
         }
     }
 
-    private mutating func register(_ request: ReceivedMessage) {
+    /// Adopt the caller's ring buffer, or refuse and let the grant go back.
+    ///
+    /// The grant is only *inspected* until the ring is mapped and a slot is
+    /// committed to it, so every refusal can simply return: `run()` releases what
+    /// was never taken. `takeGrant()` marks the single point of no return — past
+    /// it the capability belongs to `grantedCaps` and `release(slot:)` owns it.
+    private mutating func register(_ request: inout ReceivedMessage) {
 
         let badge = request.identity
 
         guard badge != 0 else {
             print("[ SERVE ] Console register refused: no caller identity")
-            if let grantedCap = request.grantedCap { _ = capDrop(grantedCap) }
             return
         }
 
@@ -95,7 +100,6 @@ public struct ConsoleServer: Service {
 
         guard request.message.words[0] == Self.ringPages else {
             print("[ SERVE ] Console register refused: ring is not one page")
-            _ = capDrop(grantedCap)
             return
         }
 
@@ -103,20 +107,18 @@ public struct ConsoleServer: Service {
 
         guard let slot = freeSlot() else {
             print("[ SERVE ] Console register refused: no free slot")
-            _ = capDrop(grantedCap)
             return
         }
 
         let mapped = shmMap(handle: grantedCap)
         guard let ringBase = UnsafeMutableRawPointer(bitPattern: UInt(mapped)) else {
             print("[ SERVE ] Console register refused: cannot map the ring")
-            _ = capDrop(grantedCap)
             return
         }
 
         clients[slot]     = badge
         rings[slot]       = Ring(base: ringBase, regionSize: Self.pageSize)
-        grantedCaps[slot] = grantedCap
+        grantedCaps[slot] = request.takeGrant()
     }
 
     private func drain(_ ring: Ring) {

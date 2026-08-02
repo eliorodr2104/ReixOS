@@ -6,6 +6,7 @@
 //
 
 public enum CommunicationMessageResult {
-    case sended
+
+    case sended(grantRejected: Bool)
     case blocked
 }

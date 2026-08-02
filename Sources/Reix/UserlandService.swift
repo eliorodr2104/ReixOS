@@ -2,7 +2,7 @@
 //  UserlandService.swift
 //  ReixOS
 //
-// Created by Eliomar Alejandro Rodriguez Ferrer on 28/06/2026.
+//  Created by Eliomar Alejandro Rodriguez Ferrer on 28/06/2026.
 //
 
 
@@ -18,37 +18,28 @@ public protocol UserlandService {
     /// The endpoint clients send requests to.
     var serviceEndpoint: UInt32 { get }
 
-    /// Handle one request. `request.badge` tells you who is calling.
-    mutating func handle(_ operation: Operation, request: ReceivedMessage)
+    /// Handle one request. `request.identity` tells you who is calling.
+    ///
+    /// `request` is `inout` so that `takeGrant()` is visible to the loop: keep an
+    /// attached capability by taking it, and anything left behind is released for
+    /// you. Nothing else about the message is meant to be written.
+    mutating func handle(_ operation: Operation, request: inout ReceivedMessage)
 }
 
 
 public extension UserlandService {
 
-    /// Serve requests forever: receive, decode the operation, dispatch.
-    ///
-    /// An unknown operation is skipped rather than fatal — a server must not die
-    /// because somebody sent it a label it does not know. But skipping it cannot
-    /// mean dropping the message on the floor: if the sender attached a grant,
-    /// the kernel has *already* installed that capability into this process's
-    /// table, during the sender's `send` and before this loop ever saw the
-    /// message.
-    ///
-    /// Every path out of a request that this loop declines to dispatch must give
-    /// the grant back. A handler that *is* dispatched owns the capability and is
-    /// responsible for it, `ConsoleServer.register` is the worked example.
     mutating func run() {
-        
-        while true {
-            let request = receive(handle: serviceEndpoint)
 
-            guard let operation = Operation(rawValue: request.message.tag.label) else {
-                if let grantedCap = request.grantedCap { _ = capDrop(grantedCap) }
-                continue
+        while true {
+            var request = receive(handle: serviceEndpoint)
+
+            if let operation = Operation(rawValue: request.message.tag.label) {
+                handle(operation, request: &request)
             }
 
-            handle(operation, request: request)
+            if let grantedCap = request.takeGrant() { _ = capDrop(grantedCap) }
         }
-        
+
     }
 }

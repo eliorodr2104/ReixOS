@@ -2,8 +2,7 @@
 //  Services.swift
 //  ReixOS
 //
-//  Well-known services the Name Server resolves. The rawValue doubles as the
-//  index into the registry table.
+//  Created by Eliomar on 02/08/2026.
 //
 
 public enum Services: UInt32 {

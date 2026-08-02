@@ -2,10 +2,6 @@
 //  ServiceRuntime.swift
 //  ReixOS
 //
-//  Boots a process from its seeded capabilities: attaches the console, publishes
-//  the service endpoint per its manifest, then runs the receive loop. `launch`
-//  is the matching spawner side, forwarding the caller's ambient set to a child.
-//
 
 import ReixABI
 
@@ -29,8 +25,7 @@ public enum ServiceRuntime {
           environment: Environment
     ) {
         switch manifest.provides {
-            case .none:
-                break
+            case .none: break
 
             case .parent:
                 if let parent = parentEndpoint() {
@@ -38,29 +33,41 @@ public enum ServiceRuntime {
                         handle     : parent,
                         message    : BootMessage.announce.message,
                         grant      : endpoint,
-                        grantRights: [.send, .grant]
+                        grantRights: [.send, .grant, .derive]
                     )
                 }
 
             case .nameServer(let service):
-                if let nameServer = environment.nameServer {
-                    _ = send(
-                        handle     : nameServer,
-                        message    : NameServerOperation.register.message(for: service),
-                        grant      : endpoint,
-                        grantRights: [.send, .grant]
-                    )
+                guard let registrar = environment.nameServerRegistrar else {
+                    print("[ SERVE ] cannot publish: no Name Server registrar capability")
+                    return
                 }
+
+                _ = send(
+                    handle     : registrar,
+                    message    : NameServerOperation.register.message(for: service),
+                    grant      : endpoint,
+                    grantRights: [.send, .grant]
+                )
         }
     }
 }
 
+/// Spawn `path` seeded with the caller's ambient capabilities.
+///
+/// `registrar` is taken as an argument and never read out of `environment`,
+/// which is the whole reason it lives in a slot of its own. Ambient
+/// capabilities are inherited: whatever the caller has, its children get. That
+/// is right for the console and for name *lookup* and wrong for the authority
+/// to publish a name, so delegating it has to be an act at the call site a
+/// service seeded with a registrar still launches ordinary children.
 @inline(__always)
 public func launch(
     _ path       : StaticString,
-      environment: Environment
+      environment: Environment,
+      registrar  : UInt32? = nil
 ) -> SpawnResult {
-    
+
     withUnsafeTemporaryAllocation(
         of      : CapGrant.self,
         capacity: 8
@@ -80,6 +87,11 @@ public func launch(
 
         if let spawn = environment.spawn {
             buffer[count] = CapGrant(source: spawn, slot: BootCap.spawn.rawValue, rights: [.spawn, .grant])
+            count += 1
+        }
+
+        if let registrar {
+            buffer[count] = CapGrant(source: registrar, slot: BootCap.nameServerRegistrar.rawValue, rights: [.send])
             count += 1
         }
 

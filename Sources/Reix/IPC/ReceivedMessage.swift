@@ -8,17 +8,7 @@
 public struct ReceivedMessage {
     public var message   : Message
     public var grantedCap: UInt32?
-
-    /// Who sent this, as attested by the kernel.
-    ///
-    /// Assigned to the sending process at creation and unforgeable from userland:
-    /// it does not live in any capability, so no grant, copy or fork can hand it
-    /// to somebody else. `0` means "no identity" and names no live process.
     public var identity: UInt32
-
-    /// Which conversation this belongs to — the badge bound to the capability the
-    /// sender used, `0` when that capability is unbadged. Says nothing about who
-    /// the sender is; use `identity` for that.
     public var session: UInt32
 
     init(
@@ -29,9 +19,24 @@ public struct ReceivedMessage {
         self.message    = message
         self.grantedCap = grantedCap == UInt32.max ? nil : UInt32(grantedCap)
 
-        // Split once, here, so no caller has to know the layout of `x6`. Both
-        // halves are 32-bit wide, so neither loses a bit.
         self.identity   = UInt32(truncatingIfNeeded: badgeWord >> 32)
         self.session    = UInt32(truncatingIfNeeded: badgeWord)
+    }
+
+
+    /// Take ownership of the granted capability, leaving nothing attached.
+    ///
+    /// The kernel installs a grant into this process's table during the *sender's*
+    /// `send`, so by the time a handler runs the slot is already spent whether the
+    /// handler wants it or not. `UserlandService.run()` gives back whatever is
+    /// still attached once the handler returns, which only works if keeping a
+    /// capability is something the handler has to *say*: call this and it is
+    /// yours, ignore it and the loop returns it for you.
+    ///
+    /// Reading `grantedCap` directly is still fine to *inspect* a grant while
+    /// deciding, take it only at the point of no return.
+    public mutating func takeGrant() -> UInt32? {
+        defer { grantedCap = nil }
+        return grantedCap
     }
 }

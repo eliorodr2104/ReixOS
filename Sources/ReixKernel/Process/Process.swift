@@ -26,7 +26,15 @@ public struct Process: RXEntry {
     public static var errorMessageAllocation: StaticString = "Failed to allocate Process on the kernel heap"
     
     public var family        : ProcessRelations                      // 32 Byte -> (8 + 8 + 8 + 8)
-    public var message       : Message? = nil                        // 21 Byte -> (4 * 4) + (4 + 1)
+
+    /// The message this process is parked on a send queue with, if any.
+    ///
+    /// One optional rather than a payload plus a scatter of `pendingGrant` /
+    /// `pendingRights` / `expectsReply` companions: those describe a single
+    /// message, and keeping them separate meant every enqueue path had to
+    /// remember to reset the ones it did not use. Never assign into it
+    /// piecemeal — replace it whole, or retire it with `takePending`.
+    public var pending       : PendingMessage? = nil                 // 32 Byte -> 21 + 4 + 5 + 1 + 1
     public var addressSpace  : AddressSpace                          // 19 Byte -> ((1 + 8) + 8 + 2)
     
     
@@ -50,20 +58,29 @@ public struct Process: RXEntry {
     
     public let identity      : Badge                                  // 4 Byte
 
-    public var ipcSession    : Badge?                                 // 4 Byte
-    public var pendingGrant  : UInt32?    = nil                       // 4 Byte
-    
     public var status        : ProcessStatus                          // 9 Byte  -> (8 + 1) Enum with param
     public var priority      : UInt8                                  // 1 Byte
     public var depth         : UInt8                                  // 1 Byte
     public var type          : ProcessType                            // 1 Byte
-    public var expectsReply  : Bool = false                           // 1 Byte
-    public var pendingRights : CapRights? = nil
-    
-    
-    
+
+
+
     public var entryID: UInt64 { pid }
-    
+
+
+    /// Hands the parked message over and leaves nothing behind.
+    ///
+    /// Delivery is the only reader, and it must not be able to deliver the same
+    /// message twice or to clear half of it: taking the whole optional retires
+    /// the payload, the grant, the session and the reply expectation together,
+    /// so no fragment can survive into the next message this process parks.
+    @inline(__always)
+    public mutating func takePending() -> PendingMessage? {
+        defer { pending = nil }
+
+        return pending
+    }
+
     
     init(
         pid           : PID,

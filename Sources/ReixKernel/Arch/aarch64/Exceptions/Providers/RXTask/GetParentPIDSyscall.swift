@@ -12,7 +12,7 @@ import ReixABI
 
 public struct GetParentPIDSyscall: SyscallProvider {
 
-    public static let number: SyscallNumber = .getPid
+    public static let number: SyscallNumber = .getParentPid
 
     public static func handle(
         frame  : UnsafeMutablePointer<Arch.TrapFrame>,

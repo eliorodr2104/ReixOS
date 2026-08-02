@@ -7,6 +7,17 @@
 
 import ReixABI
 
+/// `shmCreate(pageCount)` syscall provider.
+///
+/// This is a two-register syscall: `x0` carries the capability handle and `x1`
+/// the base virtual address the region was mapped at. The userland wrapper goes
+/// through `_asm_spawn`, which stores `x1` into the result buffer
+/// unconditionally, so a failure exit that leaves `x1` alone hands the caller
+/// back its own `x1` at `svc` time as `SharedMemory.address`. Every exit below
+/// therefore writes both registers: `UInt64.max` in `x0` (the memory family
+/// failure sentinel, which truncates to the `UInt32.max` the wrapper checks)
+/// and `0` in `x1`, a null address that no mapping can ever legitimately have
+/// since the user mmap window starts at `UserSpaceLayout.mmapBase`.
 public struct ShmCreate: SyscallProvider {
 
     public static let number: SyscallNumber = .shmCreate
@@ -22,12 +33,14 @@ public struct ShmCreate: SyscallProvider {
               let vmaManager = current.pointee.addressSpace.vmaManager
         else {
             frame.pointee.x0 = UInt64.max
+            frame.pointee.x1 = 0
             return
         }
 
         let pageCount = frame.pointee.x0
         guard pageCount > 0, pageCount <= Self.maxPages else {
             frame.pointee.x0 = UInt64.max
+            frame.pointee.x1 = 0
             return
         }
 
@@ -38,20 +51,22 @@ public struct ShmCreate: SyscallProvider {
             
         } catch {
             frame.pointee.x0 = UInt64.max
+            frame.pointee.x1 = 0
             return
         }
 
-        
         let regionAddress: VirtualAddress
         do {
             regionAddress = try vmaManager.pointee.mapRegion(
                 physicalBase: physicalPage.address,
                 pageCount   : Int(pageCount),
-                kind        : .shared
+                kind        : .shared,
+                permissions : [.read, .write, .user]
             )
         } catch {
             try? context.ppm.pointee.free(physicalPage)
             frame.pointee.x0 = UInt64.max
+            frame.pointee.x1 = 0
             return
         }
 
@@ -71,6 +86,7 @@ public struct ShmCreate: SyscallProvider {
                     size: pageCount * UserSpaceLayout.pageSize
                 )
                 frame.pointee.x0 = UInt64.max
+                frame.pointee.x1 = 0
         }
     }
 }

@@ -36,11 +36,12 @@ public func main() {
         if shm.isValid, let peer = spawned.cap {
             UnsafeMutableRawPointer(bitPattern: UInt(shm.address))!
                 .storeBytes(of: UInt32(0xCAFE), as: UInt32.self)
+            
             _ = send(
                 handle     : peer,
                 message    : NameServerResponse.ok.message,
                 grant      : shm.handle,
-                grantRights: [.send]
+                grantRights: [.send, .read]
             )
         }
     }

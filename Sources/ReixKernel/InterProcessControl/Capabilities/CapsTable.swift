@@ -36,14 +36,30 @@ public struct CapsTable {
     }
 
 
-    @discardableResult
-    public mutating func install(at slot: UInt32, _ cap: Capability) -> Bool {
-        guard slot < caps.count else { return false }
+    /// Install `cap` at a fixed `slot`, handing back whatever it evicted.
+    ///
+    /// The two halves of the answer are separate because `nil` cannot mean both
+    /// "the slot was free" and "`slot` is out of range": only `installed` says
+    /// whether `cap` is in the table.
+    ///
+    /// `displaced` is *returned* rather than dropped for the same reason
+    /// `remove(handle:)` returns one. A capability holds a reference on its
+    /// target and this type is not allowed to release it (see the note on
+    /// `remove(handle:)`), so overwriting an occupied slot in silence leaked the
+    /// target the slot was holding, with only 64 endpoints in the system, a
+    /// leak the caller could repeat on demand. Deliberately not
+    /// `@discardableResult`: ignoring `displaced` *is* the bug.
+    public mutating func install(
+        at slot: UInt32,
+        _  cap : Capability
+    ) -> (installed: Bool, displaced: Capability?) {
+        guard slot < caps.count else { return (false, nil) }
 
-        if caps[Int(slot)] == nil { counterElements &+= 1 }
+        let previous = caps[Int(slot)]
+        if previous == nil { counterElements &+= 1 }
         caps[Int(slot)] = cap
 
-        return true
+        return (true, previous)
     }
     
     

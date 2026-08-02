@@ -47,6 +47,10 @@ public struct SyscallHandler: RXAllocatable {
             ppm           : ppm
         )
 
+        // No `default` arm on purpose: it is what let `sleep` sit in
+        // `SyscallNumber` undispatched, silently returning with `x0`
+        // untouched. Exhaustive, a new syscall number is a compile error
+        // until somebody wires it up here.
         switch type {
             case .exit         : ExitSyscall         .handle(frame: frame, context: context)
             case .yield        : YieldSyscall        .handle(frame: frame, context: context)
@@ -55,6 +59,7 @@ public struct SyscallHandler: RXAllocatable {
             case .getParentPid : GetParentPIDSyscall .handle(frame: frame, context: context)
             case .parentEndpoint: GetParentEndpointSyscall.handle(frame: frame, context: context)
             case .reapChild    : ReapChildSyscall    .handle(frame: frame, context: context)
+            case .sleep        : SleepSyscall        .handle(frame: frame, context: context)
             case .spawnProcess : SpawnProcessSyscall .handle(frame: frame, context: context)
             case .split        : SplitProcessSyscall .handle(frame: frame, context: context)
             case .terminate    : TerminateSyscall    .handle(frame: frame, context: context)
@@ -94,8 +99,6 @@ public struct SyscallHandler: RXAllocatable {
             // Caps
             case .capExists     : CapExistsSyscall     .handle(frame: frame, context: context)
             case .capDrop       : CapDropSyscall       .handle(frame: frame, context: context)
-
-            default: break
         }
     }
     

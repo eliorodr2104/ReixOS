@@ -35,9 +35,11 @@ public struct CallSyscall: SyscallProvider {
             case .success(let successType):
                 
                 switch successType {
-                    case .sended:
-                        frame.pointee.x0 = IPCStatus.ok.rawValue
-                        
+                    case .sended(let grantRejected):
+                        frame.pointee.x0 = grantRejected
+                            ? IPCStatus.grantRejected.rawValue
+                            : IPCStatus.ok.rawValue
+
                     case .blocked:
                         frame.pointee.x0 = IPCStatus.ok.rawValue
                         YieldSyscall.handle(frame: frame, context: context)

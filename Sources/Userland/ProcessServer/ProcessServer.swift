@@ -33,21 +33,28 @@ public struct ProcessServer: Service {
 
     public func handle(
         _ operation: ProcessServerOperation,
-          request  : ReceivedMessage
+          request  : inout ReceivedMessage
     ) {
 
         switch operation {
 
             case .spawn:
-                if let program = ProgramID(rawValue: request.message.words[0]) {
-                    let result = launch(program.tarPath, environment: environment)
-                    _ = reply(
-                        message: ProcessServerResponse.ok.message(
-                            for: UInt32(truncatingIfNeeded: result.pid)
-                        ),
-                        grant: result.handle
-                    )
+                guard let program = ProgramID(rawValue: request.message.words[0]) else {
+                    print("[ SERVE ] Process Server spawn refused: unknown program")
+                    _ = reply(message: ProcessServerResponse.errorSpawn.message(for: nil))
+                    return
                 }
+
+                let result = launch(program.tarPath, environment: environment)
+
+                _ = reply(
+                    message: ProcessServerResponse.ok.message(
+                        for: UInt32(truncatingIfNeeded: result.pid)
+                    ),
+                    grant: result.handle
+                )
+
+                if result.hasEndpoint { _ = capDrop(result.handle) }
         }
     }
 }

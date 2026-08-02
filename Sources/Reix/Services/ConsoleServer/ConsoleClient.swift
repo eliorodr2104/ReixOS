@@ -41,12 +41,11 @@ public struct ConsoleClient {
         )
         self.ring.reset()
         
-
         send(
             handle     : endpoint,
             message    : ConsoleOperation.register.message(word0: Self.ringPages),
             grant      : shm.handle,
-            grantRights: [.send]
+            grantRights: [.send, .read, .write]
         )
         
 

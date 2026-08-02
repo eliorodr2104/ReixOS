@@ -25,7 +25,9 @@ public struct ReapChildSyscall: SyscallProvider {
         let childPid   = frame.pointee.x0
 
         // TODO: - Add throws for all case
-        guard let current = AArch64CPU.getCurrentProcess() else { return }
+        guard let current = AArch64CPU.getCurrentProcess() else {
+            frame.pointee.x0 = 0; return
+        }
         guard let child = current.pointee.family.findChild(id: childPid) else {
             frame.pointee.x0 = 0; return
         }
@@ -34,11 +36,8 @@ public struct ReapChildSyscall: SyscallProvider {
                 
             // Case 1 — the child is already a zombie: reap it and return its code.
             case .terminated:
-                if case .exited(let code)? = child.pointee.metadata?.pointee.exitReason {
-                    frame.pointee.x0 = UInt64(code)
-                    
-                } else { frame.pointee.x0 = 0 }
-                
+                frame.pointee.x0 = ProcessManager.exitStatus(of: child)
+
                 _ = context.scheduler.pointee.reapChild(child)
                 context.processManager.pointee.releaseProcess(child)
                 return
@@ -46,7 +45,15 @@ public struct ReapChildSyscall: SyscallProvider {
             default:
                 current.pointee.metadata.pointee.waitingChildPid = childPid
 
-                try? context.scheduler.pointee.block(current.pointee.pid)
+                do {
+                    try context.scheduler.pointee.block(current.pointee.pid)
+
+                } catch {
+                    current.pointee.metadata.pointee.waitingChildPid = nil
+                    frame.pointee.x0 = 0
+                    return
+                }
+
                 YieldSyscall.handle(frame: frame, context: context)
                 return
         }
