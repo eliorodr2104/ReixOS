@@ -48,7 +48,9 @@ public struct Process: RXEntry {
     public var ipcDeadline   : UInt64?                     = nil      // 8 Byte
     
     
-    public var ipcBadge      : Badge?                                 // 4 Byte
+    public let identity      : Badge                                  // 4 Byte
+
+    public var ipcSession    : Badge?                                 // 4 Byte
     public var pendingGrant  : UInt32?    = nil                       // 4 Byte
     
     public var status        : ProcessStatus                          // 9 Byte  -> (8 + 1) Enum with param
@@ -65,6 +67,7 @@ public struct Process: RXEntry {
     
     init(
         pid           : PID,
+        identity      : Badge,
         status        : ProcessStatus    = .new,
         addressSpace  : AddressSpace,
         
@@ -80,6 +83,7 @@ public struct Process: RXEntry {
         
     ) {
         self.pid            = pid
+        self.identity       = identity
         self.family         = family
         self.status         = status
         self.addressSpace   = addressSpace

@@ -61,9 +61,16 @@ public struct CapsTable {
         return false
     }
     
-    /// Revoke the capability at `handle`, freeing the slot. Used to implement
-    /// *move* semantics for `grant`: the sender loses the capability once it is
-    /// transferred, instead of both processes ending up holding it.
+    /// Revoke the capability at `handle`, freeing the slot.
+    ///
+    /// Two callers: process teardown, dropping everything a dying process held,
+    /// and `capDrop`, where a live process gives one capability back. Both go
+    /// through `RendezvousIPC` so the target's refcount is released with the
+    /// slot, this only forgets the entry.
+    ///
+    /// `grant` does *not* go through here: `transferCapability` installs a copy
+    /// in the receiver and leaves the sender's own slot alone, so a grant shares
+    /// the target rather than moving it.
     @discardableResult
     public mutating func remove(handle: Int) -> Capability? {
         guard handle < caps.count, let cap = caps[handle] else { return nil }
@@ -95,25 +102,22 @@ public struct CapsTable {
     }
 
 
-    /// Derive a new capability to the same endpoint with a fresh `badge` and a
-    /// (reduced) `rights` set. Gated by `.derive` on the source cap; the derived
-    /// copy never carries `.derive`, so it can't re-derive identities.
-    public mutating func derive(
+    public mutating func mint(
         from handle: UInt32,
-        badge      : Badge,
+        session    : Badge,
         rights     : CapRights
     ) -> UInt32? {
-        guard let source = resolve(handle),
-              source.rights.contains(.derive) else {
-            return nil
-        }
+        guard session != 0,
+              let source = resolve(handle),
+              source.rights.contains(.derive),
+              source.badge == 0 else { return nil }
 
         let effective = rights.intersection(source.rights).subtracting(.derive)
 
         return install(
             Capability(
                 target: source.target,
-                badge : badge,
+                badge : session,
                 rights: effective
             )
         )

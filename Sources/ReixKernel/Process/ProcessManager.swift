@@ -19,7 +19,27 @@ public struct ProcessManager: RXAllocatable {
     
     /// Monotonically increasing PID source. Never reused within a boot.
     private var pidCounter: PID = 0
-    
+
+    /// Monotonically increasing source of `Process.identity`, kept apart from
+    /// `pidCounter` on purpose.
+    ///
+    /// Starts at 1 because `0` is the wire value for "no identity": a process
+    /// holding it would be indistinguishable, to every server keying state on the
+    /// badge, from a message carrying no principal at all. Counting separately
+    /// from the PID is what keeps identities from aliasing if PIDs are ever
+    /// reused — see `Process.identity`.
+    private var identityCounter: Badge = 1
+
+    /// Root of the process tree, published once by `Kernel.jumpUserLand`.
+    ///
+    /// `killProcess` needs a fallback adopter for the children of a process
+    /// that has no parent of its own, otherwise they would keep pointing at
+    /// the struct we are about to free. Init is never a child of anybody, so
+    /// no `removeChild(id:)`/`findChild(id:)` lookup can ever reach it and no
+    /// `releaseProcess` path can free it: this pointer stays valid for the
+    /// whole boot.
+    public internal(set) var initProcess: UnsafeMutablePointer<Process>? = nil
+
     private let vmm       : UnsafeMutablePointer<VirtualMemoryManager>
     private let ppm       : UnsafeMutablePointer<KernelPPM>
     private let heap      : UnsafeMutablePointer<BucketsHeap>
@@ -54,7 +74,13 @@ public struct ProcessManager: RXAllocatable {
                     addressSpace = try vmm.pointee.createAddressSpace()
                 } catch { throw .creationProcessFailed(error) }
 
-                let vmaManagerPtr = attachVMAManager(to: &addressSpace)
+                guard let vmaManagerPtr = attachVMAManager(to: &addressSpace) else {
+                    // Only the fresh root table is live at this point, and
+                    // `vmaManager` is still `nil`, so the partial teardown
+                    // reduces to destroying the address space.
+                    destroyPartialAddressSpace(&addressSpace)
+                    throw .heapAllocationFailed
+                }
 
                 let elf: LoadedELF
                 do {
@@ -106,7 +132,17 @@ public struct ProcessManager: RXAllocatable {
                     throw .registerRegionError(error)
                 }
 
-                let trapFramePtr = heap.pointee.kmalloc(Arch.TrapFrame.self)
+                // From here on every failure has to undo the blocks allocated
+                // before it, innermost first, and only then the address space.
+                // Everything mapped so far — the ELF segments and the first
+                // stack page — carries a registered VMA, which is the only thing
+                // `destroyPartialAddressSpace` can see: it walks the VMA list.
+                // Nothing below maps a page, so that stays true on every rung.
+                guard let trapFramePtr = heap.pointee.kmallocOrNil(Arch.TrapFrame.self) else {
+                    destroyPartialAddressSpace(&addressSpace)
+                    throw .heapAllocationFailed
+                }
+
                 trapFramePtr.initialize(to: Arch.TrapFrame())
                 trapFramePtr.pointee.elr   = elf.entryPoint
                 trapFramePtr.pointee.spsr  = 0x0
@@ -115,19 +151,44 @@ public struct ProcessManager: RXAllocatable {
                 let pid = self.pidCounter
                 self.pidCounter += 1
 
-                let kStackRaw = heap.pointee.kmalloc(4096)
+                let identity = self.identityCounter
+                self.identityCounter += 1
+
+                guard let kStackRaw = heap.pointee.kmallocOrNil(4096) else {
+                    heap.pointee.kfree(trapFramePtr)
+                    destroyPartialAddressSpace(&addressSpace)
+                    throw .heapAllocationFailed
+                }
+
                 let kStackTop = kStackRaw.advanced(by: 4096)
                 let initialBreak = (elf.loadEnd + UserSpaceLayout.pageSize - 1) & ~(UserSpaceLayout.pageSize - 1)
 
-                let metadataPtr = heap.pointee.kmalloc(ProcessMetadata.self)
+                guard let metadataPtr = heap.pointee.kmallocOrNil(ProcessMetadata.self) else {
+                    heap.pointee.kfree(kStackRaw)
+                    heap.pointee.kfree(trapFramePtr)
+                    destroyPartialAddressSpace(&addressSpace)
+                    throw .heapAllocationFailed
+                }
+
                 metadataPtr.initialize(to: ProcessMetadata(
                     elfImage: elf.image, elfLoadBase: elf.loadBase,
                     elfLoadEnd: elf.loadEnd, programBreak: initialBreak
                 ))
 
-                let processPtr = heap.pointee.kmalloc(Process.self)
+                // The `Process` is the last block on purpose: it is the only one
+                // any other container can name, and it is still unknown to the
+                // scheduler, to every endpoint queue and to every family list, so
+                // freeing the partial set here can corrupt nothing.
+                guard let processPtr = heap.pointee.kmallocOrNil(Process.self) else {
+                    heap.pointee.kfree(metadataPtr)
+                    heap.pointee.kfree(kStackRaw)
+                    heap.pointee.kfree(trapFramePtr)
+                    destroyPartialAddressSpace(&addressSpace)
+                    throw .heapAllocationFailed
+                }
+
                 processPtr.initialize(to: Process(
-                    pid: pid, addressSpace: addressSpace,
+                    pid: pid, identity: identity, addressSpace: addressSpace,
                     context: trapFramePtr, kernelStackTop: kStackTop,
                     kernelStackRaw: kStackRaw, metadata: metadataPtr
                 ))
@@ -150,32 +211,55 @@ public struct ProcessManager: RXAllocatable {
         } catch { throw .creationProcessFailed(error) }
         
         
-        // Fork/split path: the child starts with an EMPTY user address
-        // space. Every region — including the stack — is reproduced from
-        // the parent (descriptor + page contents) by `cloneRegions`, so we
-        // must NOT pre-map or pre-register a stack here: doing so would
-        // collide with the parent's stack VMA during the clone and abort it.
-        _ = attachVMAManager(to: &addressSpace)
-        
-        let trapFramePtr = heap.pointee.kmalloc(Arch.TrapFrame.self)
-        
+        guard attachVMAManager(to: &addressSpace) != nil else {
+            destroyPartialAddressSpace(&addressSpace)
+            throw .heapAllocationFailed
+        }
+
+        guard let trapFramePtr = heap.pointee.kmallocOrNil(Arch.TrapFrame.self) else {
+            destroyPartialAddressSpace(&addressSpace)
+            throw .heapAllocationFailed
+        }
+
         trapFramePtr.initialize(to: Arch.TrapFrame())
         trapFramePtr.pointee.elr   = 0
         trapFramePtr.pointee.spsr  = 0x0
         trapFramePtr.pointee.spel0 = UserSpaceLayout.stackTop
-        
+
         let pid = self.pidCounter
         self.pidCounter += 1
-        
-        let kStackRaw = heap.pointee.kmalloc(4096)
+
+        let identity = self.identityCounter
+        self.identityCounter += 1
+
+        guard let kStackRaw = heap.pointee.kmallocOrNil(4096) else {
+            heap.pointee.kfree(trapFramePtr)
+            destroyPartialAddressSpace(&addressSpace)
+            throw .heapAllocationFailed
+        }
+
         let kStackTop = kStackRaw.advanced(by: 4096)
-        
-        let metadataPtr = heap.pointee.kmalloc(ProcessMetadata.self)
+
+        guard let metadataPtr = heap.pointee.kmallocOrNil(ProcessMetadata.self) else {
+            heap.pointee.kfree(kStackRaw)
+            heap.pointee.kfree(trapFramePtr)
+            destroyPartialAddressSpace(&addressSpace)
+            throw .heapAllocationFailed
+        }
+
         metadataPtr.initialize(to: ProcessMetadata())
-        
-        let processPtr = heap.pointee.kmalloc(Process.self)
+
+        guard let processPtr = heap.pointee.kmallocOrNil(Process.self) else {
+            heap.pointee.kfree(metadataPtr)
+            heap.pointee.kfree(kStackRaw)
+            heap.pointee.kfree(trapFramePtr)
+            destroyPartialAddressSpace(&addressSpace)
+            throw .heapAllocationFailed
+        }
+
         processPtr.initialize(to: Process(
             pid           : pid,
+            identity      : identity,
             addressSpace  : addressSpace,
             
             context       : trapFramePtr,
@@ -198,10 +282,6 @@ public struct ProcessManager: RXAllocatable {
             process.pointee.addressSpace.vmaManager = nil
         }
         
-        // The ELF image is no longer a single contiguous block: it is loaded as
-        // individual `.anonymous` pages, already released per page by
-        // `teardown` above. So there is no block to free here — doing so would
-        // double-free pages teardown just returned.
         if let metadata = process.pointee.metadata {
             metadata.pointee.elfImage    = nil
             metadata.pointee.elfLoadBase = 0
@@ -219,25 +299,55 @@ public struct ProcessManager: RXAllocatable {
             process.pointee.kernelStackTop = nil
         }
         
+        defer { reinstallCurrentAddressSpace() }
+
         try vmm.pointee.destroyAddressSpace(
             addressSpace: process.pointee.addressSpace
         )
     }
-    
+
+
+    /// Put the running process's root back in TTBR0 after another address
+    /// space has been torn down.
+    ///
+    /// `destroyAddressSpace` has to detach the root it is about to free, and it
+    /// does so by installing the kernel identity root. That is right when the
+    /// caller is dying' then`killCurrent` clears the current process first, and the
+    /// scheduler installs whoever runs next, but every other caller is a live
+    /// process destroying *somebody else's* space: a parent in `terminate`, or a
+    /// failed `spawn`/`split` unwinding its half-built child. Those return
+    /// straight to EL0, and the identity root carries no user mapping at all, so
+    /// the caller would fault on its own next instruction, fault again servicing
+    /// it into a root that is not installed, and never make progress.
+    ///
+    /// A nil current process is therefore the signal to leave TTBR0 alone; it is
+    /// the only case where the outgoing root was the running one.
+    @inline(__always)
+    private func reinstallCurrentAddressSpace() {
+        guard let current = Arch.CPU.getCurrentProcess() else { return }
+
+        Arch.MMU.switchUserAddressSpace(
+            current.pointee.addressSpace.rootTablePhysical,
+            asid: current.pointee.addressSpace.asid
+        )
+    }
+
     /// Final teardown of a process struct after every consumer has read
     /// the exit code from its metadata. Frees the metadata block and the
     /// `Process` struct itself. Callers must ensure the process is no
     /// longer referenced by any scheduler queue.
     public func releaseProcess(_ process: UnsafeMutablePointer<Process>) {
-        // Unlink from the parent's children list before the struct is freed.
-        // `pushChild` threads the list through the Process structs themselves,
-        // so leaving a freed child linked leaves the parent with dangling
-        // `firstChild`/sibling pointers into reclaimed heap memory — corrupted
-        // on the next `pushChild`.
+        
         if let parent = process.pointee.family.parent {
             parent.pointee.family.removeChild(process)
+
+            if let parentMeta = parent.pointee.metadata,
+               parentMeta.pointee.waitingChildPid == process.pointee.pid {
+
+                parentMeta.pointee.waitingChildPid = nil
+            }
         }
-        
+
         if let metadata = process.pointee.metadata {
             heap.pointee.kfree(metadata)
             process.pointee.metadata = nil
@@ -271,8 +381,13 @@ public struct ProcessManager: RXAllocatable {
         
         if let trapFrame = context.scheduler.pointee.yield() {
             if let next = Arch.CPU.getCurrentProcess() {
-                Arch.MMU.switchUserAddressSpace(next.pointee.addressSpace.rootTablePhysical)
+                
+                Arch.MMU.switchUserAddressSpace(
+                    next.pointee.addressSpace.rootTablePhysical,
+                    asid: next.pointee.addressSpace.asid
+                )
             }
+            
             frame.pointee = trapFrame.pointee
             
         } else {
@@ -290,11 +405,21 @@ public struct ProcessManager: RXAllocatable {
         let status = process.pointee.status
         
         guard case .terminated = status else {
-            
-            if let grandparent = process.pointee.family.parent {
-                process.pointee.family.reparent(newParent: grandparent)
+
+            releaseOrphanedZombies(of: process, context)
+
+            let adopter = initProcess.flatMap { candidate -> UnsafeMutablePointer<Process>? in
+                if case .terminated = candidate.pointee.status { return nil }
+                return candidate
             }
-            
+
+            let newParent = process.pointee.family.parent ?? adopter
+
+            if let newParent, newParent != process {
+                process.pointee.family.reparent(newParent: newParent)
+
+            } else { process.pointee.family.orphanChildren() }
+
             switch status {
                 case .blockedOnSend(let ep?), .blockedOnReceive(let ep?):
                     ep.pointee.queue.remove(element: process)
@@ -324,24 +449,66 @@ public struct ProcessManager: RXAllocatable {
     ) {
 
         if let waiter = process.pointee.replyTo {
-            waiter.pointee.replyPartner        = nil
-            waiter.pointee.context?.pointee.x0 = IPCStatus.peerDied.rawValue
-            
-            context.scheduler.pointee.resume(waiter)
             process.pointee.replyTo = nil
+
+            if waiter.pointee.replyPartner == process {
+                waiter.pointee.replyPartner = nil
+            }
+
+            waiter.pointee.context?.pointee.x0 = IPCStatus.peerDied.rawValue
+            context.scheduler.pointee.resume(waiter)
         }
 
         if let server = process.pointee.replyPartner {
-            server.pointee.replyTo       = nil
             process.pointee.replyPartner = nil
+
+            if server.pointee.replyTo == process {
+                server.pointee.replyTo = nil
+            }
         }
     }
-    
+
+    /// Frees the children that already died and can no longer be named.
+    ///
+    /// A zombie is only reachable through `family.findChild(id:)`, so once its
+    /// parent is gone nobody knows its pid: reparenting it to the grandparent
+    /// would keep it in the scheduler's `terminated` list and leak its
+    /// `Process` plus `ProcessMetadata` for the rest of the boot. Its address
+    /// space is already down (`killProcess` did that when it became a zombie),
+    /// so all that is left is to unlink it from `terminated` and free it.
+    /// Which must happen in that order, and only for a zombie the list really
+    /// holds, because `LinkedList.remove` on a node it does not own would
+    /// clear the head and drop every other zombie.
+    private func releaseOrphanedZombies(
+        of process: UnsafeMutablePointer<Process>,
+        _  context: SyscallContext
+    ) {
+        var current = process.pointee.family.firstChild
+
+        while let child = current {
+            current = child.pointee.family.nextSibling
+
+            guard case .terminated = child.pointee.status,
+                  context.scheduler.pointee.search(
+                    in: .terminated,
+                    to: child.pointee.pid
+                  ) == child
+            else { continue }
+
+            guard context.scheduler.pointee.reapChild(child) else { continue }
+
+            releaseProcess(child)
+        }
+    }
+
     private func attachVMAManager(
         to addressSpace: inout AddressSpace
-    ) -> UnsafeMutablePointer<VMAManager> {
-        
-        let vmaPtr = heap.pointee.kmalloc(VMAManager.self)
+    ) -> UnsafeMutablePointer<VMAManager>? {
+
+        guard let vmaPtr = heap.pointee.kmallocOrNil(VMAManager.self) else {
+            return nil
+        }
+
         vmaPtr.initialize(to: VMAManager(
             heap             : heap,
             vmm              : vmm,
@@ -364,5 +531,7 @@ public struct ProcessManager: RXAllocatable {
         }
         
         try? vmm.pointee.destroyAddressSpace(addressSpace: space)
+
+        reinstallCurrentAddressSpace()
     }
 }

@@ -32,7 +32,7 @@ public struct NameServer: Service {
     ) {
 
         print("[ NS    ] badge request:", terminator: " ")
-        print(String(UInt64(request.badge)))
+        print(String(UInt64(request.identity)))
 
         let id = Services(rawValue: request.message.words[0])
 

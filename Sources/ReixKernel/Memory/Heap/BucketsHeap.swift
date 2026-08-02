@@ -39,22 +39,43 @@ public struct BucketsHeap: KernelHeapInterface {
                    .bindMemory(to: Object.self, capacity: capacity)
     }
 
+    /// Failable counterpart of `kmalloc`, for every allocation a syscall can
+    /// reach.
+    @inline(__always)
+    public mutating func kmallocOrNil(_ size: UInt) -> UnsafeMutableRawPointer? {
+        allocBytesOrNil(size)
+    }
+
+    /// Typed counterpart of `kmallocOrNil`, mirroring `kmalloc<Object>`.
+    @inline(__always)
+    public mutating func kmallocOrNil<Object: RXAllocatable & ~Copyable>(
+        _ type    : Object.Type,
+        _ capacity: Int = 1
+    ) -> UnsafeMutablePointer<Object>? {
+        let size = UInt(MemoryLayout<Object>.stride * capacity)
+
+        return allocBytesOrNil(size)?
+                   .bindMemory(to: Object.self, capacity: capacity)
+    }
+
     @inline(__always)
     public mutating func kfree(_ ptr: UnsafeMutableRawPointer) {
         let page = SlabCore<PPMBackend>.pageBase(ptr)
         let meta = frameInfo(of: page)
 
-        // Multi-page blocks bypass the slab: free the whole order-N frame.
-        // `ppm.free` clears the page flags once the refcount reaches zero.
         if meta.pointee.flags.contains(.heapLarge) {
+            
             let phys = UInt64(UInt(bitPattern: page)) - PPMBackend.physicalOffset
             try? core.backend.ppmPtr.pointee.free(
                 PhysicalPage(address: phys, order: meta.pointee.order)
             )
+            
             return
         }
 
-        guard core.free(ptr) else { Arch.CPU.panic("kfree: invalid or double free") }
+        guard core.free(ptr) else {
+            Arch.CPU.panic("kfree: invalid or double free")
+        }
     }
 
     /// Typed counterpart of `kmalloc<Object>`: deinitializes the pointee(s) and
@@ -71,26 +92,32 @@ public struct BucketsHeap: KernelHeapInterface {
 
     // MARK: - internals
 
-    /// Routes by size: blocks up to one page go through the slab, larger
-    /// requests are served as a single order-N buddy frame tagged `.heapLarge`.
+    /// Panicking wrapper kept for the boot-time singletons: they have no error
+    /// channel and nothing to roll back, so the message is the diagnostic.
     private mutating func allocBytes(
         _ size        : UInt,
         _ errorMessage: StaticString
     ) -> UnsafeMutableRawPointer {
+        guard let pointer = allocBytesOrNil(size) else { Arch.CPU.panic(errorMessage) }
+
+        return pointer
+    }
+
+    /// Routes by size: blocks up to one page go through the slab, larger
+    /// requests are served as a single order-N buddy frame tagged `.heapLarge`.
+    private mutating func allocBytesOrNil(_ size: UInt) -> UnsafeMutableRawPointer? {
         if size > UInt(SlabCore<PPMBackend>.pageSize) {
             guard let page = try? core.backend.ppmPtr.pointee.alloc(
                 Int(size),
                 flag: .heapLarge
-            ) else { Arch.CPU.panic(errorMessage) }
+            ) else { return nil }
 
             return UnsafeMutableRawPointer(
                 bitPattern: UInt(page.address + PPMBackend.physicalOffset)
             )!
         }
 
-        guard let pointer = core.alloc(size: size) else { Arch.CPU.panic(errorMessage) }
-
-        return pointer
+        return core.alloc(size: size)
     }
 
     private func frameInfo(of page: UnsafeMutableRawPointer) -> UnsafeMutablePointer<FrameInfo> {

@@ -173,7 +173,10 @@ extension LinkedList: VMAStructure where T == VirtualMemoryArea {
               address < region.pointee.endAddress
         else { throw .invalidLayout }
 
-        let newRegionPtr = heap.pointee.kmalloc(VirtualMemoryArea.self)
+        guard let newRegionPtr = heap.pointee.kmallocOrNil(VirtualMemoryArea.self) else {
+            throw .heapAllocationFailed(.allocationFailed(reason: .fullMemory))
+        }
+
         newRegionPtr.initialize(
             to: VirtualMemoryArea(
                 startAddress: address,
@@ -212,6 +215,8 @@ extension LinkedList: VMAStructure where T == VirtualMemoryArea {
               first.pointee.mappingFlags.rawValue == second.pointee.mappingFlags.rawValue,
               first.pointee.backingType           == second.pointee.backingType
         else { return nil }
+
+        guard first.pointee.backingType == .anonymous else { return nil }
 
         let merged = VirtualMemoryArea(
             startAddress: first.pointee.startAddress,

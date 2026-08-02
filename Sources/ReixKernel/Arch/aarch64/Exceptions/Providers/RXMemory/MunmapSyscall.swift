@@ -10,10 +10,13 @@ import ReixABI
 
 /// `munmap(addr, size)` syscall provider.
 ///
-/// Releases a region previously returned by `mmap`. In this milestone
-/// only full-region unmap is supported: `addr` must match the VMA start
-/// and `size` must match the VMA size. Returns `0` on success or
-/// `UInt64.max` on failure.
+/// Releases the pages of `[addr, addr + size)`. The range need not match an
+/// `mmap` exactly: it may cover part of a region, span several of them, and
+/// unmapped holes inside it are skipped. `addr` must be page-aligned and
+/// `size` rounds up to the page.
+/// 
+/// Returns `0` on success or `UInt64.max` on failure, an unaligned address, a range outside user space, or one with
+/// nothing mapped in it at all.
 public struct MunmapSyscall: SyscallProvider {
 
     public static let number: SyscallNumber = .munmap

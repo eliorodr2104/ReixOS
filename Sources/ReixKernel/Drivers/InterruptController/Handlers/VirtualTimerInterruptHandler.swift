@@ -24,15 +24,26 @@ public struct VirtualTimerInterruptHandler: InterruptHandler {
         Kernel.gic.pointee.endOfInterrupt(id: id)
 
         let quantumExpired = Kernel.scheduler.pointee.onTick()
-        
-        Kernel.ipc.pointee.checkTimeouts(now: Kernel.scheduler.pointee.systemTicks)
+
+        let systemTicks = Kernel.scheduler.pointee.systemTicks
+        if Kernel.ipc.pointee.hasDeadlineDue(at: systemTicks) {
+            Kernel.ipc.pointee.checkTimeouts(now: systemTicks)
+        }
 
         guard quantumExpired else { return }
 
+        let outgoingRoot = Arch.CPU.getCurrentProcess()? .pointee.addressSpace.rootTablePhysical
+
         if let nextProcess = Kernel.scheduler.pointee.selectNextTask() {
-            Arch.MMU.switchUserAddressSpace(
-                nextProcess.pointee.addressSpace.rootTablePhysical
-            )
+            let incomingRoot = nextProcess.pointee.addressSpace.rootTablePhysical
+
+            if incomingRoot != outgoingRoot {
+                Arch.MMU.switchUserAddressSpace(
+                    incomingRoot,
+                    asid: nextProcess.pointee.addressSpace.asid
+                )
+            }
+
             frame.pointee = nextProcess.pointee.context!.pointee
         }
     }

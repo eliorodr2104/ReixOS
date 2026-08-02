@@ -7,40 +7,13 @@
 
 import ReixABI
 
-private struct ReceivedMessageRaw {
-    public var tag          : UInt64 = 0
-    public var word0        : UInt64 = 0
-    public var word1        : UInt64 = 0
-    public var word2        : UInt64 = 0
-    public var word3        : UInt64 = 0
-    public var badge        : UInt64 = 0
-    public var grantedHandle: UInt64 = 0
-}
-
-public struct ReceivedMessage {
-    public var message   : Message
-    public var grantedCap: UInt32?
-    public var badge     : UInt32
-    
-    init(
-        message   : Message,
-        grantedCap: UInt32,
-        badge     : UInt32
-    ) {
-        self.message    = message
-        self.grantedCap = grantedCap == UInt32.max ? nil : UInt32(grantedCap)
-        self.badge      = badge
-    }
-}
-
-
 @discardableResult
 @inline(__always)
 public func send(
     handle     : UInt32,
     message    : Message,
-    grant      : UInt32?    = nil,
-    grantRights: CapRights  = [.send, .receive]
+    grant      : UInt32?   = nil,
+    grantRights: CapRights = [.send, .receive]
 ) -> IPCStatus {
     
     let grantHandle = grant ?? UInt32.max
@@ -80,9 +53,9 @@ public func receive(handle: UInt32) -> ReceivedMessage {
     w[3] = UInt32(truncatingIfNeeded: raw.word3)
 
     return ReceivedMessage(
-        message   : Message(tag: MessageTag(packed: raw.tag), words: w),
+        message   : Message(tag: raw.tag.packed, words: w),
         grantedCap: UInt32(truncatingIfNeeded: raw.grantedHandle),
-        badge     : UInt32(truncatingIfNeeded: raw.badge)
+        badgeWord : raw.badgeWord
     )
 }
 
@@ -112,9 +85,9 @@ public func receive(
     w[3] = UInt32(truncatingIfNeeded: raw.word3)
 
     return ReceivedMessage(
-        message   : Message(tag: MessageTag(packed: raw.tag), words: w),
+        message   : Message(tag: raw.tag.packed, words: w),
         grantedCap: UInt32(truncatingIfNeeded: raw.grantedHandle),
-        badge     : UInt32(truncatingIfNeeded: raw.badge)
+        badgeWord : raw.badgeWord
     )
 }
 
@@ -130,6 +103,7 @@ public func call(
     handle : UInt32,
     message: Message
 ) -> ReceivedMessage {
+    
     var raw = ReceivedMessageRaw()
 
     _ = withUnsafeMutablePointer(to: &raw) { ptr in
@@ -152,9 +126,9 @@ public func call(
     w[3] = UInt32(truncatingIfNeeded: raw.word3)
 
     return ReceivedMessage(
-        message   : Message(tag: MessageTag(packed: raw.tag), words: w),
+        message   : Message(tag: raw.tag.packed, words: w),
         grantedCap: UInt32(truncatingIfNeeded: raw.grantedHandle),
-        badge     : UInt32(truncatingIfNeeded: raw.badge)
+        badgeWord : raw.badgeWord
     )
 }
 
@@ -210,20 +184,25 @@ public func replyRecv(
     w[3] = UInt32(truncatingIfNeeded: raw.word3)
 
     return ReceivedMessage(
-        message   : Message(tag: MessageTag(packed: raw.tag), words: w),
+        message   : Message(tag: raw.tag.packed, words: w),
         grantedCap: UInt32(truncatingIfNeeded: raw.grantedHandle),
-        badge     : UInt32(truncatingIfNeeded: raw.badge)
+        badgeWord : raw.badgeWord
     )
 }
 
 
 @inline(__always)
 public func trySend(
-    handle : UInt32,
-    message: Message,
-    grant  : UInt32? = nil
+    handle     : UInt32,
+    message    : Message,
+    grant      : UInt32?   = nil,
+    grantRights: CapRights = [.send, .receive]
 ) -> IPCStatus {
-     IPCStatus(
+
+    let grantHandle = grant ?? UInt32.max
+    let grantWord   = (UInt64(grantRights.rawValue) << 32) | UInt64(grantHandle)
+
+    return IPCStatus(
         rawValue: _syscall(
             .trySend,
             UInt64(handle),
@@ -232,7 +211,7 @@ public func trySend(
             UInt64(message.words[1]),
             UInt64(message.words[2]),
             UInt64(message.words[3]),
-            UInt64(grant ?? UInt32.max)
+            grantWord
         )
      ) ?? .invalidMessage
 }
@@ -261,9 +240,9 @@ public func tryReceive(handle: UInt32) -> ReceivedMessage? {
     w[3] = UInt32(truncatingIfNeeded: raw.word3)
 
     return ReceivedMessage(
-        message   : Message(tag: MessageTag(packed: raw.tag), words: w),
+        message   : Message(tag: raw.tag.packed, words: w),
         grantedCap: UInt32(truncatingIfNeeded: raw.grantedHandle),
-        badge     : UInt32(truncatingIfNeeded: raw.badge)
+        badgeWord : raw.badgeWord
     )
     
 }
@@ -277,16 +256,22 @@ public func spawnService() -> UInt32? {
 }
 
 
+/// Bind an unbadged capability to `session`, as a new reduced-rights handle.
+///
+/// Only the session is caller-chosen, identity is stamped by the kernel from the
+/// sending process, so this cannot be used to speak as another principal.
+/// Returns `nil` when the source lacks `.derive`.
 @inline(__always)
 public func derive(
-    handle: UInt32,
-    badge : UInt32,
-    rights: CapRights
+    handle : UInt32,
+    session: UInt32,
+    rights : CapRights
 ) -> UInt32? {
+    
     let result = UInt32(truncatingIfNeeded: _syscall(
         .derive,
         UInt64(handle),
-        UInt64(badge),
+        UInt64(session),
         UInt64(rights.rawValue),
         0, 0, 0, 0
     ))
@@ -309,4 +294,21 @@ public func mapDevice(handle: UInt32) -> UInt64 {
 @inline(__always)
 public func capExists(_ handle: UInt32) -> Bool {
     _syscall(.capExists, UInt64(handle)) != 0
+}
+
+
+/// Give the capability at `handle` back to the kernel and free its table slot.
+///
+/// **Unmap before you drop.** Anything mapped through this capability
+/// (`shmMap`, `mapDevice`) must be unmapped *first*. This is the last reference
+/// counted against the target, so for a shared region the drop can free its
+/// physical frames; a mapping left behind then points at memory the kernel is
+/// free to hand to somebody else, and writing through it corrupts whatever lands
+/// there.
+///
+/// Returns `true` when the capability was dropped, `false` when this process
+/// holds nothing at `handle`.
+@inline(__always)
+public func capDrop(_ handle: UInt32) -> Bool {
+    _syscall(.capDrop, UInt64(handle)) == 0
 }

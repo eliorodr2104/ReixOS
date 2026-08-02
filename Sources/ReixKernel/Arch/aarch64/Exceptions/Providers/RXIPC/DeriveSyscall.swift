@@ -5,12 +5,20 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 04/06/2026.
 //
 
-/// `derive(handle:badge:rights:)` syscall provider. Derives a new capability
-/// to the same endpoint with a fresh badge and reduced rights, gated by the
-/// `.derive` right on the source cap. Writes the new handle into `x0`, or
-/// `UInt32.max` on failure (missing `.derive`, bad handle, table full).
 import ReixABI
 
+/// `derive(handle:session:rights:)` syscall provider. Mints a new capability to
+/// the same endpoint bound to a caller-chosen *session* with reduced rights,
+/// gated by the `.derive` right on the source cap and by the set-once-from-zero
+/// rule in `CapsTable.mint`.
+///
+/// A session is all a caller can choose here: identity comes from
+/// `Process.identity` and is stamped by the kernel at delivery, so this syscall
+/// cannot be used to speak as somebody else.
+///
+/// `x0` = handle, `x1` = session, `x2` = rights. Writes the new handle into
+/// `x0`, or `UInt32.max` on failure (missing `.derive`, already-badged source,
+/// bad handle, table full).
 public struct DeriveSyscall: SyscallProvider {
 
     public static let number: SyscallNumber = .derive
@@ -24,15 +32,15 @@ public struct DeriveSyscall: SyscallProvider {
             return
         }
 
-        let handle = UInt32(truncatingIfNeeded: frame.pointee.x0)
-        let badge  = Badge(truncatingIfNeeded: frame.pointee.x1)
-        let rights = CapRights(rawValue: UInt8(truncatingIfNeeded: frame.pointee.x2))
+        let handle  = UInt32(truncatingIfNeeded: frame.pointee.x0)
+        let session = Badge(truncatingIfNeeded: frame.pointee.x1)
+        let rights  = CapRights(rawValue: UInt8(truncatingIfNeeded: frame.pointee.x2))
 
-        guard let newHandle = current.pointee.metadata.pointee.capsTable.derive(
-            from : handle,
-            badge: badge,
-            rights: rights
-            
+        guard let newHandle = current.pointee.metadata.pointee.capsTable.mint(
+            from   : handle,
+            session: session,
+            rights : rights
+
         ) else {
             frame.pointee.x0 = UInt64(UInt32.max)
             return

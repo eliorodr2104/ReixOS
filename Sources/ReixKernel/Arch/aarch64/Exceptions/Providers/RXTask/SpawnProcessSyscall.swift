@@ -16,18 +16,21 @@ public struct SpawnProcessSyscall: SyscallProvider {
     ) {
                 
         guard let currentProcess = Arch.CPU.getCurrentProcess(),
-              let _              = currentProcess.pointee.metadata.pointee.capsTable.findFirst(for: .spawn) else {
+              let _ = currentProcess.pointee.metadata.pointee.capsTable.findFirst(for: .spawn) else {
             frame.pointee.x0 = UInt64.max
+            frame.pointee.x1 = UInt64(UInt32.max)
             return
         }
-    
-        guard let source = UnsafeRawPointer(bitPattern: UInt(frame.pointee.x0)) else {
+
+        guard frame.pointee.x0 != 0 else {
             frame.pointee.x0 = UInt64.max
+            frame.pointee.x1 = UInt64(UInt32.max)
             return // throw .nullPointer
         }
 
         guard frame.pointee.x1 <= 100 else {
             frame.pointee.x0 = UInt64.max
+            frame.pointee.x1 = UInt64(UInt32.max)
             return
         }
 
@@ -38,22 +41,27 @@ public struct SpawnProcessSyscall: SyscallProvider {
         
         guard frame.pointee.x3 <= 8 else {
             frame.pointee.x0 = UInt64.max
+            frame.pointee.x1 = UInt64(UInt32.max)
             return
         }
 
-        if let grantsBase = UnsafeRawPointer(bitPattern: UInt(frame.pointee.x2)),
-           frame.pointee.x3 > 0 {
+        if frame.pointee.x3 > 0 {
             let count = Int(frame.pointee.x3)
-            
-            guard UserMemory.validateRegion(
-                addr       : frame.pointee.x2,
-                size       : count * MemoryLayout<CapGrant>.stride,
-                permissions: [.read, .user]
-            ) else { frame.pointee.x0 = UInt64.max; return }
 
-            let typed = grantsBase.assumingMemoryBound(to: CapGrant.self)
-            for i in 0..<count { grants[i] = typed[i] }
-            
+            let copied = withUnsafeMutableBytes(of: &grants) { raw in
+                UserMemory.copyFromUser(
+                    kernelDest: raw.baseAddress!,
+                    userSrc   : frame.pointee.x2,
+                    count     : count * MemoryLayout<CapGrant>.stride
+                )
+            }
+
+            guard copied else {
+                frame.pointee.x0 = UInt64.max
+                frame.pointee.x1 = UInt64(UInt32.max)
+                return
+            }
+
             grantsCount = count
         }
 
@@ -112,6 +120,10 @@ public struct SpawnProcessSyscall: SyscallProvider {
             // Set on reg 0 the pid for parent process
             try? context.scheduler.pointee.addTask(childProcess)
             frame.pointee.x0 = childProcess.pointee.pid
+
+        } else {
+            frame.pointee.x0 = UInt64.max
+            frame.pointee.x1 = UInt64(UInt32.max)
         }
     }
 }

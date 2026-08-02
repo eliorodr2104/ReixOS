@@ -5,6 +5,8 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 23/04/2026.
 //
 
+import ReixABI
+
 /// The primary bridge between the Assembly exception vectors and the Swift kernel logic.
 ///
 /// This function is called directly from the Low-Level Exception Vector Table (EVT).
@@ -13,12 +15,10 @@
 ///
 /// - Parameters:
 ///   - rawFramePointer: A pointer to the stack location where the CPU state (GPRs) was saved.
-///   - type: The numeric representation of the `ExceptionType` (e.g., Sync, IRQ).
+///   - type: The numeric representation of the `ExceptionType` (Sync, IRQ).
 ///
 /// - Important: This function uses `@_cdecl` to maintain a stable C-compatible
 ///   calling convention, as it is invoked from Assembly.
-import ReixABI
-
 @_cdecl("swift_exception_handler")
 public func exceptionVirtualTableHandler(
     rawFramePointer: UnsafeMutableRawPointer,
@@ -102,7 +102,12 @@ func handleExceptionType(
 /// Handles memory access violations (Data/Instruction Aborts) originating from User Space (EL0).
 ///
 /// It decodes the Data Fault Status Code (DFSC) from the ISS (Instruction Specific Syndrome)
-/// to determine if the fault was a Translation Fault (Page Fault) or a Permission Fault (COW).
+/// into a `FaultCause`: translation (page fault), permission (COW), access flag,
+/// or alignment.
+///
+/// A DFSC the kernel cannot classify carries no `FaultCause`, so it skips the
+/// page-fault servicing attempt and terminates the process directly: there is
+/// nothing to service when the fault is not understood.
 ///
 /// - Parameters:
 ///   - frame: The execution context of the user process.
@@ -114,33 +119,32 @@ func userAbortHandle(
 ) {
     let iss  = frame.pointee.esr & 0x1FFFFFF
     let dfsc = iss & 0x3F
-
-    let cause: FaultCause
-    switch dfsc {
-        case 0x04...0x07: cause = .translation
-        case 0x0C...0x0F: cause = .permission
-        case 0x21       : cause = .alignment
-        case 0x08...0x0B: cause = .access
-        default:
-            Arch.CPU.panic("Unhandled DFSC")
+    
+    let cause: FaultCause? = switch dfsc {
+        case 0x04...0x07: .translation
+        case 0x0C...0x0F: .permission
+        case 0x21       : .alignment
+        case 0x08...0x0B: .access
+        default         : nil
     }
 
     guard let process = Arch.CPU.getCurrentProcess() else {
         Arch.CPU.panic("User abort raised without a current process")
     }
 
-    if process.pointee.addressSpace.handlePageFault(
+    if let cause, process.pointee.addressSpace.handlePageFault(
         at   : faultAddress,
         cause: cause
     ) { return }
 
-    
-    kprint("[SEGFAULT] pid=\(process.pointee.pid) far=0x\(hex: faultAddress) elr=0x\(hex: frame.pointee.elr)")
-    
+
+    kprint("[SEGFAULT] pid=\(process.pointee.pid) far=0x\(hex: faultAddress) elr=0x\(hex: frame.pointee.elr) dfsc=0x\(hex: dfsc)")
+
     let guardLow = UserSpaceLayout.stackLimit - UInt64(UserSpaceLayout.guardPageCount) * UserSpaceLayout.pageSize
-    let reason: ExitReason = (faultAddress >= guardLow && faultAddress < UserSpaceLayout.stackLimit)
-        ? .stackOverflow : .memoryFault(cause)
     
+    let reason: ExitReason = if faultAddress >= guardLow &&
+                                faultAddress < UserSpaceLayout.stackLimit { .stackOverflow } else { .memoryFault(cause ?? .translation) }
+
     Kernel.syscallHandler.pointee.killCurrent(
         frame : frame,
         reason: reason

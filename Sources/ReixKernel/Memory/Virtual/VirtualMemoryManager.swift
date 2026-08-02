@@ -156,15 +156,6 @@ public struct VirtualMemoryManager {
         let rootTable: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(page.address)
         rootTable.initialize(repeating: Arch.PageTableEntry(rawValue: 0), count: 512)
 
-        // Share the kernel's top-level entries by reference instead of
-        // rebuilding the whole kernel identity per process. The kernel lives
-        // entirely in the L0[0] subtree (RAM identity + device MMIO, all phys
-        // < 512 GiB) and user space is confined to L0[1..511]
-        // (`UserSpaceLayout.userMin`), so copying the populated kernel L0
-        // entries lets every address space point at the SAME kernel page
-        // tables. Address-space creation is O(1) — one zeroed page plus a
-        // pointer copy — instead of O(RAM/4K), and no kernel tables are
-        // duplicated (hence none to leak on teardown).
         let kernelMaster: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(self.identityTableAddress)
         for index in 0..<512 where kernelMaster[index].isPresent {
             rootTable[index] = kernelMaster[index]
@@ -186,33 +177,17 @@ public struct VirtualMemoryManager {
     }
 
 
-    public func destroyAddressSpace(
-        addressSpace: consuming AddressSpace
-    ) throws(PPMError) {
-        // The exiting process root table may still be installed in TTBR0_EL1.
-        // The kernel executes from the low identity map provided by TTBR0
-        // (VBAR and kernel text live there), so freeing the live root and
-        // flushing the TLB would invalidate the kernel's own code/vector
-        // mappings and wedge the CPU in a translation-fault loop. Detach by
-        // installing the kernel identity root in TTBR0 before reclaiming the
-        // page; the kernel identity root carries the same kernel mappings and
-        // is never freed.
-        Arch.MMU.switchUserAddressSpace(self.identityTableAddress)
+    public func destroyAddressSpace(addressSpace: consuming AddressSpace) throws(PPMError) {
+        
+        Arch.MMU.switchUserAddressSpace(self.identityTableAddress, asid: 0)
+        Arch.MMU.flushTLB()
 
-        // Reclaim every intermediate page table (L1/L2/L3) reachable from this
-        // root before freeing the root itself. Each process owns a private copy
-        // of its whole table tree (kernel identity included, built per-process
-        // by `createAddressSpace`/`mapKernelIdentitySpace`), so without this the
-        // ~one tree's worth of table pages per process is never returned to the
-        // PPM and accumulates until the allocator runs dry. Leaf data frames are
-        // NOT touched here: anonymous user pages were already released per-VMA by
-        // `teardown`, and kernel/device frames are globally owned. The dying root
-        // is no longer installed in TTBR0, so walking and freeing it is safe.
         freePageTables(rootTable: addressSpace.rootTablePhysical)
 
         try ppmPtr.pointee.freeOwnedKernelPage(
             PhysicalPage(address: addressSpace.rootTablePhysical, order: 0)
         )
+
         Arch.MMU.flushTLB()
     }
 
@@ -222,17 +197,13 @@ public struct VirtualMemoryManager {
     /// root page itself is freed by the caller. Leaf (block/page) descriptors
     /// point at data frames owned elsewhere and are deliberately left alone.
     private func freePageTables(rootTable: PhysicalAddress) {
-        let l0          : UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable)
+        let l0: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable)
         let kernelMaster: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(self.identityTableAddress)
 
         for index in 0..<512 {
             let entry = l0[index]
             guard entry.isPresent, entry.isTableDescriptor else { continue }
 
-            // Skip entries shared with the kernel master (copied by reference
-            // in `createAddressSpace`): their subtrees belong to every process
-            // and must never be freed. Only the process-private user subtrees
-            // (L0[1..511]) are reclaimed here.
             if entry.physicalAddress == kernelMaster[index].physicalAddress { continue }
 
             freePageTableSubtree(tablePhysical: entry.physicalAddress, level: 1)
@@ -243,17 +214,28 @@ public struct VirtualMemoryManager {
     /// 3 = L3), then the table page itself. Each table page is fully read
     /// before it is released, so the post-free overwrite the PPM performs on a
     /// reclaimed block never races the walk.
-    private func freePageTableSubtree(tablePhysical: PhysicalAddress, level: Int) {
+    private func freePageTableSubtree(
+        tablePhysical: PhysicalAddress,
+        level        : Int
+    ) {
+            
         if level < 3 {
             let table: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(tablePhysical)
+            
             for index in 0..<512 {
                 let entry = table[index]
                 guard entry.isPresent, entry.isTableDescriptor else { continue }
-                freePageTableSubtree(tablePhysical: entry.physicalAddress, level: level + 1)
+                
+                freePageTableSubtree(
+                    tablePhysical: entry.physicalAddress,
+                    level        : level + 1
+                )
             }
         }
 
-        try? ppmPtr.pointee.freeOwnedKernelPage(PhysicalPage(address: tablePhysical, order: 0))
+        try? ppmPtr.pointee.freeOwnedKernelPage(
+            PhysicalPage(address: tablePhysical, order: 0)
+        )
     }
 
 
@@ -324,6 +306,8 @@ public struct VirtualMemoryManager {
         }
 
         leafTable[virtual.l3] = Arch.PageTableEntry(rawValue: 0)
+
+        Arch.MMU.pageTableBarrier()
     }
 
 
@@ -338,14 +322,40 @@ public struct VirtualMemoryManager {
     }
 
 
+    /// The L3 table covering `virtual`, or `nil` when no table is installed for
+    /// its 2 MiB span.
+    ///
+    /// Exposed so bulk walkers can amortise the descent instead of calling
+    /// `physicalAddressOf` per page: the L0/L1/L2 indexes are identical for
+    /// every address inside one L3 table's span, so a caller stepping through a
+    /// range resolves them once and then reads `leaf[va.l3]` directly. A `nil`
+    /// result means the entire span is unmapped and can be skipped whole; the
+    /// common case for the sparse `noReserve` and `growDown` regions, which
+    /// reserve megabytes and keep only a handful of pages resident.
+    ///
+    /// The returned pointer stays valid as long as no level above L3 is torn
+    /// down for that span, which no caller does mid-walk.
+    public func leafTable(
+        rootTable: PhysicalAddress,
+        virtual  : VirtualAddress
+    ) -> UnsafeMutablePointer<Arch.PageTableEntry>? {
+        let tablePointer: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable)
+
+        return lookupLeafTable(table: tablePointer, virtual: virtual)
+    }
+
+
     public func physicalAddressOf(
         rootTable: PhysicalAddress,
         virtual  : VirtualAddress
     ) -> PhysicalAddress? {
+        
         let tablePointer: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable)
-        guard let leafTable = lookupLeafTable(table: tablePointer, virtual: virtual) else {
-            return nil
-        }
+        
+        guard let leafTable = lookupLeafTable(
+            table  : tablePointer,
+            virtual: virtual
+        ) else { return nil }
 
         let entry = leafTable[virtual.l3]
         guard entry.isPresent else { return nil }
@@ -363,11 +373,12 @@ public struct VirtualMemoryManager {
             virtual  : virtual
         ) else { return }
 
-        try? ppmPtr.pointee.release(phys)
         try unmapUserPage(
             rootTable: rootTable,
             virtual  : virtual
         )
+
+        try? ppmPtr.pointee.release(phys)
     }
     
     
@@ -397,8 +408,10 @@ public struct VirtualMemoryManager {
         entry.flags        = flags.union(defaultFlags)
         
         currentTable[virtual.l3] = entry
+
+        Arch.MMU.pageTableBarrier()
     }
-    
+
     private func mapTable(
         current: UnsafeMutablePointer<Arch.PageTableEntry>,
         _ index: Int
@@ -409,8 +422,14 @@ public struct VirtualMemoryManager {
             let newPage = try ppmPtr.pointee.alloc(4096, flag: .kernel)
             
             let newTablePtr: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(newPage.address)
-            newTablePtr.initialize(repeating: Arch.PageTableEntry(rawValue: 0), count: 512)
             
+            newTablePtr.initialize(
+                repeating: Arch.PageTableEntry(rawValue: 0),
+                count    : 512
+            )
+
+            Arch.MMU.pageTableBarrier()
+
             entry.physicalAddress = newPage.address
             entry.flags = [.valid, .page]
             current[index] = entry

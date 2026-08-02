@@ -11,7 +11,7 @@
 /// forwards each trap to the matching `SyscallProvider`. The actual
 /// logic of every syscall lives in its own file under
 /// `Arch/aarch64/Syscall/Providers/`, conforming to `SyscallProvider`.
-/// The dispatcher is intentionally a single compile-time switch — no
+/// The dispatcher is intentionally a single compile-time switch, no
 /// existential indirection, no dynamic table.
 import ReixABI
 
@@ -93,6 +93,7 @@ public struct SyscallHandler: RXAllocatable {
 
             // Caps
             case .capExists     : CapExistsSyscall     .handle(frame: frame, context: context)
+            case .capDrop       : CapDropSyscall       .handle(frame: frame, context: context)
 
             default: break
         }

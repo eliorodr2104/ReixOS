@@ -19,9 +19,9 @@ public struct ReplyRecvSyscall: SyscallProvider {
         
         guard let currentProcess = Arch.CPU.getCurrentProcess() else { return }
         
-        let handle   = frame.pointee.x0
+        let handle   = UInt32(truncatingIfNeeded: frame.pointee.x0)
         let metadata = currentProcess.pointee.metadata!
-        guard let capability = metadata.pointee.capsTable.resolve(UInt32(handle)) else {
+        guard let capability = metadata.pointee.capsTable.resolve(handle) else {
             frame.pointee.x0 = IPCStatus.invalidCapability.rawValue
             return
         }
@@ -39,6 +39,7 @@ public struct ReplyRecvSyscall: SyscallProvider {
                         frame.pointee.x0 = IPCStatus.ok.rawValue
                         
                     case .blocked:
+                        frame.pointee.x0 = IPCStatus.ok.rawValue
                         YieldSyscall.handle(frame: frame, context: context)
                     
                 }

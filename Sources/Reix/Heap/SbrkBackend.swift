@@ -38,7 +38,7 @@ struct SbrkBackend: SlabBackend {
         }
         
         let prev = sbrk(4096)
-        if prev == RX_MEM_FAILURE { return nil }
+        if prev == RXMemoryError.memoryFailure { return nil }
         
         arenaEnd = UInt(brk(0))
         

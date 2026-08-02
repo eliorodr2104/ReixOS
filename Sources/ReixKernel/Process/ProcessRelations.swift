@@ -94,4 +94,25 @@ public struct ProcessRelations {
 
         firstChild = nil
     }
+
+    /// Detaches every child without handing it to a new parent.
+    ///
+    /// Last resort for a dying root: with no ancestor left to adopt them the
+    /// children must still lose their `parent`, otherwise they keep naming a
+    /// `Process` block that is about to be freed and reused `releaseProcess`
+    /// would later unlink itself from a stranger's children list. Orphans
+    /// become unreapable and leak; a dangling `parent` corrupts the heap.
+    public mutating func orphanChildren() {
+        var current = firstChild
+
+        while let child = current {
+            current = child.pointee.family.nextSibling
+
+            child.pointee.family.parent      = nil
+            child.pointee.family.prevSibling = nil
+            child.pointee.family.nextSibling = nil
+        }
+
+        firstChild = nil
+    }
 }

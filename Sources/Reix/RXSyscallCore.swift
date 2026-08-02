@@ -66,6 +66,7 @@ public func _syscall(_ type: SyscallNumber) -> UInt64 {
     _asm_syscall_raw(type.rawValue, 0, 0, 0, 0, 0, 0, 0)
 }
 
+@discardableResult
 public func _syscall(
     _ type: SyscallNumber,
     _ arg1: UInt64

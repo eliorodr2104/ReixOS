@@ -5,11 +5,11 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 28/05/2026.
 //
 
+import ReixABI
+
 /// `putchar(ch)` syscall provider. Writes a single byte to the serial
 /// console. Used as the bootstrap user-space stdout while a real I/O
 /// stack does not yet exist.
-import ReixABI
-
 public struct PutcharSyscall: SyscallProvider {
 
     public static let number: SyscallNumber = .putchar
@@ -19,6 +19,6 @@ public struct PutcharSyscall: SyscallProvider {
         context: SyscallContext
     ) {
         _ = context
-        kputc(UInt8(frame.pointee.x0))
+        kputc(UInt8(truncatingIfNeeded: frame.pointee.x0))
     }
 }

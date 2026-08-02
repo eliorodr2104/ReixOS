@@ -25,6 +25,18 @@ public protocol KernelHeapInterface {
         _ capacity: Int
     ) -> UnsafeMutablePointer<Object>
     
+    /// Part of the contract, not an implementation detail of one heap: the two
+    /// `kmalloc` requirements above return non-optionally and can only report
+    /// exhaustion by panicking, so any heap plugged in here must also offer the
+    /// failable form the syscall paths need. Without it, swapping the
+    /// implementation would silently reintroduce a userland-triggerable panic.
+    mutating func kmallocOrNil(_ size: UInt) -> UnsafeMutableRawPointer?
+
+    mutating func kmallocOrNil<Object: RXAllocatable & ~Copyable>(
+        _ type    : Object.Type,
+        _ capacity: Int
+    ) -> UnsafeMutablePointer<Object>?
+
     mutating func kfree(_ ptr: UnsafeMutableRawPointer)
 
     mutating func kfree<Object: ~Copyable>(

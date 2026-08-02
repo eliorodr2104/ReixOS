@@ -18,6 +18,7 @@ public enum VMAError: KernelDiagnostic {
     case fixedAddressUnavailable
     case invalidLayout
     case notImplementedBacking
+    case unownedBacking
 
     case allocationFailed     (PPMError)
     case mappingFailed        (PPMError)
@@ -42,6 +43,9 @@ public enum VMAError: KernelDiagnostic {
 
             case .notImplementedBacking:
                 "VMA Error: backing type not implemented in this milestone."
+
+            case .unownedBacking:
+                "VMA Error: the frames behind this region are not owned by the caller."
 
             case .allocationFailed(let inner):
                 "VMA Error: physical allocation failed (" + inner.description + ")"

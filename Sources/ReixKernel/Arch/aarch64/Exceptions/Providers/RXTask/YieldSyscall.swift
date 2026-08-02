@@ -21,16 +21,30 @@ public struct YieldSyscall: SyscallProvider {
         context: SyscallContext
     ) {
 
+        var outgoingRoot: PhysicalAddress? = nil
+
         if let current = Arch.CPU.getCurrentProcess() {
             current.pointee.context?.pointee = frame.pointee
+            outgoingRoot = current.pointee.addressSpace.rootTablePhysical
         }
 
         if let trapFrame = context.scheduler.pointee.yield() {
 
             if let next = Arch.CPU.getCurrentProcess() {
-                Arch.MMU.switchUserAddressSpace(next.pointee.addressSpace.rootTablePhysical)
+                let incomingRoot = next.pointee.addressSpace.rootTablePhysical
+
+                if incomingRoot != outgoingRoot {
+                    Arch.MMU.switchUserAddressSpace(
+                        incomingRoot,
+                        asid: next.pointee.addressSpace.asid
+                    )
+                }
             }
             frame.pointee = trapFrame.pointee
+
+        } else {
+            Arch.CPU.setCurrentProcess(0)
+            Arch.CPU.idleLoop()
         }
     }
 }

@@ -17,44 +17,60 @@ public struct SplitProcessSyscall: SyscallProvider {
         
         guard let currentProcess = Arch.CPU.getCurrentProcess(),
               currentProcess.pointee.family.parent == nil else {
+            frame.pointee.x0 = UInt64.max
             return // throw .eunuch
         }
 
 
-        if let childProcess = try? context.processManager.pointee.spawnProcess() {
-            childProcess.pointee.context!.pointee    = frame.pointee
-            childProcess.pointee.context!.pointee.x0 = 0
-
-            let childMetadata  = childProcess.pointee.metadata!
-            let parentMetadata = currentProcess.pointee.metadata!
-            
-            childMetadata.pointee.elfImage     = nil
-            childMetadata.pointee.elfLoadBase  = parentMetadata.pointee.elfLoadBase
-            childMetadata.pointee.elfLoadEnd   = parentMetadata.pointee.elfLoadEnd
-            childMetadata.pointee.programBreak = parentMetadata.pointee.programBreak
-
-            context.ipc.pointee.cloneCapsTable(from: parentMetadata, to: childMetadata)
-
-            let childVMM  = childProcess.pointee.addressSpace.vmaManager
-            let parentVMM = currentProcess.pointee.addressSpace.vmaManager
-            childVMM?.pointee.setInitialBreak(parentVMM!.pointee.currentBreak)
-            
-            do {
-                try childVMM?.pointee.cloneRegions(from: parentVMM!.pointee)
-                
-            } catch {
-                context.processManager.pointee.killProcess(childProcess, reason: .killed, context: context)
-                context.processManager.pointee.releaseProcess(childProcess)
-                frame.pointee.x0 = UInt64(0xFFFFFFFFFFFFFFFF)
-                
-                return
-            }
-
-            childProcess.pointee.family.parent = currentProcess
-            currentProcess.pointee.family.pushChild(childProcess)
-            try? context.scheduler.pointee.addTask(childProcess)
-
-            frame.pointee.x0 = childProcess.pointee.pid
+        guard let childProcess = try? context.processManager.pointee.spawnProcess() else {
+            frame.pointee.x0 = UInt64.max
+            return
         }
+
+        childProcess.pointee.context!.pointee    = frame.pointee
+        childProcess.pointee.context!.pointee.x0 = 0
+
+        let childMetadata  = childProcess.pointee.metadata!
+        let parentMetadata = currentProcess.pointee.metadata!
+
+        childMetadata.pointee.elfImage     = nil
+        childMetadata.pointee.elfLoadBase  = parentMetadata.pointee.elfLoadBase
+        childMetadata.pointee.elfLoadEnd   = parentMetadata.pointee.elfLoadEnd
+        childMetadata.pointee.programBreak = parentMetadata.pointee.programBreak
+
+        context.ipc.pointee.cloneCapsTable(from: parentMetadata, to: childMetadata)
+
+        guard let childVMM  = childProcess.pointee.addressSpace.vmaManager,
+              let parentVMM = currentProcess.pointee.addressSpace.vmaManager
+        else {
+            context.processManager.pointee.killProcess(
+                childProcess,
+                reason : .killed,
+                context: context
+            )
+            context.processManager.pointee.releaseProcess(childProcess)
+            frame.pointee.x0 = UInt64.max
+
+            return
+        }
+
+        childVMM.pointee.setInitialBreak(parentVMM.pointee.currentBreak)
+
+        do {
+            try childVMM.pointee.cloneRegions(from: parentVMM.pointee)
+
+        } catch {
+            context.processManager.pointee.killProcess(childProcess, reason: .killed, context: context)
+            context.processManager.pointee.releaseProcess(childProcess)
+            frame.pointee.x0 = UInt64.max
+
+            return
+        }
+
+        childProcess.pointee.family.parent = currentProcess
+        currentProcess.pointee.family.pushChild(childProcess)
+        try? context.scheduler.pointee.addTask(childProcess)
+
+        frame.pointee.x0 = childProcess.pointee.pid
     }
 }

@@ -38,7 +38,7 @@ public struct LinkedList<T: RXEntry> {
             head != element,
             "pushBack of a node still linked in a list"
         )
-        
+
         element.pointee.next = nil
         element.pointee.prev = tail
         
@@ -75,8 +75,13 @@ public struct LinkedList<T: RXEntry> {
         element: UnsafeMutablePointer<T>,
         to node: UnsafeMutablePointer<T>
     ) {
-        let previous = node.pointee.prev
         
+        guard node.pointee.prev != nil || head == node,
+              node.pointee.next != nil || tail == node
+        else { return }
+
+        let previous = node.pointee.prev
+
         element.pointee.prev = previous
         element.pointee.next = node
         node.pointee.prev    = element
@@ -93,8 +98,13 @@ public struct LinkedList<T: RXEntry> {
         element: UnsafeMutablePointer<T>,
         to node: UnsafeMutablePointer<T>
     ) {
-        let next = node.pointee.next
         
+        guard node.pointee.prev != nil || head == node,
+              node.pointee.next != nil || tail == node
+        else { return }
+
+        let next = node.pointee.next
+
         element.pointee.prev = node
         element.pointee.next = next
         node.pointee.next    = element
@@ -110,7 +120,11 @@ public struct LinkedList<T: RXEntry> {
     public mutating func remove(element: UnsafeMutablePointer<T>) {
         let prev = element.pointee.prev
         let next = element.pointee.next
-        
+
+        guard prev != nil || head == element,
+              next != nil || tail == element
+        else { return }
+
         if let previousNode = prev {
             previousNode.pointee.next = next
             

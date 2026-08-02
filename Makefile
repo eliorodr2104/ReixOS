@@ -13,6 +13,7 @@
 #   make release    build + boot the optimized image
 #   make clean-image  remove only $(OUT), keep the compiled modules
 #   make clean      remove $(OUT) and the SwiftPM build directory
+#   make prune-dups remove iCloud conflict copies from the build trees
 
 # Toolchain discovery. Override either on the command line if needed:
 #     make SWIFT=/path/to/swift QEMU=/path/to/qemu-system-aarch64
@@ -37,7 +38,7 @@ QEMU_FLAGS  := -machine virt,gic-version=2 -cpu cortex-a53 -nographic
 # instead and get working code intelligence.
 export FREESTANDING := 1
 
-.PHONY: all build image release run run-release clean-image clean
+.PHONY: all build image release run run-release prune-dups clean-image clean
 
 all: image
 
@@ -46,12 +47,34 @@ all: image
 # the integration work either way instead of relying on that detail.
 build: image
 
+# Drop the "<name> 2.ext" copies iCloud leaves behind in the build trees.
+#
+# This package lives under a synced ~/Documents, so every build rewrites several
+# megabytes that the file provider is trying to upload; when the two race it
+# keeps both versions and renames one. They are regenerable artifacts, but a
+# stale copy is indistinguishable from a real one when reading the output
+# directory by hand, and one of them was read as current during an audit.
+#
+# The pattern requires a space before the digit on purpose: `Child2.elf` and
+# `Child2.build` are real targets and a broader glob would delete them. `find`
+# rather than a shell glob because a non-matching glob aborts the recipe.
+#
+# Two shapes, and both are needed. Files may or may not have an extension
+# (`debug 2.yaml`, but also `plugins 2`), so the name pattern cannot require a
+# dot. Directories have to be removed with `rm -rf`: `-delete` refuses a
+# non-empty one, and `.build` conflict copies are routinely whole trees
+# (`checkouts 2`, `ReixKernel 2.build`). `-prune` stops the walk from descending
+# into a tree that is about to go away.
+prune-dups:
+	@find $(OUT) .build -depth -name "* [0-9]" -o -name "* [0-9].*" 2>/dev/null \
+	    | while IFS= read -r dup; do rm -rf "$$dup"; done || true
+
 # Build all modules, then link the image via the plugin.
-image:
+image: prune-dups
 	$(SWIFT) build --triple $(TRIPLE)
 	$(SWIFT) package $(PLUGIN)
 
-release:
+release: prune-dups
 	$(SWIFT) build --triple $(TRIPLE) -c release
 	$(SWIFT) package $(PLUGIN) --release
 

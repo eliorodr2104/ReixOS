@@ -41,7 +41,10 @@ public struct VMAManager: RXAllocatable {
     
     
     private let asid: ASID // 2 Byte
-    
+
+    private static let rangeInvalidationLimit: UInt64 = 32
+    private static let leafTableSpan: UInt64 = 512 * UserSpaceLayout.pageSize
+
 
     public init(
         heap             : UnsafeMutablePointer<BucketsHeap>,
@@ -86,7 +89,10 @@ public struct VMAManager: RXAllocatable {
             throw .regionOverlap
         }
 
-        let nodePtr = heap.pointee.kmalloc(VirtualMemoryArea.self)
+        guard let nodePtr = heap.pointee.kmallocOrNil(VirtualMemoryArea.self) else {
+            throw .heapAllocationFailed(.allocationFailed(reason: .fullMemory))
+        }
+
         nodePtr.initialize(
             to: VirtualMemoryArea(
                 startAddress: start,
@@ -99,14 +105,6 @@ public struct VMAManager: RXAllocatable {
 
         vmaList.insert(nodePtr)
 
-        // Coalesce the freshly inserted region with adjacent regions that share
-        // its exact attributes (permissions, mapping flags, backing). Without
-        // this, repeated mmap/registration fragments the sorted VMA list into
-        // many tiny nodes and every page-fault `search`, `searchOverlap` and
-        // `contains` (all O(n)) degrades. `mergeAdjacent` keeps the first node
-        // and returns the second to free. Regions with distinct attributes
-        // (ELF text vs data, growDown stack, noReserve brk) never merge, so the
-        // spawn path is unaffected.
         var survivor = nodePtr
         if let prev = survivor.pointee.prev,
            let removed = vmaList.mergeAdjacent(prev, survivor) {
@@ -121,19 +119,57 @@ public struct VMAManager: RXAllocatable {
         }
     }
     
-    /// Decommit the passed page and return this into PPM
     public func decommit(
         addr: VirtualAddress,
         size: UInt64
-    ) {
-        
-        var va = addr & ~(UserSpaceLayout.pageSize - 1)
-        while va < addr + size {
-            try? vmm.pointee.unmapAndFreeUserPage(rootTable: rootTablePhysical, virtual: va)
-            va += UserSpaceLayout.pageSize
+    ) throws(VMAError) {
+
+        guard size > 0 else { throw .invalidLayout }
+
+        guard addr & (UserSpaceLayout.pageSize - 1) == 0 else {
+            throw .invalidLayout
         }
-        
-        Arch.MMU.flushTLB()
+
+        guard let range = UserSpaceLayout.checkedPageRange(
+            address: addr,
+            size   : size
+        ) else { throw .invalidLayout }
+
+        guard let overlapping = vmaList.searchOverlap(
+            start: range.start,
+            end  : range.end
+        ) else { throw .invalidLayout }
+
+        var probe: UnsafeMutablePointer<VirtualMemoryArea>? = overlapping
+        while let nodePtr = probe, nodePtr.pointee.startAddress < range.end {
+
+            guard nodePtr.pointee.backingType == .anonymous else {
+                throw .unownedBacking
+            }
+
+            probe = nodePtr.pointee.next
+        }
+
+        var current: UnsafeMutablePointer<VirtualMemoryArea>? = overlapping
+        while let nodePtr = current, nodePtr.pointee.startAddress < range.end {
+
+            let node  = nodePtr.pointee
+            let start = node.startAddress < range.start ? range.start : node.startAddress
+            let end   = node.endAddress   > range.end   ? range.end   : node.endAddress
+
+            var va = start
+            while va < end {
+                try? vmm.pointee.unmapAndFreeUserPage(
+                    rootTable: rootTablePhysical,
+                    virtual  : va
+                )
+                va += UserSpaceLayout.pageSize
+            }
+
+            current = node.next
+        }
+
+        invalidateRange(start: range.start, end: range.end)
     }
 
 
@@ -146,10 +182,6 @@ public struct VMAManager: RXAllocatable {
         at address: VirtualAddress,
         cause     : FaultCause
     ) -> Bool {
-        // TODO: Remove when resolve this bug
-        // This is a test for a bug
-        // let dbg = vmaList.search(at: address)
-        // kprintf("[PF] addr=0x%x found=%d\n", address, dbg != nil ? 1 : 0)
         
         guard address >= UserSpaceLayout.userMin,
               address <  UserSpaceLayout.userMax
@@ -191,8 +223,8 @@ public struct VMAManager: RXAllocatable {
 
         // Locate the VMA containing `start` once, then walk forward following
         // `next`. The list is sorted, so adjacent coverage is just a contiguity
-        // check (`next.start == cursor`) — O(n) total instead of restarting an
-        // O(n) `search(at:)` for every covered segment (previously O(k·n)).
+        // check (`next.start == cursor`), O(n) total instead of restarting an
+        // O(n) `search(at:)` for every covered segment (previously O(k·n))
         guard var vmaPtr = vmaList.search(at: start) else { return false }
 
         var cursor = start
@@ -219,6 +251,24 @@ public struct VMAManager: RXAllocatable {
     }
 
 
+    /// `true` when `virtual` already has a live leaf entry in this address
+    /// space's page tables.
+    ///
+    /// The syscall validation layer needs this probe but holds no
+    /// `VirtualMemoryManager` handle,  the instance is private to `Kernel` and
+    /// only ever injected into `ProcessManager` and here, so it is reached
+    /// through the VMA manager, which already owns both the handle and the root
+    /// table the probe must be relative to.
+    public func isPageMapped(at virtual: VirtualAddress) -> Bool {
+        guard let leafTable = vmm.pointee.leafTable(
+            rootTable: rootTablePhysical,
+            virtual  : virtual
+        ) else { return false }
+
+        return leafTable[virtual.l3].isPresent
+    }
+
+
     /// Seed the program break value used by `extendBreak`. Called by
     /// `ProcessManager.spawnProcess` once the ELF image is loaded, with
     /// the first page-aligned address above the ELF end.
@@ -239,15 +289,15 @@ public struct VMAManager: RXAllocatable {
     /// silently by returning the current break (no-op). The brk heap is
     /// represented by a single VMA `.noReserve`: on the first call the
     /// VMA is registered, on subsequent calls its end address is moved
-    /// forward in place. The pages are not allocated here — the page
+    /// forward in place. The pages are not allocated here, the page
     /// fault handler materialises them lazily.
     public mutating func extendBreak(
         to newBreak: VirtualAddress
     ) throws(VMAError) -> VirtualAddress {
 
         guard newBreak >= UserSpaceLayout.userMin,
-              newBreak <= UserSpaceLayout.mmapBase else { throw .invalidLayout }
-        
+              newBreak <= UserSpaceLayout.mmapMin - UserSpaceLayout.pageSize else { throw .invalidLayout }
+
         let aligned = (newBreak + UserSpaceLayout.pageSize - 1) & ~(UserSpaceLayout.pageSize - 1)
 
         if aligned <= currentBreak {
@@ -306,14 +356,16 @@ public struct VMAManager: RXAllocatable {
             direction: .downward
         ) else { throw .noFreeGap }
 
+        let permissions: VMAPermissions = [.read, .write, .user]
+
         try registerRegion(
             start      : start,
             size       : alignedSize,
-            permissions: [.read, .write, .user],
+            permissions: permissions,
             backing    : kind.backing,
             flags      : .none
         )
-        
+
         for i in 0..<pageCount {
             let currentVirtualPage: UInt64 = UInt64(i) * UserSpaceLayout.pageSize
 
@@ -322,7 +374,7 @@ public struct VMAManager: RXAllocatable {
                     rootTable: rootTablePhysical,
                     virtual  : start        + currentVirtualPage,
                     physical : physicalBase + currentVirtualPage,
-                    flags    : [.userAccess, .uxn],
+                    flags    : permissions.toPageFlags(),
                     type     : kind.memoryType
                 )
 
@@ -339,7 +391,7 @@ public struct VMAManager: RXAllocatable {
     ///
     /// The region is registered as `.noReserve`: physical pages are
     /// allocated only when the user actually touches them. The hint is
-    /// ignored in this milestone — placement is always automatic, in
+    /// ignored in this milestone, placement is always automatic, in
     /// the topmost free gap of `[stackLimit, mmapBase)`.
     public mutating func mmapAnonymous(
         size       : UInt64,
@@ -372,56 +424,99 @@ public struct VMAManager: RXAllocatable {
     }
 
 
-    /// Release a previously reserved region.
-    ///
-    /// Only full-region unmap is supported in this milestone: `addr`
-    /// must match the VMA start and `size` must match the VMA size.
-    /// Partial unmap (split) is left for the next milestone.
     public mutating func munmapRegion(
         addr: VirtualAddress,
         size: UInt64
     ) throws(VMAError) {
 
+        // MARK: Phase 1 — validation only, the list is left exactly as it was.
+
         guard size > 0 else { throw .invalidLayout }
+
+        guard addr & (UserSpaceLayout.pageSize - 1) == 0 else { throw .invalidLayout }
 
         guard let range = UserSpaceLayout.checkedPageRange(
             address: addr,
             size   : size
         ) else { throw .invalidLayout }
 
-        guard let vmaPtr = vmaList.search(at: addr) else {
-            throw .invalidLayout
-        }
+        guard let overlapping = vmaList.searchOverlap(
+            start: range.start,
+            end  : range.end
+        ) else { throw .invalidLayout }
 
-        guard vmaPtr.pointee.startAddress == addr,
-              vmaPtr.pointee.endAddress   == range.end
-        else { throw .invalidLayout }
+        var probe: UnsafeMutablePointer<VirtualMemoryArea>? = overlapping
+        while let nodePtr = probe, nodePtr.pointee.startAddress < range.end {
 
-        if brkVMA == vmaPtr {
-            brkVMA = nil
-        }
-
-        var va = vmaPtr.pointee.startAddress
-        while va < vmaPtr.pointee.endAddress {
-            switch vmaPtr.pointee.backingType {
-                case .anonymous:
-                    try? vmm.pointee.unmapAndFreeUserPage(
-                        rootTable: rootTablePhysical,
-                        virtual  : va
-                    )
-
-                case .fileBacked, .shared, .device:
-                    try? vmm.pointee.unmapUserPage(
-                        rootTable: rootTablePhysical,
-                        virtual  : va
-                    )
+            if nodePtr == brkVMA {
+                guard nodePtr.pointee.startAddress >= range.start,
+                      nodePtr.pointee.endAddress   <= range.end
+                else { throw .invalidLayout }
             }
-            va += UserSpaceLayout.pageSize
+
+            probe = nodePtr.pointee.next
         }
 
-        Arch.MMU.flushTLB()
-        vmaList.remove(element: vmaPtr)
-        heap.pointee.kfree(vmaPtr)
+        // MARK: Phase 2 — the only fallible mutations: at most two splits.
+
+        var first = overlapping
+        if range.start > first.pointee.startAddress {
+            
+            first = try vmaList.split(
+                first,
+                at   : range.start,
+                using: heap
+            )
+        }
+
+        var last = first
+        while let next = last.pointee.next,
+              next.pointee.startAddress < range.end {
+            last = next
+        }
+
+        if last.pointee.endAddress > range.end {
+            
+            _ = try vmaList.split(
+                last,
+                at   : range.end,
+                using: heap
+            )
+        }
+
+        // MARK: Phase 3 — infallible from here on: every node is wholly inside.
+
+        var current: UnsafeMutablePointer<VirtualMemoryArea>? = first
+        while let nodePtr = current, nodePtr.pointee.startAddress < range.end {
+            let node = nodePtr.pointee
+
+            var va = node.startAddress
+            while va < node.endAddress {
+                switch node.backingType {
+                    case .anonymous:
+                        try? vmm.pointee.unmapAndFreeUserPage(
+                            rootTable: rootTablePhysical,
+                            virtual  : va
+                        )
+
+                    case .fileBacked, .shared, .device:
+                        try? vmm.pointee.unmapUserPage(
+                            rootTable: rootTablePhysical,
+                            virtual  : va
+                        )
+                }
+                va += UserSpaceLayout.pageSize
+            }
+
+            if brkVMA == nodePtr { brkVMA = nil }
+
+            let nextPtr = node.next
+            vmaList.remove(element: nodePtr)
+            heap.pointee.kfree(nodePtr)
+            current = nextPtr
+        }
+
+        invalidateRange(start: range.start, end: range.end)
     }
 
 
@@ -540,11 +635,34 @@ public struct VMAManager: RXAllocatable {
                     try? ppm.pointee.release(phys)
                 }
 
-                Arch.MMU.flushTLB()
+                Arch.MMU.flushTLBPage(aligned)
                 return true
-                
+
             case .alignment, .access: return false
         }
+    }
+
+
+    /// Retire the cached translations of `[start, end)` once its leaf
+    /// descriptors have been cleared.
+    private func invalidateRange(
+        start: VirtualAddress,
+        end  : VirtualAddress
+    ) {
+        let pages = (end - start) / UserSpaceLayout.pageSize
+
+        guard pages <= Self.rangeInvalidationLimit else {
+            Arch.MMU.flushTLB()
+            return
+        }
+
+        var va = start
+        while va < end {
+            Arch.MMU.flushTLBPageNoSync(va)
+            va += UserSpaceLayout.pageSize
+        }
+
+        Arch.MMU.flushTLBSync()
     }
 
 
@@ -636,16 +754,14 @@ public struct VMAManager: RXAllocatable {
     /// Reproduce the parent's address space into `self` (the child of a
     /// `split`/`fork`).
     ///
-    /// For every parent VMA we register an equivalent region and then make
-    /// a *private* copy of each page the parent has actually mapped:
-    /// allocate a fresh frame, copy the bytes and map it into the child's
-    /// root table. The child therefore owns every page it sees, so each
-    /// region is registered as `.anonymous` — its frames are released
-    /// per-page on teardown — while the parent's permissions and mapping
-    /// flags (`growDown` / `noReserve`) are preserved so lazy growth keeps
-    /// working. Pages the parent has not faulted in yet are left unmapped
-    /// in the child too: they fault in on demand exactly as they would
-    /// have in the parent.
+    /// For every parent VMA we register an equivalent region **carrying the
+    /// parent's backing type**, not `.anonymous`, and then share or copy its
+    /// resident pages according to that backing. Only `.anonymous` regions are
+    /// this address space's to duplicate: a writable one is mapped read-only in
+    /// both processes and marked `.copyOnWrite`, so the first write faults and
+    /// takes a private frame. `.shared` and `.device` regions are mapped through
+    /// as they are, because their frames belong to the `SharedRegion` behind the
+    /// capability or to MMIO the PPM never owned, and neither is copyable.
     public mutating func cloneRegions(from parent: VMAManager) throws(VMAError) {
         var current = parent.vmaList.head
 
@@ -653,12 +769,12 @@ public struct VMAManager: RXAllocatable {
             let vma        = nodePtr.pointee
             let size       = vma.endAddress - vma.startAddress
 
-            let isShared   = (vma.backingType == .shared)
-            let isWritable = vma.permissions.contains(.write)
-            
-            
+            let isSharedBacking = (vma.backingType != .anonymous)
+            let isWritable      = vma.permissions.contains(.write)
+
+
             var childMappingFlags = vma.mappingFlags
-            if !isShared && isWritable {
+            if !isSharedBacking && isWritable {
                 nodePtr.pointee.mappingFlags.insert(.copyOnWrite)
                 childMappingFlags.insert(.copyOnWrite)
             }
@@ -680,18 +796,36 @@ public struct VMAManager: RXAllocatable {
 
             var va = vma.startAddress
             while va < vma.endAddress {
-                
-                if let parentPhys = vmm.pointee.physicalAddressOf(
+
+                var spanEnd = (va & ~(Self.leafTableSpan - 1)) + Self.leafTableSpan
+                if spanEnd > vma.endAddress { spanEnd = vma.endAddress }
+
+                guard let parentLeaf = vmm.pointee.leafTable(
                     rootTable: parent.rootTablePhysical,
                     virtual  : va
-                ) {
+                ) else {
+                    va = spanEnd
+                    continue
+                }
+
+                while va < spanEnd {
+                    
+                    let parentEntry = parentLeaf[va.l3]
+
+                    guard parentEntry.isPresent else {
+                        va += UserSpaceLayout.pageSize
+                        continue
+                    }
+
+                    let parentPhys = parentEntry.physicalAddress
+
                     let pageFlags                 : VirtualPageFlags
                     let downgradeParentPermissions: Bool
 
-                    if isShared {
+                    if isSharedBacking {
                         pageFlags = vma.permissions.toPageFlags()
                         downgradeParentPermissions = false
-                        
+
                     } else if isWritable {
                         var permissionsNotWritable = vma.permissions
                         
@@ -705,12 +839,6 @@ public struct VMAManager: RXAllocatable {
                         downgradeParentPermissions = false
                     }
                         
-                    // Account the shared frame for the child before mapping it.
-                    // On any failure we propagate instead of silently leaving a
-                    // hole: a half-cloned child that still gets scheduled faults
-                    // on its own (unmapped) code — exactly the failure mode that
-                    // turned an out-of-memory condition into a mystery SEGFAULT.
-                    // The caller (`split`) aborts the spawn on a thrown error.
                     do {
                         try ppm.pointee.retain(parentPhys)
                     } catch {
@@ -738,14 +866,14 @@ public struct VMAManager: RXAllocatable {
                         try? ppm.pointee.release(parentPhys)
                         throw .mappingFailed(error)
                     }
-                }
 
-                va += UserSpaceLayout.pageSize
+                    va += UserSpaceLayout.pageSize
+                }
             }
 
             current = vma.next
         }
-        
+
         Arch.MMU.flushTLB()
     }
 }

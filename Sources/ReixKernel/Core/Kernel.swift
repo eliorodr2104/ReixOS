@@ -176,7 +176,12 @@ public struct Kernel {
         ).assumingMemoryBound(to: CChar.self)
 
         let firstProcess = try processManager.pointee.spawnProcess(path: firstProcessPathPtr)
-        
+
+        // It never gets a `parent`, so the manager has to be told where
+        // the tree starts or it has nobody to
+        // hand the children of a parentless dying process to.
+        processManager.pointee.initProcess = firstProcess
+
          _ = ipc.pointee.spawnEndpoint(
             for   : firstProcess,
             rights: [.send, .receive, .grant, .spawn],

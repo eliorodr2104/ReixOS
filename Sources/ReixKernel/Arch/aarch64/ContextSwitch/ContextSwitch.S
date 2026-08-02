@@ -25,6 +25,11 @@ jump_to_user_mode:
 
 safe_high_half:
     msr     daifset, #3
+
+    // Untagged TTBR0 write: bits [63, 48] stay zero, so the first process runs
+    // under ASID 0 until the scheduler switches away from it and back through
+    // switch_user_address_space, which installs its real ASID. Its non-global
+    // entries are cached as ASID 0 and are simply re-walked at that point.
     msr     ttbr0_el1, x1
     tlbi    vmalle1is
     dsb     ish
