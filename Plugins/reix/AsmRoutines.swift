@@ -181,12 +181,36 @@ private func virtualTimer() -> [AsmRoutine] {
     ]
 }
 
+/// The kernel UART's transmit wait, in assembly for the reason userland's is.
+///
+/// A PL011 driver has to poll `FR.TXFF` before every store to `DR`, and that
+/// poll is a volatile read Swift cannot express: LLVM treats the load as
+/// loop-invariant, hoists it out and then deletes the wait, so bytes go into a
+/// FIFO with no check that there is room. The kernel's Swift loop did survive,
+/// but only on two opaque `bl`s that happened to land in its body,
+/// `is_mmu_enabled` from recomputing the address and `nop` as the pause, and
+/// removing either of those looks like a cleanup rather than a regression.
+private func serialHandlers() -> [AsmRoutine] {
+    [
+        // PL011 transmit: poll FR.TXFF (0x18, bit 5), then store to DR (0x00).
+        // x0 base, w1 byte. See Kernel `PL011UART.write(_:)`.
+        fn("pl011_write_byte") {
+            label(".L_pl011_byte_wait")
+            raw("    ldr  w2, [x0, #0x18]")
+            raw("    tbnz w2, #5, .L_pl011_byte_wait")
+            raw("    strb w1, [x0]")
+            ret()
+        },
+    ]
+}
+
 /// The generated kernel assembly files (filename, rendered source).
 func generatedKernelAsm() -> [(name: String, source: String)] {
     [
         ("CpuHandlers.gen.S",        renderAsmFile(cpuHandlers())),
         ("AArch64MMUHandlers.gen.S", renderAsmFile(mmuHandlers())),
         ("VirtualTimer.gen.S",       renderAsmFile(virtualTimer())),
+        ("PL011UART.gen.S",          renderAsmFile(serialHandlers())),
     ]
 }
 
@@ -199,6 +223,40 @@ private func reixRoutines() -> [AsmRoutine] {
         // Inner-shareable memory barrier: orders the SPSC ring's data vs index
         // accesses (release on push, acquire on pop). See Reix `dmbISH()`.
         fn("dmb_ish") { dmb("ish"); ret() },
+
+        // PL011 transmit: poll FR.TXFF (0x18, bit 5) before every store to DR
+        // (0x00). x0 base, x1 bytes, x2 count. See Reix `pl011WriteSpan()`.
+        fn("pl011_write_span") {
+            raw("    cmp  x2, #0")
+            raw("    b.le .L_pl011_span_done")
+            label(".L_pl011_span_byte")
+            raw("    ldrb w3, [x1], #1")
+            label(".L_pl011_span_wait")
+            raw("    ldr  w4, [x0, #0x18]")
+            raw("    tbnz w4, #5, .L_pl011_span_wait")
+            raw("    strb w3, [x0]")
+            raw("    subs x2, x2, #1")
+            raw("    b.ne .L_pl011_span_byte")
+            label(".L_pl011_span_done")
+            ret()
+        },
+
+        // The virtual counter, readable at EL0 because boot.S sets
+        // CNTKCTL_EL1.EL0VCTEN. See Reix `readVirtualCounter()`.
+        fn("read_virtual_counter") {
+            // `isb` first, or the read gets speculated ahead of the work being
+            // timed and two stamps around a short region come back reordered.
+            isb()
+            mrs("x0", "cntvct_el0")
+            ret()
+        },
+
+        // Ticks per second, so a counter delta becomes a duration. Readable at
+        // EL0 through CNTKCTL_EL1.EL0PCTEN, set alongside EL0VCTEN.
+        fn("read_counter_frequency") {
+            mrs("x0", "cntfrq_el0")
+            ret()
+        },
     ]
 }
 

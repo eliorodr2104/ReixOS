@@ -10,6 +10,16 @@
 public struct AArch64CPU: CPUInterface {
 
 
+    /// One `nop` instruction, and nothing else: not a barrier, not a fence,
+    /// and no ordering guarantee of any kind.
+    ///
+    /// It has no caller left in the tree. It used to be the pause in
+    /// `PL011UART`'s transmit wait, where it was one of the two opaque calls
+    /// that happened to keep the FIFO-full load inside the loop, so a `nop`
+    /// was quietly holding up the flow control of the whole log. That wait is
+    /// `pl011_write_byte` now, in assembly. Nothing may go back to leaning on
+    /// this to hold a volatile access in place: the guarantee was never in the
+    /// instruction, only in the call boundary that happened to surround it.
     @_silgen_name("nop")
     private static func nop_asm()
 

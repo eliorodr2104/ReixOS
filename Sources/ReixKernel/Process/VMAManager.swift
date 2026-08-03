@@ -157,19 +157,14 @@ public struct VMAManager: RXAllocatable {
             let start = node.startAddress < range.start ? range.start : node.startAddress
             let end   = node.endAddress   > range.end   ? range.end   : node.endAddress
 
-            var va = start
-            while va < end {
-                try? vmm.pointee.unmapAndFreeUserPage(
-                    rootTable: rootTablePhysical,
-                    virtual  : va
-                )
-                va += UserSpaceLayout.pageSize
-            }
+            retireRange(
+                start  : start,
+                end    : end,
+                backing: node.backingType
+            )
 
             current = node.next
         }
-
-        invalidateRange(start: range.start, end: range.end)
     }
 
 
@@ -495,23 +490,11 @@ public struct VMAManager: RXAllocatable {
         while let nodePtr = current, nodePtr.pointee.startAddress < range.end {
             let node = nodePtr.pointee
 
-            var va = node.startAddress
-            while va < node.endAddress {
-                switch node.backingType {
-                    case .anonymous:
-                        try? vmm.pointee.unmapAndFreeUserPage(
-                            rootTable: rootTablePhysical,
-                            virtual  : va
-                        )
-
-                    case .fileBacked, .shared, .device:
-                        try? vmm.pointee.unmapUserPage(
-                            rootTable: rootTablePhysical,
-                            virtual  : va
-                        )
-                }
-                va += UserSpaceLayout.pageSize
-            }
+            retireRange(
+                start  : node.startAddress,
+                end    : node.endAddress,
+                backing: node.backingType
+            )
 
             if brkVMA == nodePtr { brkVMA = nil }
 
@@ -520,8 +503,6 @@ public struct VMAManager: RXAllocatable {
             heap.pointee.kfree(nodePtr)
             current = nextPtr
         }
-
-        invalidateRange(start: range.start, end: range.end)
     }
 
 
@@ -531,41 +512,34 @@ public struct VMAManager: RXAllocatable {
     /// PTE is cleared: the backing block is freed by whoever produced
     /// it (e.g. the ELF loader frees the contiguous image block back
     /// to the PPM with its original buddy order).
+    ///
+    /// Each node is unlinked before it is freed, and unlinked *before* its pages
+    /// are retired, so the list is well-formed at every point of the walk. The
+    /// kernel heap threads its free list through the first 8 bytes of a released
+    /// block, which is `startAddress`: freeing a node that is still linked hands
+    /// every later walker a corrupted region, and hands the next same-sized
+    /// `kmalloc` a node the list still points at. Unlinking first also denies
+    /// `serviceFault` any chance to fault a page back into a region already being
+    /// torn down.
+    ///
+    /// Frame safety no longer rests on the full flush `destroyAddressSpace`
+    /// performs around this call: that flush runs after every frame has already
+    /// been recycled, so it never covered the window it appeared to.
     public mutating func teardown() {
-        var current = vmaList.head
-
-        while let nodePtr = current {
+        while let nodePtr = vmaList.popFront() {
             let node = nodePtr.pointee
-            var va   = node.startAddress
 
-            while va < node.endAddress {
-                switch node.backingType {
-                    case .anonymous:
-                        try? vmm.pointee.unmapAndFreeUserPage(
-                            rootTable: rootTablePhysical,
-                            virtual  : va
-                        )
+            retireRange(
+                start  : node.startAddress,
+                end    : node.endAddress,
+                backing: node.backingType
+            )
 
-                    case .fileBacked, .shared, .device:
-                        try? vmm.pointee.unmapUserPage(
-                            rootTable: rootTablePhysical,
-                            virtual  : va
-                        )
-                }
-                va += UserSpaceLayout.pageSize
-            }
-
-            let nextPtr = node.next
             heap.pointee.kfree(nodePtr)
-            current = nextPtr
         }
 
-        vmaList = LinkedList(
-            head      : nil,
-            tail      : nil,
-            minAddress: UserSpaceLayout.userMin,
-            maxAddress: UserSpaceLayout.userMax
-        )
+        brkVMA       = nil
+        currentBreak = 0
     }
 
 
@@ -644,6 +618,87 @@ public struct VMAManager: RXAllocatable {
                 return true
 
             case .alignment, .access: return false
+        }
+    }
+
+
+    /// Clear the leaf descriptors of `[start, end)` and, for an owned region,
+    /// release each frame only after its translation is gone.
+    ///
+    /// `unmapAndFreeUserPage` releases the frame the instant the descriptor is
+    /// cleared, so unmapping a whole range and invalidating once at the end
+    /// leaves the buddy allocator free to re-issue frames the TLB still
+    /// translates writable, for a window as long as the range itself. Frames are
+    /// therefore collected in a fixed-size batch, invalidated, and released only
+    /// then. The batch lives on the stack: two internal callers are rollbacks
+    /// running under memory pressure and must not need the heap.
+    ///
+    /// Only resident pages are invalidated, which relies on the invariant this
+    /// function establishes: a cleared descriptor never keeps a cached
+    /// translation, so an absent one has nothing to retire. `materialize`
+    /// already depends on the same invariant when it maps a fresh page.
+    private func retireRange(
+        start  : VirtualAddress,
+        end    : VirtualAddress,
+        backing: BackingType
+    ) {
+        guard backing == .anonymous else {
+            var va = start
+            while va < end {
+                try? vmm.pointee.unmapUserPage(
+                    rootTable: rootTablePhysical,
+                    virtual  : va
+                )
+                va += UserSpaceLayout.pageSize
+            }
+
+            invalidateRange(start: start, end: end)
+            return
+        }
+
+        // The batch width is read back from the storage so the two cannot drift;
+        // `InlineArray` needs its count as a literal.
+        var virtuals  = InlineArray<32, VirtualAddress>(repeating: 0)
+        var physicals = InlineArray<32, PhysicalAddress>(repeating: 0)
+
+        var chunkStart = start
+        while chunkStart < end {
+            var pending = 0
+            var va      = chunkStart
+
+            while va < end, pending < virtuals.count {
+                if let phys = vmm.pointee.physicalAddressOf(
+                    rootTable: rootTablePhysical,
+                    virtual  : va
+                ) {
+                    try? vmm.pointee.unmapUserPage(
+                        rootTable: rootTablePhysical,
+                        virtual  : va
+                    )
+
+                    virtuals[pending]  = va
+                    physicals[pending] = phys
+                    pending += 1
+                }
+
+                va += UserSpaceLayout.pageSize
+            }
+            chunkStart = va
+
+            guard pending > 0 else { continue }
+
+            var index = 0
+            while index < pending {
+                Arch.MMU.flushTLBPageNoSync(virtuals[index])
+                index += 1
+            }
+            Arch.MMU.flushTLBSync()
+
+            index = 0
+            while index < pending {
+                try? ppm.pointee.release(physicals[index])
+                index += 1
+            }
         }
     }
 
@@ -767,7 +822,16 @@ public struct VMAManager: RXAllocatable {
     /// takes a private frame. `.shared` and `.device` regions are mapped through
     /// as they are, because their frames belong to the `SharedRegion` behind the
     /// capability or to MMIO the PPM never owned, and neither is copyable.
+    ///
+    /// The parent's own descriptors are rewritten in place as the walk proceeds
+    /// and `mapUserPage` retires no translation, so the flush has to cover the
+    /// throwing exits too. On those paths the parent keeps read-only descriptors
+    /// in memory and stale *writable* entries in the TLB, and no later path
+    /// flushes on its behalf; today it survives only because the caller happens
+    /// to destroy the half-built child, which flushes for unrelated reasons.
     public mutating func cloneRegions(from parent: VMAManager) throws(VMAError) {
+        defer { Arch.MMU.flushTLB() }
+
         var current = parent.vmaList.head
 
         while let nodePtr = current {
@@ -858,6 +922,8 @@ public struct VMAManager: RXAllocatable {
                             flags    : pageFlags
                         )
 
+                        // Writable in the parent's TLB until the deferred flush.
+                        // Safe only while the parent cannot run before we return.
                         if downgradeParentPermissions {
                             try vmm.pointee.mapUserPage(
                                 rootTable: parent.rootTablePhysical,
@@ -878,7 +944,5 @@ public struct VMAManager: RXAllocatable {
 
             current = vma.next
         }
-
-        Arch.MMU.flushTLB()
     }
 }

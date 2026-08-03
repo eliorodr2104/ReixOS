@@ -35,9 +35,106 @@ public func exceptionVirtualTableHandler(
         to      : Arch.TrapFrame.self,
         capacity: 1
     )
-    
+
+    let frameAddress = UInt(bitPattern: rawFramePointer)
+
+    KernelStack.noteEntry(at: frameAddress, frame: framePointer)
+
     handleExceptionType(exceptionType, framePointer: framePointer)
+
+    guard Kernel.scheduler.pointee.needsResched else { return }
+
+    performPendingSwitch(frame: framePointer, at: frameAddress)
 }
+
+
+/// Where the outermost exception frame sits on the single kernel stack.
+///
+/// `jump_to_user_mode` and `kernel_idle_loop` both re-anchor SP at the
+/// linker's `stack_top`, and every entry unwinds back to it, so an exception
+/// with no kernel work beneath it always pushes its frame at one fixed
+/// address. That address is learned from the first entry taken from EL0
+/// instead of being read from `stack_top`, which Swift cannot name and whose
+/// value would have to track changes to the stack layout in `linker.ld`.
+///
+/// A frame built on the exception stack can never become this anchor, so the
+/// second stack `check_kernel_stack` switches to leaves the comparison intact:
+/// the anchor is only ever taken from an entry arriving at EL0, and only
+/// entries taken at EL1 are ever diverted off the kernel stack.
+fileprivate struct KernelStack {
+
+    static var outermostFrame: UInt = 0
+
+    /// Anchors `outermostFrame` on the first exception arriving from EL0.
+    ///
+    /// EL0 is unreachable from inside kernel work, so such a frame is the
+    /// outermost one by construction and its address is the anchor. Recorded
+    /// once rather than on every entry, so the comparison stays a genuine
+    /// test of where this frame is and not a moving target.
+    @inline(__always)
+    static func noteEntry(
+        at    address: UInt,
+        frame        : UnsafeMutablePointer<Arch.TrapFrame>
+    ) {
+        guard outermostFrame == 0, frame.pointee.spsr & 0xF == 0 else {
+            return
+        }
+
+        outermostFrame = address
+    }
+}
+
+
+/// Installs the next ready task, the one place in the kernel that does.
+///
+/// This is the deferred half of preemption: the timer tick records that the
+/// quantum is spent and this runs on the way out of the kernel, so a tick
+/// taken at EL1 pauses the interrupted syscall instead of abandoning it.
+///
+/// Two conditions gate the swap, and both are about the frame rather than
+/// about the tick. The frame must be the outermost one: below a nested frame
+/// lies a half-finished kernel call whose Swift state `eret` cannot come back
+/// to, and whose stack space would never be reclaimed, walking SP down by one
+/// frame per preemption. And control must genuinely be leaving the kernel,
+/// which a return to EL0 proves. The idle loop is the single EL1 context that
+/// also qualifies: it holds no current process, keeps nothing worth resuming
+/// and re-anchors SP itself, and a tick is the only thing that ever gets the
+/// CPU back out of it.
+fileprivate
+func performPendingSwitch(
+    frame      : UnsafeMutablePointer<Arch.TrapFrame>,
+    at  address: UInt
+) {
+    guard address == KernelStack.outermostFrame else { return }
+
+    let returningToEL0 = frame.pointee.spsr & 0xF == 0
+    let current        = Arch.CPU.getCurrentProcess()
+
+    guard returningToEL0 || current == nil else { return }
+
+    var outgoingRoot: PhysicalAddress? = nil
+
+    if let current {
+        current.pointee.context?.pointee = frame.pointee
+        outgoingRoot = current.pointee.addressSpace.rootTablePhysical
+    }
+
+    guard let nextProcess = Kernel.scheduler.pointee.selectNextTask() else {
+        return
+    }
+
+    let incomingRoot = nextProcess.pointee.addressSpace.rootTablePhysical
+
+    if incomingRoot != outgoingRoot {
+        Arch.MMU.switchUserAddressSpace(
+            incomingRoot,
+            asid: nextProcess.pointee.addressSpace.asid
+        )
+    }
+
+    frame.pointee = nextProcess.pointee.context!.pointee
+}
+
 
 /// Dispatches exceptions based on their fundamental type.
 ///
@@ -69,7 +166,6 @@ func handleExceptionType(
             
             switch exceptionClass {
                 case 0x15: // SVC Syscall
-                    
                     guard let type = SyscallNumber(rawValue: frame.x8) else {
                         framePointer.pointee.x0 = UInt64.max
                         return
@@ -83,7 +179,14 @@ func handleExceptionType(
                 case 0x24, 0x20: // User Space Abort (Data | Instruction)
                     userAbortHandle(frame: framePointer, faultAddress: frame.far)
                     
-                case 0x25, 0x21: // Kernel Space Abort
+                case 0x25, 0x21: // Kernel Space Abort (Data | Instruction)
+                    if exceptionClass == 0x25, isStackGuardFault(at: frame.far) {
+                        Arch.CPU.panic(
+                            "Kernel stack overflow (fault inside the kernel stack guard page)",
+                            fp: frame
+                        )
+                    }
+
                     Arch.CPU.panic("Kernel Space Abort", fp: frame)
                     
                 case 0x3C: // BRK
@@ -100,6 +203,28 @@ func handleExceptionType(
             }
     }
 }
+
+
+/// Whether a kernel data abort landed in the kernel stack's guard page.
+///
+/// The reason line is the first thing anyone reads, and "Kernel Space Abort"
+/// for an overflow sends the reader hunting a bad pointer instead of a deep
+/// call chain. The guard page is unmapped and no other structure is addressed
+/// through it, so a fault inside it is a stack overflow to a good approximation.
+///
+/// Folded into the low alias before comparing: the linker symbols are placed at
+/// physical addresses, while `FAR_EL1` reports whichever alias the faulting
+/// access used, and the kernel stack is reached through the high one from the
+/// first entry into user mode onward.
+@inline(__always)
+fileprivate
+func isStackGuardFault(at address: UInt64) -> Bool {
+    let physical = address & ~VirtualMemoryManager.physicalOffset
+
+    return physical >= getOfaddressWithSymbol(of: &__stack_guard_bottom)
+        && physical <  getOfaddressWithSymbol(of: &__stack_guard_top)
+}
+
 
 /// Handles memory access violations (Data/Instruction Aborts) originating from User Space (EL0).
 ///

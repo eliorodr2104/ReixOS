@@ -121,19 +121,20 @@ public struct ConsoleServer: Service {
         grantedCaps[slot] = request.takeGrant()
     }
 
+    /// Hand every complete line in `ring` to the UART, then the whole ring if it
+    /// is full and holds no line at all.
+    ///
+    /// The byte loop and its FIFO-full wait live in `pl011WriteSpan`, in
+    /// assembly. The same loop spelled in Swift lost its wait: `uartBase + 0x18`
+    /// is not a volatile read, so LLVM hoisted the load out of the loop and then
+    /// dropped it, and the shipped code stored into a FIFO it never checked.
     private func drain(_ ring: Ring) {
-        let flagRegister = uartBase + 0x18
 
         func writeSpan(
             _ bytes: UnsafeRawPointer,
               count: Int
         ) {
-            for offset in 0..<count {
-                let byte = bytes.load(fromByteOffset: offset, as: UInt8.self)
-
-                while (flagRegister.load(as: UInt32.self) & 0x20) != 0 { }
-                uartBase.storeBytes(of: byte, as: UInt8.self)
-            }
+            pl011WriteSpan(uartBase, bytes, count)
         }
 
         while ring.consumeLine(writeSpan) { }

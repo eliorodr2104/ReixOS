@@ -146,7 +146,20 @@ public struct VirtualMemoryManager: Loggable {
         flags = [.present, .pxn]
         let ramEnd = PhysicalAddress(self.ppmPtr.pointee.ramStart + self.ppmPtr.pointee.ramSize)
 
-        let safeRamStart = (kernelEnd + (Self.pageSize - 1)) & ~(Self.pageSize - 1)
+        let guardBottom = getOfaddressWithSymbol(of: &__stack_guard_bottom)
+        let guardTop    = getOfaddressWithSymbol(of: &__stack_guard_top)
+
+        // The guard page only guards while it is exactly the span between the
+        // last page of the kernel image and the bottom of the stack.
+        guard guardBottom == (kernelEnd + (Self.pageSize - 1)) & ~(Self.pageSize - 1),
+              guardTop    == guardBottom + Self.pageSize
+        else {
+            Arch.CPU.panic("the stack guard page is not between _kernel_end and __stack_bottom")
+        }
+
+        // Starts above the guard page, not above `_kernel_end`: the linear map
+        // covers RAM, so leaving the guard out of it is what makes it fault.
+        let safeRamStart = guardTop
 
         // Rounded the same way `mapSection` rounds its own bounds, so the hole
         // covers exactly the pages the read-only mapping above touched.

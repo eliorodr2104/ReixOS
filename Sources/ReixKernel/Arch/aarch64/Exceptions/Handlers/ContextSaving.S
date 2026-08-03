@@ -6,6 +6,55 @@
     b \label
 .endm
 
+// Reserves the trap frame and branches to \overflow if it does not fit on the
+// kernel stack, for exceptions taken at EL1.
+//
+// It has to run before the first store. Once SP has walked into the guard page
+// below __stack_bottom, the prologue's own stp is the next access into it, so
+// the abort re-enters here and the kernel spins at a fixed PC with nothing
+// reported. Below the guard page lies .bss.
+//
+// x0 is parked in CONTEXTIDR_EL1, an EL1 software field this kernel never reads
+// and does not carry in any context it saves. No general register may simply be
+// spilled instead: the panic report prints all of them. Nothing can nest inside
+// the window and observe the parked value, since it takes no memory access and
+// the exception entry has already masked DAIF.
+//
+// The comparison is 32 bits wide because SP and the symbol can sit in different
+// aliases of the same page: VBAR_EL1 is never moved off the identity mapping,
+// so the vectors run at a low PC and adrp yields the low alias, while SP is
+// high-half from the first entry into user mode onward. The two aliases differ
+// only above bit 32.
+//
+// Only the low side is tested, because a runaway call chain is what walks SP
+// off the stack. Bounding it above as well would need the stack size as an
+// assembly-time constant, which means restating linker.ld here and being
+// silently wrong the day the two disagree.
+.macro check_kernel_stack overflow
+    msr     contextidr_el1, x0
+    sub     sp, sp, #288
+    adrp    x0, __stack_bottom
+    add     x0, x0, :lo12:__stack_bottom
+    cmp     wsp, w0
+    mrs     x0, contextidr_el1
+    b.lo    \overflow
+.endm
+
+// Re-anchors SP at the top of the exception stack and reserves the trap frame
+// there. Reached only from check_kernel_stack, so the kernel stack is already
+// unusable and nothing on it is worth preserving.
+//
+// adrp resolves in whichever alias the vectors are running in, and both are
+// mapped, so this is correct before and after the switch to the high half.
+.macro switch_to_exception_stack
+    msr     contextidr_el1, x0
+    adrp    x0, __exception_stack_top
+    add     x0, x0, :lo12:__exception_stack_top
+    mov     sp, x0
+    mrs     x0, contextidr_el1
+    sub     sp, sp, #288
+.endm
+
 .section .vectors, "ax"
 .align 11
 
@@ -37,20 +86,46 @@ _evt_start:
 
 // --- Handler Implementations ---
 
-sync_handler_el1:
 sync_handler_el0:
     sub     sp, sp, #288
     stp     x0, x1,   [sp, #0]
     mov     x0, #1       // 1 = Sync
     b       save_context_after_x0_x1
 
-irq_handler_el1:
 irq_handler_el0:
     sub     sp, sp, #288
     stp     x0, x1,   [sp, #0]
     mov     x0, #0       // 0 = IRQ
     b       save_context_after_x0_x1
-    
+
+// Only the EL1 entries check the stack. An exception from EL0 finds the kernel
+// stack empty by construction, because EL0 was running and jump_to_user_mode
+// left SP at stack_top, so on that path the check would spend its instructions
+// proving something already known.
+sync_handler_el1:
+    check_kernel_stack .L_sync_el1_overflow
+    stp     x0, x1,   [sp, #0]
+    mov     x0, #1       // 1 = Sync
+    b       save_context_after_x0_x1
+
+.L_sync_el1_overflow:
+    switch_to_exception_stack
+    stp     x0, x1,   [sp, #0]
+    mov     x0, #1
+    b       save_context_after_x0_x1
+
+irq_handler_el1:
+    check_kernel_stack .L_irq_el1_overflow
+    stp     x0, x1,   [sp, #0]
+    mov     x0, #0       // 0 = IRQ
+    b       save_context_after_x0_x1
+
+.L_irq_el1_overflow:
+    switch_to_exception_stack
+    stp     x0, x1,   [sp, #0]
+    mov     x0, #0
+    b       save_context_after_x0_x1
+
 
 sync_invalid:
 irq_invalid:

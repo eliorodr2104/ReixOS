@@ -22,6 +22,10 @@ public struct RoundRobin: SchedulerInterface, Loggable {
     
     private(set) var systemTicks: UInt64 = 0
 
+    /// See `SchedulerInterface.needsResched`. Cleared by `selectNextTask`,
+    /// so whichever site rotates the queue first also cancels the request.
+    public private(set) var needsResched: Bool = false
+
 
     /// Written out rather than left implicit only so the boot line has
     /// somewhere to live. Every queue and counter above still starts from
@@ -58,8 +62,33 @@ public struct RoundRobin: SchedulerInterface, Loggable {
     }
     
     
+    /// Rotates the ready queue and returns whoever runs next, or `nil` when
+    /// there is nobody to run.
+    ///
+    /// This is the one funnel every rotation goes through, voluntary or
+    /// timer-driven, which is why `needsResched` is cleared here: whichever
+    /// site rotates first also cancels any pending request, so a switch cannot
+    /// happen twice for one expiry.
+    ///
+    /// ## The quantum, and why idling looks wasteful but is not
+    ///
+    /// `currentTicks` counts ticks since the last rotation, not per process, so
+    /// a task that never yields is preempted after `quantum` of them and a
+    /// workload that yields constantly never reaches it. Measured: this kernel
+    /// serves roughly a thousand voluntary rotations per tick under IPC load
+    /// and the timer never fires, while two spinning tasks alternate at exactly
+    /// 7 ticks with no jitter.
+    ///
+    /// With nobody ready the count is left *spent* rather than reset, so the
+    /// timer asks again on every tick. That looks like busy work and is in fact
+    /// the only thing that lifts the CPU out of `wfi`: the ask is what notices
+    /// a sleeper has become ready. Resetting it here would idle the machine for
+    /// a whole quantum between asks and strand every sleeper for up to that
+    /// long.
     public mutating func selectNextTask() -> UnsafeMutablePointer<Process>? {
-        
+
+        needsResched = false
+
         if let currentPtr = Arch.CPU.getCurrentProcess() {
             if case .running = currentPtr.pointee.status {
                 currentPtr.pointee.status = .ready
@@ -76,6 +105,11 @@ public struct RoundRobin: SchedulerInterface, Loggable {
             return next
         }
         
+        // Leave the quantum spent rather than untouched, so the next tick asks
+        // again. Keeping the old count would delay the first ask by up to a
+        // whole quantum, and that ask is what wakes a sleeper.
+        currentTicks = quantum
+
         Arch.CPU.setCurrentProcess(0)
         return nil
     }
@@ -95,10 +129,15 @@ public struct RoundRobin: SchedulerInterface, Loggable {
     public mutating func onTick() -> Bool {
         currentTicks &+= 1
         systemTicks  &+= 1
-        
+
         return currentTicks >= quantum
     }
-    
+
+
+    public mutating func requestReschedule() {
+        needsResched = true
+    }
+
     
     public mutating func yield() -> UnsafeMutablePointer<AArch64TrapFrame>? {
         if let nextProcess = selectNextTask() {

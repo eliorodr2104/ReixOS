@@ -10,9 +10,16 @@
 /// On each tick the handler snapshots the running process context into
 /// the process trap frame, rearms the core timer (`ect`), signals
 /// end-of-interrupt to the GIC and asks the scheduler if the quantum
-/// has expired. When it has, the next ready process is selected and
-/// its context is loaded back into the exception frame so the return
-/// from EL1 lands on the new task.
+/// has expired.
+///
+/// When it has, the handler only *asks* for a switch. It never performs one,
+/// because the frame it was handed may be a nested one taken at EL1, in the
+/// middle of a syscall, and overwriting that with another task's user context
+/// would `eret` away from a half-finished kernel call: its Swift frame, its
+/// locals and its return address would be orphaned on the kernel stack and
+/// the syscall would never return a value. The switch is carried out by
+/// `swift_exception_handler`, at the one point where the kernel stack is
+/// known to have unwound.
 public struct VirtualTimerInterruptHandler: InterruptHandler {
 
     public static let id: UInt32 = 27
@@ -39,26 +46,25 @@ public struct VirtualTimerInterruptHandler: InterruptHandler {
 
         guard quantumExpired else { return }
 
-        let outgoingRoot = Arch.CPU.getCurrentProcess()? .pointee.addressSpace.rootTablePhysical
-
-        if let nextProcess = Kernel.scheduler.pointee.selectNextTask() {
-            let incomingRoot = nextProcess.pointee.addressSpace.rootTablePhysical
-
-            if incomingRoot != outgoingRoot {
-                Arch.MMU.switchUserAddressSpace(
-                    incomingRoot,
-                    asid: nextProcess.pointee.addressSpace.asid
-                )
-            }
-
-            frame.pointee = nextProcess.pointee.context!.pointee
-        }
+        Kernel.scheduler.pointee.requestReschedule()
     }
 
 
+    /// Refreshes the running task's saved user context from `frame`.
+    ///
+    /// Only a frame taken from EL0 describes user state. A nested frame taken
+    /// at EL1 holds kernel state, an `elr` pointing into kernel code and an
+    /// `spsr` reading EL1h, so letting it reach `context` would leave the task
+    /// scheduled to resume inside the kernel at a stale address, on whatever
+    /// stack the interrupted handler happened to be using. Such a frame is
+    /// dropped here: the switch site re-reads the real user frame later.
     private static func snapshotCurrentContext(
         frame: UnsafeMutablePointer<Arch.TrapFrame>
     ) {
+        guard frame.pointee.spsr & 0xF == 0 else {
+            return
+        }
+
         guard let current = Arch.CPU.getCurrentProcess() else {
             return
         }

@@ -50,6 +50,18 @@ public var _evt_end: UInt8
 @_silgen_name("_kernel_total_end")
 public var _kernel_total_end: UInt8
 
+
+/// Bounds of the kernel stack's guard page, from `linker.ld`.
+///
+/// The page between `_kernel_end` and `__stack_bottom` that the linear map has
+/// to skip. Never dereference either symbol: the whole point is that the page
+/// they delimit has no translation.
+@_silgen_name("__stack_guard_bottom")
+public var __stack_guard_bottom: UInt8
+
+@_silgen_name("__stack_guard_top")
+public var __stack_guard_top: UInt8
+
 public func getOfaddressWithSymbol(of symbol: inout UInt8) -> PhysicalAddress {
     return withUnsafePointer(to: &symbol) {
         UInt64(UInt(bitPattern: $0))
