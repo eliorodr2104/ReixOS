@@ -73,10 +73,12 @@ public struct Kernel: Loggable {
             printBootBanner()
 
             self.ppm = try PhysicalPageManager<BuddyAllocator>()
+            bootPhase(TraceBootPhase.ppmReady)
 
             self.vmm = try VirtualMemoryManager(ppmPtr: &ppm!)
 
             self.ppm?.applyFramesMetadataVirtualOffset(VirtualMemoryManager.physicalOffset)
+            bootPhase(TraceBootPhase.vmmReady)
 
 
             let heapPage     = try ppm!.alloc(4096, flag: .kernel)
@@ -85,6 +87,7 @@ public struct Kernel: Loggable {
             let heapPtr      = heapRaw.bindMemory(to: BucketsHeap.self, capacity: 1)
             heapPtr.initialize(to: BucketsHeap(ppmPtr: &ppm!))
             self.heap = heapPtr
+            bootPhase(TraceBootPhase.heapReady)
 
 
             let gicPtr = heap.pointee.kmalloc(GICv2.self)
@@ -93,6 +96,7 @@ public struct Kernel: Loggable {
                 cBase: platformInfo.gic.giccBase
             ))
             self.gic = gicPtr
+            bootPhase(TraceBootPhase.gicReady)
 
 
             let tarFileSystemPtr = heap.pointee.kmalloc(KernelInternalFileSystem.self)
@@ -100,6 +104,7 @@ public struct Kernel: Loggable {
                 to: TarFileSystem()
             )
             self.fileSystem = tarFileSystemPtr
+            bootPhase(TraceBootPhase.fsReady)
 
 
             let processManagerPtr = heap.pointee.kmalloc(ProcessManager.self)
@@ -110,11 +115,13 @@ public struct Kernel: Loggable {
                 fileSystem:  fileSystem
             ))
             self.processManager = processManagerPtr
+            bootPhase(TraceBootPhase.pmReady)
 
 
             let schedulerPtr = heap.pointee.kmalloc(KernelScheduler.self)
             schedulerPtr.initialize(to: RoundRobin())
             self.scheduler = schedulerPtr
+            bootPhase(TraceBootPhase.schedReady)
 
 
             let ipcPtr = heap.pointee.kmalloc(KernelIPC.self)
@@ -126,6 +133,7 @@ public struct Kernel: Loggable {
                 )
             )
             self.ipc = ipcPtr
+            bootPhase(TraceBootPhase.ipcReady)
 
 
             let syscallHandlerPtr = heap.pointee.kmalloc(SyscallHandler.self)
@@ -136,9 +144,12 @@ public struct Kernel: Loggable {
                 ppm           : &self.ppm!
             ))
             self.syscallHandler = syscallHandlerPtr
+            bootPhase(TraceBootPhase.syscallReady)
 
 
             AArch64VirtualTimer.enable()
+            bootPhase(TraceBootPhase.timerOn)
+
             kprint()
 
         } catch { internalPanic(error) }
@@ -162,6 +173,19 @@ public struct Kernel: Loggable {
             Arch.CPU.idleLoop()
         }
     }
+
+
+    /// Files one bring-up milestone into the trace side table.
+    ///
+    /// Records and prints nothing: the boot log is this project's regression
+    /// test and a new line in it would be a failure. The ids are fixed by
+    /// `TraceBootPhase` and not by this sequence of calls, so reordering two
+    /// constructions here moves the events and never renames them.
+    @inline(__always)
+    private static func bootPhase(_ phase: UInt16) {
+        Trace.emitBootPhase(phase)
+    }
+
 
     private static func internalPanic<E: KernelFatal>(_ error: E) {
         internalPanicMessage = error.description
@@ -224,6 +248,8 @@ public struct Kernel: Loggable {
         // Last kernel statement before EL0: from here the timer tick exists to
         // drain the ring, and no kernel line still has to beat user space out.
         LogSink.mode = .deferred
+
+        bootPhase(TraceBootPhase.firstUser)
 
         jump_to_user_mode(
             trapFrame: trapFramePtr,

@@ -194,6 +194,8 @@ public struct ProcessManager: RXAllocatable, Loggable {
                 ))
 
                 vmaManagerPtr.pointee.setInitialBreak(initialBreak)
+
+                Self.traceSpawn(pid)
                 return processPtr
 
 
@@ -255,7 +257,8 @@ public struct ProcessManager: RXAllocatable, Loggable {
             context       : trapFramePtr,
             metadata      : metadataPtr,
         ))
-        
+
+        Self.traceSpawn(pid)
         return processPtr
     }
     
@@ -418,6 +421,8 @@ public struct ProcessManager: RXAllocatable, Loggable {
 
             } else { process.pointee.family.orphanChildren() }
 
+            SleepSyscall.unpark(pid: process.pointee.pid)
+
             switch status {
                 case .blockedOnSend(let ep?), .blockedOnReceive(let ep?):
                     ep.pointee.queue.remove(element: process)
@@ -433,6 +438,13 @@ public struct ProcessManager: RXAllocatable, Loggable {
 
             process.pointee.status                       = .terminated
             process.pointee.metadata?.pointee.exitReason = reason
+
+            Trace.emit(
+                TraceProc.self,
+                code: TraceCode.procExit,
+                info: Self.traceReason(reason),
+                a   : process.pointee.pid
+            )
 
             try? context.processManager.pointee.releaseAddressSpace(process)
             context.ipc.pointee.releaseCapabilities(of: process)
@@ -537,6 +549,43 @@ public struct ProcessManager: RXAllocatable, Loggable {
             releaseProcess(child)
         }
     }
+
+    // MARK: - Trace funnels
+
+    /// Files a `procSpawn` for a process that is fully built.
+    ///
+    /// The parent reported is whoever was running at the time, not
+    /// `family.parent`: the link is assigned by the caller after this returns,
+    /// so at this point the child has none, and the process that asked is the
+    /// answer every profile of a spawn actually wants. It is zero for `Init`,
+    /// which the kernel spawns with nobody running.
+    @inline(__always)
+    private static func traceSpawn(_ pid: PID) {
+        Trace.emit(
+            TraceProc.self,
+            code: TraceCode.procSpawn,
+            a   : pid,
+            b   : Arch.CPU.getCurrentProcess()?.pointee.pid ?? 0
+        )
+    }
+
+
+    /// How a process died, as `TraceCode.procExit`'s `info`.
+    ///
+    /// Numbered from one so that zero stays available for "not recorded", and
+    /// deliberately not `ExitReason`'s payload: a code or a fault cause is a
+    /// second dimension, and the ring records what kind of death it was.
+    @inline(__always)
+    private static func traceReason(_ reason: ExitReason) -> UInt16 {
+        switch reason {
+            case .exited            : 1
+            case .killed            : 2
+            case .memoryFault       : 3
+            case .illegalInstruction: 4
+            case .stackOverflow     : 5
+        }
+    }
+
 
     private func attachVMAManager(
         to addressSpace: inout AddressSpace

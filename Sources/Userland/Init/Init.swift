@@ -75,6 +75,9 @@ public func main() {
         registrar  : registrar
     )
 
+    sleep(for: .seconds(3))
+    profileDump()
+
     while true {
         sleep(for: .seconds(1))
     }

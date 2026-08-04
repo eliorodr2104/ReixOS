@@ -5,6 +5,8 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 30/04/2026.
 //
 
+import ReixABI
+
 public struct RoundRobin: SchedulerInterface, Loggable {
     
     public static var errorMessageAllocation: StaticString = "Failed to allocate Scheduler on the kernel heap"
@@ -17,8 +19,17 @@ public struct RoundRobin: SchedulerInterface, Loggable {
     private var terminated: LinkedList = LinkedList<Process>(head: nil, tail: nil)
     
     
-    private var currentTicks: UInt = 0   // Tick
-    private let quantum     : UInt = 7 // One tick is 10ms
+    private var currentTicks: UInt = 0 // Tick
+    private let quantum     : UInt = 7 // One tick is SchedulerABI.millisecondsPerTick
+
+    /// Whether the last `selectNextTask` found nobody to run.
+    ///
+    /// The trace's only piece of scheduler state, and it exists for `idleExit`
+    /// alone: `idleEnter` is self-limiting, since the first empty rotation
+    /// clears the current process and every later one then has nothing to
+    /// report, but coming *out* of idle is indistinguishable from an ordinary
+    /// rotation without remembering that the machine was idle at all.
+    private var isIdle: Bool = false
     
     private(set) var systemTicks: UInt64 = 0
 
@@ -89,7 +100,9 @@ public struct RoundRobin: SchedulerInterface, Loggable {
 
         needsResched = false
 
-        if let currentPtr = Arch.CPU.getCurrentProcess() {
+        let previous = Arch.CPU.getCurrentProcess()
+
+        if let currentPtr = previous {
             if case .running = currentPtr.pointee.status {
                 currentPtr.pointee.status = .ready
                 ready.pushBack(currentPtr)
@@ -102,6 +115,23 @@ public struct RoundRobin: SchedulerInterface, Loggable {
             next.pointee.status = .running
                         
             currentTicks = 0
+
+            if isIdle {
+                isIdle = false
+                Trace.emit(TraceSched.self, code: TraceCode.idleExit)
+            }
+
+            // Rotating back onto the same task is not a switch, and would bury
+            // the real ones under one runnable process's quantum expiries.
+            if previous != next {
+                Trace.emit(
+                    TraceSched.self,
+                    code: TraceCode.ctxSwitch,
+                    a   : previous?.pointee.pid ?? 0,
+                    b   : next.pointee.pid
+                )
+            }
+
             return next
         }
         
@@ -110,17 +140,40 @@ public struct RoundRobin: SchedulerInterface, Loggable {
         // whole quantum, and that ask is what wakes a sleeper.
         currentTicks = quantum
 
+        if !isIdle, previous != nil {
+            isIdle = true
+            Trace.emit(TraceSched.self, code: TraceCode.idleEnter)
+        }
+
         Arch.CPU.setCurrentProcess(0)
         return nil
     }
     
     
+    /// Puts a parked process back on the ready queue, unlinking it first from
+    /// whichever list its status says it is parked on.
+    ///
+    /// The unlink is the invariant, not a courtesy: `prev`/`next` are one pair
+    /// of intrusive links shared by every list, so a `pushBack` while still
+    /// chained into `waiting` or an endpoint queue would rewrite them and
+    /// corrupt the old list in place. Callers that already popped the process,
+    /// which is all of the IPC fast paths, pay two nil checks and nothing else,
+    /// because `remove(element:)` is a no-op on an unlinked node.
     public mutating func resume(_ process: UnsafeMutablePointer<Process>) {
         switch process.pointee.status {
-            case .ready, .running, .terminated: return
-            default: break
+            case .ready, .running, .terminated:
+                return
+
+            case .waiting:
+                waiting.remove(element: process)
+
+            case .blockedOnSend(let endpoint), .blockedOnReceive(let endpoint):
+                endpoint?.pointee.queue.remove(element: process)
+
+            default:
+                break
         }
-        
+
         process.pointee.status = .ready
         ready.pushBack(process)
     }
@@ -148,12 +201,16 @@ public struct RoundRobin: SchedulerInterface, Loggable {
     }
     
     
+    /// Blocks the current process. `pid` is kept honest, not decorative:
+    /// both callers pass their own pid, and a mismatch throws instead of
+    /// silently blocking the wrong process.
     public mutating func block(_ pid: PID) throws(SchedulerError) {
 
-        guard let process = Arch.CPU.getCurrentProcess() else {
+        guard let process = Arch.CPU.getCurrentProcess(),
+              process.pointee.pid == pid else {
             throw .processNotExist
         }
-        
+
         process.pointee.status = .waiting
         waiting.pushBack(process)
     }

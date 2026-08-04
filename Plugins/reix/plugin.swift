@@ -47,6 +47,13 @@ struct ReixPlugin: CommandPlugin {
             return
         }
 
+        // Same reasoning as symbolize: it only reads a log file and prints a
+        // report, so it runs before any of the build machinery below.
+        if arguments.first == "trace" {
+            try TraceDecoder.run(arguments: arguments)
+            return
+        }
+
         let root = context.package.directoryURL
         let work = context.pluginWorkDirectoryURL
         let release = arguments.contains("--release")
@@ -195,6 +202,23 @@ enum ReixError: Error, CustomStringConvertible {
 }
 
 
+// MARK: - trace
+
+/// The `trace` subcommand.
+///
+/// The kernel can dump its trace ring to the serial console: syscall
+/// latencies, IPC blocks/wakes/transfers, preemption spans and boot phases,
+/// each framed as `{{{t:TS:CODE:INFO:PID:A:B}}}` between a begin/end marker.
+/// Decoding that into readable tables is pure host-side text processing, so
+/// it lives entirely in `TraceDecoder.swift` next to this dispatch line.
+///
+///     swift package reix trace panic.txt                       # summary report
+///     swift package reix trace panic.txt --boot                # boot-phase timeline
+///     swift package reix trace panic.txt --raw                 # one line per event
+///
+/// See the doc comment atop `TraceDecoder.swift` for the exact wire format.
+
+
 // MARK: - symbolize
 
 /// The `symbolize` subcommand.
@@ -243,6 +267,8 @@ extension ReixPlugin {
             No kernel image at \(elf.path).
             Build it first, or point the subcommand somewhere else:
                 swift package reix symbolize --elf <path/to/kernel.elf>
+            Point at a different llvm-symbolizer the same way:
+                swift package reix symbolize --symbolizer <path/to/llvm-symbolizer>
             """)
             return
         }
@@ -267,7 +293,7 @@ extension ReixPlugin {
             if !addresses.contains(address) { addresses.append(address) }
         }
 
-        let resolved = try resolve(addresses, in: elf, cwd: root)
+        let resolved = try resolve(addresses, using: resolvedSymbolizer(arguments), in: elf, cwd: root)
 
         // Back to front: every replacement invalidates the offsets of the
         // matches that follow it, and none of the ones that precede it.
@@ -296,11 +322,12 @@ extension ReixPlugin {
     /// falls back to the symbol table and names them.
     private func resolve(
         _ addresses: [String],
-        in elf     : URL,
-        cwd        : URL
+        using tool  : String,
+        in elf      : URL,
+        cwd         : URL
     ) throws -> [String: String] {
 
-        let json = try capture(symbolizer, [
+        let json = try capture(tool, [
             "--obj=" + elf.path,
             "--functions=linkage",
             "--output-style=JSON",
@@ -382,7 +409,7 @@ extension ReixPlugin {
         var index      = 1 // arguments[0] is the subcommand
 
         while index < arguments.count {
-            if arguments[index] == "--elf" {
+            if arguments[index] == "--elf" || arguments[index] == "--symbolizer" {
                 index += 2
                 continue
             }
@@ -415,6 +442,38 @@ extension ReixPlugin {
         else { return nil }
 
         return URL(fileURLWithPath: arguments[flag + 1])
+    }
+
+
+    /// Which `llvm-symbolizer` to run: an explicit `--symbolizer` argument
+    /// first, then the Homebrew install every other native tool here
+    /// assumes, falling back to whatever `PATH` names when neither exists.
+    private func resolvedSymbolizer(_ arguments: [String]) -> String {
+        if let flag = arguments.firstIndex(of: "--symbolizer"),
+           flag + 1 < arguments.count {
+            return arguments[flag + 1]
+        }
+
+        if FileManager.default.isExecutableFile(atPath: symbolizer) {
+            return symbolizer
+        }
+
+        return which("llvm-symbolizer") ?? "llvm-symbolizer"
+    }
+
+
+    /// Foundation has no `which`, and `Process` needs an absolute path: it
+    /// will not search `PATH` on its own, so this is what makes the PATH
+    /// fallback above actually usable rather than a guaranteed launch failure.
+    private func which(_ name: String) -> String? {
+        let dirs = (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":")
+
+        for dir in dirs {
+            let candidate = "\(dir)/\(name)"
+            if FileManager.default.isExecutableFile(atPath: candidate) { return candidate }
+        }
+
+        return nil
     }
 
 

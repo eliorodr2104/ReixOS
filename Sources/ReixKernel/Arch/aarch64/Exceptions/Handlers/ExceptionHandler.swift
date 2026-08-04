@@ -132,7 +132,19 @@ func performPendingSwitch(
         )
     }
 
-    frame.pointee = nextProcess.pointee.context!.pointee
+    guard let nextContext = nextProcess.pointee.context else {
+        Arch.CPU.panic(
+            report: PanicReport(
+                reason: "Ready process has no saved context (broken invariant)",
+                frame : frame.pointee,
+                pid   : nextProcess.pointee.pid
+            ),
+            formattedBy: DefaultPanicFormatter.self,
+            finishedBy : HaltPanicAction.self
+        )
+    }
+
+    frame.pointee = nextContext.pointee
 }
 
 

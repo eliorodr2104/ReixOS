@@ -32,7 +32,7 @@ public struct NameServer: Service {
     ) {
 
         print("[ NS    ] badge request:", terminator: " ")
-        print(String(UInt64(request.identity)))
+        printDec(UInt64(request.identity))
 
         switch operation {
 

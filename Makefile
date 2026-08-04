@@ -11,6 +11,7 @@
 #   make build      alias for the above (Xcode's legacy target passes $(ACTION))
 #   make run        build + boot in QEMU
 #   make release    build + boot the optimized image
+#   make smoke      build + boot headless, pass/fail on the serial log
 #   make clean-image  remove only $(OUT), keep the compiled modules
 #   make clean      remove $(OUT) and the SwiftPM build directory
 #   make prune-dups remove iCloud conflict copies from the build trees
@@ -38,7 +39,7 @@ QEMU_FLAGS  := -machine virt,gic-version=2 -cpu cortex-a53 -nographic
 # instead and get working code intelligence.
 export FREESTANDING := 1
 
-.PHONY: all build image release run run-release prune-dups clean-image clean
+.PHONY: all build image release run run-release smoke prune-dups clean-image clean
 
 all: image
 
@@ -84,6 +85,11 @@ run: image
 
 run-release: release
 	$(QEMU) $(QEMU_FLAGS) -kernel $(OUT)/kernel.bin -initrd $(OUT)/initrd.tar
+
+# Headless boot smoke test: no human at the serial port, script watches the
+# log for the SHM-OK line (success) or a panic/SHM-FAIL (failure) instead.
+smoke: image
+	QEMU=$(QEMU) QEMU_FLAGS='$(QEMU_FLAGS)' OUT=$(OUT) scripts/smoke.sh
 
 clean-image:
 	rm -rf $(OUT)

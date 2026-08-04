@@ -14,9 +14,7 @@ import ReixABI
 /// next ready task. Deadlines live in a table here instead of on
 /// `Process` because a sleeper is already linked into a scheduler queue
 /// through its own `prev`/`next`: a second intrusive list over the same
-/// nodes would corrupt both. The table is keyed by PID rather than by
-/// pointer, so a slot left behind by a process that died while parked
-/// resolves to nothing and is simply dropped.
+/// nodes would corrupt both.
 public struct SleepSyscall: SyscallProvider {
 
     public static let number: SyscallNumber = .sleep
@@ -41,7 +39,10 @@ public struct SleepSyscall: SyscallProvider {
         frame  : UnsafeMutablePointer<Arch.TrapFrame>,
         context: SyscallContext
     ) {
-        guard let current = Arch.CPU.getCurrentProcess() else { return }
+        guard let current = Arch.CPU.getCurrentProcess() else {
+            frame.pointee.x0 = 1
+            return
+        }
 
         let ticks = frame.pointee.x0
 
@@ -54,9 +55,14 @@ public struct SleepSyscall: SyscallProvider {
         let (deadline, overflowed) = context.scheduler.pointee.systemTicks
             .addingReportingOverflow(ticks)
 
+        guard !overflowed else {
+            frame.pointee.x0 = 1
+            return
+        }
+
         guard park(
             pid     : current.pointee.pid,
-            deadline: overflowed ? UInt64.max : deadline
+            deadline: deadline
         ) else {
             frame.pointee.x0 = 1
             return
@@ -97,7 +103,7 @@ public struct SleepSyscall: SyscallProvider {
 
             sleepers[i].deadline = 0
             parked -= 1
-
+            
             try? Kernel.scheduler.pointee.wakeUp(sleeper.pid)
         }
 
@@ -121,7 +127,14 @@ public struct SleepSyscall: SyscallProvider {
     }
 
 
-    private static func unpark(pid: PID) {
+    /// Gives back the slot `pid` holds, if it holds one.
+    ///
+    /// Reached from the failed-block path above and from
+    /// `ProcessManager.killProcess`, which is what keeps a process that dies
+    /// while parked from taking its slot to the grave. A pid with no slot is
+    /// not an error here, so a death route may call this unconditionally
+    /// without first asking whether the process was sleeping.
+    public static func unpark(pid: PID) {
         for i in 0..<sleepers.count
         where sleepers[i].deadline != 0 && sleepers[i].pid == pid {
             sleepers[i].deadline = 0

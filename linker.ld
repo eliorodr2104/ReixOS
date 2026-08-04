@@ -21,6 +21,7 @@ SECTIONS
         _rodata_start = .;
         *(.rodata)
         *(.rodata.*)
+        *(.swift_modhash)
         _rodata_end = .;
     }
     

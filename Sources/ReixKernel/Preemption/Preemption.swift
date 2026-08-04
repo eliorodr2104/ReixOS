@@ -171,14 +171,25 @@ public enum Preemption {
             activeDrivers &-= 1
 
             if owner {
-                let tail = Arch.Timer.counter() &- openedAt
+                let tail    = Arch.Timer.counter() &- openedAt
+                let stretch = tail > longestStretch ? tail : longestStretch
 
                 PreemptionSpans.merge(
                     Region.self,
-                    stretch       : tail > longestStretch ? tail : longestStretch,
+                    stretch       : stretch,
                     longestWindow : longestWindow,
                     cheapestWindow: cheapestWindow,
                     checkpoints   : checkpoints
+                )
+
+                // The ring `PreemptionSpans` promises: the table keeps the
+                // extremes, this keeps every run that produced them.
+                Trace.emit(
+                    TracePreemption.self,
+                    code: TraceCode.preemptSpan,
+                    info: UInt16(truncatingIfNeeded: Region.slot),
+                    a   : stretch,
+                    b   : checkpoints
                 )
             }
         }
@@ -228,11 +239,24 @@ public enum Preemption {
     /// Lets whatever is pending in, and returns the reading that starts the
     /// next uninterrupted stretch.
     ///
-    /// `daifclr #3` unmasks FIQ along with IRQ. That is safe here rather than
-    /// merely tolerable: GICv2 is configured Group 1, so it only ever signals
-    /// IRQ, and no other source in this machine raises an FIQ. Should one ever
-    /// appear it lands in `fiq_invalid` and panics, which is the correct
-    /// outcome for an interrupt this kernel has no handler for.
+    /// The window unmasks IRQ and nothing else. `enableInterrupts` is
+    /// `daifclr #2`, so F stays masked for its whole duration: GICv2 is
+    /// configured Group 1 and only ever signals IRQ, no other source in this
+    /// machine raises an FIQ, and the kernel installs no FIQ handler anyway, so
+    /// unmasking F could only widen the door onto an interrupt nobody services.
+    /// It used to be `#3`, which did exactly that.
+    ///
+    /// `disableInterrupts` on the way out is still `daifset #3` and masks both.
+    /// The asymmetry is deliberate: closing more than was opened costs nothing
+    /// and leaves the door shut whoever opened it.
+    ///
+    /// Should an FIQ arrive anyway it now waits behind the mask instead of being
+    /// taken here. Taken anywhere else, `fiq_invalid` re-anchors SP on the
+    /// exception stack, builds a real trap frame and panics through
+    /// `swift_invalid_vector` with the slot named and ESR, ELR and FAR printed.
+    /// That is what this comment used to claim; until the vectors were fixed
+    /// every `*_invalid` slot fell into a bare `b .` and the machine stopped
+    /// with nothing reported at all.
     ///
     /// The barrier between the two writes is what makes this a window rather
     /// than a pair of writes. An `MSR` to `DAIF` is not context-synchronizing,

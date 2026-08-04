@@ -42,6 +42,11 @@ playground.xcworkspace
 # reix plugin output (kernel.elf/kernel.bin/*.elf/initrd.tar)
 .reix/
 
+# iCloud conflict copies ("<name> 2.<ext>"), see the prune-dups note in Makefile.
+# One of these under Sources/ was once committed and broke the build.
+* [0-9].*
+* [0-9]
+
 # CocoaPods
 #
 # We recommend against adding the Pods directory to your .gitignore. However

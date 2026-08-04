@@ -49,6 +49,27 @@ public struct SyscallHandler: RXAllocatable {
             ppm           : ppm
         )
 
+        // One `syscallExit` record per trap, filed once the arm returns, so a
+        // whole span costs one record and two counter reads.
+        Trace.syscallSpan(
+            TraceSyscalls.self,
+            info : UInt16(truncatingIfNeeded: type.rawValue),
+            frame: frame
+        ) {
+            dispatch(type: type, frame: frame, context: context)
+        }
+    }
+
+
+    /// The dispatch itself, split out only so the trace bracket above has
+    /// something to wrap. `@inline(__always)`, so the emitted shape is the one
+    /// switch it has always been.
+    @inline(__always)
+    private func dispatch(
+        type   : SyscallNumber,
+        frame  : UnsafeMutablePointer<Arch.TrapFrame>,
+        context: SyscallContext
+    ) {
         // No `default` arm on purpose: one let `sleep` sit undispatched, silently
         // returning with `x0` untouched. Exhaustive, a new number fails to compile.
         switch type {
@@ -99,6 +120,10 @@ public struct SyscallHandler: RXAllocatable {
             // Caps
             case .capExists     : CapExistsSyscall     .handle(frame: frame, context: context)
             case .capDrop       : CapDropSyscall       .handle(frame: frame, context: context)
+
+
+            // Profile
+            case .profileControl: ProfileControlSyscall.handle(frame: frame, context: context)
         }
     }
     

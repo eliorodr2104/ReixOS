@@ -83,6 +83,10 @@ public struct RendezvousIPC: IPCInterface, Loggable {
                 return .failure(.noReply)
             }
 
+            guard let receiverContext = receiverProcess.pointee.context else {
+                return .failure(.noReply)
+            }
+
 
             var transferResult: Result<UInt32, IPCError>?
             if grantHandle != UInt32.max {
@@ -94,35 +98,37 @@ public struct RendezvousIPC: IPCInterface, Loggable {
                     rights : grantRights
                 )
             }
-            
+
             var grantRejected = false
             switch transferResult {
                 case .success(let newGrantHandle):
-                    receiverProcess.pointee.context!.pointee.x7 = UInt64(newGrantHandle)
+                    receiverContext.pointee.x7 = UInt64(newGrantHandle)
 
                 case .failure(_):
-                    receiverProcess.pointee.context!.pointee.x7 = UInt64(UInt32.max)
+                    receiverContext.pointee.x7 = UInt64(UInt32.max)
                     grantRejected = true
 
                 case nil:
-                    receiverProcess.pointee.context!.pointee.x7 = UInt64(UInt32.max)
+                    receiverContext.pointee.x7 = UInt64(UInt32.max)
             }
 
 
             if endpointPtr.pointee.queue.isEmpty() {
                 endpointPtr.pointee.state = .idle
             }
-            
-            Message(from: frame).write(to: receiverProcess.pointee.context!)
 
-            receiverProcess.pointee.context!.pointee.x6 = ipcTag(
+            Message(from: frame).write(to: receiverContext)
+
+            traceTransfer(from: currentProcess, to: receiverProcess)
+
+            receiverContext.pointee.x6 = ipcTag(
                 from   : currentProcess,
                 session: capability.badge
             )
 
             disarmDeadline(on: receiverProcess)
 
-            scheduler.pointee.resume(receiverProcess)
+            wake(receiverProcess)
 
             return .success(.sended(grantRejected: grantRejected))
         }
@@ -144,9 +150,11 @@ public struct RendezvousIPC: IPCInterface, Loggable {
 
         endpointPtr.pointee.state     = .sendBlocked
         currentProcess.pointee.status = .blockedOnSend(endpointPtr)
-        
+
+        traceBlock(TraceBlockReason.sendQueue, on: endpointPtr)
+
         return .success(.blocked)
-        
+
     }
     
     
@@ -210,6 +218,8 @@ public struct RendezvousIPC: IPCInterface, Loggable {
 
             pending?.message.write(to: frame)
 
+            traceTransfer(from: senderProcess, to: currentProcess)
+
             frame.pointee.x6 = ipcTag(
                 from   : senderProcess,
                 session: pending?.session ?? 0
@@ -228,7 +238,7 @@ public struct RendezvousIPC: IPCInterface, Loggable {
                 senderProcess.pointee.replyPartner = currentProcess
                 senderProcess.pointee.status       = .blockedOnReply
 
-            } else { scheduler.pointee.resume(senderProcess) }
+            } else { wake(senderProcess) }
 
             return .success(.sended(grantRejected: false))
         }
@@ -251,9 +261,11 @@ public struct RendezvousIPC: IPCInterface, Loggable {
 
         } else { disarmDeadline(on: currentProcess) }
 
+        traceBlock(TraceBlockReason.recvWait, on: endpointPtr)
+
         return .success(.blocked)
     }
-    
+
 
     public mutating func call(
         capability: Capability,
@@ -278,18 +290,26 @@ public struct RendezvousIPC: IPCInterface, Loggable {
                 return .failure(.noReply)
             }
 
+            // A queued process is always a live IPC participant; a broken
+            // invariant is the only way this is nil.
+            guard let receiverContext = receiverProcess.pointee.context else {
+                return .failure(.noReply)
+            }
+
             if endpointPtr.pointee.queue.isEmpty() {
                 endpointPtr.pointee.state = .idle
             }
 
-            Message(from: frame).write(to: receiverProcess.pointee.context!)
+            Message(from: frame).write(to: receiverContext)
 
-            receiverProcess.pointee.context!.pointee.x6 = ipcTag(
+            traceTransfer(from: currentProcess, to: receiverProcess)
+
+            receiverContext.pointee.x6 = ipcTag(
                 from   : currentProcess,
                 session: capability.badge
             )
 
-            receiverProcess.pointee.context!.pointee.x7 = UInt64(UInt32.max)
+            receiverContext.pointee.x7 = UInt64(UInt32.max)
 
             disarmDeadline(on: receiverProcess)
 
@@ -297,11 +317,13 @@ public struct RendezvousIPC: IPCInterface, Loggable {
 
             receiverProcess.pointee.replyTo     = currentProcess
             currentProcess.pointee.replyPartner = receiverProcess
-            
+
             currentProcess.pointee.status = .blockedOnReply
 
-            scheduler.pointee.resume(receiverProcess)
-            
+            traceBlock(TraceBlockReason.call, on: endpointPtr)
+
+            wake(receiverProcess)
+
             return .success(.blocked)
         }
         
@@ -322,7 +344,9 @@ public struct RendezvousIPC: IPCInterface, Loggable {
 
         endpointPtr.pointee.queue.pushBack(currentProcess)
         endpointPtr.pointee.state = .sendBlocked
-        
+
+        traceBlock(TraceBlockReason.call, on: endpointPtr)
+
         return .success(.blocked)
     }
     
@@ -364,13 +388,19 @@ public struct RendezvousIPC: IPCInterface, Loggable {
         
         guard let currentProcess = Arch.CPU.getCurrentProcess(),
               let replyProcess = currentProcess.pointee.replyTo else {
-            
+
             return .failure(.noReply)
         }
 
-        Message(from: frame).write(to: replyProcess.pointee.context!)
+        guard let replyContext = replyProcess.pointee.context else {
+            return .failure(.noReply)
+        }
 
-        replyProcess.pointee.context!.pointee.x6 = ipcTag(
+        Message(from: frame).write(to: replyContext)
+
+        traceTransfer(from: currentProcess, to: replyProcess)
+
+        replyContext.pointee.x6 = ipcTag(
             from   : currentProcess,
             session: 0
         )
@@ -384,21 +414,21 @@ public struct RendezvousIPC: IPCInterface, Loggable {
                 rights : grantRights
             )
         }
-        
+
         var grantRejected = false
         switch transferResult {
             case .success(let newHandle):
-                replyProcess.pointee.context!.pointee.x7 = UInt64(newHandle)
+                replyContext.pointee.x7 = UInt64(newHandle)
 
             case .failure(_):
-                replyProcess.pointee.context!.pointee.x7 = UInt64(UInt32.max)
+                replyContext.pointee.x7 = UInt64(UInt32.max)
                 grantRejected = true
 
             case nil:
-                replyProcess.pointee.context!.pointee.x7 = UInt64(UInt32.max)
+                replyContext.pointee.x7 = UInt64(UInt32.max)
         }
 
-        scheduler.pointee.resume(replyProcess)
+        wake(replyProcess)
         currentProcess.pointee.replyTo    = nil
         replyProcess.pointee.replyPartner = nil
 
@@ -564,15 +594,20 @@ public struct RendezvousIPC: IPCInterface, Loggable {
              rights         : CapRights
         
     ) -> Result<UInt32, IPCError> {
-        let senderMetadata = senderProcess.pointee.metadata!
+        // A nil metadata means the process is not a live IPC participant;
+        // fail the same way an unresolvable capability handle does.
+        guard let senderMetadata = senderProcess.pointee.metadata else {
+            return .failure(.invalidCapability)
+        }
+
         guard let capability = senderMetadata.pointee.capsTable.resolve(handler) else {
             return .failure(.invalidCapability)
         }
-        
+
         guard capability.rights.contains(.grant) else {
             return .failure(.notEnoughRights)
         }
-        
+
         let effective = rights.intersection(capability.rights)
         let receiverCap = Capability(
             target: capability.target,
@@ -580,8 +615,10 @@ public struct RendezvousIPC: IPCInterface, Loggable {
             rights: effective
         )
 
-        
-        let receiverMetadata = receiverProcess.pointee.metadata!
+        guard let receiverMetadata = receiverProcess.pointee.metadata else {
+            return .failure(.invalidCapability)
+        }
+
         guard let receiverHandle = receiverMetadata.pointee.capsTable.install(receiverCap) else {
             return .failure(.outOfEndpoints)
         }
@@ -669,7 +706,7 @@ public struct RendezvousIPC: IPCInterface, Loggable {
                             current.pointee.context?.pointee.x0 = IPCStatus.timeout.rawValue
 
                             disarmDeadline(on: current)
-                            scheduler.pointee.resume(current)
+                            wake(current)
 
                         } else {
                             survivingArmed   += 1
@@ -691,6 +728,67 @@ public struct RendezvousIPC: IPCInterface, Loggable {
     }
 
     
+    // MARK: - Trace funnels
+
+    /// Puts `process` back on the ready queue, and records that it happened.
+    ///
+    /// Every resume in this file goes through here, the rendezvous fast paths,
+    /// the reply, the timeout scan and the displaced caller alike, so the trace
+    /// sees one `ipcWake` per unparked process wherever the wake came from and
+    /// a new wake site cannot quietly skip it.
+    ///
+    /// Not `mutating`: the scheduler is reached through a pointer, which is
+    /// what lets `displaceReplyLink` call this too.
+    @inline(__always)
+    private func wake(_ process: UnsafeMutablePointer<Process>) {
+        Trace.emit(
+            TraceIPC.self,
+            code: TraceCode.ipcWake,
+            a   : process.pointee.pid
+        )
+
+        scheduler.pointee.resume(process)
+    }
+
+
+    /// Records that the running process parked on `endpoint`.
+    ///
+    /// The endpoint is identified by its address rather than by its index in
+    /// `endpoints`: the index would cost a scan of all 64 slots on a path that
+    /// is supposed to be almost free, and an address is just as unique for as
+    /// long as the endpoint lives, which is as long as anything can be waiting
+    /// on it.
+    @inline(__always)
+    private func traceBlock(
+        _  reason  : UInt16,
+        on endpoint: UnsafeMutablePointer<Endpoint>
+    ) {
+        Trace.emit(
+            TraceIPC.self,
+            code: TraceCode.ipcBlock,
+            info: reason,
+            a   : UInt64(UInt(bitPattern: endpoint))
+        )
+    }
+
+
+    /// Records a message actually crossing, which is the event the four
+    /// rendezvous fast paths have in common and the only one that says work
+    /// moved rather than merely that somebody waited.
+    @inline(__always)
+    private func traceTransfer(
+        from sender  : UnsafeMutablePointer<Process>,
+        to   receiver: UnsafeMutablePointer<Process>
+    ) {
+        Trace.emit(
+            TraceIPC.self,
+            code: TraceCode.ipcTransfer,
+            a   : sender.pointee.pid,
+            b   : receiver.pointee.pid
+        )
+    }
+
+
     // MARK: - Helpers
 
     /// Arms `deadline` on `process` and folds it into the earliest known one.
@@ -755,7 +853,7 @@ public struct RendezvousIPC: IPCInterface, Loggable {
         abandoned.pointee.replyPartner        = nil
         abandoned.pointee.context?.pointee.x0 = IPCStatus.noReply.rawValue
 
-        scheduler.pointee.resume(abandoned)
+        wake(abandoned)
         server.pointee.replyTo = nil
     }
 

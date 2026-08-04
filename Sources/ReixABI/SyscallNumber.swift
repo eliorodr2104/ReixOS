@@ -55,4 +55,8 @@ public enum SyscallNumber: UInt64 {
     // Caps
     case capExists
     case capDrop
+
+
+    // Profiler
+    case profileControl
 }

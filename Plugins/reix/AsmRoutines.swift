@@ -10,7 +10,7 @@
 private func cpuHandlers() -> [AsmRoutine] {
     [
         fn("disable_interrupts") { msr("daifset", 3); ret() },
-        fn("enable_interrupts")  { msr("daifclr", 3); ret() },
+        fn("enable_interrupts")  { msr("daifclr", 2); ret() },
 
         fn("instruction_barrier") { isb(); ret() },
         fn("wait_for_interrupt") { wfi(); ret() },
@@ -36,8 +36,10 @@ private func cpuHandlers() -> [AsmRoutine] {
             raw("    ldr x0, =stack_top")
             raw("    ldr x1, =0xFFFF800000000000")
             add("x0", "x0", "x1")
-            mov("sp", "x0")  
-            msr("daifclr", 3)
+            mov("sp", "x0")
+            // IRQ only. The tick is the one thing that gets the CPU back out of
+            // here, and FIQ has no handler to get it out with.
+            msr("daifclr", 2)
             label(".L_idle")
             wfi()
             b(".L_idle")

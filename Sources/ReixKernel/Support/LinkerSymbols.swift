@@ -26,11 +26,11 @@ public var _data_start: UInt8
 public var _data_end: UInt8
 
 
-@_silgen_name("_bss_start")
-public var _bss_start: UInt8
+@_silgen_name("__bss_start")
+public var __bss_start: UInt8
 
-@_silgen_name("_bss_end")
-public var _bss_end: UInt8
+@_silgen_name("__bss_end")
+public var __bss_end: UInt8
 
 
 @_silgen_name("_kernel_start")

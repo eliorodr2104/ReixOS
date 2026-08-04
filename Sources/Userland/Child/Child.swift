@@ -30,7 +30,7 @@ public func main() {
 
     if let spawned = processServer.spawn(.child2) {
         print("[ CHILD ] Child Pid: ", terminator: " ")
-        print(String(spawned.pid))
+        printDec(UInt64(spawned.pid))
 
         let shm = shmCreate(pageCount: 1)
         if shm.isValid, let peer = spawned.cap {

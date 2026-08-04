@@ -55,6 +55,60 @@
     sub     sp, sp, #288
 .endm
 
+// Completes the trap frame the entry stub started, and leaves x0 pointing at it
+// with x1 carrying whatever the stub put in x0.
+//
+// x0 and x1 are already stored by the stub, because x1 is reused to pass the
+// exception type to Swift.
+.macro save_trap_frame
+    stp     x2, x3,   [sp, #16]
+    stp     x4, x5,   [sp, #32]
+    stp     x6, x7,   [sp, #48]
+    stp     x8, x9,   [sp, #64]
+    stp     x10, x11, [sp, #80]
+    stp     x12, x13, [sp, #96]
+    stp     x14, x15, [sp, #112]
+    stp     x16, x17, [sp, #128]
+    stp     x18, x19, [sp, #144]
+    stp     x20, x21, [sp, #160]
+    stp     x22, x23, [sp, #176]
+    stp     x24, x25, [sp, #192]
+    stp     x26, x27, [sp, #208]
+    stp     x28, x29, [sp, #224]
+    str     x30,      [sp, #240]
+
+    mov     x5, x0
+
+    // Save critical system register
+    mrs     x0, elr_el1
+    mrs     x1, spsr_el1
+    mrs     x2, esr_el1
+    mrs     x3, far_el1
+    mrs     x4, sp_el0
+
+    stp     x0, x1,   [sp, #248]
+    stp     x2, x3,   [sp, #264]
+    str     x4,       [sp, #280]
+    mov     x1,       x5
+
+    mov     x0, sp
+.endm
+
+// The prologue shared by every vector this kernel installs no handler for.
+// \id names the slot, and is the only thing Swift can tell them apart by.
+//
+// SP is re-anchored before the first store rather than checked, because these
+// slots can fire in any context: the SP0 group runs on a stack that is never
+// set up, and an SError can arrive while SP is already off the kernel stack. The
+// frame is a real one, so the panic report carries ESR, ELR, FAR and the
+// registers instead of an address and a guess.
+.macro invalid_entry id
+    switch_to_exception_stack
+    stp     x0, x1,   [sp, #0]
+    mov     x0, #\id
+    b       report_invalid_vector
+.endm
+
 .section .vectors, "ax"
 .align 11
 
@@ -127,49 +181,42 @@ irq_handler_el1:
     b       save_context_after_x0_x1
 
 
+// The slot ids are the contract with `swift_invalid_vector`, and are spelled
+// out again in InvalidVectorHandler.swift. Nothing else reads them.
 sync_invalid:
+    invalid_entry 0
+
 irq_invalid:
+    invalid_entry 1
+
 fiq_invalid:
+    invalid_entry 2
+
 serror_invalid:
+    invalid_entry 3
+
 handler_invalid:
-    b . // TODO: Manage this error
+    invalid_entry 4
+
+
+// Reached with the slot id in x0 and the frame already reserved on the
+// exception stack. save_trap_frame turns that into the (frame, id) pair Swift
+// is called with.
+//
+// `swift_invalid_vector` panics and does not return. The halt below is only for
+// the case where the panic path itself fails to reach its own halt: there is no
+// handler behind these vectors, so there is nothing to eret to.
+report_invalid_vector:
+    save_trap_frame
+    bl      swift_invalid_vector
+
+.L_invalid_halt:
+    wfi
+    b       .L_invalid_halt
 
 
 save_context_after_x0_x1:
-    // Save general registers. x0/x1 are already saved by the entry stub,
-    // because x1 is reused to pass the exception type to Swift.
-    stp     x2, x3,   [sp, #16]
-    stp     x4, x5,   [sp, #32]
-    stp     x6, x7,   [sp, #48]
-    stp     x8, x9,   [sp, #64]
-    stp     x10, x11, [sp, #80]
-    stp     x12, x13, [sp, #96]
-    stp     x14, x15, [sp, #112]
-    stp     x16, x17, [sp, #128]
-    stp     x18, x19, [sp, #144]
-    stp     x20, x21, [sp, #160]
-    stp     x22, x23, [sp, #176]
-    stp     x24, x25, [sp, #192]
-    stp     x26, x27, [sp, #208]
-    stp     x28, x29, [sp, #224]
-    str     x30,      [sp, #240]
-
-    mov     x5, x0
-
-    // Save critical system register
-    mrs     x0, elr_el1
-    mrs     x1, spsr_el1
-    mrs     x2, esr_el1
-    mrs     x3, far_el1
-    mrs     x4, sp_el0
-    
-    
-    stp     x0, x1,   [sp, #248]
-    stp     x2, x3,   [sp, #264]
-    str     x4,       [sp, #280]
-    mov     x1,       x5
-    
-    mov     x0, sp
+    save_trap_frame
     bl      swift_exception_handler
 
     // RESTORE CONTEXT

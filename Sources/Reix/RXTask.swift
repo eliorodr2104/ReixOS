@@ -60,11 +60,6 @@ public func split() -> PID {
 }
 
 @inline(__always)
-public func exec(path: StaticString) {
-    // _syscall()
-}
-
-@inline(__always)
 public func spawnProcess(path: StaticString) -> SpawnResult {
 
     var raw = SpawnResultRaw()
@@ -142,10 +137,9 @@ public func reapChild(for pid: PID) -> ExitCode {
 
 /// Milliseconds in one scheduler tick.
 ///
-/// Keep in sync with `RoundRobin.quantum`'s unit in the kernel. The syscall
-/// argument is a tick count, but a tick is a scheduler implementation
-/// detail.
-private let millisecondsPerTick: UInt64 = 10
+/// The contract shared with the kernel
+/// scheduler, so the two cannot drift out of sync.
+private let millisecondsPerTick: UInt64 = SchedulerABI.millisecondsPerTick
 
 /// Ticks in one second.
 ///
