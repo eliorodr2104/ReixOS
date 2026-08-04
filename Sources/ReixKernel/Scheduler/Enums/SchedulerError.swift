@@ -9,12 +9,10 @@ public enum SchedulerError: KernelDiagnostic {
     case notNewerProcess
     case processNotExist
 
-    public var description: String {
+    public var description: StaticString {
         switch self {
             case .notNewerProcess: "Scheduler Error: the process is not in the .new state."
             case .processNotExist: "Scheduler Error: the PID is not in any scheduler queue."
         }
     }
-
-    public var category: ErrorCategory { .scheduler }
 }

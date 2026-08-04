@@ -11,6 +11,8 @@ private func cpuHandlers() -> [AsmRoutine] {
     [
         fn("disable_interrupts") { msr("daifset", 3); ret() },
         fn("enable_interrupts")  { msr("daifclr", 3); ret() },
+
+        fn("instruction_barrier") { isb(); ret() },
         fn("wait_for_interrupt") { wfi(); ret() },
         fn("nop")                { nop(); ret() },
         fn("wait_for_exception") { wfe(); b("wait_for_exception") },

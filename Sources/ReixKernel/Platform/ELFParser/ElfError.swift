@@ -14,21 +14,7 @@ public enum ElfError: KernelDiagnostic {
 
     /// Every branch ends in a plain literal, and the wrapping cases spell the
     /// nested reason out instead of composing it.
-    ///
-    /// A literal `String` points straight at `.rodata` and never touches the
-    /// heap; `+` builds a new buffer. `Kernel.internalPanic` reads this
-    /// property exactly when a subsystem has just failed, often the allocator
-    /// itself, so the concatenation that used to be here asked the exhausted
-    /// allocator for one more buffer, `swift_allocObject` force-unwrapped the
-    /// nil it got back, and the kernel died reporting the fault instead of
-    /// reporting it.
-    ///
-    /// Both wrapping cases carry a `PPMError`, so neither may hand back
-    /// `inner.description`: the step is the only thing that tells them apart.
-    /// They enumerate `reportedCause` instead, which keeps the nested reason
-    /// and lets the compiler force a new PPM case to be classified once, at
-    /// its source, rather than here.
-    public var description: String {
+    public var description: StaticString {
         switch self {
             case .invalidMagicNumber:
                 "ELF Error: the file is not a valid ELF executable (bad magic)."
@@ -54,6 +40,4 @@ public enum ElfError: KernelDiagnostic {
                 }
         }
     }
-
-    public var category: ErrorCategory { .elf }
 }

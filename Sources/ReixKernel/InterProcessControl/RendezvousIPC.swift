@@ -543,7 +543,10 @@ public struct RendezvousIPC: IPCInterface, Loggable {
         )
 
         guard let handle = process.pointee.metadata.pointee.capsTable.install(capability) else {
-            sharedRegion.move().releaseFrame(ppm: ppm)
+            if let failure = sharedRegion.move().releaseFrame(ppm: ppm) {
+                Self.error("shared region unwound with no capability installed but its frame was refused, \(failure.description)")
+            }
+
             heap.pointee.kfree(UnsafeMutableRawPointer(sharedRegion))
 
             return .failure(.outOfEndpoints)
@@ -786,7 +789,10 @@ public struct RendezvousIPC: IPCInterface, Loggable {
             case .shared(let sharedMemoryPtr):
                 guard rxRelease(sharedMemoryPtr) else { return }
 
-                sharedMemoryPtr.move().releaseFrame(ppm: ppm)
+                if let failure = sharedMemoryPtr.move().releaseFrame(ppm: ppm) {
+                    Self.error("last capability to a shared region dropped but its frame was refused, \(failure.description)")
+                }
+
                 heap.pointee.kfree(UnsafeMutableRawPointer(sharedMemoryPtr))
                 
                 

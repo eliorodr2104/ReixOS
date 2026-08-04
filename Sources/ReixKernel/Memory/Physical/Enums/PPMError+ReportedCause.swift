@@ -59,6 +59,7 @@ extension PPMError {
             case .initRamError            : .managerFault
             case .invalidRefCount         : .managerFault
             case .pageOrderMismatch       : .managerFault
+            case .frameNotBlockHead       : .requestRejected
         }
     }
 }

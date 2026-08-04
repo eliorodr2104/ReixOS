@@ -7,8 +7,8 @@
 
 import ReixABI
 
-public struct Kernel: Loggable {
-
+public struct Kernel {
+    
     public static let nameLog : StaticString = "[KERN]"
     public static let logLevel: LogLevel     = .info
     

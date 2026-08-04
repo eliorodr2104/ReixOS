@@ -12,9 +12,6 @@ public protocol SerialDriver {
 
 
 extension SerialDriver {
-    func writeString(_ s: String) {
-        for b in s.utf8 { write(b) }
-    }
 
     func writeString(_ s: StaticString) {
         s.withUTF8Buffer { buffer in

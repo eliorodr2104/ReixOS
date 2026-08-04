@@ -22,7 +22,7 @@ public enum ProcessManagerError: KernelDiagnostic {
     /// diagnosis. Spawning is the caller's request, so it fails alone.
     case heapAllocationFailed
 
-    public var description: String {
+    public var description: StaticString {
         switch self {
             case .managerNotValid:
                 "Process Manager Error: manager pointers are not wired."
@@ -62,6 +62,4 @@ public enum ProcessManagerError: KernelDiagnostic {
 
         }
     }
-
-    public var category: ErrorCategory { .process }
 }

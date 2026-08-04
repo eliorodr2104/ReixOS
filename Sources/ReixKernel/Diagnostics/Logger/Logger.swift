@@ -24,7 +24,4 @@ public struct Logger<Driver: SerialDriver> {
 
     @_transparent
     func writeStatic(_ s: StaticString) { driver.writeString(s) }
-
-    @_transparent
-    func writeString(_ s: String) { driver.writeString(s) }
 }

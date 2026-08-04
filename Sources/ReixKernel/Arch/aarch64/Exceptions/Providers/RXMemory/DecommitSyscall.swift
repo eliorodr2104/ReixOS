@@ -34,11 +34,17 @@ public struct DecommitSyscall: SyscallProvider {
         }
 
         do {
-            try vmaManager.pointee.decommit(
+            switch try vmaManager.pointee.decommit(
                 addr: addr,
                 size: size
-            )
-            frame.pointee.x0 = 0
+            ) {
+                case .completed:
+                    frame.pointee.x0 = 0
+
+                // Back onto the `svc`, arguments untouched. See the type's doc.
+                case .restartSyscall:
+                    frame.pointee.elr &-= 4
+            }
 
         } catch {
             frame.pointee.x0 = UInt64.max

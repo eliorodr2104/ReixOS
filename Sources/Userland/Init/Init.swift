@@ -75,5 +75,7 @@ public func main() {
         registrar  : registrar
     )
 
-    while true { yield() }
+    while true {
+        sleep(for: .seconds(1))
+    }
 }

@@ -177,19 +177,13 @@ enum LogRing {
     }
 
 
-    /// Bulk overloads so a whole literal segment costs the sink one call
+    /// Bulk overload so a whole literal segment costs the sink one call
     /// instead of one call per character.
     @inline(never)
     static func appendPayload(_ value: StaticString) {
         value.withUTF8Buffer { buffer in
             for byte in buffer { appendPayload(byte) }
         }
-    }
-
-
-    @inline(never)
-    static func appendPayload(_ value: String) {
-        for byte in value.utf8 { appendPayload(byte) }
     }
 
 

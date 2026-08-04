@@ -24,7 +24,7 @@ public enum VMAError: KernelDiagnostic {
     case mappingFailed        (PPMError)
     case heapAllocationFailed (PPMError)
 
-    public var description: String {
+    public var description: StaticString {
         switch self {
             case .regionOverlap:
                 "VMA Error: requested region overlaps an existing VMA."
@@ -69,6 +69,4 @@ public enum VMAError: KernelDiagnostic {
                 }
         }
     }
-
-    public var category: ErrorCategory { .vma }
 }

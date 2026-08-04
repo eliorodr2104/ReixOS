@@ -60,7 +60,9 @@ public func main() {
     roundedRectangle.height       = 27
     roundedRectangle.cornerRadius = 2
 
-    while true { yield() }
+    while true {
+        sleep(for: .seconds(1))
+    }
 }
 
 class RoundedRectangle {

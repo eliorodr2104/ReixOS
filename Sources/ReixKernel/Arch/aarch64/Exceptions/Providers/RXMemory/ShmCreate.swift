@@ -81,7 +81,8 @@ public struct ShmCreate: SyscallProvider {
                 frame.pointee.x1 = regionAddress
 
             case .failure:
-                try? vmaManager.pointee.munmapRegion(
+                
+                try? vmaManager.pointee.rollbackMapping(
                     addr: regionAddress,
                     size: pageCount * UserSpaceLayout.pageSize
                 )

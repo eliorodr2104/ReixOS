@@ -9,6 +9,7 @@
 public protocol CPUInterface {
     static func enableInterrupts()
     static func disableInterrupts()
+    static func instructionBarrier()
     static func triggerTrap()
     static func nop()
 }

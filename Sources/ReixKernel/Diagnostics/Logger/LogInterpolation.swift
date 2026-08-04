@@ -13,24 +13,25 @@
 /// constructed, every `kprint` overload takes the message as an
 /// `@autoclosure` so the record is opened before the first segment lands.
 public struct LogInterpolation: StringInterpolationProtocol {
+    
     public typealias StringLiteralType = StaticString
 
     public init(literalCapacity: Int, interpolationCount: Int) {}
 
     @inline(__always)
-    public mutating func appendLiteral(_ literal: StaticString) { LogSink.write(literal) }
+    public mutating func appendLiteral(_ literal: StaticString) {
+        LogSink.write(literal)
+    }
 
     @inline(__always)
     public mutating func appendInterpolation(_ value: StaticString) { LogSink.write(value) }
-
-    @inline(__always)
-    public mutating func appendInterpolation(_ value: String) { LogSink.write(value) }
 
     @inline(__always)
     public mutating func appendInterpolation<T: FixedWidthInteger>(_ value: T) {
         if T.isSigned, value < 0 {
             LogSink.put(45) // '-'
             LogSink.writeDec(UInt64(value.magnitude))
+            
         } else {
             LogSink.writeDec(UInt64(value))
         }

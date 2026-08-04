@@ -14,27 +14,12 @@
 /// things the report is *dumping*, so feeding it while reading it would be
 /// circular; and the machine halts a few instructions after the last line, so
 /// anything that lands in the ring is never seen by anybody.
-///
-/// - Important: nothing in here allocates, and nothing in here may ever start
-///   to. Every primitive either streams a `StaticString` (bytes that already
-///   live in `.rodata`), walks the UTF-8 of a `String` the caller already
-///   owns, or emits digits computed in registers. There is no concatenation
-///   and no intermediate buffer, because the fault being reported is quite
-///   possibly "the allocator is empty". That is the exact bug that made the
-///   previous reporter kill the kernel while describing why the kernel was
-///   dying.
 enum PanicConsole {
 
     // MARK: - Primitives
 
     @inline(never)
     static func write(_ text: StaticString) { _logger.writeStatic(text) }
-
-    /// The one `String` the report ever prints is
-    /// `Kernel.internalPanicMessage`, which was built long before the fault.
-    /// Streaming its UTF-8 view neither copies nor grows it.
-    @inline(never)
-    static func write(_ text: String) { _logger.writeString(text) }
 
     @inline(__always)
     static func put(_ byte: UInt8) { _logger.kputc(byte) }

@@ -147,7 +147,12 @@ public func reapChild(for pid: PID) -> ExitCode {
 /// detail.
 private let millisecondsPerTick: UInt64 = 10
 
-private let secondsPerTick: UInt64 = millisecondsPerTick * 60
+/// Ticks in one second.
+///
+/// Derived from the tick length rather than written out, so the two cannot
+/// disagree. A second is more ticks than a millisecond, so this multiplies
+/// where the millisecond path divides.
+private let ticksPerSecond: UInt64 = 1000 / millisecondsPerTick
 
 public enum SleepModality {
     
@@ -175,9 +180,11 @@ public func sleep(for mode: SleepModality) -> Bool {
             ticks         = remainder == 0 ? whole : whole + 1
             
         case .seconds(let val):
-            let whole     = val / secondsPerTick
-            let remainder = val % secondsPerTick
-            ticks         = remainder == 0 ? whole : whole + 1
+            
+            let (product, overflowed) = val.multipliedReportingOverflow(
+                by: ticksPerSecond
+            )
+            ticks = overflowed ? UInt64.max : product
     }
     
     

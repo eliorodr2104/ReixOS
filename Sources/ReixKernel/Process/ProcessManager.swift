@@ -430,12 +430,12 @@ public struct ProcessManager: RXAllocatable, Loggable {
             }
                         
             severReplyLinks(of: process, context)
-            context.ipc.pointee.releaseCapabilities(of: process)
-            
+
             process.pointee.status                       = .terminated
             process.pointee.metadata?.pointee.exitReason = reason
 
             try? context.processManager.pointee.releaseAddressSpace(process)
+            context.ipc.pointee.releaseCapabilities(of: process)
 
             return deliverCorpse(process, context)
         }
@@ -550,8 +550,7 @@ public struct ProcessManager: RXAllocatable, Loggable {
             heap             : heap,
             vmm              : vmm,
             ppm              : ppm,
-            rootTablePhysical: addressSpace.rootTablePhysical,
-            asid             : addressSpace.asid
+            rootTablePhysical: addressSpace.rootTablePhysical
         ))
 
         addressSpace.vmaManager = vmaPtr

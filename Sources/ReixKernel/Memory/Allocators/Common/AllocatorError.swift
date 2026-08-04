@@ -13,16 +13,14 @@ public enum AllocatorError: KernelDiagnostic {
     case pageOrderInvalid    (_ order  : UInt8)
     case doubleFreeInvalid
 
-    public var description: String {
+    public var description: StaticString {
         switch self {
-            case .bytesNotValid       : "Allocator Error: invalid byte size requested."
-            case .fullMemory          : "Allocator Error: memory is full."
-            case .addressInvalid      : "Allocator Error: address is out of bounds."
-            case .addressRangeInvalid : "Allocator Error: invalid address range."
-            case .pageOrderInvalid    : "Allocator Error: invalid page order."
-            case .doubleFreeInvalid   : "Allocator Error: attempted to double-free a memory page."
+            case .bytesNotValid      : "Allocator Error: invalid byte size requested."
+            case .fullMemory         : "Allocator Error: memory is full."
+            case .addressInvalid     : "Allocator Error: address is out of bounds."
+            case .addressRangeInvalid: "Allocator Error: invalid address range."
+            case .pageOrderInvalid   : "Allocator Error: invalid page order."
+            case .doubleFreeInvalid  : "Allocator Error: attempted to double-free a memory page."
         }
     }
-
-    public var category: ErrorCategory { .allocator }
 }

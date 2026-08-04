@@ -16,7 +16,7 @@ public enum ServiceRuntime {
         var service = S(environment: environment, endpoint: endpoint)
         service.run()
 
-        while true { yield() }
+        while true { sleep(for: .seconds(1)) }
     }
 
     private static func publish(

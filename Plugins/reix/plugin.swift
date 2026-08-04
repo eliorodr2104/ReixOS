@@ -121,6 +121,12 @@ struct ReixPlugin: CommandPlugin {
         for app in apps {
             try run(lld, [
                 "-T", root.appending(path: "user.ld").path,
+
+                // lld defaults maxPageSize to 64 KiB on AArch64 and aligns the
+                // first section's file offset to it, which `user.ld` cannot
+                // reach: its ALIGN(4096) governs virtual addresses only.
+                "-z", "max-page-size=4096",
+
                 "-o", out.appending(path: "\(app).elf").path,
             ] + reixObjs + [
                 "--whole-archive", buildDir.appending(path: "lib\(app).a").path, "--no-whole-archive",

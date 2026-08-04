@@ -32,6 +32,9 @@ public struct AArch64CPU: CPUInterface {
     @_silgen_name("disable_interrupts")
     private static func disable_interrupts()
 
+    @_silgen_name("instruction_barrier")
+    private static func instruction_barrier()
+
     @_silgen_name("wait_for_interrupt")
     public static func waitForInterrupt()
 
@@ -53,10 +56,18 @@ public struct AArch64CPU: CPUInterface {
 
     // MARK: - Function used on protocol CPUInterface
 
-    public static func enableInterrupts () { enable_interrupts () }
+    public static func enableInterrupts()  { enable_interrupts () }
     public static func disableInterrupts() { disable_interrupts() }
-    public static func triggerTrap      () { trigger_trap      () }
-    public static func nop              () { nop_asm           () }
+
+    /// Waits for every instruction before it to be seen, so a system-register
+    /// write takes effect before what follows depends on it.
+    ///
+    /// Needed because writing `DAIF` is not context-synchronizing: an unmask
+    /// and a remask a few instructions apart are free to be observed as one
+    /// no-op, and the interrupt window between them never opens.
+    public static func instructionBarrier() { instruction_barrier() }
+    public static func triggerTrap()        { trigger_trap()        }
+    public static func nop()                { nop_asm()             }
 
     
     public static func getCurrentProcess() -> UnsafeMutablePointer<Process>? {

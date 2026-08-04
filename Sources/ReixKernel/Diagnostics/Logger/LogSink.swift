@@ -192,8 +192,8 @@ public enum LogSink {
     /// A byte emitted *outside* a record goes to the wire whatever `teeing`
     /// happens to hold, because that flag is stale between records. That
     /// preserves the property the original routing had: a stray `put` can
-    /// never be swallowed, and can never be recursively buffered either. The
-    /// `write` overloads below answer the same two questions the same way.
+    /// never be swallowed, and can never be recursively buffered either.
+    /// `write` below answers the same two questions the same way.
     @inline(never)
     static func put(_ byte: UInt8) {
         let recording = LogRing.isRecording
@@ -209,15 +209,6 @@ public enum LogSink {
 
         if recording { LogRing.appendPayload(value) }
         if teeing || !recording { _logger.writeStatic(value) }
-    }
-
-
-    @inline(never)
-    static func write(_ value: String) {
-        let recording = LogRing.isRecording
-
-        if recording { LogRing.appendPayload(value) }
-        if teeing || !recording { _logger.writeString(value) }
     }
 
 

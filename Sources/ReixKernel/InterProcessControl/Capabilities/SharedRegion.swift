@@ -23,11 +23,17 @@ public struct SharedRegion: RXObject, ~Copyable {
         self.pageCount    = pageCount
     }
 
-    /// Releases the owned frame back to the PPM, consuming the region. Called
-    /// once the last capability to it is dropped; the caller frees the slab
-    /// storage afterwards.
-    public consuming func releaseFrame(ppm: UnsafeMutablePointer<KernelPPM>) {
-        // TODO: Manage the PPM error
-        try? ppm.pointee.free(physicalPage)
+    /// Releases the owned frame back to the PPM, consuming the region, and hands
+    /// back the PPM's refusal if there was one. Called once the last capability to
+    /// it is dropped; the caller frees the slab storage afterwards.
+    public consuming func releaseFrame(
+        ppm: UnsafeMutablePointer<KernelPPM>
+    ) -> PPMError? {
+
+        do {
+            try ppm.pointee.free(physicalPage)
+            return nil
+
+        } catch { return error }
     }
 }

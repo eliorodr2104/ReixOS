@@ -472,24 +472,6 @@ public struct VirtualMemoryManager: Loggable {
     }
 
 
-    public func unmapAndFreeUserPage(
-        rootTable: PhysicalAddress,
-        virtual  : VirtualAddress
-    ) throws(PPMError) {
-        guard let phys = physicalAddressOf(
-            rootTable: rootTable,
-            virtual  : virtual
-        ) else { return }
-
-        try unmapUserPage(
-            rootTable: rootTable,
-            virtual  : virtual
-        )
-
-        try? ppmPtr.pointee.release(phys)
-    }
-    
-    
     // MARK: - Internals Handlers
     
     private func map(

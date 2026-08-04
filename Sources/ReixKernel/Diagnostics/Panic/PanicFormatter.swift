@@ -27,20 +27,10 @@ public protocol PanicFormatter {
 ///
 /// It is delimited on both ends by a fixed marker so a host tool can lift the
 /// block out of a terminal capture without guessing where it starts.
-///
-/// Two properties this file must never lose:
-///
-/// **Nothing here allocates.** The previous reporter built one of its
-/// messages with `"prefix (" + inner + ")"`. That fires when memory has run
-/// out, so it asked the exhausted allocator for one more buffer and the
-/// kernel died on a nil unwrap *while reporting that it was out of memory*.
-/// `StaticString` literals point into `.rodata` and are free; building a
-/// `String` is not. The only `String` this file touches is
-/// `Kernel.internalPanicMessage`, which was built before the fault and is
-/// only ever streamed.
-///
-/// **A fault inside the report degrades, it does not recurse.** See `depth`.
-public struct DefaultPanicFormatter: PanicFormatter {
+public struct DefaultPanicFormatter: PanicFormatter, Loggable {
+
+    public static let nameLog : StaticString = "[PNIC]"
+    public static let logLevel: LogLevel     = .panic
 
     /// How many times the panic path has been entered.
     ///
@@ -285,9 +275,10 @@ public struct DefaultPanicFormatter: PanicFormatter {
     /// frame the caller already has on its stack. In particular it does not
     /// go near `LogRing` (whose cursors the interrupted first report may
     /// have been halfway through moving), `Kernel.internalPanicMessage` (a
-    /// heap object, and a corrupt heap is a plausible reason to be here at
-    /// all), the frame-pointer chain (the single most likely thing to have
-    /// faulted a moment ago) or the register dump.
+    /// global the interrupted report was in the middle of reading, and the
+    /// cause it names is already in the line that got cut off), the
+    /// frame-pointer chain (the single most likely thing to have faulted a
+    /// moment ago) or the register dump.
     private static func emitNestedMarker(_ report: PanicReport) {
         PanicConsole.newline()
         PanicConsole.write("=== REIX-PANIC NESTED - fault inside the panic report ===")
@@ -306,18 +297,4 @@ public struct DefaultPanicFormatter: PanicFormatter {
 
     private static let unattributed: StaticString = "(the kernel recorded no cause)"
     private static let unclassified: StaticString = "unclassified trap"
-}
-
-
-/// The delimiters go through the sink at `.panic` severity, unlike the body
-/// of the report, which is emitted a character at a time by `PanicConsole`.
-///
-/// That is not inconsistency for its own sake: `LogSink.writesThrough`
-/// refuses to buffer `.panic` whatever the mode is, so the two lines that
-/// frame the block are guaranteed to reach the wire even if some future
-/// change flips the sink back to deferred underneath us, and they arrive
-/// tagged, so the block is greppable by severity as well as by marker text.
-extension DefaultPanicFormatter: Loggable {
-    public static let nameLog : StaticString = "[PNIC]"
-    public static let logLevel: LogLevel     = .panic
 }
