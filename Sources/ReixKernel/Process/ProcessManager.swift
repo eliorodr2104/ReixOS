@@ -20,8 +20,17 @@ public struct ProcessManager: RXAllocatable, Loggable {
     public static let nameLog : StaticString = "[PROC]"
     public static let logLevel: LogLevel     = .info
     
+    /// Bytes of a path `assignName` is willing to walk looking for its end.
+    private static let maxPathScan: Int = 256
+    
     /// Monotonically increasing PID source. Never reused within a boot.
-    private var pidCounter: PID = 0
+    ///
+    /// Starts at 1 for the same reason `identityCounter` does: `0` is what a
+    /// trace record stamps for "no process" (the kernel and the idle loop),
+    /// and it is the exclusive cursor `procStats` sweeps start from, so a
+    /// process numbered 0 would be unattributable in one and unreachable in
+    /// the other.
+    private var pidCounter: PID = 1
 
     /// Monotonically increasing source of `Process.identity`, kept apart from
     /// `pidCounter` on purpose.
@@ -179,8 +188,8 @@ public struct ProcessManager: RXAllocatable, Loggable {
                     elfLoadEnd: elf.loadEnd, programBreak: initialBreak
                 ))
 
-                // Last block on purpose: the scheduler, the endpoint queues and
-                // the family lists cannot name it yet, so this frees nothing live.
+                Self.assignName(metadataPtr, basenameOf: path)
+
                 guard let processPtr = heap.pointee.kmallocOrNil(Process.self) else {
                     heap.pointee.kfree(metadataPtr)
                     heap.pointee.kfree(trapFramePtr)
@@ -195,7 +204,11 @@ public struct ProcessManager: RXAllocatable, Loggable {
 
                 vmaManagerPtr.pointee.setInitialBreak(initialBreak)
 
+                vmaManagerPtr.pointee.recountResidentPages()
+
                 Self.traceSpawn(pid)
+                Self.traceName(metadataPtr, pid: pid)
+
                 return processPtr
 
 
@@ -242,6 +255,10 @@ public struct ProcessManager: RXAllocatable, Loggable {
 
         metadataPtr.initialize(to: ProcessMetadata())
 
+        if let parent = Arch.CPU.getCurrentProcess()?.pointee.metadata {
+            metadataPtr.pointee.setName(copyingFrom: parent)
+        }
+
         guard let processPtr = heap.pointee.kmallocOrNil(Process.self) else {
             heap.pointee.kfree(metadataPtr)
             heap.pointee.kfree(trapFramePtr)
@@ -259,12 +276,16 @@ public struct ProcessManager: RXAllocatable, Loggable {
         ))
 
         Self.traceSpawn(pid)
+        Self.traceName(metadataPtr, pid: pid)
+
         return processPtr
     }
     
     
     public func releaseAddressSpace(_ process: UnsafeMutablePointer<Process>) throws(PPMError) {
-        
+
+        TraceExport.detach(pid: process.pointee.pid)
+
         if let vmaManager = process.pointee.addressSpace.vmaManager {
             vmaManager.pointee.teardown()
 
@@ -321,7 +342,9 @@ public struct ProcessManager: RXAllocatable, Loggable {
     /// `Process` struct itself. Callers must ensure the process is no
     /// longer referenced by any scheduler queue.
     public func releaseProcess(_ process: UnsafeMutablePointer<Process>) {
-        
+
+        TraceExport.detach(pid: process.pointee.pid)
+
         if let parent = process.pointee.family.parent {
             parent.pointee.family.removeChild(process)
 
@@ -492,6 +515,46 @@ public struct ProcessManager: RXAllocatable, Loggable {
         return false
     }
 
+    /// Visits every process in the family tree, zombies included.
+    ///
+    /// The tree is the one enumeration that sees a process wherever it is
+    /// parked: the scheduler's queues miss whoever is blocked on an endpoint,
+    /// and endpoint queues are not reachable from here. Pre-order without
+    /// recursion, climbing back up through `parent` links, so a deep tree
+    /// costs no kernel stack. `body` must not mutate the tree.
+    public func forEachProcess(_ body: (UnsafeMutablePointer<Process>) -> Void) {
+        guard let root = initProcess else { return }
+
+        var current: UnsafeMutablePointer<Process>? = root
+
+        while let node = current {
+            body(node)
+            current = successor(of: node, root: root)
+        }
+    }
+
+
+    /// Pre-order successor: first child, else the nearest next sibling found
+    /// while climbing toward `root`, else nil when the walk is done.
+    private func successor(
+        of   node: UnsafeMutablePointer<Process>,
+        root     : UnsafeMutablePointer<Process>
+    ) -> UnsafeMutablePointer<Process>? {
+
+        if let child = node.pointee.family.firstChild { return child }
+
+        var climber: UnsafeMutablePointer<Process>? = node
+
+        while let at = climber, at != root {
+            if let sibling = at.pointee.family.nextSibling { return sibling }
+
+            climber = at.pointee.family.parent
+        }
+
+        return nil
+    }
+
+
     private func severReplyLinks(
         of process: UnsafeMutablePointer<Process>,
         _  context: SyscallContext
@@ -566,6 +629,70 @@ public struct ProcessManager: RXAllocatable, Loggable {
             code: TraceCode.procSpawn,
             a   : pid,
             b   : Arch.CPU.getCurrentProcess()?.pointee.pid ?? 0
+        )
+    }
+
+
+    /// Files the `procName` that pairs with a spawn.
+    ///
+    /// The pid is passed rather than stamped, because the record describes the
+    /// process being created and not the one that asked: without the override
+    /// every name in the ring would be attributed to the caller, and the two are
+    /// never the same process.
+    ///
+    /// Both payload words are packed whole, the bytes past `nameLength`
+    /// included, which costs nothing because `setName` zeroes that tail: the
+    /// decoder reads sixteen bytes and trims by the length instead of scanning.
+    @inline(__always)
+    private static func traceName(
+        _ metadata: UnsafeMutablePointer<ProcessMetadata>,
+        pid       : PID
+    ) {
+        let name = metadata.pointee.name
+
+        var low : UInt64 = 0
+        var high: UInt64 = 0
+
+        for index in 0..<8 {
+            low  |= UInt64(name[index])     << (8 &* index)
+            high |= UInt64(name[index + 8]) << (8 &* index)
+        }
+
+        Trace.emit(
+            TraceProc.self,
+            code: TraceCode.procName,
+            info: UInt16(metadata.pointee.nameLength),
+            a   : low,
+            b   : high,
+            pid : UInt32(truncatingIfNeeded: pid)
+        )
+    }
+
+
+    /// Names a process after the last component of the path it was loaded from.
+    ///
+    /// The scan is bounded because the path is a user argument reached through a
+    /// pointer, and a missing terminator must cost a fixed walk and not the
+    /// address space. `open` has already accepted this same string, so a path
+    /// longer than the bound is refused there and never reaches here.
+    private static func assignName(
+        _ metadata     : UnsafeMutablePointer<ProcessMetadata>,
+        basenameOf path: UnsafePointer<CChar>
+    ) {
+        let bytes = UnsafeRawPointer(path).assumingMemoryBound(to: UInt8.self)
+
+        var end   = 0
+        var start = 0
+
+        while end < Self.maxPathScan, bytes[end] != 0 {
+            if bytes[end] == UInt8(ascii: "/") { start = end + 1 }
+
+            end += 1
+        }
+
+        metadata.pointee.setName(
+            from : bytes + start,
+            count: end - start
         )
     }
 

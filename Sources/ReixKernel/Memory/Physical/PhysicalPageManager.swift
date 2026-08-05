@@ -17,7 +17,23 @@ public struct PhysicalPageManager<A: Allocator>: Loggable {
     public  let ramSize       : UInt64
         
     public  var framesMetadata: UnsafeMutablePointer<FrameInfo>?
-    
+
+
+    /// 4 KiB frames this machine has, the whole of RAM and not the part the
+    /// buddy was given: the reserved blocks are memory too, and a total that
+    /// moved with them would make the free share unreadable.
+    public private(set) var totalPages: UInt64 = 0
+
+    /// 4 KiB frames currently spoken for, whether by a block the buddy issued
+    /// or by one of the ranges withheld at boot.
+    ///
+    /// Maintained in whole blocks, `1 << order` frames at a time, so a
+    /// multi-page allocation is counted once by the head that owns it. Free
+    /// pages are `totalPages - allocatedPages` and are not stored: two counters
+    /// for one quantity is one of them going stale.
+    public private(set) var allocatedPages: UInt64 = 0
+
+
     
     /// Order written on every frame of a block except its first, so a frame that
     /// is not a block head can be told apart from one that is.
@@ -31,20 +47,23 @@ public struct PhysicalPageManager<A: Allocator>: Loggable {
     private static var blockInteriorOrder: UInt8 { .max }
 
 
-    public func alloc(
+    /// - Note: `mutating` for the accounting alone. Every call site reaches the
+    ///   manager through a pointer, so the pointee is the one that is bumped and
+    ///   no caller had to change.
+    public mutating func alloc(
         _ bytes  : Int,
         flag     : PhysicalPageFlags = .none,
         heapShift: UInt8 = 0
     ) throws(PPMError) -> PhysicalPage {
-        
+
         guard framesMetadata != nil else {
             throw .metadataInconsistency
         }
-        
+
         do {
             let frame         = try allocator.alloc(bytes)
             let indexMetadata = Int((frame.address - ramStart) / 4096)
-            
+
             let metadata = framesMetadata!.advanced(by: indexMetadata)
             metadata.pointee.refCount  = 1
             metadata.pointee.order     = frame.order
@@ -53,10 +72,12 @@ public struct PhysicalPageManager<A: Allocator>: Loggable {
 
             markInteriorFrames(after: indexMetadata, order: frame.order)
 
+            allocatedPages &+= UInt64(1) << UInt64(frame.order)
+
             return frame
-            
+
         } catch { throw .allocationFailed(reason: error) }
-        
+
     }
 
 
@@ -100,16 +121,16 @@ public struct PhysicalPageManager<A: Allocator>: Loggable {
     }
 
     
-    public func free(_ page: consuming PhysicalPage) throws(PPMError) {
+    public mutating func free(_ page: consuming PhysicalPage) throws(PPMError) {
         try free(page, allowProtected: false)
     }
 
-    public func freeOwnedKernelPage(_ page: consuming PhysicalPage) throws(PPMError) {
+    public mutating func freeOwnedKernelPage(_ page: consuming PhysicalPage) throws(PPMError) {
         try free(page, allowProtected: true)
     }
 
     @inline(__always)
-    private func free(
+    private mutating func free(
         _ page        : consuming PhysicalPage,
         allowProtected: Bool
     ) throws(PPMError) {
@@ -142,10 +163,14 @@ public struct PhysicalPageManager<A: Allocator>: Loggable {
 
         metadata.refCount -= 1
         
+        let releasedPages = UInt64(1) << UInt64(page.order)
+
         do {
             if metadata.refCount == 0 {
                 metadata.flags = .none
                 try allocator.free(page)
+
+                allocatedPages &-= releasedPages
             }
 
             framesMetadata![indexMetadata] = metadata
@@ -339,7 +364,10 @@ extension PhysicalPageManager where A == BuddyAllocator {
 
         self.ramStart             = Kernel.platformInfo.ram.base
         self.ramSize              = Kernel.platformInfo.ram.size
-        
+
+        self.totalPages           = Kernel.platformInfo.ram.size / 4096
+        self.allocatedPages       = 0
+
         let ramEnd                = Kernel.platformInfo.ram.base + Kernel.platformInfo.ram.size
         
         let bitmapAddr: UInt64    = (kernelTotalEnd + 0xFFF) & ~0xFFF
@@ -416,11 +444,15 @@ extension PhysicalPageManager where A == BuddyAllocator {
                 try freeSegment(from: cursor, to: block.start)
             }
 
+            let withheldStart = max(block.start, cursor)
+
             setRangeMetadata(
-                from: max(block.start, cursor),
+                from: withheldStart,
                 to  : block.end,
                 flag: .reserved
             )
+
+            allocatedPages &+= (block.end - withheldStart) / 4096
 
             cursor = block.end
         }

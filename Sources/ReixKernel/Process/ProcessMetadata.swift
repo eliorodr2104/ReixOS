@@ -64,7 +64,22 @@ public struct ProcessMetadata: RXAllocatable {
     /// Backing physical page of the ELF image. Allocated by `ElfParser`,
     /// kept alive for the whole process lifetime, freed by the teardown.
     public var elfImage: PhysicalAddress?      // 8 Byte
-    
+
+
+    /// Human-readable name, the basename of the spawned image, truncated to
+    /// the storage rather than to any path rule. Not NUL terminated.
+    ///
+    /// Inline bytes and not a pointer into the ELF image or the caller's path:
+    /// both are gone or unmapped long before anything reads this, and the
+    /// kernel has no allocator on the reporting path. Sixteen is what fits two
+    /// trace payload words, so `TraceCode.procName` carries a whole name.
+    public var name: InlineArray<16, UInt8>    // 16 Byte
+
+    /// Bytes of `name` that are meaningful. Zero for a process nobody named,
+    /// which is every process spawned before the name was assigned.
+    public var nameLength: UInt8 = 0           // 1 Byte
+
+
 
     public init(
         elfImage       : PhysicalAddress?  = nil,
@@ -83,6 +98,8 @@ public struct ProcessMetadata: RXAllocatable {
         self.capsTable       = CapsTable()
         self.parentEndpoint  = nil
         self.deviceCap       = nil
+        self.name            = InlineArray<16, UInt8>(repeating: 0)
+        self.nameLength      = 0
     }
 
     public init() {
@@ -95,6 +112,44 @@ public struct ProcessMetadata: RXAllocatable {
         self.capsTable       = CapsTable()
         self.parentEndpoint  = nil
         self.deviceCap       = nil
+        self.name            = InlineArray<16, UInt8>(repeating: 0)
+        self.nameLength      = 0
     }
-    
+
+
+    /// Copy at most `name`'s width out of `source` and record how much was
+    /// taken, clamping a longer name rather than refusing it.
+    ///
+    /// The one writer of both fields, so a name and its length cannot disagree:
+    /// every byte past what was copied is cleared, which is what lets the trace
+    /// packing read all sixteen of them unconditionally.
+    public mutating func setName(
+        from source: UnsafePointer<UInt8>,
+        count      : Int
+    ) {
+        let wanted = count < 0 ? 0 : count
+        let taken  = wanted > name.count ? name.count : wanted
+
+        for index in 0..<name.count {
+            name[index] = index < taken ? source[index] : 0
+        }
+
+        nameLength = UInt8(truncatingIfNeeded: taken)
+    }
+
+
+    /// Copy another process's name verbatim, for a child that inherits its
+    /// parent's image rather than loading one of its own.
+    ///
+    /// Through a pointer and not a value, because the source is always another
+    /// heap-allocated metadata block and copying one to read sixteen bytes off
+    /// it would carry the whole capability table with it.
+    public mutating func setName(copyingFrom other: UnsafePointer<ProcessMetadata>) {
+        for index in 0..<name.count {
+            name[index] = other.pointee.name[index]
+        }
+
+        nameLength = other.pointee.nameLength
+    }
+
 }

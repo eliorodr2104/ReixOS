@@ -125,6 +125,9 @@ extension VMAManager {
     ///
     /// The shared frame's reference is dropped only once the new mapping is in
     /// place, so a failed map leaves the faulting page exactly as it was.
+    ///
+    /// Nothing is counted here: the page was resident before the write fault and
+    /// is resident after it, only behind a different frame.
     private func copyPage(
         from source : PhysicalAddress,
         onto aligned: VirtualAddress,
@@ -214,7 +217,10 @@ extension VMAManager {
 
 
     /// Back the page holding `address` with a fresh zeroed frame.
-    private func materialize(
+    ///
+    /// The one place a lazily backed page becomes resident, which is why the
+    /// count is taken here and not at the two callers that route faults to it.
+    private mutating func materialize(
         vma    : VirtualMemoryArea,
         address: VirtualAddress
     ) -> Bool {
@@ -245,6 +251,8 @@ extension VMAManager {
             try? context.ppm.pointee.free(page)
             return false
         }
+
+        noteMapped(1)
 
         return true
     }

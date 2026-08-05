@@ -27,7 +27,7 @@ struct ReixPlugin: CommandPlugin {
 
     let triple = "aarch64-none-none-elf"
     let outputDir = ".reix"
-    let apps = ["Init", "Child", "Child2", "NameServer", "ProcessServer", "ConsoleServer"]
+    let apps = ["Init", "Child", "Child2", "NameServer", "ProcessServer", "ConsoleServer", "Top"]
     
     let kernelNative = [
         "Sources/ReixKernel/Arch/aarch64/Boot/boot.S",
@@ -50,7 +50,7 @@ struct ReixPlugin: CommandPlugin {
         // Same reasoning as symbolize: it only reads a log file and prints a
         // report, so it runs before any of the build machinery below.
         if arguments.first == "trace" {
-            try TraceDecoder.run(arguments: arguments)
+            try TraceDecoder.run(arguments: arguments, root: context.package.directoryURL)
             return
         }
 
@@ -168,7 +168,7 @@ struct ReixPlugin: CommandPlugin {
         if doRun {
             print("→ qemu (Ctrl-A X to quit)")
             try run(qemu, [
-                "-machine", "virt,gic-version=2", "-cpu", "cortex-a53", "-nographic",
+                "-machine", "virt,gic-version=2", "-cpu", "cortex-a53,pmu=on", "-nographic",
                 "-kernel", kernelBin.path, "-initrd", initrd.path,
             ], cwd: root, inheritIO: true)
         } else {
@@ -207,14 +207,22 @@ enum ReixError: Error, CustomStringConvertible {
 /// The `trace` subcommand.
 ///
 /// The kernel can dump its trace ring to the serial console: syscall
-/// latencies, IPC blocks/wakes/transfers, preemption spans and boot phases,
-/// each framed as `{{{t:TS:CODE:INFO:PID:A:B}}}` between a begin/end marker.
-/// Decoding that into readable tables is pure host-side text processing, so
-/// it lives entirely in `TraceDecoder.swift` next to this dispatch line.
+/// latencies, IPC blocks/wakes/transfers, preemption spans, boot phases,
+/// PC samples and PMU-bracketed sections, each printed as a `[TRACE] `-prefixed
+/// line between a `begin`/`end` marker. Decoding that into readable tables is
+/// pure host-side text processing, so it lives entirely in `TraceDecoder.swift`
+/// next to this dispatch line.
 ///
 ///     swift package reix trace panic.txt                       # summary report
 ///     swift package reix trace panic.txt --boot                # boot-phase timeline
 ///     swift package reix trace panic.txt --raw                 # one line per event
+///     swift package reix trace panic.txt --profile             # sampling + PMU profile
+///     swift package reix trace panic.txt --profile --symbolizer <path>
+///
+/// `--profile` resolves kernel and per-process addresses through the same
+/// `llvm-symbolizer` machinery as `symbolize` below, against `.reix/kernel.elf`
+/// and the unstripped `.reix/<Name>.elf` for each named process; it degrades
+/// to raw addresses when either is unavailable.
 ///
 /// See the doc comment atop `TraceDecoder.swift` for the exact wire format.
 
@@ -320,7 +328,9 @@ extension ReixPlugin {
     /// (`trigger_trap`, the context switch, the exception vectors, i.e. exactly
     /// the frames a panic tends to land in) comes back as `??`. `linkage`
     /// falls back to the symbol table and names them.
-    private func resolve(
+    /// Shared with `TraceDecoder`'s `--profile` view, which resolves plain
+    /// addresses the same way rather than re-walking `PATH` on its own.
+    func resolve(
         _ addresses: [String],
         using tool  : String,
         in elf      : URL,
@@ -448,7 +458,10 @@ extension ReixPlugin {
     /// Which `llvm-symbolizer` to run: an explicit `--symbolizer` argument
     /// first, then the Homebrew install every other native tool here
     /// assumes, falling back to whatever `PATH` names when neither exists.
-    private func resolvedSymbolizer(_ arguments: [String]) -> String {
+    ///
+    /// Shared with `TraceDecoder`'s `--profile` view for the same reason as
+    /// `resolve` above.
+    func resolvedSymbolizer(_ arguments: [String]) -> String {
         if let flag = arguments.firstIndex(of: "--symbolizer"),
            flag + 1 < arguments.count {
             return arguments[flag + 1]

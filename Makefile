@@ -31,8 +31,17 @@ PLUGIN      := --allow-writing-to-package-directory reix
 # Plugins/reix/plugin.swift and with the QEMU arguments in the Xcode scheme.
 OUT         := .reix
 # QEMU: resolved from PATH by default (Homebrew on macOS, distro package on Linux).
+#
+# `pmu=on` gives the guest a PMUv3 block, which the kernel enables at boot and
+# both the trace's pmuSection records and userland's PMUSection read. Without it
+# every PMU system register traps as undefined and the machine panics on the
+# first counter access, so it is not optional for this image.
+#
+# Keep this string in sync with the QEMU_FLAGS default in scripts/smoke.sh, with
+# the `reix run` command in Plugins/reix/plugin.swift and with the Xcode scheme:
+# four places boot this kernel and all four have to give it the same machine.
 QEMU        ?= qemu-system-aarch64
-QEMU_FLAGS  := -machine virt,gic-version=2 -cpu cortex-a53 -nographic
+QEMU_FLAGS  := -machine virt,gic-version=2 -cpu cortex-a53,pmu=on -nographic
 
 # Selects the bare-metal flags in Package.swift (Embedded, -wmo, strict-align…).
 # Required for the cross build; when unset, SourceKit/Xcode index for the host

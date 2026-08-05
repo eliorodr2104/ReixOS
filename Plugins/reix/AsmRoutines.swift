@@ -185,6 +185,66 @@ private func virtualTimer() -> [AsmRoutine] {
     ]
 }
 
+/// PMUv3: the cycle counter and one programmable event counter.
+///
+/// Every one of these is a system-register access Swift has no spelling for, so
+/// they are here for the same reason the timer reads are, and not because the
+/// bodies are interesting. See Kernel `AArch64PMU`.
+private func performanceMonitors() -> [AsmRoutine] {
+    // PMCNTENSET_EL0 bit 31 is the cycle counter, bit 0 event counter 0.
+    let countersEnabled: UInt64 = (1 << 31) | (1 << 0)
+
+    return [
+        fn("pmu_init") {
+            // PMCR_EL0 E | P | C: switch the block on and zero both the event
+            // counters and the cycle counter, so the first read starts at boot.
+            mov("x0", 0b111)
+            msr("pmcr_el0", "x0")
+
+            ldrImm("x1", countersEnabled)
+            msr("pmcntenset_el0", "x1")
+
+            // Event counter 0 counts INST_RETIRED (0x08). Selected through
+            // PMSELR_EL0, whose write must be synchronized before the type lands.
+            msr("pmselr_el0", "xzr")
+            isb()
+            mov("x2", 0x08)
+            msr("pmxevtyper_el0", "x2")
+
+            // PMUSERENR_EL0 CR | ER: EL0 reads the counters directly, without EN,
+            // so it cannot also write PMCR_EL0 or reprogram the counters.
+            mov("x3", 0b1100)
+            msr("pmuserenr_el0", "x3")
+
+            isb()
+            ret()
+        },
+
+        // PMCR_EL0 itself, for the implemented-counter count in bits 15:11.
+        fn("pmu_read_pmcr") {
+            mrs("x0", "pmcr_el0")
+            ret()
+        },
+
+        // The 64-bit cycle counter, PMCCNTR_EL0.
+        fn("pmu_read_cycles") {
+            // `isb` first, for `read_virtual_counter`'s reason: without it the
+            // two reads bracketing a section are free to drift out of it.
+            isb()
+            mrs("x0", "pmccntr_el0")
+            ret()
+        },
+
+        // Event counter 0, reached by selecting it and reading the window register.
+        fn("pmu_read_event0") {
+            msr("pmselr_el0", "xzr")
+            isb()
+            mrs("x0", "pmxevcntr_el0")
+            ret()
+        },
+    ]
+}
+
 /// The kernel UART's transmit wait, in assembly for the reason userland's is.
 ///
 /// A PL011 driver has to poll `FR.TXFF` before every store to `DR`, and that
@@ -214,6 +274,7 @@ func generatedKernelAsm() -> [(name: String, source: String)] {
         ("CpuHandlers.gen.S",        renderAsmFile(cpuHandlers())),
         ("AArch64MMUHandlers.gen.S", renderAsmFile(mmuHandlers())),
         ("VirtualTimer.gen.S",       renderAsmFile(virtualTimer())),
+        ("AArch64PMU.gen.S",         renderAsmFile(performanceMonitors())),
         ("PL011UART.gen.S",          renderAsmFile(serialHandlers())),
     ]
 }
@@ -259,6 +320,25 @@ private func reixRoutines() -> [AsmRoutine] {
         // EL0 through CNTKCTL_EL1.EL0PCTEN, set alongside EL0VCTEN.
         fn("read_counter_frequency") {
             mrs("x0", "cntfrq_el0")
+            ret()
+        },
+
+        // The cycle counter, readable at EL0 because `pmu_init` sets
+        // PMUSERENR_EL0.CR. See Reix `PMUSection`.
+        fn("reix_pmu_cycles") {
+            // `isb` first, or the two reads bracketing a section are free to be
+            // speculated out of it and the delta is a fiction.
+            isb()
+            mrs("x0", "pmccntr_el0")
+            ret()
+        },
+
+        // Event counter 0, INST_RETIRED as the kernel programmed it. Readable
+        // at EL0 through PMUSERENR_EL0.ER, set alongside CR.
+        fn("reix_pmu_event0") {
+            msr("pmselr_el0", "xzr")
+            isb()
+            mrs("x0", "pmxevcntr_el0")
             ret()
         },
     ]

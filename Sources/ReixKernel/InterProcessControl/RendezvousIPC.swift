@@ -117,6 +117,10 @@ public struct RendezvousIPC: IPCInterface, Loggable {
                 endpointPtr.pointee.state = .idle
             }
 
+            let measuring = pmuRecording(TracePMU.self)
+            let cycles0   = measuring ? Arch.PMU.cycles()       : 0
+            let instr0    = measuring ? Arch.PMU.instructions() : 0
+
             Message(from: frame).write(to: receiverContext)
 
             traceTransfer(from: currentProcess, to: receiverProcess)
@@ -129,6 +133,20 @@ public struct RendezvousIPC: IPCInterface, Loggable {
             disarmDeadline(on: receiverProcess)
 
             wake(receiverProcess)
+
+            if measuring {
+                let instr1 = Arch.PMU.instructions()
+                let instrDelta = UInt32(truncatingIfNeeded: instr1)
+                    &- UInt32(truncatingIfNeeded: instr0)
+
+                Trace.emit(
+                    TracePMU.self,
+                    code: TraceCode.pmuSection,
+                    info: PMUSectionID.ipcTransfer,
+                    a   : Arch.PMU.cycles() &- cycles0,
+                    b   : UInt64(instrDelta)
+                )
+            }
 
             return .success(.sended(grantRejected: grantRejected))
         }
@@ -786,6 +804,24 @@ public struct RendezvousIPC: IPCInterface, Loggable {
             a   : sender.pointee.pid,
             b   : receiver.pointee.pid
         )
+    }
+
+
+    /// Whether the one PMU-bracketed section should read the counters at all.
+    ///
+    /// Generic on the category for `Trace.syscallSpan`'s reason: with
+    /// `C.isEnabled` false this is the constant `false`, both stamp ternaries at
+    /// the call site collapse to zero, the emit becomes dead code and a class
+    /// compiled out leaves nothing whatsoever on the transfer path. Left on and
+    /// merely masked, it costs one mask test and one flag load.
+    ///
+    /// `Arch.PMU.initialized` belongs in the same answer rather than in a guard
+    /// of its own: counters that were never enabled read as plausible numbers
+    /// and not as an error, so a section taken before boot armed them would be
+    /// filed as a real measurement of nothing.
+    @inline(__always)
+    private func pmuRecording<C: TraceCategory>(_ category: C.Type) -> Bool {
+        C.isEnabled && Trace.runtimeMask & C.bit != 0 && Arch.PMU.initialized
     }
 
 

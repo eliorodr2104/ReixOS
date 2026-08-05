@@ -124,6 +124,7 @@ public struct SyscallHandler: RXAllocatable {
 
             // Profile
             case .profileControl: ProfileControlSyscall.handle(frame: frame, context: context)
+            case .procStats     : ProcStatsSyscall     .handle(frame: frame, context: context)
         }
     }
     

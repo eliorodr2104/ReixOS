@@ -30,7 +30,22 @@ public struct RoundRobin: SchedulerInterface, Loggable {
     /// report, but coming *out* of idle is indistinguishable from an ordinary
     /// rotation without remembering that the machine was idle at all.
     private var isIdle: Bool = false
-    
+
+    /// The counter reading of the rotation that found nobody to run, `0` when
+    /// the machine is not idle.
+    ///
+    /// Kept apart from `isIdle` rather than folded into an optional: this one is
+    /// arithmetic the accounting owns and that one is the trace's, and a single
+    /// field would tie a measurement to whether a trace class is compiled in.
+    private var idleSince: UInt64 = 0
+
+    /// Counter units nobody was on the CPU, closed stretches only.
+    ///
+    /// The complement of the `cpuTime` of every process: a reader that wants
+    /// utilisation needs the denominator, and summing the processes gives only
+    /// the numerator. Raw counter units, converted by whoever reports it.
+    private(set) var idleTime: UInt64 = 0
+
     private(set) var systemTicks: UInt64 = 0
 
     /// See `SchedulerInterface.needsResched`. Cleared by `selectNextTask`,
@@ -100,21 +115,33 @@ public struct RoundRobin: SchedulerInterface, Loggable {
 
         needsResched = false
 
+        let now      = Arch.Timer.counter()
         let previous = Arch.CPU.getCurrentProcess()
 
         if let currentPtr = previous {
+            if currentPtr.pointee.scheduledAt != 0 {
+                currentPtr.pointee.cpuTime    &+= now &- currentPtr.pointee.scheduledAt
+                currentPtr.pointee.scheduledAt  = 0
+            }
+
             if case .running = currentPtr.pointee.status {
                 currentPtr.pointee.status = .ready
                 ready.pushBack(currentPtr)
             }
         }
-        
+
         if let next = ready.popFront() {
             let nextAddr = VirtualAddress(UInt(bitPattern: next))
             Arch.CPU.setCurrentProcess(nextAddr)
-            next.pointee.status = .running
-                        
+            next.pointee.status      = .running
+            next.pointee.scheduledAt = now
+
             currentTicks = 0
+
+            if idleSince != 0 {
+                idleTime &+= now &- idleSince
+                idleSince = 0
+            }
 
             if isIdle {
                 isIdle = false
@@ -139,6 +166,10 @@ public struct RoundRobin: SchedulerInterface, Loggable {
         // again. Keeping the old count would delay the first ask by up to a
         // whole quantum, and that ask is what wakes a sleeper.
         currentTicks = quantum
+
+        if previous != nil, idleSince == 0 {
+            idleSince = now
+        }
 
         if !isIdle, previous != nil {
             isIdle = true
@@ -249,8 +280,10 @@ public struct RoundRobin: SchedulerInterface, Loggable {
     }
     
     
+
+
     public func notifyTaskBlocked(_ processID: PID) {
-        
+
     }
     
     

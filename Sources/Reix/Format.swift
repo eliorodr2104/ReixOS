@@ -120,3 +120,46 @@ public func printDec(
         putchar(ch: term[i])
     }
 }
+
+/// Prints `value` in decimal, right-aligned to `width` with leading spaces.
+///
+/// Values wider than `width` print in full, never truncated.
+public func printDecPadded(
+    _ value: UInt64,
+      width: Int
+) {
+
+    withUnsafeTemporaryAllocation(of: UInt8.self, capacity: maxDecDigits) { buffer in
+        let count = writeDec(value, into: buffer)
+
+        var pad = width - count
+        while pad > 0 {
+            putchar(ch: UInt8(ascii: " "))
+            pad -= 1
+        }
+
+        for i in 0..<count {
+            putchar(ch: buffer[i])
+        }
+    }
+}
+
+/// Prints `count` bytes from `bytes`, left-aligned to `width` with trailing spaces.
+///
+/// Runs longer than `width` print in full, never truncated.
+public func printPadded(
+    _ bytes: UnsafePointer<UInt8>,
+      count: Int,
+      width: Int
+) {
+
+    for i in 0..<count {
+        putchar(ch: bytes[i])
+    }
+
+    var pad = width - count
+    while pad > 0 {
+        putchar(ch: UInt8(ascii: " "))
+        pad -= 1
+    }
+}

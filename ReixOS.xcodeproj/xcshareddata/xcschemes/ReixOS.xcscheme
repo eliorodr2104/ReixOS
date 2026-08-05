@@ -59,7 +59,7 @@
             isEnabled = "YES">
          </CommandLineArgument>
          <CommandLineArgument
-            argument = "cortex-a53"
+            argument = "cortex-a53,pmu=on"
             isEnabled = "YES">
          </CommandLineArgument>
          <CommandLineArgument

@@ -263,6 +263,8 @@ struct RegionClone: ResumableOperation {
                     flags    : pageFlags
                 )
 
+                manager.pointee.noteMapped(1)
+
                 // Writable in the parent's TLB until the deferred flush.
                 // Safe only while the parent cannot run before we return.
                 if downgradeParentPermissions {

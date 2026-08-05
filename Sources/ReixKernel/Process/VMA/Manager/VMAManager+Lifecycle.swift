@@ -35,6 +35,10 @@ extension VMAManager {
         brkVMA       = nil
         currentBreak = 0
 
+        // Zeroed up front rather than counted down as the walk goes: the whole
+        // address space is going, so nothing can be resident once it returns.
+        resetResidentPages()
+
         // The VMAs they walk are about to be freed, and nobody will re-enter the
         // syscalls that would have finished them.
         suspendedDecommit = nil

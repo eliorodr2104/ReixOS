@@ -11,7 +11,7 @@
 /// The device carries no symbol table, because the kernel's `.symtab` is
 /// ~52 KB and that is real money against a 4 MB target, so an address is
 /// all it can print. Resolution belongs on the host, and the markup is what
-/// lets a host tool do it: `{{{bt:0:0x40081138}}}` is Fuchsia's format,
+/// lets a host tool do it: `{{{bt:0:0x40081138}}}` is Fuchsia's (Zircon) format,
 /// costs nothing on device, and `reix symbolize` rewrites it into a function
 /// name and a source line. The raw address stays on the line so the report
 /// is still readable without any tooling at all.
@@ -23,6 +23,9 @@
 /// the console as its only output. That is the normal state of affairs after
 /// the kind of corruption that gets you here, and a report that never ends
 /// is worse than a truncated one. Hence the cap below.
+///
+/// The chain walk itself now lives in `FrameWalker`, which the tick sampler
+/// shares. Only the numbering, the markup and the cap are this file's.
 enum PanicBacktrace {
 
     /// Hard cap on printed frames.
@@ -43,21 +46,12 @@ enum PanicBacktrace {
         emitFrame(&index, frame.elr, "PC/ELR")
         emitFrame(&index, frame.x30, "LR/x30")
 
-        var framePointer = frame.x29
-
-        while index < frameLimit, isPlausible(framePointer) {
-            let returnAddress = word(at: framePointer &+ 8)
-            let previous      = word(at: framePointer)
-
-            guard returnAddress != 0 else { break }
-
+        FrameWalker.walk(
+            from : frame.x29,
+            limit: frameLimit - index
+        ) { returnAddress in
             emitFrame(&index, returnAddress, nil)
-
-            // Stacks grow down, so a caller's frame sits above its callee's.
-            // Following anything else is how an unwinder hangs on a cycle.
-            guard previous > framePointer else { break }
-
-            framePointer = previous
+            return true
         }
 
         if index >= frameLimit {
@@ -93,24 +87,5 @@ enum PanicBacktrace {
         PanicConsole.newline()
 
         index &+= 1
-    }
-
-
-    /// Cheapest possible sanity check before dereferencing a frame pointer.
-    ///
-    /// AAPCS64 keeps the stack, and therefore `x29`, 16-byte aligned, so
-    /// anything else in there is garbage and reading through it would fault
-    /// inside the printer. This does not make the read safe, it just makes
-    /// the obvious cases free; the re-entrancy guard in
-    /// `DefaultPanicFormatter` is what covers the rest.
-    @inline(__always)
-    private static func isPlausible(_ framePointer: UInt64) -> Bool {
-        framePointer != 0 && framePointer & 0xF == 0
-    }
-
-
-    @inline(__always)
-    private static func word(at address: UInt64) -> UInt64 {
-        UnsafePointer<UInt64>(bitPattern: UInt(address))?.pointee ?? 0
     }
 }

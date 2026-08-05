@@ -11,6 +11,9 @@ public func main() {
 
     print("[ INIT  ] Hi, this is init process!\n")
 
+    profileControl(.enable, arg: 0xFF)
+    profileControl(.setSampleDivider, arg: 1)
+
     guard let device = deviceCap() else { return }
 
     let console = withUnsafeTemporaryAllocation(
@@ -75,8 +78,17 @@ public func main() {
         registrar  : registrar
     )
 
-    sleep(for: .seconds(3))
+    _ = launch("Top.elf", environment: environment)
+
+    sleep(for: .milliseconds(800))
+    
+    print("")
+    print("============ PROFILE DUMP ============")
+    print("\n")
+    
     profileDump()
+
+    profileControl(.enable, arg: 0x3F)
 
     while true {
         sleep(for: .seconds(1))

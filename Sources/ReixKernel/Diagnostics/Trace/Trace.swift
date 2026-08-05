@@ -5,74 +5,6 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 04/08/2026.
 //
 
-/// Which class of event a record belongs to, and therefore whether it is
-/// compiled at all.
-///
-/// One conforming type per class. Static requirements only, and read through a
-/// generic parameter, for the reason `PreemptionRegion` gives at length: in
-/// Embedded Swift every generic call is specialized, so `isEnabled` and `bit`
-/// are `static let`s of one concrete type inside each specialization of `emit`,
-/// the `guard` in front of the body is a constant, and a class switched off
-/// leaves no counter read, no ring write and no code at the emit site. An
-/// `any TraceCategory` would put every requirement behind a witness table and
-/// destroy that fold; this kernel has no existential anywhere.
-///
-/// `isEnabled` is the build-time switch and `Trace.runtimeMask` the run-time
-/// one. They are deliberately separate: the mask is what `profileControl` moves
-/// while the machine is up, and it cannot bring back a class the image was
-/// never built with.
-protocol TraceCategory {
-
-    /// Whether this class is compiled in at all.
-    static var isEnabled: Bool { get }
-
-    /// This class's bit in `Trace.runtimeMask`.
-    static var bit: UInt32 { get }
-}
-
-
-/// Syscall entry and exit spans.
-enum TraceSyscalls: TraceCategory {
-    static let isEnabled       = true
-    static let bit    : UInt32 = 1 << 0
-}
-
-
-/// Context switches and the idle transitions around them.
-enum TraceSched: TraceCategory {
-    static let isEnabled       = true
-    static let bit    : UInt32 = 1 << 1
-}
-
-
-/// Rendezvous blocks, wakes and message transfers.
-enum TraceIPC: TraceCategory {
-    static let isEnabled       = true
-    static let bit    : UInt32 = 1 << 2
-}
-
-
-/// One record per owning `Preemption.run`, carrying the latency it cost.
-enum TracePreemption: TraceCategory {
-    static let isEnabled       = true
-    static let bit    : UInt32 = 1 << 3
-}
-
-
-/// Subsystem bring-up milestones, from the first allocator to the first `eret`
-/// into EL0.
-enum TraceBoot: TraceCategory {
-    static let isEnabled       = true
-    static let bit    : UInt32 = 1 << 4
-}
-
-
-/// Process creation and death.
-enum TraceProc: TraceCategory {
-    static let isEnabled       = true
-    static let bit    : UInt32 = 1 << 5
-}
-
 
 /// The one funnel every trace record goes through.
 ///
@@ -83,11 +15,13 @@ enum Trace {
 
     /// Which classes are recording right now, one bit per `TraceCategory`.
     ///
-    /// All on at reset, so a kernel that is never told anything still has the
-    /// last 256 events when something goes wrong. `profileControl` narrows it,
-    /// and a class whose bit is clear costs one load, one `tst` and a branch at
-    /// each of its sites.
-    static var runtimeMask: UInt32 = .max
+    /// The event classes are on at reset, so a kernel that is never told
+    /// anything still has the last 256 events when something goes wrong.
+    /// Sampling and PMU sections start off: both are volume producers that
+    /// exist to be switched on for a measurement, not to run ambiently.
+    /// `profileControl` moves this, and a class whose bit is clear costs one
+    /// load, one `tst` and a branch at each of its sites.
+    static var runtimeMask: UInt32 = 0x3F
 
 
     /// Files one record for `category`, if that class is recording.
@@ -99,25 +33,30 @@ enum Trace {
     /// Durations are measured with `stamp()`, which is the ordered read.
     ///
     /// A `nil` current process stamps `pid` zero, which the kernel and the idle
-    /// loop both legitimately are.
+    /// loop both legitimately are. `pid` overrides that attribution for the
+    /// few records that describe a process other than the caller, `procName`
+    /// being the one today.
     @inline(__always)
     static func emit<C: TraceCategory>(
-        _  category: C.Type,
-        code       : UInt16,
-        info       : UInt16 = 0,
-        a          : UInt64 = 0,
-        b          : UInt64 = 0
+        _    category: C.Type,
+        code         : UInt16,
+        info         : UInt16  = 0,
+        a            : UInt64  = 0,
+        b            : UInt64  = 0,
+        pid          : UInt32? = nil
     ) {
-        guard C.isEnabled             else { return }
+        guard C.isEnabled              else { return }
         guard runtimeMask & C.bit != 0 else { return }
 
-        let current = Arch.CPU.getCurrentProcess()
+        let stamped = pid ?? UInt32(
+            truncatingIfNeeded: Arch.CPU.getCurrentProcess()?.pointee.pid ?? 0
+        )
 
         TraceRing.append(TraceEvent(
             timestamp: Arch.Timer.counterUnordered(),
             code     : code,
             info     : info,
-            pid      : UInt32(truncatingIfNeeded: current?.pointee.pid ?? 0),
+            pid      : stamped,
             a        : a,
             b        : b
         ))
@@ -173,10 +112,10 @@ enum Trace {
     /// fold it disappears with everything else.
     @inline(__always)
     static func syscallSpan<C: TraceCategory>(
-        _  category: C.Type,
-        info       : UInt16,
-        frame      : UnsafeMutablePointer<Arch.TrapFrame>,
-        _ dispatch : () -> Void
+        _     category : C.Type,
+        info           : UInt16,
+        frame          : UnsafeMutablePointer<Arch.TrapFrame>,
+        _     dispatch : () -> Void
     ) {
         let recording = C.isEnabled && runtimeMask & C.bit != 0
         let entered   = recording ? stamp() : 0

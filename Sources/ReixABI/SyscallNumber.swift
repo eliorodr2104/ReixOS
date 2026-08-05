@@ -59,4 +59,5 @@ public enum SyscallNumber: UInt64 {
 
     // Profiler
     case profileControl
+    case procStats
 }

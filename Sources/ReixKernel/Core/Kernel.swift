@@ -150,6 +150,8 @@ public struct Kernel: Loggable {
             AArch64VirtualTimer.enable()
             bootPhase(TraceBootPhase.timerOn)
 
+            Arch.PMU.initialize()
+
             kprint()
 
         } catch { internalPanic(error) }

@@ -114,10 +114,19 @@ extension VMAManager {
     /// Shared by the fresh and the resumed path so that one place decides what a
     /// suspension means, and so the range recorded with a park is always the range
     /// the operation was built for.
+    ///
+    /// The resident count is settled by the delta `PageRetirement` accumulated
+    /// across this entry, so a suspended run charges the pages it did retire and
+    /// the entry that finishes the range charges the rest. See
+    /// `PageRetirement.retiredPages` for why the operation cannot carry it.
     private mutating func driveRetirement(
         _ operation: consuming RangeRetirement,
         over range : (start: VirtualAddress, end: VirtualAddress)
     ) -> DecommitOutcome {
+
+        let before = PageRetirement.retiredPages
+
+        defer { noteRetired(UInt32(truncatingIfNeeded: PageRetirement.retiredPages &- before)) }
 
         switch Preemption.run(RegionDecommit.self, operation) {
 

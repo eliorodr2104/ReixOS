@@ -51,7 +51,27 @@ public struct Process: RXEntry {
     public var replyTo       : UnsafeMutablePointer<Self>? = nil      // 8 Byte
     public var replyPartner  : UnsafeMutablePointer<Self>? = nil
     public var ipcDeadline   : UInt64?                     = nil      // 8 Byte
-    
+
+
+    /// Counter units this process has spent on the CPU, closed slices only.
+    ///
+    /// Charged by `RoundRobin.selectNextTask`, which is the one funnel every
+    /// rotation goes through, so the value moves exactly once per slice. Raw
+    /// `CNTVCT_EL0` units for `TraceEvent.timestamp`'s reason: the divisor is
+    /// reported once by `procStats` and the conversion is the reader's.
+    ///
+    /// Inline rather than in `ProcessMetadata` because the scheduler writes it
+    /// on every rotation, which is the definition this struct sorts on.
+    public var cpuTime       : UInt64                      = 0        // 8 Byte
+
+    /// The counter reading of the rotation that put this process on the CPU,
+    /// `0` whenever it is not the running one.
+    ///
+    /// The open slice is therefore `now - scheduledAt`, which is what makes a
+    /// live `cpuTime` readable without disturbing the scheduler: `procStats`
+    /// adds it for the running process and every other one is already closed.
+    public var scheduledAt   : UInt64                      = 0        // 8 Byte
+
     
     public let identity      : Badge                                  // 4 Byte
 

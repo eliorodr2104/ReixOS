@@ -30,6 +30,8 @@ public struct VirtualTimerInterruptHandler: InterruptHandler {
         AArch64VirtualTimer.ect()
         Kernel.gic.pointee.endOfInterrupt(id: id)
 
+        TraceSampler.onTick(frame: frame)
+
         let quantumExpired = Kernel.scheduler.pointee.onTick()
 
         let systemTicks = Kernel.scheduler.pointee.systemTicks
@@ -43,6 +45,8 @@ public struct VirtualTimerInterruptHandler: InterruptHandler {
         // The one periodic path already holding the CPU with IRQs masked, which is
         // what `LogRing` needs; bounded by the UART being slower than the tick.
         LogSink.drain(budget: LogSink.tickBudget)
+
+        TraceExport.pump()
 
         guard quantumExpired else { return }
 

@@ -29,6 +29,18 @@ public struct VMAManager: RXAllocatable {
     /// `setInitialBreak` at spawn time, then bumped by `extendBreak`.
     public var currentBreak: VirtualAddress = 0 // 8 Byte
 
+    /// Pages with a live translation in this address space.
+    ///
+    /// Resident means mapped here, not owned here: a shared or device page is
+    /// counted by every address space it appears in, because the number answers
+    /// what this process can touch without faulting and not how much of RAM it
+    /// is responsible for. Summing it across processes therefore double counts
+    /// on purpose, and `SystemStats` reports the physical side separately.
+    ///
+    /// `UInt32` covers 16 TiB of mappings, which the 39-bit user window cannot
+    /// reach, and keeps the counter inside the word next to `currentBreak`.
+    public private(set) var residentPages: UInt32 = 0 // 4 Byte
+
     let heap: UnsafeMutablePointer<BucketsHeap> // 8 Byte
 
     /// The page tables and the frame allocator of this address space, read once
@@ -186,6 +198,59 @@ public struct VMAManager: RXAllocatable {
     /// a parked continuation never depends on one an earlier entry took.
     mutating func managerPointer() -> UnsafeMutablePointer<VMAManager> {
         withUnsafeMutablePointer(to: &self) { $0 }
+    }
+
+
+    /// Record `count` pages this address space has just had mapped into it.
+    ///
+    /// A funnel rather than a settable property, so the two directions are named
+    /// at every site and the clamp below has one place to live.
+    mutating func noteMapped(_ count: UInt32) {
+        residentPages &+= count
+    }
+
+
+    /// Record `count` pages whose translation has just been dropped.
+    ///
+    /// Clamped at zero rather than wrapping: the count is a report, and an
+    /// underflow would show a process holding four billion pages for the rest of
+    /// its life. A miscount is a bug worth finding, and 0 is where it shows.
+    mutating func noteRetired(_ count: UInt32) {
+        residentPages = count >= residentPages ? 0 : residentPages &- count
+    }
+
+
+    /// Declare nothing resident any more, for the teardown that is taking the
+    /// whole address space down rather than a range of it.
+    mutating func resetResidentPages() {
+        residentPages = 0
+    }
+
+
+    /// Recount from the page tables what the manager did not map itself.
+    ///
+    /// The spawn path maps the ELF image and the first stack page through the
+    /// VMM directly, so the only honest count after it is an observed one. Every
+    /// mapped page lies inside a registered region by construction, which is
+    /// what bounds this walk to the image and not to the address space.
+    public mutating func recountResidentPages() {
+        var total  : UInt32 = 0
+        var current = vmaList.head
+
+        while let nodePtr = current {
+            let node = nodePtr.pointee
+
+            var va = node.startAddress
+            while va < node.endAddress {
+                if isPageMapped(at: va) { total &+= 1 }
+
+                va += UserSpaceLayout.pageSize
+            }
+
+            current = node.next
+        }
+
+        residentPages = total
     }
 
 

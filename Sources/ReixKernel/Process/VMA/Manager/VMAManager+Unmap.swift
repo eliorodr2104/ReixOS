@@ -220,11 +220,20 @@ extension VMAManager {
     /// decides what a suspension means. It is generic over the region and
     /// `driveRetirement` is not, because `decommit` has one caller and one mode
     /// while the unmap has two of each.
+    ///
+    /// It is also where the rollback gives the resident count back, which is what
+    /// keeps `mapRegion`'s per-page increments honest on a failed mapping: the
+    /// same delta serves both entry points because both retire through the same
+    /// operation.
     private mutating func driveUnmap<Region: PreemptionRegion>(
         _    region   : Region.Type,
         _    operation: consuming UnmapRetirement,
         over range    : (start: VirtualAddress, end: VirtualAddress)
     ) -> UnmapOutcome {
+
+        let before = PageRetirement.retiredPages
+
+        defer { noteRetired(UInt32(truncatingIfNeeded: PageRetirement.retiredPages &- before)) }
 
         switch Preemption.run(region, operation) {
 

@@ -31,6 +31,13 @@ enum TraceRing {
     static let capacity: UInt32 = 256
 
     private static let mask: UInt32 = 255
+    
+    /// The position a reader that wants only what happens next starts from.
+    ///
+    /// `TraceExport.attach` takes this so a consumer sees the machine from the
+    /// moment it asked and not a replay of whatever the ring still holds, which
+    /// for a live view is history it has no timeline to put anywhere.
+    static var currentHead: UInt32 { head }
 
     private static var storage = InlineArray<256, TraceEvent>(repeating: TraceEvent())
 
@@ -70,9 +77,14 @@ enum TraceRing {
 
 
     /// Empties the ring and forgets what it dropped.
+    ///
+    /// The cursors move forward rather than back to zero. `drainForExport`
+    /// hands monotonic positions out to a reader that keeps them across calls,
+    /// and rewinding `head` under one of those would read as the ring having
+    /// lapped it four billion times. `head &- tail` is zero either way, which
+    /// is the only thing "empty" means here.
     static func reset() {
-        head       = 0
-        tail       = 0
+        tail       = head
         lostEvents = 0
     }
 
@@ -133,5 +145,50 @@ enum TraceRing {
         }
 
         return visited
+    }
+
+
+    // MARK: - Export path
+    
+    /// Visits at most `max` records `cursor` has not seen, oldest first, and
+    /// leaves the ring exactly as it was found.
+    ///
+    /// A second reader alongside `forEachEvent`, wanting the opposite thing: a
+    /// dump is a snapshot of the whole history and must repeat itself, an
+    /// export is a stream and must not. The two cannot disturb each other
+    /// because the only state a drain moves is the caller's own `cursor`.
+    ///
+    /// `max` bounds what one tick pays. Anything left over is not lost: it
+    /// stays in the ring and the next drain resumes where this one stopped,
+    /// unless the writer laps the cursor first.
+    ///
+    /// - Returns: how many records were evicted before the cursor reached them,
+    ///   which the caller reports as dropped. Records actually visited are
+    ///   counted by `body`, which is handed every one of them.
+    /// - Invariant: as everywhere else in this file, the caller must have IRQs
+    ///   masked so no emit can evict underneath the drain.
+    static func drainForExport(
+        from cursor: inout UInt32,
+        max        : Int,
+        _    body  : (TraceEvent) -> Void
+    ) -> Int {
+        let live   = head &- tail
+        let unseen = head &- cursor
+
+       var skipped = 0
+        if unseen > live {
+            skipped = Int(unseen &- live)
+            cursor  = tail
+        }
+
+        var remaining = max
+        while cursor != head, remaining > 0 {
+            body(storage[Int(cursor & mask)])
+
+            cursor    &+= 1
+            remaining &-= 1
+        }
+
+        return skipped
     }
 }

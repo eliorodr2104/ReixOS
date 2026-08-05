@@ -109,6 +109,8 @@ extension VMAManager {
                 try? rollbackMapping(addr: start, size: alignedSize)
                 throw .mappingFailed(error)
             }
+
+            noteMapped(1)
         }
 
         return start

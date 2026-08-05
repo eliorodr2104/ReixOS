@@ -31,6 +31,21 @@ enum PageRetirement {
     private static let rangeInvalidationLimit: UInt64 = 32
 
 
+    /// Pages this kernel has retired since boot, all address spaces together.
+    ///
+    /// A running total sampled around a drive, and not a value handed back per
+    /// call, because the caller that has to act on it is `VMAManager` and the
+    /// operations between it and here are cut into steps that a checkpoint may
+    /// abandon: a suspension would drop a returned count on the floor, while a
+    /// delta taken across `Preemption.run` charges each entry exactly the pages
+    /// that entry retired. Wraps, and is only ever read as a difference.
+    ///
+    /// A step of one retirement never drives another, and the interrupt window
+    /// opens no path back into this file, so no reader can observe a partial
+    /// update of the counter it is bracketing.
+    static var retiredPages: UInt64 = 0
+
+
     /// End of the batch a step starting at `cursor` covers, never past `limit`.
     static func batchEnd(
         from cursor: VirtualAddress,
@@ -62,6 +77,9 @@ enum PageRetirement {
     /// function establishes: a cleared descriptor never keeps a cached
     /// translation, so an absent one has nothing to retire. `materialize`
     /// depends on the same invariant when it maps a fresh page.
+    ///
+    /// Every page that had a translation is added to `retiredPages`, whatever
+    /// the backing: the count is of mappings dropped and not of frames freed.
     static func retire(
         context: PagingContext,
         start  : VirtualAddress,
@@ -71,6 +89,12 @@ enum PageRetirement {
         guard backing == .anonymous else {
             var va = start
             while va < end {
+                
+                if context.vmm.pointee.physicalAddressOf(
+                    rootTable: context.rootTablePhysical,
+                    virtual  : va
+                ) != nil { retiredPages &+= 1 }
+
                 try? context.vmm.pointee.unmapUserPage(
                     rootTable: context.rootTablePhysical,
                     virtual  : va
@@ -112,6 +136,8 @@ enum PageRetirement {
             chunkStart = va
 
             guard pending > 0 else { continue }
+
+            retiredPages &+= UInt64(pending)
 
             var index = 0
             while index < pending {
