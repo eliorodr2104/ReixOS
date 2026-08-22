@@ -5,21 +5,6 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 21/04/2026.
 //
 
-/// Intrusive free-list node overlaid on a free block's first 16 bytes.
-///
-/// The buddy free lists thread through the free blocks themselves (no extra
-/// allocation: the allocator can't allocate to track its own free list), so
-/// `FreeBlock` is materialised at a block's physical address and linked via a
-/// `LinkedList<FreeBlock>`. Being doubly linked, unlinking an arbitrary buddy
-/// during a merge is O(1). `entryID` is unused: the buddy never does id-based
-/// lookups, only `pushBack`/`popFront`/`remove(element:)`.
-public struct FreeBlock: RXEntry {
-    public static var errorMessageAllocation: StaticString = "FreeBlock"
-    public var prev: UnsafeMutablePointer<FreeBlock>?
-    public var next: UnsafeMutablePointer<FreeBlock>?
-    public var entryID: UInt64 { 0 }
-}
-
 public struct BuddyAllocator: Allocator {
 
     private let startRam       : PhysicalAddress
@@ -27,14 +12,33 @@ public struct BuddyAllocator: Allocator {
 
     private let bitmap         : UnsafeMutablePointer<UInt8>
 
-    /// One free list per order (0...maxOrder), kept in a small reserved region.
+    /// One free list per order (0...maxOrder), kept in the boot bookkeeping arena.
     /// The list nodes live inside the free blocks (`FreeBlock`), so this only
     /// stores the 12 list heads/tails, the heavy data is in the pages.
+    ///
+    /// 192 bytes, which is why `PhysicalPageManager.init` packs the table into a
+    /// page it already owns rather than rounding one up for it. See `freeListsBytes`.
     private let freeLists      : UnsafeMutablePointer<LinkedList<FreeBlock>>
 
     private static let pageSize: UInt64 = 4096
 
+    /// Raisable to 14 and no further: `FrameInfo` packs `order` into a nibble and
+    /// 15 is `PhysicalPageManager.blockInteriorOrder`. A larger value is silently
+    /// truncated there, and 15 would alias that sentinel, so a block head would
+    /// read back as a block interior.
     private static let maxOrder: UInt8  = 11
+
+
+    /// Bytes the free-list table needs, one `LinkedList<FreeBlock>` per order.
+    ///
+    /// Published because `PhysicalPageManager.init` reserves the region this
+    /// initializer then zeroes, and the two now sit byte to byte with the bitmap in
+    /// a shared page: a `maxOrder` raised here without the reservation following
+    /// would have the memset below run into a frame the buddy hands out. Both read
+    /// this, so there is one number to raise.
+    public static var freeListsBytes: Int {
+        (Int(maxOrder) + 1) * MemoryLayout<LinkedList<FreeBlock>>.stride
+    }
 
     public init(
         start           : PhysicalAddress,
@@ -50,8 +54,7 @@ public struct BuddyAllocator: Allocator {
         self.bitmap    = UnsafeMutablePointer<UInt8>(bitPattern: UInt(bitmapAddress))!
         self.freeLists = UnsafeMutablePointer<LinkedList<FreeBlock>>(bitPattern: UInt(freeListsAddress))!
 
-        let listsBytes = (Int(Self.maxOrder) + 1) * MemoryLayout<LinkedList<FreeBlock>>.stride
-        UnsafeMutableRawPointer(freeLists).initializeMemory(as: UInt8.self, repeating: 0, count: listsBytes)
+        UnsafeMutableRawPointer(freeLists).initializeMemory(as: UInt8.self, repeating: 0, count: Self.freeListsBytes)
 
         bitmap.initialize(repeating: 0xFF, count: bitmapBytes)
     }
@@ -99,9 +102,9 @@ public struct BuddyAllocator: Allocator {
     }
     
     public func free(_ page: consuming PhysicalPage) throws(AllocatorError) {
-        guard (page.address >= startRam &&
-                page.address <= startRam + sizeRam)
-        else { throw .addressInvalid(page.address) }
+        guard try isValidBlock(address: page.address, order: page.order) else {
+            throw .addressInvalid(page.address)
+        }
         guard try !isBlockFree(page.address, order: page.order) else { throw(.doubleFreeInvalid) }
 
 
@@ -113,11 +116,22 @@ public struct BuddyAllocator: Allocator {
         from rawStart: PhysicalAddress,
         to   rawEnd  : PhysicalAddress
     ) throws(AllocatorError) {
-        guard rawStart >= startRam && rawEnd <= startRam + sizeRam else { throw .addressInvalid(rawStart) }
-        guard rawStart < rawEnd else { throw .addressRangeInvalid(from: rawStart, to: rawEnd) }
         
-        let start = alignUp  (max(rawStart, startRam), Self.pageSize)
-        let end   = alignDown(min(rawEnd, startRam + sizeRam), Self.pageSize)
+        let ramEnd = try getRamEnd(address: rawStart)
+        
+        guard rawStart >= startRam &&
+              rawStart < ramEnd    &&
+              rawEnd   <= ramEnd else { throw .addressInvalid(rawStart) }
+        
+        guard rawStart < rawEnd else {
+            throw .addressRangeInvalid(
+                from: rawStart,
+                to  : rawEnd
+            )
+        }
+        
+        let start = try alignUp(max(rawStart, startRam), Self.pageSize)
+        let end   = alignDown(min(rawEnd, ramEnd), Self.pageSize)
         
         var current = start
         
@@ -142,18 +156,33 @@ public struct BuddyAllocator: Allocator {
         address: PhysicalAddress,
         order  : UInt8
     ) throws(AllocatorError) {
-        guard address >= startRam && address <= startRam + sizeRam else { throw .addressInvalid(address) }
-        guard order <= Self.maxOrder else { throw .pageOrderInvalid(order) }
+        
+        guard try isValidBlock(
+            address: address,
+            order  : order
+        ) else { throw .addressInvalid(address) }
         
         var currentAddress = address
         var currentOrder   = order
 
         while currentOrder < Self.maxOrder {
-            let buddyAddress = try buddyOf(address: currentAddress, order: currentOrder)
+            
+            guard let buddyAddress = try buddyOf(
+                address: currentAddress,
+                order  : currentOrder
+            ) else { break }
+            
+            guard try isValidBlock(
+                address: buddyAddress,
+                order  : currentOrder
+            ) else { break }
 
             if try isBlockFree(buddyAddress, order: currentOrder) {
-                if !(try removeFreeBlock(address: buddyAddress, order: currentOrder)) {
-                    fatalError("PPM: Buddy block in list not found - Corrupted structures")
+                
+                if !(try removeFreeBlock(
+                    address: buddyAddress,
+                    order  : currentOrder)) {
+                    fatalError("PPM: Buddy block in list not found. Corrupted structures")
                 }
                 
                 currentAddress = min(currentAddress, buddyAddress)
@@ -176,14 +205,18 @@ public struct BuddyAllocator: Allocator {
         address      : UInt64,
         remainingSize: UInt64
     ) throws(AllocatorError) -> UInt8 {
-        guard address >= startRam && address <= startRam + sizeRam else { throw .addressInvalid(address) }
+        let ramEnd = try getRamEnd(address: address)
+        
+        guard address >= startRam &&
+              address < ramEnd else { throw .addressInvalid(address) }
         
         var order = Self.maxOrder
         while order > 0 {
-            let blockSize = try blockSize(order)
+            let blockBytes = try blockSize(order)
             
-            if remainingSize >= blockSize &&
-                address % blockSize == 0 {
+            if remainingSize >= blockBytes &&
+                (address - startRam) % blockBytes == 0 &&
+                blockBytes <= ramEnd - address {
                 return order
             }
             
@@ -196,20 +229,36 @@ public struct BuddyAllocator: Allocator {
     private func buddyOf(
         address: UInt64,
         order  : UInt8
-    ) throws(AllocatorError) -> UInt64 {
-        guard address >= startRam && address <= startRam + sizeRam else { throw .addressInvalid(address) }
+    ) throws(AllocatorError) -> UInt64? {
+        guard try isValidBlock(
+            address: address,
+            order  : order
+        ) else { throw .addressInvalid(address) }
         
-        let rel = address - startRam
-        let b   = try blockSize(order)
+        let rel         = address - startRam
+        let blockBytes  = try blockSize(order)
+        let buddyOffset = rel ^ blockBytes
+
+        guard buddyOffset < sizeRam &&
+              blockBytes <= sizeRam - buddyOffset else { return nil }
         
-        return startRam + (rel ^ b)
+        return startRam + buddyOffset
     }
     
     
     private func alignUp(
         _ x: UInt64,
         _ a: UInt64
-    ) -> UInt64 { (x + a - 1) & ~(a - 1) }
+    ) throws(AllocatorError) -> UInt64 {
+        
+        let remainder = x % a
+        guard remainder != 0 else { return x }
+        
+        let increment = a - remainder
+        let (result, overflow) = x.addingReportingOverflow(increment)
+        guard !overflow else { throw .addressInvalid(x) }
+        return result
+    }
     
     private func alignDown(
         _ x: UInt64,
@@ -217,9 +266,17 @@ public struct BuddyAllocator: Allocator {
     ) -> UInt64 { x & ~(a - 1) }
     
     private func getPageIndex(address: UInt64) throws(AllocatorError) -> Int {
-        guard address >= startRam && address <= startRam + sizeRam else { throw .addressInvalid(address) }
+        let ramEnd = try getRamEnd(address: address)
         
-        return Int((address - startRam) / Self.pageSize)
+        guard address >= startRam &&
+              address < ramEnd else { throw .addressInvalid(address) }
+        
+        let index = (address - startRam) / Self.pageSize
+        guard index < sizeRam / Self.pageSize else {
+            throw .addressInvalid(address)
+        }
+        
+        return Int(index)
     }
     
     private func setBit(_ index: Int) {
@@ -235,8 +292,10 @@ public struct BuddyAllocator: Allocator {
         address: UInt64,
         order  : UInt8
     ) throws(AllocatorError) {
-        guard address >= startRam && address <= startRam + sizeRam else { throw .addressInvalid(address) }
-        guard order <= Self.maxOrder else { throw .pageOrderInvalid(order) }
+        guard try isValidBlock(
+            address: address,
+            order  : order
+        ) else { throw .addressInvalid(address) }
         
         let startPage = try getPageIndex(address: address)
         let pageCount = 1 << order
@@ -250,8 +309,10 @@ public struct BuddyAllocator: Allocator {
         address: UInt64,
         order  : UInt8
     ) throws(AllocatorError) {
-        guard address >= startRam && address <= startRam + sizeRam else { throw .addressInvalid(address) }
-        guard order <= Self.maxOrder else { throw .pageOrderInvalid(order) }
+        guard try isValidBlock(
+            address: address,
+            order  : order
+        ) else { throw .addressInvalid(address) }
         
         let startPage = try getPageIndex(address: address)
         let pageCount = 1 << order
@@ -263,8 +324,10 @@ public struct BuddyAllocator: Allocator {
         _ address: UInt64,
         order    : UInt8
     ) throws(AllocatorError) -> Bool {
-        guard address >= startRam && address <= startRam + sizeRam else { throw .addressInvalid(address) }
-        guard order <= Self.maxOrder else { throw .pageOrderInvalid(order) }
+        guard try isValidBlock(
+            address: address,
+            order  : order
+        ) else { throw .addressInvalid(address) }
         
         let startPage = try getPageIndex(address: address)
         let pageCount = 1 << order
@@ -280,11 +343,25 @@ public struct BuddyAllocator: Allocator {
         address: UInt64,
         order  : UInt8
     ) throws(AllocatorError) -> Bool {
+        let ramEnd = try getRamEnd(address: address)
         
-        guard address >= startRam && address <= startRam + sizeRam else { throw .addressInvalid(address) }
-        guard order <= Self.maxOrder else { throw .pageOrderInvalid(order) }
+        guard address >= startRam &&
+              address < ramEnd else { return false }
         
-        return address % (try blockSize(order)) == 0
+        guard order <= Self.maxOrder else {
+            throw .pageOrderInvalid(order)
+        }
+        
+        let blockBytes = try blockSize(order)
+        return (address - startRam) % blockBytes == 0 &&
+                blockBytes <= ramEnd - address
+    }
+
+    private func getRamEnd(address: UInt64) throws(AllocatorError) -> UInt64 {
+        let (ramEnd, overflow) = startRam.addingReportingOverflow(sizeRam)
+        guard !overflow else { throw .addressInvalid(address) }
+        
+        return ramEnd
     }
     
     
@@ -306,10 +383,16 @@ public struct BuddyAllocator: Allocator {
         address: UInt64,
         order  : UInt8
     ) throws(AllocatorError) {
-        guard address >= startRam && address < startRam + sizeRam else { throw .addressInvalid(address) }
-        guard order <= Self.maxOrder else { throw .pageOrderInvalid(order) }
+        guard try isValidBlock(
+            address: address,
+            order  : order
+        ) else { throw .addressInvalid(address) }
 
         let block = UnsafeMutablePointer<FreeBlock>(bitPattern: UInt(address))!
+
+        block.pointee.next = nil
+        block.pointee.prev = nil
+
         (freeLists + Int(order)).pointee.pushBack(block)
     }
 
@@ -330,8 +413,10 @@ public struct BuddyAllocator: Allocator {
         address: UInt64,
         order  : UInt8
     ) throws(AllocatorError) -> Bool {
-        guard address >= startRam && address < startRam + sizeRam else { throw .addressInvalid(address) }
-        guard order <= Self.maxOrder else { throw .pageOrderInvalid(order) }
+        guard try isValidBlock(
+            address: address,
+            order  : order
+        ) else { throw .addressInvalid(address) }
 
         let block = UnsafeMutablePointer<FreeBlock>(bitPattern: UInt(address))!
         (freeLists + Int(order)).pointee.remove(element: block)

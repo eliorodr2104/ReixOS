@@ -120,15 +120,8 @@ enum TraceSampler {
     /// program that asked for it. There is nothing to gain by risking it: a
     /// user sample already carries PC and LR, and a host with the process image
     /// can unwind the rest offline.
-    ///
-    /// Only the first frame is checked for being the kernel's. After that the
-    /// monotonic rule in `FrameWalker` keeps the walk climbing one stack, and
-    /// four frames is a short enough leash that a chain corrupt enough to leave
-    /// it is already a panic waiting on the next kernel access.
     @inline(__always)
     private static func walkKernelChain(from fp: UInt64) {
-        guard isKernelFrame(fp) else { return }
-
         var depth: UInt16 = 0
 
         FrameWalker.walk(from: fp, limit: frameLimit) { returnAddress in
@@ -143,19 +136,5 @@ enum TraceSampler {
 
             return true
         }
-    }
-
-
-    /// `FrameWalker`'s plausibility test, plus the half the address must be in.
-    ///
-    /// User space is confined to `L0[1..255]` and the kernel owns everything
-    /// outside that window, both the identity-mapped image at the bottom and
-    /// the linear map at the top, so one range test names every address this
-    /// walk is allowed to dereference.
-    @inline(__always)
-    private static func isKernelFrame(_ framePointer: UInt64) -> Bool {
-        FrameWalker.isPlausible(framePointer)
-            && (framePointer <  UserSpaceLayout.userMin
-             || framePointer >= UserSpaceLayout.userMax)
     }
 }

@@ -5,22 +5,25 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 30/04/2026.
 //
 
-public struct AArch64VirtualTimer: HardwareTimerInterface {
+public struct AArch64VirtualTimer: HardwareTimerInterface, Loggable {
+    
+    public static let nameLog : StaticString = "[TIM ]"
+    public static let logLevel: LogLevel     = .info
 
-    /// Arms the core timer for the first time and says so.
+    /// Brings this core's timer up: first deadline armed, `CNTV_CTL_EL0` set.
     ///
-    /// Separate from `ect()` purely because of the announcement: `ect()` is
-    /// also the rearm the IRQ handler runs on every single tick, and a boot
-    /// line in there would print ten times a second forever.
+    /// Every core runs this once for itself. `CNTV_CTL_EL0` and `CNTV_CVAL_EL0`
+    /// are banked per core, so no core can be armed on another's behalf.
     public static func enable() {
-        ect()
+        enable_core_timer()
 
         Self.boot("Virtual Timer enabled.")
     }
 
 
-    public static func ect() {
-        enable_core_timer()
+    /// Moves this core's deadline one tick interval on. Never enables anything.
+    public static func rearm() {
+        rearm_core_timer()
     }
 
 
@@ -53,10 +56,4 @@ public struct AArch64VirtualTimer: HardwareTimerInterface {
     public static func frequency() -> UInt64 {
         read_counter_frequency()
     }
-}
-
-
-extension AArch64VirtualTimer: Loggable {
-    public static let nameLog : StaticString = "[TIM ]"
-    public static let logLevel: LogLevel     = .info
 }

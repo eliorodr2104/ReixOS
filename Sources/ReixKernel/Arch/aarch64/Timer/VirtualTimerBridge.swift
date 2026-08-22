@@ -8,6 +8,9 @@
 @_silgen_name("enable_core_timer")
 public func enable_core_timer()
 
+@_silgen_name("rearm_core_timer")
+public func rearm_core_timer()
+
 @_silgen_name("read_virtual_counter")
 public func read_virtual_counter() -> UInt64
 

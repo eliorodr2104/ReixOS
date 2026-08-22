@@ -65,15 +65,41 @@ public struct Kernel: Loggable {
     public static func boot(dtbRawAddress: PhysicalAddress) {
 
         do {
-            if !QemuVirtPlatform.discover(into: &platformInfo, at: dtbRawAddress) {
-                QemuVirtPlatform.error("DTB Tree not found.")
-                Arch.CPU.waitForInterrupt()
+            
+            if let fault = QemuVirtPlatform.discover(
+                into: &platformInfo, at: dtbRawAddress
+            ) {
+                
+                QemuVirtPlatform.installBootConsole(into: &platformInfo)
+
+                // Two calls rather than one line with an empty tail: a reason
+                // with no position must not print one reading like offset zero.
+                if let offset = fault.offset {
+                    QemuVirtPlatform.error(
+                        "Device tree at 0x\(hex: dtbRawAddress) rejected: \(fault.reason.description) Blob offset 0x\(hex: offset)."
+                    )
+                } else {
+                    QemuVirtPlatform.error(
+                        "Device tree at 0x\(hex: dtbRawAddress) rejected: \(fault.reason.description)"
+                    )
+                }
+
+                HaltPanicAction.execute()
             }
 
             printBootBanner()
 
             self.ppm = try PhysicalPageManager<BuddyAllocator>()
             bootPhase(TraceBootPhase.ppmReady)
+
+            // The two pointers discovery left aimed into the blob. Dropped before
+            // the reclaim, which overwrites what they point at.
+            platformInfo.bootargs   = nil
+            platformInfo.stdoutPath = nil
+
+            // `try?`: winning back the megabyte QEMU rounds its device tree up to
+            // is an optimisation, and a boot must not fold when one does not pay.
+            _ = try? ppm!.reclaimDeviceTree()
 
             self.vmm = try VirtualMemoryManager(ppmPtr: &ppm!)
 
@@ -228,6 +254,21 @@ public struct Kernel: Loggable {
         
         firstProcess.pointee.metadata.pointee.deviceCap = grantHandle
 
+        guard installProfilerCap(
+            into: &firstProcess.pointee.metadata.pointee.capsTable
+        ) else {
+            throw .heapAllocationFailed
+        }
+
+        if !InterruptBootAuthority.install(
+            line: Kernel.platformInfo.uart.irq,
+            into: &firstProcess.pointee.metadata.pointee.capsTable,
+            heap: heap,
+            gic : gic
+        ) {
+            ProcessManager.warning("no interrupt authority minted, the device tree named no line")
+        }
+
         ProcessManager.info("Handing control to user space.")
         kprint()
 
@@ -257,5 +298,20 @@ public struct Kernel: Loggable {
             trapFrame: trapFramePtr,
             rootTable: firstProcess.pointee.addressSpace.rootTablePhysical
         )
+    }
+    
+    private static func installProfilerCap(into caps: inout CapsTable) -> Bool {
+        let slot = BootCap.profiler.rawValue
+        guard caps.resolve(slot) == nil else { return false }
+
+        let result = caps.install(
+            at: slot,
+            Capability(
+                target: .profileControl,
+                badge: 0,
+                rights: [.grant, .profile]
+            )
+        )
+        return result.installed && result.displaced == nil
     }
 }

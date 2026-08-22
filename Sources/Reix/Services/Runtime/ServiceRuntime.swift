@@ -61,11 +61,16 @@ public enum ServiceRuntime {
 /// is right for the console and for name *lookup* and wrong for the authority
 /// to publish a name, so delegating it has to be an act at the call site a
 /// service seeded with a registrar still launches ordinary children.
+///
+/// `profiler` is passed the same way and for the same reason, and it arrives at
+/// the child narrowed to `.profileStats` by `ProfileAuthorityGrant.tool`: a
+/// stats reader has no business dumping the trace ring over the console.
 @inline(__always)
 public func launch(
     _ path       : StaticString,
       environment: Environment,
-      registrar  : UInt32? = nil
+      registrar  : UInt32? = nil,
+      profiler   : UInt32? = nil
 ) -> SpawnResult {
 
     withUnsafeTemporaryAllocation(
@@ -92,6 +97,11 @@ public func launch(
 
         if let registrar {
             buffer[count] = CapGrant(source: registrar, slot: BootCap.nameServerRegistrar.rawValue, rights: [.send])
+            count += 1
+        }
+
+        if let profiler {
+            buffer[count] = ProfileAuthorityGrant.tool(source: profiler)
             count += 1
         }
 

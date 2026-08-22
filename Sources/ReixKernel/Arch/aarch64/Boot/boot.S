@@ -5,6 +5,10 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 19/04/2026.
 //
 
+// A word no live stack value can be mistaken for: not zero, not a pointer,
+// not a length. `StackUsage` scans for the first eight bytes that lost it.
+.equ STACK_POISON, 0x5245495853544B21
+
 .equ SPSR_EL1h,  (0b0101)
 .equ SPSR_DAIF,  (0b1111 << 6)
 .equ SPSR_VALUE, (SPSR_EL1h | SPSR_DAIF)   // 0x3C5
@@ -76,9 +80,39 @@ _start:
 
 .L_bss_loop:
     cmp     x2, x3
-    b.hs    .L_jump_to_swift
+    b.hs    .L_poison_stacks
     str     xzr, [x2], #8
     b       .L_bss_loop
+
+// Both kernel stacks are filled before anything runs on them. SP is still at
+// stack_top and no frame exists yet, so every byte of both is fair game.
+.L_poison_stacks:
+    ldr     x5, =STACK_POISON
+
+    ldr     x2, =__stack_bottom
+    ldr     x3, =stack_top
+    bl      .L_poison_range
+
+    ldr     x2, =__exception_stack_bottom
+    ldr     x3, =__exception_stack_top
+    bl      .L_poison_range
+
+    b       .L_jump_to_swift
+
+// Fills [x2, x3) with x5, eight bytes at a time, as the bss loop above does.
+// x19 relocates both bounds: with the MMU off a link address is not yet usable.
+.L_poison_range:
+    add     x2, x2, x19
+    add     x3, x3, x19
+
+.L_poison_word:
+    cmp     x2, x3
+    b.hs    .L_poison_done
+    str     x5, [x2], #8
+    b       .L_poison_word
+
+.L_poison_done:
+    ret
 
 .L_jump_to_swift:
     mov     x29, #0

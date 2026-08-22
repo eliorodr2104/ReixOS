@@ -1,0 +1,86 @@
+#
+# scenarios.tsv
+# ReixOS
+#
+# The QEMU boot matrix, as data. scripts/scenarios.sh reads this file and boots
+# one row at a time through scripts/smoke.sh, so a new machine configuration is
+# a new line here rather than a new script or a new Makefile target.
+#
+# Tab-separated, ten columns, `-` for a column that does not apply. Blank lines
+# and `#` lines are ignored. A field may contain spaces; it may not contain a
+# tab, and runs of tabs collapse, so every column needs its placeholder.
+#
+#   id         row name: its serial log lands in .reix/scenario-<id>.log
+#   mem        guest RAM, e.g. `4M` (`-` = the machine default)
+#   initrd     `qemu` (handed over with -initrd) or `embedded` (the copy the
+#              plugin links into kernel.bin under `.initrd`)
+#   flags      QEMU flags appended after the base set (`-` = none). Appended and
+#              not merged: QEMU keeps the last `-cpu`/`-machine` it is given, so
+#              a row overrides one of them without restating the whole machine.
+#   mode       `verdict` stops the guest at the first success/failure marker,
+#              exactly like `make smoke`. `window` keeps it running for the full
+#              timeout and judges the log afterwards, which is what a row needs
+#              when it asserts lines printed after the success marker.
+#   timeout    seconds: the deadline under `verdict`, the run length under `window`
+#   required   markers that must all appear, in this order, `|`-separated. The
+#              order is a subsequence, not adjacency: other lines may sit
+#              between two markers, and each marker only has to appear after
+#              the line that satisfied the previous one.
+#   forbidden  markers that must not appear anywhere, `|`-separated (`-` = none)
+#   post       extra check run after the markers hold (`-` = none). The names are
+#              the post_* functions in scripts/scenarios.sh.
+#   expect     `pass`, `xfail:<reason>`, or `skip-if:<condition>`
+#
+# On the marker sets, both of which are deliberately narrow:
+#   * A healthy boot prints no `[ ERROR ]` line at all, verified against every
+#     configuration below, so the level tag itself is forbidden rather than any
+#     particular message. A panic is caught twice: `[ PANIC ]` is the level tag
+#     and `REIX-PANIC` is the report banner, which the nested-fault path prints
+#     without a level tag.
+#   * Only single-writer lines are required. The kernel's `[ INFO  ][ELF ]`
+#     spawn lines interleave with userland output and shred whatever line they
+#     land in the middle of, so nothing printed during a spawn is asserted -
+#     including the initrd page-sharing line, which is the one that shreds.
+#
+# id	mem	initrd	flags	mode	timeout	required	forbidden	post	expect
+
+# The configuration `make smoke` boots: machine default RAM, initrd from QEMU.
+# The required chain is one boot read end to end - the pre-Swift banner, the
+# subsystems in bring-up order, the handoff to EL0, init, and finally the
+# shared-memory round trip between the two children that says IPC works.
+default	-	qemu	-	verdict	30	[ reix ] ReixOS|[PPM ] Physical Page Manager ready.|[VMM ] Virtual Memory Manager ready.|[HEAP] Kernel heap ready.|[SCHD] Scheduler ready.|[SYS ] Syscall Handler ready.|[KERN] Kernel is running.|Handing control to user space.|[ INIT  ] Hi, this is init process!|[ NCHIL ] SHM OK	[ PANIC ]|REIX-PANIC|[ ERROR ]|SHM FAIL	-	pass
+
+# The 4 MiB floor the project targets, i.e. `make smoke-4m`. `embedded` is not a
+# preference here: see dtb-squeeze below. The reclaim line is required only on
+# this row, because at 4 MiB giving the device tree's megabyte back to the page
+# manager is what makes the machine fit rather than a nicety.
+mem-4m	4M	embedded	-	verdict	30	[ reix ] ReixOS|[PPM ] Physical Page Manager ready.|Device tree reclaimed: 1024 KiB.|[VMM ] Virtual Memory Manager ready.|[HEAP] Kernel heap ready.|[SCHD] Scheduler ready.|[SYS ] Syscall Handler ready.|[KERN] Kernel is running.|Handing control to user space.|[ INIT  ] Hi, this is init process!|[ NCHIL ] SHM OK	[ PANIC ]|REIX-PANIC|[ ERROR ]|SHM FAIL	-	pass
+
+# The embedded initrd on its own, at default RAM: it isolates the `.initrd`
+# section path from the 4 MiB layout, so a break in one of the two says which.
+embedded-initrd	-	embedded	-	verdict	30	[ reix ] ReixOS|[PPM ] Physical Page Manager ready.|[VMM ] Virtual Memory Manager ready.|[HEAP] Kernel heap ready.|[SCHD] Scheduler ready.|[SYS ] Syscall Handler ready.|[KERN] Kernel is running.|Handing control to user space.|[ INIT  ] Hi, this is init process!|[ NCHIL ] SHM OK	[ PANIC ]|REIX-PANIC|[ ERROR ]|SHM FAIL	-	pass
+
+# A machine with no PMUv3 block. The PMUVer gate is supposed to make profiling
+# optional, so the boot has to reach the same end state with the counters left
+# alone; the forbidden line is the one the PMU prints when it does come up, and
+# its absence is what says the gate closed instead of the boot getting lucky.
+no-pmu	-	qemu	-cpu cortex-a53,pmu=off	verdict	30	[ reix ] ReixOS|[PPM ] Physical Page Manager ready.|[VMM ] Virtual Memory Manager ready.|[HEAP] Kernel heap ready.|[SCHD] Scheduler ready.|[SYS ] Syscall Handler ready.|[KERN] Kernel is running.|Handing control to user space.|[ INIT  ] Hi, this is init process!|[ NCHIL ] SHM OK	[ PANIC ]|REIX-PANIC|[ ERROR ]|SHM FAIL|cycle counter on	-	pass
+
+# The guard on smoke-4m's coupling: at 4 MiB, MEM and INITRD_MODE are one knob
+# and not two, because QEMU drops an -initrd halfway up RAM and then 2 MiB-aligns
+# the generated DTB after it, which lands past the top of the machine. QEMU says
+# exactly that and exits before the kernel runs, so its message is what this row
+# requires and the success marker is what it forbids.
+#
+# Which makes this row failing good news rather than a regression: it would mean
+# the guest booted all the way through on `qemu` at 4 MiB, INITRD_MODE=embedded
+# stopped being load-bearing, and the coupling can be relaxed - in `smoke-4m` and
+# `run-4m` in the Makefile, and in the mem-4m row above.
+dtb-squeeze	4M	qemu	-	verdict	15	Not enough space for DTB after kernel/initrd	[ NCHIL ] SHM OK	-	pass
+
+# The kernel's own account of the boot, cross-checked against the console's.
+# Init dumps the trace ring ~800 ms after the children are done, which is later
+# than the success marker, hence `window`; the post-check then decodes the same
+# log with `swift package reix trace --boot` and asserts all eleven boot phases
+# come out in TraceBootPhase order.
+trace-boot	-	qemu	-	window	12	[ reix ] ReixOS|[PPM ] Physical Page Manager ready.|[VMM ] Virtual Memory Manager ready.|[HEAP] Kernel heap ready.|[SCHD] Scheduler ready.|[SYS ] Syscall Handler ready.|[KERN] Kernel is running.|Handing control to user space.|[ INIT  ] Hi, this is init process!|[ NCHIL ] SHM OK|[TRACE] begin v=2|[TRACE] end	[ PANIC ]|REIX-PANIC|[ ERROR ]|SHM FAIL	trace-boot	skip-if:no-host-swift

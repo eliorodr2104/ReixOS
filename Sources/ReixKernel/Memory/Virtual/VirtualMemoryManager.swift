@@ -56,6 +56,40 @@ public struct VirtualMemoryManager: Loggable {
     private var asidCounter         : ASID = 1
     
     
+    #if !hasFeature(Embedded)
+    /// Host stand-in for a manager the real initialiser cannot build off the
+    /// machine, seamed like `PPMBackend.physicalOffset`: `hasFeature(Embedded)`
+    /// is on only when `Package.swift` sees `FREESTANDING=1`, so the machine is
+    /// compiled without this at all.
+    ///
+    /// The real `init` maps the linker's sections and then panics unless the
+    /// stack guard page sits exactly between `_kernel_end` and `__stack_bottom`.
+    /// Off the machine those are four unrelated bytes in `KernelHostShims.c`,
+    /// which no arithmetic can make satisfy it, and that wall is why
+    /// `ELFLoaderFixtures` runs the loader against a zeroed manager instead.
+    ///
+    /// This takes the two fields `createAddressSpace` actually reads and leaves
+    /// the mapping machinery alone, so a suite can exercise the address-space
+    /// lifecycle without a booted machine. `physToVirt` is already the identity
+    /// here, because `isMMUEnabled()` is a shim that answers false, so an arena
+    /// address doubles as its own pointer.
+    ///
+    /// - Parameter identityTable: a zeroed, readable 512-entry page. Its
+    ///   descriptors are what `createAddressSpace` copies into every new root,
+    ///   so leaving them zero is what makes a fresh address space empty.
+    init(
+        hostPPM      : UnsafeMutablePointer<KernelPPM>,
+        identityTable: PhysicalAddress
+    ) {
+        self.ppmPtr               = hostPPM
+        self.kernelTableAddress   = identityTable
+        self.identityTableAddress = identityTable
+        self.kernelRootTable      = UnsafeMutablePointer(bitPattern: UInt(identityTable))!
+        self.identityRootTable    = UnsafeMutablePointer(bitPattern: UInt(identityTable))!
+    }
+    #endif
+
+
     public func physToVirt<T>(_ phys: UInt64) -> UnsafeMutablePointer<T> {
         let offset = Arch.MMU.isMMUEnabled() ? Self.physicalOffset : 0
         let virtAddr = phys + offset

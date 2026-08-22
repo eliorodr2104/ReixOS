@@ -80,12 +80,29 @@ enum PageRetirement {
     ///
     /// Every page that had a translation is added to `retiredPages`, whatever
     /// the backing: the count is of mappings dropped and not of frames freed.
+    ///
+    /// ## Why only `.anonymous` reaches the allocator
+    ///
+    /// Any other backing is retired by the branch below, which clears the leaf
+    /// descriptors, invalidates the range and returns without a single `release`.
+    /// That is not a simplification of the batched path, it is the contract of
+    /// those regions: `.fileBacked` maps permanently resident initrd frames that
+    /// belong to a reserved range rather than to this address space, `.shared`
+    /// frames are owned by the `SharedRegion` that counts its own references, and
+    /// `.device` frames are not RAM the buddy allocator has ever seen. Releasing
+    /// any of them here would hand the allocator a frame it never issued, or drop
+    /// a reference this layer never took.
+    ///
+    /// So the batch, the deferred release and the frame ownership reasoning above
+    /// all describe the `.anonymous` path alone. See `BackingType.fileBacked`.
     static func retire(
         context: PagingContext,
         start  : VirtualAddress,
         end    : VirtualAddress,
         backing: BackingType
     ) {
+        // Unmap only, for every backing this address space does not own: the
+        // translations go, the frames stay with whoever owns them.
         guard backing == .anonymous else {
             var va = start
             while va < end {

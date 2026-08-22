@@ -20,8 +20,8 @@
 ///
 /// A step that empties a region returns `.more` without looking at what is left,
 /// so the run ends on a step that finds the chain empty and retires nothing. That
-/// is one wasted step per teardown, against asking `LinkedList.count` whether the
-/// chain is empty and leaking every remaining region if that count ever drifted.
+/// is one wasted step per teardown, against asking a maintained element count
+/// whether the chain is empty and leaking regions whenever that count drifted.
 struct ListRetirement: ResumableOperation {
 
     typealias Failure = Never
@@ -89,7 +89,13 @@ struct ListRetirement: ResumableOperation {
 
         guard cursor >= end else { return .more }
 
+        let sharedRegion = nodePtr.pointee.sharedRegion
         heap.pointee.kfree(nodePtr)
+
+        if let sharedRegion {
+            _ = releaseSharedRegion(sharedRegion, ppm: context.ppm, heap: heap)
+        }
+
         node = nil
 
         return .more

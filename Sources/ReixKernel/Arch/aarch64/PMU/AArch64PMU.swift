@@ -5,18 +5,8 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 04/08/2026.
 //
 
-/// The Performance Monitors Unit, v3: a cycle counter and one programmed event.
-///
-/// What the virtual timer cannot answer. `Arch.Timer.counter()` says how long a
-/// section took in wall time, which on a TCG guest is mostly a statement about
-/// the host; the cycle and retired-instruction counters say how much work the
-/// section actually was, and that number is stable enough to compare two builds.
-///
-/// Only counter 0 is programmed, to `INST_RETIRED`. The rest are left alone and
-/// reported by `probe()` so a later phase can claim them without this file
-/// deciding in advance what they are for.
-public struct AArch64PMU {
-
+public struct AArch64PMU: Loggable {
+    
     /// Whether `initialize()` has run.
     ///
     /// Every read site guards on this rather than on the counters being
@@ -29,20 +19,36 @@ public struct AArch64PMU {
     /// The cycle counter is not one of them: it is a separate register with its
     /// own enable bit, always present, and never included in this count.
     public private(set) static var eventCounters: UInt64 = 0
+    
+    public static let nameLog : StaticString = "[PMU ]"
+    public static let logLevel: LogLevel     = .info
 
 
-    /// Enables the block and programs counter 0, then says so.
+    /// Enables a supported block and programs counter 0, then says so.
     ///
     /// Called once from `Kernel.boot`, after the timer, because the boot line it
     /// prints belongs at that point in the log and for no deeper reason: the PMU
     /// depends on nothing the kernel builds.
     public static func initialize() {
-        pmu_init()
+        if initialize(using: HardwarePMURegisters.self) {
+            Self.boot("\(eventCounters) event counters, cycle counter on.")
+        }
+    }
 
-        eventCounters = (pmu_read_pmcr() >> 11) & 0x1F
-        initialized   = true
+    static func initialize<Registers: PMURegisterAccess>(using: Registers.Type) -> Bool {
+        initialized = false
+        eventCounters = 0
 
-        Self.boot("\(eventCounters) event counters, cycle counter on.")
+        let version = (Registers.readDebugFeatures() >> 8) & 0xF
+        switch version {
+            case 1, 4, 5, 6, 7, 8, 9: break
+            default: return false
+        }
+
+        Registers.configure()
+        eventCounters = (Registers.readPMCR() >> 11) & 0x1F
+        initialized = true
+        return true
     }
 
 
@@ -74,20 +80,4 @@ public struct AArch64PMU {
     public static func instructions() -> UInt64 {
         pmu_read_event0()
     }
-}
-
-
-extension AArch64PMU: Loggable {
-    public static let nameLog : StaticString = "[PMU ]"
-    public static let logLevel: LogLevel     = .info
-}
-
-
-/// Reachable as `Arch.PMU`, the way the timer is reachable as `Arch.Timer`.
-///
-/// An extension rather than a member of `AArch64` itself because
-/// `KernelArchitecture` has no `PMU` requirement: a port with no performance
-/// monitor is a port with no counters, not one that fails to build.
-extension AArch64 {
-    public typealias PMU = AArch64PMU
 }

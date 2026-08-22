@@ -110,7 +110,27 @@ public struct BucketsHeap: KernelHeapInterface, Loggable {
 
     /// Routes by size: blocks up to one page go through the slab, larger
     /// requests are served as a single order-N buddy frame tagged `.heapLarge`.
+    #if !hasFeature(Embedded)
+    /// Host-only fault injection: the next `n` requests that are allowed to
+    /// answer nil succeed, and every one after that fails. `nil` disables it.
+    ///
+    /// Seamed like `PPMBackend.physicalOffset`, so the machine is compiled
+    /// without it. It exists because the four rollbacks in
+    /// `ProcessManager.spawnProcess` are otherwise unreachable from a test: each
+    /// one needs a heap allocation to fail *after* an address space was created,
+    /// and draining the arena makes the address space fail first every time.
+    static var failAllocationsAfter: Int? = nil
+    #endif
+
+
     private mutating func allocBytesOrNil(_ size: UInt) -> UnsafeMutableRawPointer? {
+        #if !hasFeature(Embedded)
+        if let remaining = Self.failAllocationsAfter {
+            guard remaining > 0 else { return nil }
+            Self.failAllocationsAfter = remaining - 1
+        }
+        #endif
+
         if size > UInt(SlabCore<PPMBackend>.pageSize) {
             guard let page = try? core.backend.ppmPtr.pointee.alloc(
                 Int(size),

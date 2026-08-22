@@ -11,6 +11,10 @@ import ReixABI
 /// with user space.
 public struct UserMemory {
 
+    #if !hasFeature(Embedded)
+        static var validationOverride: ((UInt64, Int, VMAPermissions) -> Bool)? = nil
+    #endif
+
     static func validateRegion(addr: UInt64, size: Int) -> Bool {
         guard size > 0 else { return false }
         
@@ -25,6 +29,12 @@ public struct UserMemory {
         size       : Int,
         permissions: VMAPermissions
     ) -> Bool {
+        #if !hasFeature(Embedded)
+            if let validationOverride {
+                return validationOverride(addr, size, permissions)
+            }
+        #endif
+
         guard size > 0,
               let range = UserSpaceLayout.checkedUserRange(
                 address: addr,

@@ -11,29 +11,11 @@ import ReixABI
 ///
 /// Parks the caller in the scheduler `waiting` queue until the system
 /// tick counter reaches an absolute deadline, then hands the CPU to the
-/// next ready task. Deadlines live in a table here instead of on
-/// `Process` because a sleeper is already linked into a scheduler queue
-/// through its own `prev`/`next`: a second intrusive list over the same
-/// nodes would corrupt both.
+/// next ready task.
 public struct SleepSyscall: SyscallProvider {
 
     public static let number: SyscallNumber = .sleep
-
-    /// One parked sleeper.
-    ///
-    /// `deadline == 0` marks a free slot: PID 0 is the init process and
-    /// therefore a real key, while a deadline of zero is unreachable
-    /// because a sleeper is only ever parked with a positive tick count.
-    private struct Sleeper {
-        var pid     : PID    = 0
-        var deadline: UInt64 = 0
-    }
-
-    private static var sleepers = InlineArray<32, Sleeper>(repeating: Sleeper())
-
-    /// Earliest armed deadline, so the tick can bail out on two loads.
-    private static var earliest: UInt64 = .max
-    private static var parked  : Int    = 0
+    private static var index = SleepDeadlineIndex()
 
     public static func handle(
         frame  : UnsafeMutablePointer<Arch.TrapFrame>,
@@ -52,17 +34,14 @@ public struct SleepSyscall: SyscallProvider {
             return
         }
 
-        let (deadline, overflowed) = context.scheduler.pointee.systemTicks
-            .addingReportingOverflow(ticks)
-
-        guard !overflowed else {
+        guard ticks <= UInt64(Int64.max) else {
             frame.pointee.x0 = 1
             return
         }
 
         guard park(
-            pid     : current.pointee.pid,
-            deadline: deadline
+            current,
+            deadline: context.scheduler.pointee.systemTicks &+ ticks
         ) else {
             frame.pointee.x0 = 1
             return
@@ -71,7 +50,7 @@ public struct SleepSyscall: SyscallProvider {
         do {
             try context.scheduler.pointee.block(current.pointee.pid)
         } catch {
-            unpark(pid: current.pointee.pid)
+            unpark(current)
             frame.pointee.x0 = 1
             return
         }
@@ -81,49 +60,22 @@ public struct SleepSyscall: SyscallProvider {
         YieldSyscall.handle(frame: frame, context: context)
     }
 
-    /// Readies every sleeper whose deadline has come.
-    ///
-    /// Driven from the timer tick, so the common path has to be cheap:
-    /// with nobody parked it is a load, a compare and a return, and the
-    /// table is only walked on the tick that actually owes a wake-up.
-    public static func wakeExpired(at now: UInt64) {
-        guard parked > 0, earliest <= now else { return }
-
-        var survivingEarliest: UInt64 = .max
-
-        for i in 0..<sleepers.count {
-            let sleeper = sleepers[i]
-
-            guard sleeper.deadline != 0 else { continue }
-
-            guard sleeper.deadline <= now else {
-                survivingEarliest = min(survivingEarliest, sleeper.deadline)
-                continue
-            }
-
-            sleepers[i].deadline = 0
-            parked -= 1
-            
-            try? Kernel.scheduler.pointee.wakeUp(sleeper.pid)
-        }
-
-        earliest = survivingEarliest
-    }
-
-
     private static func park(
-        pid     : PID,
+        _ process: UnsafeMutablePointer<Process>,
         deadline: UInt64
     ) -> Bool {
-        for i in 0..<sleepers.count where sleepers[i].deadline == 0 {
-            sleepers[i] = Sleeper(pid: pid, deadline: deadline)
-            parked  += 1
-            earliest = min(earliest, deadline)
+        guard index.insert(process) else { return false }
 
-            return true
+        guard KernelDeadlineQueue.shared.arm(
+            process,
+            kind: .sleep,
+            deadline: deadline
+        ) else {
+            _ = index.remove(pid: process.pointee.pid)
+            return false
         }
 
-        return false
+        return true
     }
 
 
@@ -135,12 +87,19 @@ public struct SleepSyscall: SyscallProvider {
     /// not an error here, so a death route may call this unconditionally
     /// without first asking whether the process was sleeping.
     public static func unpark(pid: PID) {
-        for i in 0..<sleepers.count
-        where sleepers[i].deadline != 0 && sleepers[i].pid == pid {
-            sleepers[i].deadline = 0
-            parked -= 1
+        guard let process = index.remove(pid: pid) else { return }
+        _ = KernelDeadlineQueue.shared.cancel(process)
+    }
 
-            return
-        }
+    private static func unpark(_ process: UnsafeMutablePointer<Process>) {
+        guard process.pointee.kernelDeadlineKind == .sleep else { return }
+        _ = index.remove(pid: process.pointee.pid)
+        _ = KernelDeadlineQueue.shared.cancel(process)
+    }
+
+    static func expire(_ process: UnsafeMutablePointer<Process>) {
+        _ = index.remove(pid: process.pointee.pid)
+        guard case .waiting = process.pointee.status else { return }
+        Kernel.scheduler.pointee.resume(process)
     }
 }

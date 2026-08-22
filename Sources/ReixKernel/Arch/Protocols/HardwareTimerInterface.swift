@@ -9,7 +9,7 @@
 public protocol HardwareTimerInterface {
 
     /// Rearm the per-core tick.
-    static func ect()
+    static func rearm()
 
     /// Free-running monotonic counter, in architectural ticks.
     ///

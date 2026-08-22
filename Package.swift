@@ -54,6 +54,10 @@ let package = Package(
         .library(name: "ProcessServer", type: .static, targets: ["ProcessServer"]),
         .library(name: "ConsoleServer", type: .static, targets: ["ConsoleServer"]),
         .library(name: "Top",           type: .static, targets: ["Top"]),
+        .library(name: "Shell",         type: .static, targets: ["Shell"]),
+        .library(name: "Hello",         type: .static, targets: ["Hello"]),
+        .library(name: "ShellLanguage", type: .static, targets: ["ShellLanguage"]),
+        .library(name: "TerminalServer", type: .static, targets: ["TerminalServer"]),
     ],
     targets: [
         // Shared ABI: IPC types + syscall numbers. No dependencies.
@@ -74,8 +78,70 @@ let package = Package(
         // Userland apps: one ELF each, depend only on Reix.
         app("Init", bareMetal), app("Child", bareMetal), app("Child2", bareMetal),
         app("NameServer", bareMetal), app("ProcessServer", bareMetal), app("ConsoleServer", bareMetal),
-        app("Top", bareMetal),
+        app("Top", bareMetal), app("Hello", bareMetal), app("TerminalServer", bareMetal),
 
+        // The command language, with no dependency on the SDK on purpose: it is
+        // a parser over bytes, and keeping it free of the bare-metal runtime is
+        // what lets a host suite exercise it.
+        .target(
+            name: "ShellLanguage",
+            path: "Sources/ShellLanguage",
+            swiftSettings: bareMetal
+        ),
+        .target(
+            name: "Shell",
+            dependencies: ["Reix", "ShellLanguage"],
+            path: "Sources/Userland/Shell",
+            swiftSettings: bareMetal
+        ),
+
+    ] + (isFreestanding ? [] : [
+        .target(
+            name: "KernelHostShims",
+            path: "Tests/KernelHostShims",
+            publicHeadersPath: "include"
+        ),
+
+        // Fixtures shared by the host suites. Its own target because SwiftPM
+        // forbids a target reaching for sources outside its own directory.
+        .target(
+            name: "KernelTestSupport",
+            // `@testable import Kernel` inside makes this debug-only: a host
+            // `-c release` build fails ModuleNotTestable. `make release` is fine.
+            dependencies: ["Kernel", "ReixABI"],
+            path: "Tests/Support"
+        ),
+
+        .testTarget(
+            name: "KernelPolicyTests",
+            dependencies: ["Kernel", "ReixABI", "KernelHostShims", "KernelTestSupport"],
+            path: "Tests/KernelPolicyTests"
+        ),
+
+        // The shell's command language, which is the one piece of it that is
+        // pure logic: a line in, a parsed command or a placed error out.
+        .testTarget(
+            name: "ShellTests",
+            dependencies: ["ShellLanguage"],
+            path: "Tests/ShellTests"
+        ),
+
+        // Layout locks only: sizes, strides and the all-zero patterns the wire
+        // formats and the per-frame records depend on. No behaviour is exercised.
+        .testTarget(
+            name: "ABILayoutTests",
+            dependencies: ["Kernel", "ReixABI", "KernelHostShims", "KernelTestSupport"],
+            path: "Tests/ABILayoutTests"
+        ),
+
+        // The memory subsystem in isolation: buddy allocator, slab core, physical
+        // page manager, VMA list and page retirement, over host-owned arenas.
+        .testTarget(
+            name: "KernelUnitTests",
+            dependencies: ["Kernel", "ReixABI", "KernelHostShims", "KernelTestSupport"],
+            path: "Tests/KernelUnitTests"
+        ),
+    ]) + [
         // Bare-metal orchestrator: link + objcopy + tar + qemu over the .a files
         // produced by `FREESTANDING=1 swift build --triple aarch64-none-none-elf`.
         .plugin(

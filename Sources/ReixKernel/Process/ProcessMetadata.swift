@@ -5,7 +5,6 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 27/05/2026.
 //
 
-
 import ReixABI
 
 /// Out-of-line cold state of a process.
@@ -23,7 +22,7 @@ public struct ProcessMetadata: RXAllocatable {
 
     public static var errorMessageAllocation: StaticString = "Failed to allocate ProcessMetadata on the kernel heap"
     
-    public var capsTable: CapsTable         // (16 * 13) 208 Byte
+    public var capsTable: CapsTable         // (16 * 24) + 8 = 392 Byte
 
 
     /// Handle of the bootstrap endpoint shared with the parent, as seen by
@@ -31,9 +30,9 @@ public struct ProcessMetadata: RXAllocatable {
     /// `nil` when the process has no parent channel. Read back from userland
     /// through the `parentEndpoint` syscall, so a freshly spawned child can
     /// discover its handle instead of assuming a fixed capsTable slot.
-    public var parentEndpoint: UInt32?      // 4 Byte
-    
-    public var deviceCap     : UInt32?
+    public var parentEndpoint: UInt32?      // 5 Byte, padded to 8
+
+    public var deviceCap     : UInt32?      // 5 Byte, padded to 8
 
 
     /// Current program break. Populated by the brk milestone (step 5);
@@ -53,17 +52,17 @@ public struct ProcessMetadata: RXAllocatable {
     
     /// PID the process is currently waiting on through reapChild.
     /// `nil` when the process is not blocked on a child.
-    public var waitingChildPid: PID?        // 8 Byte
+    public var waitingChildPid: PID?        // 9 Byte, padded to 16
 
     
     /// Exit code written by the exiting process. Read by the parent
     /// when reaping the zombie.
-    public var exitReason: ExitReason?      // 4 Byte
+    public var exitReason: ExitReason?      // 9 Byte, padded to 16
     
     
     /// Backing physical page of the ELF image. Allocated by `ElfParser`,
     /// kept alive for the whole process lifetime, freed by the teardown.
-    public var elfImage: PhysicalAddress?      // 8 Byte
+    public var elfImage: PhysicalAddress?      // 9 Byte
 
 
     /// Human-readable name, the basename of the spawned image, truncated to

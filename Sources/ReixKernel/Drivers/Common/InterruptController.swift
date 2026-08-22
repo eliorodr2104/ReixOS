@@ -22,5 +22,5 @@ public protocol InterruptController {
     func enableInterrupt(id: UInt32)
     func disableInterrupt(id: UInt32)
     func acknowledgeInterrupt() -> UInt32
-    func endOfInterrupt(id: UInt32)
+    func endOfInterrupt(ack: UInt32)
 }

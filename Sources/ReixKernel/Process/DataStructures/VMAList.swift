@@ -1,23 +1,56 @@
 //
-//  DoubleLinkedList.swift
+//  VMAList.swift
 //  ReixOS
 //
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 10/05/2026.
 //
 
-extension LinkedList: VMAStructure where T == VirtualMemoryArea {
+/// The VMA set of one address space: an intrusive chain of regions in ascending
+/// address order, plus the window gap finding may hand addresses out of.
+///
+/// The window is what makes this a type of its own rather than a `LinkedList`
+/// extension: `minAddress`/`maxAddress` mean something only here, and every
+/// other list in the kernel (the scheduler queues, the endpoint queues, the
+/// buddy's free lists) used to carry the two words unset and unread.
+public struct VMAList: VMAStructure {
+
+    /// The user window `findFreeGAP` searches, fixed at construction.
+    internal let minAddress: VirtualAddress // 8 Byte
+    internal let maxAddress: VirtualAddress // 8 Byte
+
+    /// The regions themselves, ordered by `startAddress`.
+    internal var nodes: LinkedList<VirtualMemoryArea> // 16 Byte
+
+
+    internal var head: UnsafeMutablePointer<VirtualMemoryArea>? { nodes.head }
+    internal var tail: UnsafeMutablePointer<VirtualMemoryArea>? { nodes.tail }
+
 
     public init(
-        head      : UnsafeMutablePointer<T>?,
-        tail      : UnsafeMutablePointer<T>?,
-        minAddress: VirtualAddress?,
-        maxAddress: VirtualAddress?
+        minAddress: VirtualAddress,
+        maxAddress: VirtualAddress
     ) {
-        self.head = head
-        self.tail = tail
-
         self.minAddress = minAddress
         self.maxAddress = maxAddress
+        self.nodes      = LinkedList(head: nil, tail: nil)
+    }
+
+
+    /// Hand the whole chain to the caller and keep an empty list, window intact.
+    ///
+    /// Teardown's move: the retirement walk frees the nodes it pops, so it must
+    /// own them, and nothing may reach a region through the manager afterwards.
+    internal mutating func detachAll() -> LinkedList<VirtualMemoryArea> {
+        let chain = nodes
+        nodes     = LinkedList(head: nil, tail: nil)
+
+        return chain
+    }
+
+
+    /// Unlink `region` without freeing it. The caller owns the node afterwards.
+    internal mutating func remove(element region: UnsafeMutablePointer<VirtualMemoryArea>) {
+        nodes.remove(element: region)
     }
 
 
@@ -80,7 +113,7 @@ extension LinkedList: VMAStructure where T == VirtualMemoryArea {
                     }
                 }
 
-                insertBefore(element: region, to: elementPtr)
+                nodes.insertBefore(element: region, to: elementPtr)
                 return
             }
 
@@ -93,7 +126,7 @@ extension LinkedList: VMAStructure where T == VirtualMemoryArea {
             }
         }
 
-        pushBack(region)
+        nodes.pushBack(region)
     }
 
 
@@ -102,22 +135,17 @@ extension LinkedList: VMAStructure where T == VirtualMemoryArea {
             return
         }
 
-        remove(element: currentNode)
+        nodes.remove(element: currentNode)
 
         _ = currentNode
     }
 
-    
+
     @inline(__always)
     public func findFreeGAP(
         size     : UInt64,
         alignment: UInt64
     ) -> VirtualAddress? {
-
-        guard let minAddress = self.minAddress,
-              let maxAddress = self.maxAddress else {
-            return nil
-        }
 
         return findFreeGAPInRange(
             min      : minAddress,
@@ -183,9 +211,14 @@ extension LinkedList: VMAStructure where T == VirtualMemoryArea {
                 endAddress  : region.pointee.endAddress,
                 permissions : region.pointee.permissions,
                 backingType : region.pointee.backingType,
-                mappingFlags: region.pointee.mappingFlags
+                mappingFlags: region.pointee.mappingFlags,
+                sharedRegion: region.pointee.sharedRegion
             )
         )
+
+        if let sharedRegion = region.pointee.sharedRegion {
+            retainSharedRegion(sharedRegion)
+        }
 
         let truncated = VirtualMemoryArea(
             startAddress: region.pointee.startAddress,
@@ -194,11 +227,12 @@ extension LinkedList: VMAStructure where T == VirtualMemoryArea {
             prev        : region.pointee.prev,
             next        : region.pointee.next,
             backingType : region.pointee.backingType,
-            mappingFlags: region.pointee.mappingFlags
+            mappingFlags: region.pointee.mappingFlags,
+            sharedRegion: region.pointee.sharedRegion
         )
         region.pointee = truncated
 
-        insertAfter(element: newRegionPtr, to: region)
+        nodes.insertAfter(element: newRegionPtr, to: region)
 
         return newRegionPtr
     }
@@ -225,11 +259,12 @@ extension LinkedList: VMAStructure where T == VirtualMemoryArea {
             prev        : first.pointee.prev,
             next        : first.pointee.next,
             backingType : first.pointee.backingType,
-            mappingFlags: first.pointee.mappingFlags
+            mappingFlags: first.pointee.mappingFlags,
+            sharedRegion: first.pointee.sharedRegion
         )
         first.pointee = merged
 
-        remove(element: second)
+        nodes.remove(element: second)
         return second
     }
 
@@ -256,7 +291,7 @@ extension LinkedList: VMAStructure where T == VirtualMemoryArea {
             if nodeStart >= max { break }
 
             let alignedStart = align(currentMinAddress, to: alignment)
-            
+
             if alignedStart + size <= nodeStart && alignedStart + size <= max {
                 return alignedStart
             }

@@ -64,6 +64,10 @@ public enum LogSink {
     /// is owed by whoever opened the colour, and only `heading` knows it did.
     private static var colourOpen = false
 
+    private static var queueing = false
+
+    private static var transmitQueue = SerialTransmitQueue()
+
     /// What a rendered line carries beyond the record's own bytes.
     ///
     /// Colour on, timestamps off. See `LogDecoration`, which is one switch
@@ -71,34 +75,12 @@ public enum LogSink {
     /// used to sit here.
     public static var decoration: LogDecoration = [.colour]
 
-    /// Bytes the drain may *start* a record on, per timer tick.
-    ///
-    /// A floor, not a ceiling: the drain stops between records once this many
-    /// bytes have gone out and always finishes the record it began. It used
-    /// to stop wherever the count ran out, which cost nothing while a line was
-    /// plain bytes and became a correctness bug the moment lines could carry
-    /// colour. `\u{1B}[33m` is five bytes; split across two ticks the terminal
-    /// gets `\u{1B}[3`, then up to 10 ms of user-space output through the same
-    /// UART, then `3m`, and it eats the intervening characters as parameters
-    /// of the sequence it is still parsing.
-    ///
-    /// Bytes, not records: a record is whatever length its author made it, so
-    /// a record budget bounds nothing. At 115200 8N1 the UART moves ~11.5 KB/s,
-    /// which is ~115 bytes in a 10 ms tick, so 32 bytes is a little over a
-    /// quarter of the tick, ~2.8 ms, and the rest stays with the scheduler.
-    ///
-    /// Worst case per tick is now 31 bytes plus one whole rendered line: the
-    /// loop enters a record only while `spent < budget`. A line costs 16 bytes
-    /// of prefix, 4 to 14 of colour, one newline and its payload; the longest
-    /// in the tree renders to 63, so 94 bytes, ~8.2 ms, still inside the tick.
-    /// The bound is only as good as the longest line, and the hard ceiling on
-    /// that is the ring: `LogRing` truncates a payload before it can exceed
-    /// 8 KiB, which is the one case that would cost several ticks.
-    ///
-    /// It sustains ~3.2 KB/s, some fifty short lines a second, well above the
-    /// kernel's steady-state rate; the 8 KiB ring absorbs bursts above it and
-    /// takes ~2.6 s to give a full one back.
+    /// Maximum UART readiness probes performed by one timer tick.
     public static let tickBudget = 32
+
+    public static var droppedTransmissionRecords: UInt64 {
+        transmitQueue.droppedRecords
+    }
 
 
     // MARK: - Record framing
@@ -111,6 +93,24 @@ public enum LogSink {
     static func beginRecord(level: LogLevel?, tag: StaticString?) {
         teeing     = writesThrough(level)
         colourOpen = false
+        queueing   = mode == .deferred && !teeing
+        let recording = records()
+        let timestamp = recording ? Arch.Timer.counterUnordered() : 0
+
+        if queueing {
+            transmitQueue.beginRecord()
+            if decoration.contains(.timestamp) {
+                transmitQueue.append(91)
+                transmitDec(timestamp)
+                transmitQueue.append(93)
+            }
+            colourOpen = LogLine.heading(
+                level   : level,
+                tag     : tag.map(LogLine.Tag.literal) ?? .untagged,
+                coloured: decoration.contains(.colour),
+                into    : { transmitQueue.append($0) }
+            )
+        }
 
         if teeing {
             colourOpen = LogLine.heading(
@@ -121,12 +121,12 @@ public enum LogSink {
             )
         }
 
-        guard records() else { return }
+        guard recording else { return }
 
         LogRing.begin(
             level    : level?.rawValue ?? LogRing.rawLevel,
             tag      : tag,
-            timestamp: Arch.Timer.counterUnordered()
+            timestamp: timestamp
         )
     }
 
@@ -143,14 +143,18 @@ public enum LogSink {
 
             // Written through as it was built, so the drain owes it nothing:
             // the ring keeps it as history, not as output still pending.
-            if teeing { LogRing.markFlushed() }
+            if teeing || queueing { LogRing.markFlushed() }
         }
 
         if teeing {
             LogLine.trailer(closing: colourOpen) { _logger.kputc($0) }
+        } else if queueing {
+            LogLine.trailer(closing: colourOpen) { transmitQueue.append($0) }
+            transmitQueue.endRecord()
         }
 
         colourOpen = false
+        queueing = false
     }
 
 
@@ -199,6 +203,7 @@ public enum LogSink {
         let recording = LogRing.isRecording
 
         if recording { LogRing.appendPayload(byte) }
+        if queueing { transmitQueue.append(byte) }
         if teeing || !recording { _logger.kputc(byte) }
     }
 
@@ -208,6 +213,7 @@ public enum LogSink {
         let recording = LogRing.isRecording
 
         if recording { LogRing.appendPayload(value) }
+        if queueing { transmitQueue.append(value) }
         if teeing || !recording { _logger.writeStatic(value) }
     }
 
@@ -261,103 +267,77 @@ public enum LogSink {
 
     // MARK: - Drain
 
-    /// Sends whatever the ring still owes the wire, stopping on the first
-    /// record boundary past `budget` bytes, and returns how many went out.
-    ///
-    /// Only `.deferred` owes anything. In the other two modes every byte went
-    /// out as it was produced, and `endRecord` said so, so there is nothing
-    /// pending however full the ring is.
-    ///
-    /// The budget is in bytes because that is the unit the cost is in: a full
-    /// 8 KiB ring is about 700 ms of UART time at 115200 baud, so an unbounded
-    /// drain from the timer tick would swallow dozens of quanta. This buys no
-    /// throughput at all, the wire is still 11.5 KB/s; it moves the wait off
-    /// the caller, so a `send()` that logs no longer spends 5 ms of its
-    /// syscall inside `kprint`.
-    ///
-    /// A record is atomic here, which is what `tickBudget` being a floor
-    /// means: a rendered line carries escape sequences and the wire is shared
-    /// with user space, so a line resumed on the next tick would put unrelated
-    /// characters inside an SGR sequence the terminal was still parsing. See
-    /// `tickBudget` for what that costs.
-    ///
-    /// Rendering goes through `_logger` directly, with `LogRing.isRecording`
-    /// false throughout, so the drain never feeds the ring it is reading. It
-    /// advances only the ring's queue cursor, so the history a panic quotes
-    /// survives being flushed.
-    ///
-    /// - Invariant: the caller must have IRQs masked, so no writer can
-    ///   evict the record being rendered. See `LogRing`.
+    /// Sends at most `budget` queued bytes and stops immediately if TX is full.
     @discardableResult
     public static func drain(budget: Int = .max) -> Int {
         guard mode == .deferred, budget > 0 else { return 0 }
 
-        guard LogRing.hasPending || hasLosses else { return 0 }
-
-        var spent = reportLosses()
-
-        while spent < budget, let record = LogRing.pending() {
-            spent &+= render(record)
-
-            LogRing.flushed(record)
-        }
-
-        return spent
+        return drain(budget: budget) { _logger.tryKputc($0) }
     }
 
+    static func drain(budget: Int, _ put: (UInt8) -> Bool) -> Int {
+        guard mode == .deferred, budget > 0 else { return 0 }
 
-    /// Puts one whole record on the wire and returns the bytes that cost.
-    ///
-    /// The count is exact rather than estimated because it is the only thing
-    /// bounding the tick: colour and the timestamp are bytes the record does
-    /// not carry, and charging the budget for the payload alone would let a
-    /// heavily decorated burst run over.
-    private static func render(_ record: LogRing.Record) -> Int {
-        var written = 0
-
-        if decoration.contains(.timestamp) { written &+= writeStamp(record.timestamp) }
-
-        // `nil` is `LogRing.rawLevel`: a line written with no prefix at all.
-        let level = LogLevel(rawValue: record.level)
-
-        let colour = LogLine.heading(
-            level   : level,
-            tag     : .recorded(record),
-            coloured: decoration.contains(.colour)
-        ) { byte in
-            _logger.kputc(byte)
-            written &+= 1
-        }
-
-        for i in 0..<record.payloadLength {
-            _logger.kputc(LogRing.payloadByte(record, i))
-        }
-
-        written &+= record.payloadLength
-
-        LogLine.trailer(closing: colour) { byte in
-            _logger.kputc(byte)
-            written &+= 1
-        }
-
-        return written
+        return transmitQueue.drain(budget: budget, put)
     }
 
-
-    /// `[ticks]`, the raw counter reading the record was stamped with, and
-    /// the bytes it took.
-    ///
-    /// Raw rather than seconds, unlike the panic tail: converting needs the
-    /// timer frequency, and the drain runs from the timer interrupt on every
-    /// tick of the machine's life.
-    private static func writeStamp(_ ticks: UInt64) -> Int {
-        _logger.kputc(91) // '['
-        writeDec(ticks)
-        _logger.kputc(93) // ']'
-
-        return decimalWidth(ticks) &+ 2
+    static var transmissionAvailable: Int {
+        transmitQueue.available
     }
 
+    @discardableResult
+    static func beginTransmission(reserving reservedBytes: Int = 0) -> Bool {
+        transmitQueue.beginRecord(reserving: reservedBytes)
+    }
+
+    static func transmit(_ byte: UInt8) {
+        transmitQueue.append(byte)
+    }
+
+    static func transmit(_ value: StaticString) {
+        transmitQueue.append(value)
+    }
+
+    @discardableResult
+    static func endTransmission() -> Bool {
+        transmitQueue.endRecord()
+    }
+
+    static func transmitDec(_ value: UInt64) {
+        if value == 0 {
+            transmit(48)
+            return
+        }
+
+        var divisor: UInt64 = 1
+        while value / divisor >= 10 { divisor *= 10 }
+
+        var rest = value
+        while divisor > 0 {
+            transmit(UInt8(48 &+ (rest / divisor)))
+            rest %= divisor
+            divisor /= 10
+        }
+    }
+
+    static func transmitHex(_ value: UInt64) {
+        guard value != 0 else {
+            transmit(48)
+            return
+        }
+
+        var started = false
+        var shift = 60
+
+        while shift >= 0 {
+            let nibble = Int((value >> UInt64(shift)) & 0xF)
+            if nibble != 0 { started = true }
+            if started {
+                transmit(nibble < 10 ? UInt8(48 &+ nibble) : UInt8(87 &+ nibble))
+            }
+            shift -= 4
+        }
+    }
 
     /// Pins the sink write-through and recording-off for the rest of the
     /// kernel's life.
@@ -384,75 +364,5 @@ public enum LogSink {
         mode = .direct
 
         decoration.remove(.colour)
-    }
-
-
-    /// Whether the ring has anything to confess.
-    @inline(__always)
-    private static var hasLosses: Bool {
-        LogRing.lost > 0 || LogRing.truncated > 0
-    }
-
-
-    /// Says what the ring dropped, and returns the bytes that cost.
-    ///
-    /// Charged to the caller's budget, which is why it returns a count: a
-    /// `drain(budget: 0)` used to emit this and blow the budget it was given.
-    /// It is still written whole rather than resumed, so the one tick that
-    /// carries it can overrun by up to ~70 bytes; it is emitted once per burst
-    /// of loss, not once per tick, and interleaving a half-finished notice
-    /// with the records it is about would be worse than the overrun.
-    private static func reportLosses() -> Int {
-        guard hasLosses else { return 0 }
-
-        var spent = 0
-
-        if LogRing.lost > 0 {
-            spent &+= notice("[... ", LogRing.lost, " records lost]")
-            LogRing.clearLost()
-        }
-
-        if LogRing.truncated > 0 {
-            spent &+= notice("[... ", LogRing.truncated, " records truncated]")
-            LogRing.clearTruncated()
-        }
-
-        return spent
-    }
-
-
-    /// One `[... N somethings]` line, and the bytes it took.
-    ///
-    /// Plain, and outside `LogLine`: it is the drain talking about itself
-    /// rather than a record being replayed, so it carries no severity and
-    /// nothing to colour.
-    private static func notice(
-        _ opening: StaticString,
-        _ count  : UInt64,
-        _ closing: StaticString
-    ) -> Int {
-        _logger.writeStatic(opening)
-        writeDec(count)
-        _logger.writeStatic(closing)
-        _logger.kputc(10) // '\n'
-
-        return opening.utf8CodeUnitCount
-             &+ decimalWidth(count)
-             &+ closing.utf8CodeUnitCount
-             &+ 1
-    }
-
-
-    @inline(__always)
-    private static func decimalWidth(_ value: UInt64) -> Int {
-        var temp  = value
-        var width = 1
-
-        while temp >= 10 {
-            temp  /= 10
-            width &+= 1
-        }
-
-        return width
     }
 }

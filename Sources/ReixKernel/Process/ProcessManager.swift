@@ -159,15 +159,13 @@ public struct ProcessManager: RXAllocatable, Loggable {
 
                 // Nothing below maps a page, which is what keeps the unwinding
                 // rule on `spawnProcess` true for every step from here down.
-                guard let trapFramePtr = heap.pointee.kmallocOrNil(Arch.TrapFrame.self) else {
+                guard let trapFramePtr = makeTrapFrame(
+                    entry: elf.entryPoint, stack: userStackTop
+                
+                ) else {
                     destroyPartialAddressSpace(&addressSpace)
                     throw .heapAllocationFailed
                 }
-
-                trapFramePtr.initialize(to: Arch.TrapFrame())
-                trapFramePtr.pointee.elr   = elf.entryPoint
-                trapFramePtr.pointee.spsr  = 0x0
-                trapFramePtr.pointee.spel0 = userStackTop
 
                 let pid = self.pidCounter
                 self.pidCounter += 1
@@ -177,30 +175,31 @@ public struct ProcessManager: RXAllocatable, Loggable {
 
                 let initialBreak = (elf.loadEnd + UserSpaceLayout.pageSize - 1) & ~(UserSpaceLayout.pageSize - 1)
 
-                guard let metadataPtr = heap.pointee.kmallocOrNil(ProcessMetadata.self) else {
+                guard let metadataPtr = makeMetadata(
+                    elf: elf, programBreak: initialBreak, basenameOf: path
+                ) else {
                     heap.pointee.kfree(trapFramePtr)
                     destroyPartialAddressSpace(&addressSpace)
                     throw .heapAllocationFailed
                 }
 
-                metadataPtr.initialize(to: ProcessMetadata(
-                    elfImage: elf.image, elfLoadBase: elf.loadBase,
-                    elfLoadEnd: elf.loadEnd, programBreak: initialBreak
-                ))
-
-                Self.assignName(metadataPtr, basenameOf: path)
-
-                guard let processPtr = heap.pointee.kmallocOrNil(Process.self) else {
+                guard let processPtr = makeProcess(
+                    pid         : pid,
+                    identity    : identity,
+                    addressSpace: addressSpace,
+                    context     : trapFramePtr,
+                    metadata    : metadataPtr
+                
+                ) else {
                     heap.pointee.kfree(metadataPtr)
                     heap.pointee.kfree(trapFramePtr)
                     destroyPartialAddressSpace(&addressSpace)
                     throw .heapAllocationFailed
                 }
 
-                processPtr.initialize(to: Process(
-                    pid: pid, identity: identity, addressSpace: addressSpace,
-                    context: trapFramePtr, metadata: metadataPtr
-                ))
+                guard Self.registerForProcStats(processPtr) else {
+                    Arch.CPU.panic("duplicate process in ProcStats index")
+                }
 
                 vmaManagerPtr.pointee.setInitialBreak(initialBreak)
 
@@ -231,15 +230,13 @@ public struct ProcessManager: RXAllocatable, Loggable {
             throw .heapAllocationFailed
         }
 
-        guard let trapFramePtr = heap.pointee.kmallocOrNil(Arch.TrapFrame.self) else {
+        guard let trapFramePtr = makeTrapFrame(
+            entry: 0, stack: UserSpaceLayout.stackTop
+        
+        ) else {
             destroyPartialAddressSpace(&addressSpace)
             throw .heapAllocationFailed
         }
-
-        trapFramePtr.initialize(to: Arch.TrapFrame())
-        trapFramePtr.pointee.elr   = 0
-        trapFramePtr.pointee.spsr  = 0x0
-        trapFramePtr.pointee.spel0 = UserSpaceLayout.stackTop
 
         let pid = self.pidCounter
         self.pidCounter += 1
@@ -247,33 +244,33 @@ public struct ProcessManager: RXAllocatable, Loggable {
         let identity = self.identityCounter
         self.identityCounter += 1
 
-        guard let metadataPtr = heap.pointee.kmallocOrNil(ProcessMetadata.self) else {
+        guard let metadataPtr = makeMetadata(
+            inheritingNameFrom: Arch.CPU.getCurrentProcess()?.pointee.metadata
+       
+        ) else {
             heap.pointee.kfree(trapFramePtr)
             destroyPartialAddressSpace(&addressSpace)
             throw .heapAllocationFailed
         }
 
-        metadataPtr.initialize(to: ProcessMetadata())
-
-        if let parent = Arch.CPU.getCurrentProcess()?.pointee.metadata {
-            metadataPtr.pointee.setName(copyingFrom: parent)
-        }
-
-        guard let processPtr = heap.pointee.kmallocOrNil(Process.self) else {
+        guard let processPtr = makeProcess(
+            pid         : pid,
+            identity    : identity,
+            addressSpace: addressSpace,
+            context     : trapFramePtr,
+            metadata    : metadataPtr
+        
+        ) else {
             heap.pointee.kfree(metadataPtr)
             heap.pointee.kfree(trapFramePtr)
             destroyPartialAddressSpace(&addressSpace)
             throw .heapAllocationFailed
         }
 
-        processPtr.initialize(to: Process(
-            pid           : pid,
-            identity      : identity,
-            addressSpace  : addressSpace,
-            
-            context       : trapFramePtr,
-            metadata      : metadataPtr,
-        ))
+
+        guard Self.registerForProcStats(processPtr) else {
+            Arch.CPU.panic("duplicate process in ProcStats index")
+        }
 
         Self.traceSpawn(pid)
         Self.traceName(metadataPtr, pid: pid)
@@ -342,6 +339,10 @@ public struct ProcessManager: RXAllocatable, Loggable {
     /// `Process` struct itself. Callers must ensure the process is no
     /// longer referenced by any scheduler queue.
     public func releaseProcess(_ process: UnsafeMutablePointer<Process>) {
+
+        guard Self.unregisterForProcStats(process) else {
+            Arch.CPU.panic("missing process in ProcStats index")
+        }
 
         TraceExport.detach(pid: process.pointee.pid)
 
@@ -533,6 +534,26 @@ public struct ProcessManager: RXAllocatable, Loggable {
         }
     }
 
+    @inline(__always)
+    @discardableResult
+    static func registerForProcStats(_ process: UnsafeMutablePointer<Process>) -> Bool {
+        ProcessStatsIndex.insert(process)
+    }
+
+    @inline(__always)
+    @discardableResult
+    static func unregisterForProcStats(_ process: UnsafeMutablePointer<Process>) -> Bool {
+        ProcessStatsIndex.remove(process)
+    }
+
+    @discardableResult
+    func forEachProcess(
+        upTo limit: UInt32,
+        _ body: (UnsafeMutablePointer<Process>) -> Void
+    ) -> UInt32 {
+        ProcessTreeTraversal.forEach(from: initProcess, upTo: limit, body)
+    }
+
 
     /// Pre-order successor: first child, else the nearest next sibling found
     /// while climbing toward `root`, else nil when the walk is done.
@@ -675,6 +696,98 @@ public struct ProcessManager: RXAllocatable, Loggable {
     /// pointer, and a missing terminator must cost a fixed walk and not the
     /// address space. `open` has already accepted this same string, so a path
     /// longer than the bound is refused there and never reaches here.
+    /// Allocate a metadata block and fill it in, named after `path`.
+    ///
+    /// Out of line on purpose, and this is the whole reason the function
+    /// exists: `initialize(to: ProcessMetadata(...))` reads as building in
+    /// place but is not. The initialiser returns its 490 bytes into a
+    /// temporary and the store then copies them, so inlined into the spawn
+    /// this frame would carry the capability table twice for the whole call,
+    /// the ELF load included, which is where the deepest point of the kernel
+    /// stack is. Out of line the temporary lives and dies here instead.
+    @inline(never)
+    private mutating func makeMetadata(
+        elf            : LoadedELF,
+        programBreak   : VirtualAddress,
+        basenameOf path: UnsafePointer<CChar>
+    ) -> UnsafeMutablePointer<ProcessMetadata>? {
+
+        guard let ptr = heap.pointee.kmallocOrNil(ProcessMetadata.self) else { return nil }
+
+        ptr.initialize(to: ProcessMetadata(
+            elfImage: elf.image, elfLoadBase: elf.loadBase,
+            elfLoadEnd: elf.loadEnd, programBreak: programBreak
+        ))
+
+        Self.assignName(ptr, basenameOf: path)
+
+        return ptr
+    }
+
+
+    /// Allocate an empty metadata block, named after `parent` when there is
+    /// one. Out of line for the same reason as the variant above.
+    @inline(never)
+    private mutating func makeMetadata(
+        inheritingNameFrom parent: UnsafeMutablePointer<ProcessMetadata>?
+    ) -> UnsafeMutablePointer<ProcessMetadata>? {
+
+        guard let ptr = heap.pointee.kmallocOrNil(ProcessMetadata.self) else { return nil }
+
+        ptr.initialize(to: ProcessMetadata())
+
+        if let parent { ptr.pointee.setName(copyingFrom: parent) }
+
+        return ptr
+    }
+
+
+    /// Allocate the trap frame of a process that has not run yet.
+    ///
+    /// Shared by both spawn paths, which differ only in `entry` and `stack`.
+    /// Out of line because `Arch.TrapFrame()` is 288 bytes built on the stack
+    /// and then copied into the allocation.
+    @inline(never)
+    private mutating func makeTrapFrame(
+        entry: VirtualAddress,
+        stack: VirtualAddress
+    ) -> UnsafeMutablePointer<Arch.TrapFrame>? {
+
+        guard let ptr = heap.pointee.kmallocOrNil(Arch.TrapFrame.self) else {
+            return nil
+        }
+
+        ptr.initialize(to: Arch.TrapFrame())
+        ptr.pointee.elr   = entry
+        ptr.pointee.spsr  = 0x0
+        ptr.pointee.spel0 = stack
+
+        return ptr
+    }
+
+
+    /// Allocate the process record and fill it in. Out of line for the same
+    /// reason as `makeMetadata`, on a smaller temporary.
+    @inline(never)
+    private mutating func makeProcess(
+        pid         : PID,
+        identity    : Badge,
+        addressSpace: AddressSpace,
+        context     : UnsafeMutablePointer<Arch.TrapFrame>,
+        metadata    : UnsafeMutablePointer<ProcessMetadata>
+    ) -> UnsafeMutablePointer<Process>? {
+
+        guard let ptr = heap.pointee.kmallocOrNil(Process.self) else { return nil }
+
+        ptr.initialize(to: Process(
+            pid: pid, identity: identity, addressSpace: addressSpace,
+            context: context, metadata: metadata
+        ))
+
+        return ptr
+    }
+
+
     private static func assignName(
         _ metadata     : UnsafeMutablePointer<ProcessMetadata>,
         basenameOf path: UnsafePointer<CChar>

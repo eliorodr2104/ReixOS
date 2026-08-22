@@ -58,7 +58,11 @@ private func mmuHandlers() -> [AsmRoutine] {
 
     return [
         fn("enable_mmu") {
-            ldrImm("x2", 0x4FF)
+            // MAIR attributes, one byte per index: 0 normal write-back, 1 device
+            // nGnRE, 2 normal non-cacheable. The third is what a DMA buffer is
+            // mapped with, and it was zero until it had a user, which spells
+            // Device-nGnRnE and not the Normal NC `MairIndex` promised.
+            ldrImm("x2", 0x4404FF)
             msr("mair_el1", "x2")
             ldrImm("x2", tcr)
             msr("tcr_el1", "x2")
@@ -124,40 +128,45 @@ private func mmuHandlers() -> [AsmRoutine] {
 }
 
 private func virtualTimer() -> [AsmRoutine] {
-    [
+    // Scheduler tick rate, the one place it is written.
+    let tickHz = 100
+
+    return [
+        // Per-core, once at bring-up: derive this core's interval, arm the first
+        // deadline from the counter and enable the core's own timer.
         fn("enable_core_timer") {
-            raw("    adrp x1, timer_tick_interval")
-            raw("    add  x1, x1, :lo12:timer_tick_interval")
-            raw("    ldr  x2, [x1]")
-            raw("    cbz  x2, .L_timer_first_enable")
+            mrs("x1", "cntfrq_el0")
+            mov("x2", tickHz)
+            udiv("x1", "x1", "x2")
 
-            mrs("x3", "cntv_cval_el0")
-            add("x3", "x3", "x2")
-            mrs("x4", "cntvct_el0")
-            raw("    cmp  x3, x4")
-            add("x4", "x4", "x2")
-            raw("    csel x3, x3, x4, hi")
-            msr("cntv_cval_el0", "x3")
+            mrs("x2", "cntvct_el0")
+            add("x2", "x2", "x1")
+            msr("cntv_cval_el0", "x2")
+
+            mov("x2", 1)
+            msr("cntv_ctl_el0", "x2")
             ret()
+        },
 
-            label(".L_timer_first_enable")
-            mrs("x2", "cntfrq_el0")
-            mov("x3", 100)
-            udiv("x2", "x2", "x3")
-            raw("    str  x2, [x1]")
+        // Per-tick: push the deadline one interval on. Both routines recompute
+        // the interval, so neither depends on state some other core wrote.
+        fn("rearm_core_timer") {
+            mrs("x1", "cntfrq_el0")
+            mov("x2", tickHz)
+            udiv("x1", "x1", "x2")
 
+            mrs("x2", "cntv_cval_el0")
+            add("x2", "x2", "x1")
+
+            // A deadline already behind the counter means the tick was serviced
+            // late: rearm from now, or the timer fires again immediately.
             mrs("x3", "cntvct_el0")
-            add("x3", "x3", "x2")
-            msr("cntv_cval_el0", "x3")
-            mov("x3", 1)
-            msr("cntv_ctl_el0", "x3")
-            ret()
+            raw("    cmp  x2, x3")
+            add("x3", "x3", "x1")
+            raw("    csel x2, x2, x3, hi")
 
-            raw(".section .data")
-            raw("    .align 3")
-            raw("timer_tick_interval:")
-            raw("    .quad 0")
-            raw(".section .text")
+            msr("cntv_cval_el0", "x2")
+            ret()
         },
 
         // The only clock Swift can read. `RoundRobin.systemTicks` has 10 ms
@@ -195,6 +204,11 @@ private func performanceMonitors() -> [AsmRoutine] {
     let countersEnabled: UInt64 = (1 << 31) | (1 << 0)
 
     return [
+        fn("pmu_read_id_aa64dfr0") {
+            mrs("x0", "id_aa64dfr0_el1")
+            ret()
+        },
+
         fn("pmu_init") {
             // PMCR_EL0 E | P | C: switch the block on and zero both the event
             // counters and the cycle counter, so the first read starts at boot.
@@ -265,6 +279,16 @@ private func serialHandlers() -> [AsmRoutine] {
             raw("    strb w1, [x0]")
             ret()
         },
+        fn("pl011_try_write_byte") {
+            raw("    ldr  w2, [x0, #0x18]")
+            raw("    tbnz w2, #5, .L_pl011_byte_full")
+            raw("    strb w1, [x0]")
+            mov("w0", 1)
+            ret()
+            label(".L_pl011_byte_full")
+            mov("w0", 0)
+            ret()
+        },
     ]
 }
 
@@ -303,6 +327,45 @@ private func reixRoutines() -> [AsmRoutine] {
             raw("    subs x2, x2, #1")
             raw("    b.ne .L_pl011_span_byte")
             label(".L_pl011_span_done")
+            ret()
+        },
+
+        // PL011 receive: one byte if the FIFO has one. Answers 0x100 when it is
+        // empty, which no byte can be, so a caller needs no second call to ask.
+        // x0 base. FR is 0x18 and RXFE its bit 4; DR is 0x00.
+        fn("pl011_try_read_byte") {
+            raw("    ldr  w1, [x0, #0x18]")
+            raw("    tbnz w1, #4, .L_pl011_rx_empty")
+            raw("    ldr  w0, [x0]")
+            raw("    and  w0, w0, #0xff")
+            ret()
+            label(".L_pl011_rx_empty")
+            raw("    mov  w0, #0x100")
+            ret()
+        },
+
+        // Arm the receive interrupts in the device itself: IMSC (0x38) bit 4 is
+        // a full FIFO, bit 6 a partial one that stopped filling, and a terminal
+        // needs the second or a lone keystroke would wait for a full buffer.
+        // Any stale condition is cleared first through ICR (0x44).
+        fn("pl011_enable_receive") {
+            raw("    mov  w1, #0x7ff")
+            raw("    str  w1, [x0, #0x44]")
+            raw("    ldr  w1, [x0, #0x38]")
+            // Through a register: 0x50 is not one of the repeating bit patterns
+            // a logical immediate can encode.
+            raw("    mov  w2, #0x50")
+            raw("    orr  w1, w1, w2")
+            raw("    str  w1, [x0, #0x38]")
+            ret()
+        },
+
+        // Acknowledge at the device what was just drained, which has to happen
+        // before the line is unmasked at the controller or it fires again on
+        // the same condition.
+        fn("pl011_clear_receive") {
+            raw("    mov  w1, #0x50")
+            raw("    str  w1, [x0, #0x44]")
             ret()
         },
 

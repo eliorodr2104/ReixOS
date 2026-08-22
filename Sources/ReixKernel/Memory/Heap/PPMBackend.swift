@@ -10,7 +10,8 @@ import ReixABI
 struct PPMBackend: SlabBackend {
     
     let ppmPtr: UnsafeMutablePointer<KernelPPM>
-    static let physicalOffset: UInt64 = 0xFFFF800000000000
+
+    static var physicalOffset: UInt64 = 0xFFFF800000000000
 
     func acquirePage() -> UnsafeMutableRawPointer? {
         guard let page = try? ppmPtr.pointee.alloc(4096) else { return nil }

@@ -168,29 +168,35 @@ public struct GICv2: RXAllocatable, InterruptController, Loggable {
         Self.writeRegister(ptr: gicd, offset: offset, value: word)
     }
 
-    /// Takes the pending interrupt and returns its INTID.
+    /// Takes the pending interrupt and returns the whole `GICC_IAR` word.
     ///
-    /// The `0x3FF` mask also drops `GICC_IAR`, the CPUID of the
-    /// core that sent an SGI, which `GICC_EOIR` is required to carry back
-    /// in the same field. Harmless while this is a uniprocessor that
-    /// never sends SGIs, but the mask here and the value `endOfInterrupt`
-    /// writes are one decision: widening either one alone breaks EOI.
+    /// Not just the INTID: bits 12:10 name the core that sent an SGI, and
+    /// `GICC_EOIR` is required to carry that field back unchanged. The word
+    /// is therefore what travels, and `intid(of:)` is what narrows it for a
+    /// routing decision. Masking on the way out of here is what would break
+    /// EOI for SGIs the moment a second core starts sending them.
     public func acknowledgeInterrupt() -> UInt32 {
-        let iar         = Self.readRegister(ptr: gicc, offset: Self.giccIAR)
-        let interruptID = iar & 0x3FF
-
-        return interruptID
+        Self.readRegister(ptr: gicc, offset: Self.giccIAR) & 0x1FFF
     }
 
-    /// Signals completion of `id` to the CPU interface.
-    ///
-    /// Reserved IDs are dropped: the `GICC_IAR` read that produced one
-    /// took no interrupt and raised no running priority, so there is
-    /// nothing to complete and the write would be UNPREDICTABLE.
-    public func endOfInterrupt(id: UInt32) {
-        guard id < Self.reservedInterruptBase else { return }
+    /// The INTID an acknowledged word denotes, with the CPUID field dropped.
+    public static func intid(of ack: UInt32) -> UInt32 {
+        ack & 0x3FF
+    }
 
-        Self.writeRegister(ptr: gicc, offset: Self.giccEOIR, value: id)
+    /// Signals completion of an acknowledged interrupt to the CPU interface.
+    ///
+    /// Takes the value `acknowledgeInterrupt` returned, unaltered, because
+    /// `GICC_EOIR` expects the same INTID *and* CPUID the `GICC_IAR` read
+    /// handed over.
+    ///
+    /// Reserved INTIDs are dropped: the read that produced one took no
+    /// interrupt and raised no running priority, so there is nothing to
+    /// complete and the write would be UNPREDICTABLE.
+    public func endOfInterrupt(ack: UInt32) {
+        guard Self.intid(of: ack) < Self.reservedInterruptBase else { return }
+
+        Self.writeRegister(ptr: gicc, offset: Self.giccEOIR, value: ack)
     }
 
 

@@ -10,9 +10,13 @@ import Foundation
 ///
 /// Every artifact lands in `.reix/` at the package root: a command plugin can only
 /// write inside the package directory, and a single hidden folder keeps the root
-/// clean. The initrd is packed with `-C` on `.reix/stripped/` so the tar entries
-/// stay bare names (`Init.elf`), which is what the kernel's TarFileSystem looks up
-/// at spawn time.
+/// clean. The initrd is packed by `UstarWriter` from `.reix/stripped/` with bare
+/// entry names (`Init.elf`), which is what the kernel's TarFileSystem looks up
+/// at spawn time; it also page-aligns each member's data so the kernel can map
+/// ELF segments straight out of the archive. That same archive is then
+/// `.incbin`-ed into the kernel image under `.initrd`, so a boot that passes no
+/// `-initrd` still finds it; see the `.initrd` section in `linker.ld` for why a
+/// 4 MiB machine needs that.
 ///
 /// Prerequisite: the `.a` files must already exist. Build them first with
 /// `swift build --triple aarch64-none-none-elf`.
@@ -23,11 +27,10 @@ struct ReixPlugin: CommandPlugin {
     let lld     = "/opt/homebrew/opt/lld@20/bin/ld.lld"
     let objcopy = "/opt/homebrew/opt/llvm/bin/llvm-objcopy"
     let qemu    = "/opt/homebrew/bin/qemu-system-aarch64"
-    let tarTool = "/usr/bin/tar"
 
     let triple = "aarch64-none-none-elf"
     let outputDir = ".reix"
-    let apps = ["Init", "Child", "Child2", "NameServer", "ProcessServer", "ConsoleServer", "Top"]
+    let apps = ["Init", "Child", "Child2", "NameServer", "ProcessServer", "ConsoleServer", "TerminalServer", "Top", "Shell", "Hello"]
     
     let kernelNative = [
         "Sources/ReixKernel/Arch/aarch64/Boot/boot.S",
@@ -64,7 +67,7 @@ struct ReixPlugin: CommandPlugin {
         let out = root.appending(path: outputDir)
         try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
 
-        let mustExist = (["libKernel", "libReixABI", "libReix"] + apps.map { "lib\($0)" })
+        let mustExist = (["libKernel", "libReixABI", "libReix", "libShellLanguage"] + apps.map { "lib\($0)" })
             .map { buildDir.appending(path: "\($0).a") }
         let missing = mustExist.filter { !FileManager.default.fileExists(atPath: $0.path) }
         guard missing.isEmpty else {
@@ -109,21 +112,6 @@ struct ReixPlugin: CommandPlugin {
         }
         print("✓ generated userland asm (\(reixGeneratedObjs.count) files)")
 
-        let kernelElf = out.appending(path: "kernel.elf")
-        try run(lld, [
-            "-T", root.appending(path: "linker.ld").path, "--nmagic",
-            "-o", kernelElf.path,
-        ] + kernelNative.map { obj($0).path } + generatedObjs.map { $0.path } + [
-            "--start-group",
-            buildDir.appending(path: "libKernel.a").path,
-            buildDir.appending(path: "libReixABI.a").path,
-            "--end-group",
-        ], cwd: root)
-
-        let kernelBin = out.appending(path: "kernel.bin")
-        try run(objcopy, ["-O", "binary", kernelElf.path, kernelBin.path], cwd: root)
-        print("✓ \(outputDir)/kernel.bin")
-
         let reixObjs = reixNative.map { obj($0).path } + reixGeneratedObjs.map { $0.path }
         for app in apps {
             try run(lld, [
@@ -140,6 +128,7 @@ struct ReixPlugin: CommandPlugin {
                 "--start-group",
                 buildDir.appending(path: "libReix.a").path,
                 buildDir.appending(path: "libReixABI.a").path,
+                buildDir.appending(path: "libShellLanguage.a").path,
                 "--end-group",
             ], cwd: root)
         }
@@ -159,21 +148,76 @@ struct ReixPlugin: CommandPlugin {
         print("✓ \(apps.count) stripped for initrd")
 
         let initrd = out.appending(path: "initrd.tar")
-        // ustar (what TarFileSystem parses) cannot carry the xattrs macOS puts on
-        // built files, and --no-mac-metadata drops the `._*` AppleDouble entries.
-        try run(tarTool, ["-cf", initrd.path, "--format", "ustar", "--no-mac-metadata",
-                          "-C", strippedDir.path] + apps.map { "\($0).elf" }, cwd: root)
-        print("✓ \(outputDir)/initrd.tar")
+        // Written by UstarWriter, not /usr/bin/tar: it page-aligns each
+        // member's data, which the initrd page-sharing design depends on.
+        let members = try apps.map {
+            UstarWriter.Member(name: "\($0).elf",
+                                data: try Data(contentsOf: strippedDir.appending(path: "\($0).elf")))
+        }
+        let archive = UstarWriter.write(members: members)
+        guard UstarWriter.verifyPageAlignment(archive) else {
+            throw ReixError.tool("initrd.tar: a member's data is not 4096-aligned")
+        }
+        try archive.write(to: initrd)
+        print("✓ \(outputDir)/initrd.tar (\(archive.count) bytes)")
+
+        // The archive goes into the kernel image too, which is why the link
+        // below happens here and not before the userland ELFs were packed.
+        // `linker.ld` brackets the section with _initrd_start/_initrd_end.
+        let initrdAsm = work.appending(path: "Initrd.gen.S")
+        try """
+        // Generated by the reix plugin. See the .initrd section in linker.ld.
+            .section .initrd, "a", %progbits
+            .incbin "\(initrd.path)"
+        """.write(to: initrdAsm, atomically: true, encoding: .utf8)
+        let initrdObj = work.appending(path: "Initrd.gen.S.o")
+        try run(clang, ["-target", triple, "-c", initrdAsm.path, "-o", initrdObj.path], cwd: root)
+        print("✓ initrd embedded in the kernel image")
+
+        let kernelElf = out.appending(path: "kernel.elf")
+        try run(lld, [
+            "-T", root.appending(path: "linker.ld").path, "--nmagic",
+            "-o", kernelElf.path,
+        ] + kernelNative.map { obj($0).path } + generatedObjs.map { $0.path } + [
+            initrdObj.path,
+            "--start-group",
+            buildDir.appending(path: "libKernel.a").path,
+            buildDir.appending(path: "libReixABI.a").path,
+            "--end-group",
+        ], cwd: root)
+
+        let kernelBin = out.appending(path: "kernel.bin")
+        try run(objcopy, ["-O", "binary", kernelElf.path, kernelBin.path], cwd: root)
+        print("✓ \(outputDir)/kernel.bin")
 
         if doRun {
-            print("→ qemu (Ctrl-A X to quit)")
-            try run(qemu, [
+            // Keep these in sync with QEMU_FLAGS in the Makefile, with
+            // scripts/smoke.sh and with the Xcode scheme.
+            var qemuArgs = [
                 "-machine", "virt,gic-version=2", "-cpu", "cortex-a53,pmu=on", "-nographic",
-                "-kernel", kernelBin.path, "-initrd", initrd.path,
-            ], cwd: root, inheritIO: true)
+            ]
+            if let mem = value(of: "--mem", in: arguments) { qemuArgs += ["-m", mem] }
+            qemuArgs += ["-kernel", kernelBin.path]
+
+            // Without -initrd the kernel falls back to the copy just linked in,
+            // which is the only way a 4 MiB machine boots. See the Makefile.
+            if !arguments.contains("--embedded-initrd") {
+                qemuArgs += ["-initrd", initrd.path]
+            }
+
+            print("→ qemu (Ctrl-A X to quit)")
+            try run(qemu, qemuArgs, cwd: root, inheritIO: true)
         } else {
             print("To run:  swift package --allow-writing-to-package-directory reix run")
         }
+    }
+
+    /// The word after `flag`, when the argument list carries one.
+    func value(of flag: String, in arguments: [String]) -> String? {
+        guard let index = arguments.firstIndex(of: flag), index + 1 < arguments.count else {
+            return nil
+        }
+        return arguments[index + 1]
     }
 
     /// Runs an external tool; throws on a non-zero exit code.

@@ -127,6 +127,26 @@ public struct ConsoleClient {
         return .accepted
     }
 
+    /// Pushes whatever is staged and asks the server to drain it now, without
+    /// waiting for the newline that normally closes a line.
+    ///
+    /// For the one writer that has to be seen before its line ends: a terminal
+    /// echoing keystrokes. Everything else is better off staged, which is why
+    /// this is a call and not the default.
+    public func flushNow() {
+        flushStage()
+
+        // `drainPartial` and not `kick`: the console emits whole lines, and a
+        // prompt or an echoed character is not one. Without this the bytes sit
+        // in the ring until something closes the line, which for a terminal
+        // waiting at a prompt is never.
+        _ = send(
+            handle : endpoint,
+            message: ConsoleOperation.drainPartial.message()
+        )
+    }
+
+
     /// Pushes every staged byte into the ring in as few `push(_:count:)`
     /// calls as its free contiguous space allows: one call when the ring has
     /// room for the whole run, more only when it has to ask the server to
@@ -213,6 +233,15 @@ public struct ConsoleClient {
         }
     }
 }
+
+/// Makes everything written so far visible, for a caller that cannot wait for
+/// the end of its line. Nothing to do when this process talks to the kernel
+/// console directly: that path never stages.
+@inline(__always)
+public func consoleFlush() {
+    Console.client?.flushNow()
+}
+
 
 @_cdecl("putchar")
 public func putchar(ch: UInt8) {

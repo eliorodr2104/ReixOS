@@ -14,7 +14,7 @@ public struct Endpoint: RXObject {
     public static var errorMessageAllocation: StaticString = "Failed to allocate IPC endpoint"
     public static var kernelOwner           : PID    = PID.max
     
-    public var queue     : LinkedList<Process>   // 8 Byte
+    public var queue     : LinkedList<Process>   // 16 Byte
     public var references: UInt32        = 0     // 4 Byte
     public var state     : EndpointState = .idle // 1 Byte
 

@@ -13,8 +13,8 @@ public struct CapsTable {
     
     private(set) var caps: InlineArray = InlineArray<16, Capability?>(
         repeating: nil
-    ) // (16 * 13) 208 Byte
-    
+    ) // (16 * 24) 384 Byte
+
     private var counterElements: UInt = 0 // 8 Byte
     
     

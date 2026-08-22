@@ -10,4 +10,10 @@ public enum BootCap: UInt32 {
     case spawn               = 3
     case device              = 4
     case nameServerRegistrar = 5
+    case profiler            = 6
+    case interrupt           = 7
+
+    /// The terminal service endpoint: where a process asks for a line of input.
+    /// Not the hardware, which belongs to the terminal server alone.
+    case terminal            = 8
 }

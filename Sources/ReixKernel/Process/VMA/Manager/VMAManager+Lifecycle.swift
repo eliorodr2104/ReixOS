@@ -23,14 +23,7 @@ extension VMAManager {
     /// `AddressSpaceTeardown` is `.latencyOnly`: see `PreemptionRegion` for why a
     /// dying address space must not park a continuation.
     public mutating func teardown() {
-        let pending = vmaList
-
-        vmaList = LinkedList(
-            head      : nil,
-            tail      : nil,
-            minAddress: pending.minAddress,
-            maxAddress: pending.maxAddress
-        )
+        let pending = vmaList.detachAll()
 
         brkVMA       = nil
         currentBreak = 0

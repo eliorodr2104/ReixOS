@@ -165,9 +165,9 @@ func handleExceptionType(
 ) {
     switch type {
         case .irq:
-            let interruptID = Kernel.gic.pointee.acknowledgeInterrupt()
+            let acknowledged = Kernel.gic.pointee.acknowledgeInterrupt()
             InterruptDispatcher.dispatch(
-                id   : interruptID,
+                ack  : acknowledged,
                 frame: framePointer
             )
 

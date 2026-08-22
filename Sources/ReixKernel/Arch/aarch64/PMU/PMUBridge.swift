@@ -8,6 +8,9 @@
 @_silgen_name("pmu_init")
 public func pmu_init()
 
+@_silgen_name("pmu_read_id_aa64dfr0")
+public func pmu_read_id_aa64dfr0() -> UInt64
+
 @_silgen_name("pmu_read_pmcr")
 public func pmu_read_pmcr() -> UInt64
 

@@ -24,8 +24,8 @@ public struct SharedRegion: RXObject, ~Copyable {
     }
 
     /// Releases the owned frame back to the PPM, consuming the region, and hands
-    /// back the PPM's refusal if there was one. Called once the last capability to
-    /// it is dropped; the caller frees the slab storage afterwards.
+    /// back the PPM's refusal if there was one. Called once the last owner drops
+    /// it; the caller frees the slab storage afterwards.
     public consuming func releaseFrame(
         ppm: UnsafeMutablePointer<KernelPPM>
     ) -> PPMError? {
@@ -36,4 +36,22 @@ public struct SharedRegion: RXObject, ~Copyable {
 
         } catch { return error }
     }
+}
+
+@inline(__always)
+func retainSharedRegion(_ region: UnsafeMutablePointer<SharedRegion>) {
+    rxRetain(region)
+}
+
+@inline(__always)
+func releaseSharedRegion(
+    _ region: UnsafeMutablePointer<SharedRegion>,
+    ppm   : UnsafeMutablePointer<KernelPPM>,
+    heap  : UnsafeMutablePointer<KernelHeap>
+) -> PPMError? {
+    guard rxRelease(region) else { return nil }
+
+    let failure = region.move().releaseFrame(ppm: ppm)
+    heap.pointee.kfree(UnsafeMutableRawPointer(region))
+    return failure
 }

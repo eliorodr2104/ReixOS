@@ -26,6 +26,12 @@ struct PL011UART: SerialDriver, @unchecked Sendable {
         _ byte: UInt8
     )
 
+    @_silgen_name("pl011_try_write_byte")
+    private static func tryWriteByte(
+        _ base: UnsafeMutableRawPointer,
+        _ byte: UInt8
+    ) -> Bool
+
     /// The data register, which is at offset 0 and so is the block's base.
     ///
     /// Computed here rather than inside the routine because this is the side
@@ -34,17 +40,45 @@ struct PL011UART: SerialDriver, @unchecked Sendable {
     /// through the high-half window. Recomputed per byte rather than cached,
     /// so a `PL011UART` value outliving the switch cannot keep writing to an
     /// address that has stopped resolving.
-    private var base: UnsafeMutableRawPointer {
+    ///
+    /// Optional because `uart.baseAddr` is zero until discovery finds a base,
+    /// and with the MMU still off that computes the null pointer. It used to
+    /// force-unwrap, so the first line reporting a failed discovery trapped on
+    /// the nil and the panic printer trapped again on the same nil, printing
+    /// nothing at all. Dropping the byte instead is what stops a report from
+    /// re-entering the trap it is trying to report.
+    ///
+    /// Not a licence to boot without a console, and it could not be one: past
+    /// `enable_mmu` a zero base is not nil any more, `physicalOffset &+ 0` is an
+    /// ordinary address in the device window, and the log would land in whatever
+    /// physical page zero is. So zero survives discovery in exactly one window,
+    /// the pre-MMU boot-failure path that reports it, and nowhere else:
+    /// `getPlatformInfo` rejects a blob that leaves the base at zero with
+    /// `DeviceTreeFault.Reason.missingConsole`.
+    private var base: UnsafeMutableRawPointer? {
         UnsafeMutableRawPointer(
             bitPattern: UInt(
                 (Arch.MMU.isMMUEnabled() ? VirtualMemoryManager.physicalOffset : 0) &+ Kernel.platformInfo.uart.baseAddr
             )
-        )!
+        )
     }
 
 
     func write(_ byte: UInt8) {
+        guard let base = base else { return }
         Self.writeByte(base, byte)
+    }
+
+    /// `true` once the byte is on its way and the caller may move on.
+    ///
+    /// A byte dropped for want of a UART answers `true` as well. `false` is how
+    /// this says "not yet, keep it": `SerialTransmitQueue.drain` stops on it
+    /// without advancing `tail`, so the byte is held for the next tick. Nothing
+    /// is worth holding for a register that does not exist, so a missing base
+    /// drops the byte and reports it sent rather than queueing it forever.
+    func tryWrite(_ byte: UInt8) -> Bool {
+        guard let base = base else { return true }
+        return Self.tryWriteByte(base, byte)
     }
 
     func read() -> UInt8 {

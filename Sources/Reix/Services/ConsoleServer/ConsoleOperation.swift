@@ -10,6 +10,15 @@ public enum ConsoleOperation: UInt32, IPCLabel {
     case kick
     case flush
 
+    /// Write out the caller's ring even where no line has closed.
+    ///
+    /// The console emits whole lines, so two processes printing at once cannot
+    /// shred each other's output. A terminal is the one writer that must be
+    /// seen before its line ends: a prompt has no newline, and neither does a
+    /// character being echoed under the cursor. Only the caller's own ring is
+    /// drained this way, so nobody else's line is broken open on its behalf.
+    case drainPartial
+
     /// Builds a request (or reply) for this operation.
     ///
     /// The payload never carries the caller's identity: the server keys clients

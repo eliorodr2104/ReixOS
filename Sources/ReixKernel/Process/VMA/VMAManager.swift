@@ -23,7 +23,7 @@ public struct VMAManager: RXAllocatable {
 
     public static var errorMessageAllocation: StaticString = "Failed to allocate VMAManager on the kernel heap"
 
-    var vmaList: LinkedList<VirtualMemoryArea> // 40 Byte (All ptr 8 Bytes var)
+    var vmaList: VMAList // 32 Byte (window + head/tail)
 
     /// Current program break for the brk-style heap. Set once by
     /// `setInitialBreak` at spawn time, then bumped by `extendBreak`.
@@ -82,9 +82,7 @@ public struct VMAManager: RXAllocatable {
             ppm              : ppm,
             rootTablePhysical: rootTablePhysical
         )
-        self.vmaList = LinkedList(
-            head      : nil,
-            tail      : nil,
+        self.vmaList = VMAList(
             minAddress: UserSpaceLayout.userMin,
             maxAddress: UserSpaceLayout.userMax
         )
@@ -254,6 +252,32 @@ public struct VMAManager: RXAllocatable {
     }
 
 
+    /// Pages the user stack has ever occupied, which is its high-water mark.
+    ///
+    /// A `.growDown` region gains a page only because a fault demanded one, and
+    /// nothing moves its start back up, so its extent is the deepest the stack
+    /// has ever been rather than where SP happens to be now. No poison and no
+    /// scan are needed on this side: demand paging already keeps the record.
+    ///
+    /// Walked rather than counted alongside `residentPages`: the region is the
+    /// one source of truth, and a counter beside it could only disagree with it.
+    public var stackPages: UInt32 {
+        var current = vmaList.head
+
+        while let nodePtr = current {
+            let node = nodePtr.pointee
+
+            if node.mappingFlags.contains(.growDown) {
+                return UInt32((node.endAddress &- node.startAddress) / UserSpaceLayout.pageSize)
+            }
+
+            current = node.next
+        }
+
+        return 0
+    }
+
+
     /// Unlink `node` and free it, once the pages it covered are gone.
     ///
     /// The caller must read `node.pointee.next` *before* this: `kfree` threads the
@@ -262,8 +286,13 @@ public struct VMAManager: RXAllocatable {
     mutating func unregister(_ node: UnsafeMutablePointer<VirtualMemoryArea>) {
         if brkVMA == node { brkVMA = nil }
 
+        let sharedRegion = node.pointee.sharedRegion
         vmaList.remove(element: node)
         heap.pointee.kfree(node)
+
+        if let sharedRegion {
+            _ = releaseSharedRegion(sharedRegion, ppm: context.ppm, heap: heap)
+        }
     }
 
 
@@ -283,7 +312,8 @@ public struct VMAManager: RXAllocatable {
             size       : vma.endAddress - vma.startAddress,
             permissions: vma.permissions,
             backing    : vma.backingType,
-            flags      : flags
+            flags      : flags,
+            sharedRegion: vma.sharedRegion
         )
 
         if isBrkRegion { brkVMA = vmaList.search(at: vma.startAddress) }

@@ -8,9 +8,9 @@ import ReixABI
 
 public struct Environment {
 
-    private var slots: InlineArray<8, UInt32?>
+    private var slots: InlineArray<16, UInt32?>
 
-    private init(slots: InlineArray<8, UInt32?>) {
+    private init(slots: InlineArray<16, UInt32?>) {
         self.slots = slots
     }
 
@@ -18,18 +18,23 @@ public struct Environment {
         console   : UInt32?,
         nameServer: UInt32?,
         spawn     : UInt32?,
-        device    : UInt32? = nil
+        device    : UInt32? = nil,
+        profiler  : UInt32? = nil
     ) {
-        var slots = InlineArray<8, UInt32?>(repeating: nil)
+        
+        var slots = InlineArray<16, UInt32?>(repeating: nil)
+        
         slots[Int(BootCap.console.rawValue)]    = console
         slots[Int(BootCap.nameServer.rawValue)] = nameServer
         slots[Int(BootCap.spawn.rawValue)]      = spawn
         slots[Int(BootCap.device.rawValue)]     = device
+        slots[Int(BootCap.profiler.rawValue)]   = profiler
+        
         self.slots = slots
     }
 
     public static func boot() -> Environment {
-        var slots = InlineArray<8, UInt32?>(repeating: nil)
+        var slots = InlineArray<16, UInt32?>(repeating: nil)
 
         for i in 0..<slots.count {
             let handle = UInt32(i)
@@ -49,6 +54,14 @@ public struct Environment {
     public var nameServer    : UInt32? { handle(.nameServer) }
     public var spawn         : UInt32? { handle(.spawn) }
     public var device        : UInt32? { handle(.device) }
+    public var profiler      : UInt32? { handle(.profiler) }
+
+    /// The interrupt lines this process may wait on, if its spawner granted
+    /// any. One handle names a whole set: see `irqWait`.
+    public var interrupt     : UInt32? { handle(.interrupt) }
+
+    /// The terminal this process reads lines from, if it was given one.
+    public var terminal      : UInt32? { handle(.terminal) }
 
     /// The Name Server capability this process may *register* through, if its
     /// spawner granted it one. `nameServer` resolves names for everybody; this

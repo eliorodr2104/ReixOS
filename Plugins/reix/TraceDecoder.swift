@@ -7,7 +7,7 @@ import Foundation
 /// series of `[TRACE] `-prefixed lines, which may appear anywhere in a
 /// captured console log that also carries ordinary output:
 ///
-///     [TRACE] begin v=1 freq=DEC lost=DEC
+///     [TRACE] begin v=2 freq=DEC lost=DEC stack=DEC exstack=DEC
 ///     [TRACE] t=DEC ev=NAME pid=DEC info=DEC a=VAL b=VAL
 ///     [TRACE] end count=DEC
 ///
@@ -137,6 +137,8 @@ extension TraceDecoder {
         let startLine     : Int
         let freq          : UInt64
         let lost          : UInt64
+        let stack         : UInt64
+        let exceptionStack: UInt64
         let endLine       : Int
         let declaredCount : UInt64
         let events        : [TraceEvent]
@@ -173,7 +175,14 @@ extension TraceDecoder {
     /// fresh begin abandons whatever block was still open (an earlier dump
     /// that never got its end); only the last completed block is returned.
     private static func extractLastBlock(from lines: [String]) throws -> Extraction {
-        struct OpenBlock { var startLine: Int; var freq: UInt64; var lost: UInt64; var events: [TraceEvent] }
+        struct OpenBlock {
+            var startLine: Int
+            var freq: UInt64
+            var lost: UInt64
+            var stack: UInt64
+            var exceptionStack: UInt64
+            var events: [TraceEvent]
+        }
 
         var open: OpenBlock?
         var completed: [TraceBlock] = []
@@ -191,8 +200,11 @@ extension TraceDecoder {
             guard let first = tokens.first else { malformed += 1; continue }
 
             if first == "begin" {
-                guard let (freq, lost) = parseBeginLine(tokens) else { malformed += 1; continue }
-                open = OpenBlock(startLine: lineNumber, freq: freq, lost: lost, events: [])
+                guard let header = parseBeginLine(tokens) else { malformed += 1; continue }
+                open = OpenBlock(
+                    startLine: lineNumber, freq: header.freq, lost: header.lost,
+                    stack: header.stack, exceptionStack: header.exceptionStack, events: []
+                )
                 continue
             }
 
@@ -201,6 +213,7 @@ extension TraceDecoder {
                 guard let current = open else { malformed += 1; continue } // end without begin
                 completed.append(TraceBlock(
                     startLine: current.startLine, freq: current.freq, lost: current.lost,
+                    stack: current.stack, exceptionStack: current.exceptionStack,
                     endLine: lineNumber, declaredCount: count, events: current.events
                 ))
                 open = nil
@@ -227,13 +240,19 @@ extension TraceDecoder {
         return Extraction(block: last, malformedCount: malformed, danglingWarning: warning)
     }
 
-    /// `begin v=1 freq=DEC lost=DEC`: exactly four tokens, `v=1` literal
-    /// (the only wire version this decoder speaks).
-    private static func parseBeginLine(_ tokens: [Substring]) -> (freq: UInt64, lost: UInt64)? {
-        guard tokens.count == 4, tokens[1] == "v=1" else { return nil }
-        guard let freq = decimalField(tokens[2], key: "freq") else { return nil }
-        guard let lost = decimalField(tokens[3], key: "lost") else { return nil }
-        return (freq, lost)
+    /// `begin v=2 freq=DEC lost=DEC stack=DEC exstack=DEC`: exactly six
+    /// tokens, `v=2` literal (the only wire version this decoder speaks; a
+    /// `v=1` log, which carried no stack figures, is refused rather than
+    /// half-read, which is the whole reason the field is on the line).
+    private static func parseBeginLine(
+        _ tokens: [Substring]
+    ) -> (freq: UInt64, lost: UInt64, stack: UInt64, exceptionStack: UInt64)? {
+        guard tokens.count == 6, tokens[1] == "v=2" else { return nil }
+        guard let freq     = decimalField(tokens[2], key: "freq")    else { return nil }
+        guard let lost     = decimalField(tokens[3], key: "lost")    else { return nil }
+        guard let stack    = decimalField(tokens[4], key: "stack")   else { return nil }
+        guard let exstack  = decimalField(tokens[5], key: "exstack") else { return nil }
+        return (freq, lost, stack, exstack)
     }
 
     /// `end count=DEC`: exactly two tokens.
@@ -445,6 +464,7 @@ extension TraceDecoder {
         print("  freq   : \(block.freq) Hz")
         print("  events : \(block.events.count)")
         print("  lost   : \(block.lost)")
+        printStacks(block)
         print("")
         printSyscallTable(block)
         print("")
@@ -602,12 +622,23 @@ extension TraceDecoder {
 }
 
 
+/// The kernel stack figures from the block header, in the one shape both the
+/// summary and the boot view print and a post-check can read a field out of.
+extension TraceDecoder {
+
+    static func printStacks(_ block: TraceBlock) {
+        print("  stack  : kernel \(block.stack) B, exception \(block.exceptionStack) B")
+    }
+}
+
+
 // MARK: - Boot view (--boot)
 
 extension TraceDecoder {
 
     private static func printBoot(_ block: TraceBlock) {
         print("Note: phases before Swift entry (boot.S, MMU trampoline) are not covered by this trace.")
+        printStacks(block)
         print("")
 
         guard let first = block.events.first else { print("(no events)"); return }

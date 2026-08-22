@@ -11,4 +11,5 @@ public enum AArch64: KernelArchitecture {
     public typealias MMU            = AArch64MMU
     public typealias TrapFrame      = AArch64TrapFrame
     public typealias PageTableEntry = AArch64PageTableEntry
+    public typealias PMU            = AArch64PMU
 }

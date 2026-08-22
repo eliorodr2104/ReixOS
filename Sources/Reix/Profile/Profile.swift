@@ -12,30 +12,38 @@ import ReixABI
 @discardableResult
 public func profileControl(
     _ op : ProfileOperation,
+      authority: UInt32,
       arg: UInt64 = 0
 ) -> Bool {
-    _syscall(.profileControl, op.rawValue, arg) == 0
+    _syscall(.profileControl, op.rawValue, arg, UInt64(authority)) == 0
 }
 
 
 /// Asks the kernel to dump the current profiler samples to the console.
 @inline(__always)
-public func profileDump() {
-    profileControl(.dumpConsole)
+public func profileDump(authority: UInt32) {
+    profileControl(.dumpConsole, authority: authority)
 }
 
 
 /// Fills `stats` with the kernel's machine-wide counters.
 /// Returns `true` when the kernel replies with x0 == 0.
+///
+/// `authority` is a profiler capability handle carrying `.profileStats`, the
+/// same one `profileAttachExport` takes. A process without one gets nothing.
 @inline(__always)
 @discardableResult
-public func systemStats(into stats: inout SystemStats) -> Bool {
+public func systemStats(
+    into stats: inout SystemStats,
+    authority : UInt32
+) -> Bool {
     withUnsafeMutablePointer(to: &stats) { ptr in
         _syscall(
             .procStats,
             StatsSubOperation.systemOperation.rawValue,
             0,
-            UInt64(UInt(bitPattern: ptr))
+            UInt64(UInt(bitPattern: ptr)),
+            UInt64(authority)
         ) == 0
     }
 }
@@ -48,17 +56,22 @@ public func systemStats(into stats: inout SystemStats) -> Bool {
 /// A fresh sweep starts with `after: 0`; each following call passes the pid
 /// this one returned, not `after + 1`, since pids are not contiguous once a
 /// process has been reaped.
+///
+/// A caller whose `authority` does not carry `.profileStats` is answered
+/// `UInt64.max`, which reads as a sweep that ended before it began.
 @inline(__always)
 public func nextProcessStats(
-    after pid: UInt64,
-    into stats: inout ProcessStats
+    after pid : UInt64,
+    into stats: inout ProcessStats,
+    authority : UInt32
 ) -> UInt64 {
     withUnsafeMutablePointer(to: &stats) { ptr in
         _syscall(
             .procStats,
             StatsSubOperation.processOperation.rawValue,
             pid,
-            UInt64(UInt(bitPattern: ptr))
+            UInt64(UInt(bitPattern: ptr)),
+            UInt64(authority)
         )
     }
 }
@@ -67,6 +80,6 @@ public func nextProcessStats(
 /// See `Top.swift` for the exported layout.
 @inline(__always)
 @discardableResult
-public func profileAttachExport(handle: UInt32) -> Bool {
-    profileControl(.attachExport, arg: UInt64(handle))
+public func profileAttachExport(handle: UInt32, authority: UInt32) -> Bool {
+    profileControl(.attachExport, authority: authority, arg: UInt64(handle))
 }

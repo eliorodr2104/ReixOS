@@ -55,40 +55,47 @@ public struct ShmCreate: SyscallProvider {
             return
         }
 
-        let regionAddress: VirtualAddress
-        do {
-            regionAddress = try vmaManager.pointee.mapRegion(
-                physicalBase: physicalPage.address,
-                pageCount   : Int(pageCount),
-                kind        : .shared,
-                permissions : [.read, .write, .user]
-            )
-        } catch {
-            try? context.ppm.pointee.free(physicalPage)
-            frame.pointee.x0 = UInt64.max
-            frame.pointee.x1 = 0
-            return
-        }
+        let zeroDest: UnsafeMutablePointer<UInt8> = vmaManager.pointee.context.vmm.pointee.physToVirt(
+            physicalPage.address
+        )
+        zeroDest.initialize(
+            repeating: 0,
+            count    : Int(pageCount * UserSpaceLayout.pageSize)
+        )
 
-
+        let handle: UInt32
+        let region: UnsafeMutablePointer<SharedRegion>
         switch context.ipc.pointee.createShared(
             for      : current,
             page     : physicalPage,
             pageCount: UInt32(pageCount)
         ) {
-            case .success(let handle):
-                frame.pointee.x0 = UInt64(handle)
-                frame.pointee.x1 = regionAddress
+            case .success(let created):
+                handle = created.handle
+                region = created.region
 
             case .failure:
-                
-                try? vmaManager.pointee.rollbackMapping(
-                    addr: regionAddress,
-                    size: pageCount * UserSpaceLayout.pageSize
-                )
                 frame.pointee.x0 = UInt64.max
                 frame.pointee.x1 = 0
+                return
+        }
+
+        do {
+            let regionAddress = try vmaManager.pointee.mapRegion(
+                physicalBase: region.pointee.physicalPage.address,
+                pageCount   : Int(pageCount),
+                kind        : .shared,
+                permissions : [.read, .write, .user],
+                sharedRegion: region
+            )
+
+            frame.pointee.x0 = UInt64(handle)
+            frame.pointee.x1 = regionAddress
+
+        } catch {
+            _ = context.ipc.pointee.releaseCapability(handle, of: current)
+            frame.pointee.x0 = UInt64.max
+            frame.pointee.x1 = 0
         }
     }
 }
-

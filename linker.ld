@@ -25,6 +25,22 @@ SECTIONS
         _rodata_end = .;
     }
     
+    /* The initrd, carried inside the kernel image instead of being handed to
+       QEMU with -initrd. QEMU drops an -initrd halfway up RAM and then
+       2 MiB-aligns the generated DTB after it, which on a 4 MiB machine lands
+       past the top of RAM and kills the boot before the kernel starts; linked
+       here it is contiguous with the kernel and nothing has to be placed.
+
+       Between .rodata and .data so no kernel mapping covers it: the VMM maps
+       .rodata, then .data.._kernel_end, then the initrd read-only on its own.
+       Empty when the plugin links no .initrd input, and the two symbols then
+       coincide and DeviceTreeBridge keeps what the device tree reported. */
+    .initrd : ALIGN(4096) {
+        _initrd_start = .;
+        KEEP(*(.initrd))
+        _initrd_end = .;
+    }
+
     .data : ALIGN(4096) {
         _data_start = .;
         *(.data)
@@ -54,9 +70,25 @@ SECTIONS
         __stack_guard_top = .;
     }
 
+    /* Sized on measurement, not on a guess: boot.S poisons this section and
+       StackUsage reports the deepest byte ever written, which the trace dump
+       prints and scripts/scenarios.sh holds to a ceiling on every `make test`.
+
+       The peak is ~12KB, reached by one path only: spawn plus ELF load. It
+       was ~17KB until that chain was flattened, and what was removed was not
+       code but copies the compiler makes of whole aggregates (see
+       ImageSharing.shareablePageCount, TarFileSystem.open and
+       ProcessManager.makeMetadata for the three shapes of it). Probed per
+       phase, the path is no deeper at boot than from the spawn syscall at
+       runtime, so a separate boot stack reclaimed after handoff would buy
+       about a kilobyte and was dropped. Nothing recurses, and the segment
+       loops iterate rather than nest, so the figure is bounded by the call
+       chain and not by the input: 24KB is twice a peak that input cannot
+       inflate, with the guard page under it and the matrix ceiling firing 8KB
+       before the wall. */
     .stack (NOLOAD) : ALIGN(4096) {
         __stack_bottom = .;
-        . += 0x10000; /* 64KB */
+        . += 0x6000; /* 24KB */
         stack_top = .;
     }
 

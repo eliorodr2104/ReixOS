@@ -24,6 +24,7 @@ public struct VirtualMemoryArea: RXEntry {
     
     public var backingType : BackingType         // 1 Byte
     public var mappingFlags: MappingFlags        // 1 Byte
+    var sharedRegion: UnsafeMutablePointer<SharedRegion>?
     
     
     public var entryID: UInt64 { startAddress }
@@ -40,7 +41,8 @@ public struct VirtualMemoryArea: RXEntry {
         prev        : UnsafeMutablePointer<Self>? = nil,
         next        : UnsafeMutablePointer<Self>? = nil,
         backingType : BackingType,
-        mappingFlags: MappingFlags
+        mappingFlags: MappingFlags,
+        sharedRegion: UnsafeMutablePointer<SharedRegion>? = nil
     ) {
         self.startAddress = startAddress
         self.endAddress   = endAddress
@@ -49,5 +51,6 @@ public struct VirtualMemoryArea: RXEntry {
         self.next         = next
         self.backingType  = backingType
         self.mappingFlags = mappingFlags
+        self.sharedRegion = sharedRegion
     }
 }

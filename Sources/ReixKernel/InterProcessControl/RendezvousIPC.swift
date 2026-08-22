@@ -20,25 +20,6 @@ public struct RendezvousIPC: IPCInterface, Loggable {
     var scheduler: UnsafeMutablePointer<KernelScheduler>
     var heap     : UnsafeMutablePointer<KernelHeap>
 
-    /// Earliest `ipcDeadline` armed anywhere, and how many processes hold one.
-    ///
-    /// `armedDeadlines` counts the processes whose `ipcDeadline` is non-`nil`,
-    /// which is why every assignment to that field in this file goes through
-    /// `armDeadline`/`disarmDeadline`, including the two rendezvous paths where a
-    /// waiter is taken off a queue with its timeout still set. `earliestDeadline`
-    /// is only a lower bound on those deadlines, never an exact minimum.
-    ///
-    /// Both may err in one direction only, count too high:
-    /// a process can also leave a wait queue without
-    /// passing through this file at all (`ProcessManager.killProcess` unlinks a
-    /// blocked victim straight out of `Endpoint.queue`, deadline and all), and
-    /// that drop is invisible here. Erring this way costs a scan that finds
-    /// nothing, exactly what the old code paid on every single tick; erring the
-    /// other way would swallow a real timeout.
-    private var earliestDeadline: UInt64? = nil
-    private var armedDeadlines  : Int     = 0
-
-    
     init(
         ppm      : UnsafeMutablePointer<KernelPPM>,
         scheduler: UnsafeMutablePointer<KernelScheduler>,
@@ -263,21 +244,20 @@ public struct RendezvousIPC: IPCInterface, Loggable {
         
         guard blocking else { return .failure(.wouldBlock) }
 
+        if let timeoutTicks {
+            guard timeoutTicks <= UInt64(Int64.max),
+                  armDeadline(
+                    on: currentProcess,
+                    deadline: scheduler.pointee.systemTicks &+ timeoutTicks
+                  ) else {
+                return .failure(.timeout)
+            }
+
+        } else { disarmDeadline(on: currentProcess) }
+
         endpointPtr.pointee.queue.pushBack(currentProcess)
         endpointPtr.pointee.state     = .recvBlocked
         currentProcess.pointee.status = .blockedOnReceive(endpointPtr)
-
-        if let timeoutTicks {
-            
-            let (deadline, overflowed) = scheduler.pointee.systemTicks
-                .addingReportingOverflow(timeoutTicks)
-
-            armDeadline(
-                on      : currentProcess,
-                deadline: overflowed ? UInt64.max : deadline
-            )
-
-        } else { disarmDeadline(on: currentProcess) }
 
         traceBlock(TraceBlockReason.recvWait, on: endpointPtr)
 
@@ -567,8 +547,12 @@ public struct RendezvousIPC: IPCInterface, Loggable {
     public mutating func createShared(
         for process  : UnsafeMutablePointer<Process>,
             page     : consuming PhysicalPage,
-            pageCount: UInt32
-    ) -> Result<UInt32, IPCError> {
+            pageCount: UInt32,
+            forDevice: Bool = false
+    ) -> Result<(
+        handle: UInt32,
+        region: UnsafeMutablePointer<SharedRegion>
+    ), IPCError> {
     
         guard let sharedRegion = heap.pointee.kmallocOrNil(SharedRegion.self) else {
             try? ppm.pointee.free(page)
@@ -585,7 +569,7 @@ public struct RendezvousIPC: IPCInterface, Loggable {
         )
         
         let capability = Capability(
-            target: .shared(sharedRegion),
+            target: forDevice ? .dma(sharedRegion) : .shared(sharedRegion),
             badge : Badge(0),
             rights: [.send, .receive, .grant, .read, .write]
         )
@@ -602,7 +586,7 @@ public struct RendezvousIPC: IPCInterface, Loggable {
         
         retain(capability)
 
-        return .success(handle)
+        return .success((handle, sharedRegion))
     }
     
     public mutating func transferCapability(
@@ -626,7 +610,7 @@ public struct RendezvousIPC: IPCInterface, Loggable {
             return .failure(.notEnoughRights)
         }
 
-        let effective = rights.intersection(capability.rights)
+        let effective = Self.attenuatedRights(source: capability.rights, requested: rights)
         let receiverCap = Capability(
             target: capability.target,
             badge : capability.badge,
@@ -664,7 +648,7 @@ public struct RendezvousIPC: IPCInterface, Loggable {
             return false
         }
 
-        let effective = rights.intersection(capability.rights)
+        let effective = Self.attenuatedRights(source: capability.rights, requested: rights)
         let childCap  = Capability(
             target: capability.target,
             badge : capability.badge,
@@ -684,65 +668,30 @@ public struct RendezvousIPC: IPCInterface, Loggable {
         return true
     }
 
-
-    /// O(1) answer to "is it worth scanning at all?", for the 100 Hz tick.
-    ///
-    /// Kept separate from `checkTimeouts` so the timer handler can skip the call
-    /// altogether, and non-`mutating` so testing it costs two loads and a
-    /// compare; `checkTimeouts` asks the very same question again, because a
-    /// caller that forgets to must still not scan for nothing.
-    @inline(__always)
-    public func hasDeadlineDue(at now: UInt64) -> Bool {
-        guard armedDeadlines > 0, let earliest = earliestDeadline else {
-            return false
-        }
-
-        return earliest <= now
+    static func attenuatedRights(source: CapRights, requested: CapRights) -> CapRights {
+        requested.intersection(source)
     }
 
 
-    public mutating func checkTimeouts(now: UInt64) {
+    @inline(__always)
+    public func hasDeadlineDue(at now: UInt64) -> Bool {
+        KernelDeadlineQueue.shared.hasDue(at: now)
+    }
 
+    public mutating func checkTimeouts(now: UInt64) {
         guard hasDeadlineDue(at: now) else { return }
 
-        var survivingEarliest: UInt64? = nil
-        var survivingArmed   : Int     = 0
-
-        for i in 0..<endpoints.count {
-
-            if let endpoint = endpoints[i],
-               endpoint.pointee.state != .idle {
-
-                var iterator = endpoint.pointee.queue.getIterator()
-                while let current: UnsafeMutablePointer<Process> = iterator {
-                    let next = current.pointee.next
-
-                    if let deadLine = current.pointee.ipcDeadline {
-
-                        if deadLine <= now {
-                            endpoint.pointee.queue.remove(element: current)
-                            current.pointee.context?.pointee.x0 = IPCStatus.timeout.rawValue
-
-                            disarmDeadline(on: current)
-                            wake(current)
-
-                        } else {
-                            survivingArmed   += 1
-                            survivingEarliest = survivingEarliest.map { min($0, deadLine) } ?? deadLine
-                        }
-                    }
-
-                    iterator = next
-                }
-
-                if endpoint.pointee.queue.isEmpty() {
-                    endpoint.pointee.state = .idle
-                }
+        KernelDeadlineQueue.shared.poll(
+            now   : now,
+            budget: KernelDeadlineQueue.tickBudget
+        ) { process, kind in
+            
+            switch kind {
+                case .ipc  : expireIPCWait(process)
+                case .sleep: SleepSyscall.expire(process)
+                case .none : break
             }
         }
-
-        earliestDeadline = survivingEarliest
-        armedDeadlines   = survivingArmed
     }
 
     
@@ -827,38 +776,35 @@ public struct RendezvousIPC: IPCInterface, Loggable {
 
     // MARK: - Helpers
 
-    /// Arms `deadline` on `process` and folds it into the earliest known one.
-    ///
-    /// Folding with `min` here is what makes it legal to recompute
-    /// `earliestDeadline` only during a scan: a deadline armed between two scans
-    /// can pull the next one earlier, never push it later, so the bound stays
-    /// on the safe side of every waiter.
     @inline(__always)
     private mutating func armDeadline(
         on process : UnsafeMutablePointer<Process>,
            deadline: UInt64
-    ) {
-        if process.pointee.ipcDeadline == nil { armedDeadlines += 1 }
-
-        process.pointee.ipcDeadline = deadline
-        earliestDeadline            = earliestDeadline.map {
-            min($0, deadline)
-        } ?? deadline
+    ) -> Bool {
+        KernelDeadlineQueue.shared.arm(
+            process,
+            kind    : .ipc,
+            deadline: deadline
+        )
     }
 
-
-    /// Disarms whatever deadline `process` was holding.
-    ///
-    /// `earliestDeadline` is left untouched on purpose, it is only ever read as
-    /// a lower bound, and the next scan rebuilds it from the waiters that are
-    /// still there; lowering the count without it merely risks one scan that
-    /// finds nothing to do.
     @inline(__always)
     private mutating func disarmDeadline(on process: UnsafeMutablePointer<Process>) {
-        guard process.pointee.ipcDeadline != nil else { return }
+        guard process.pointee.kernelDeadlineKind == .ipc else { return }
+        KernelDeadlineQueue.shared.cancel(process)
+    }
 
-        process.pointee.ipcDeadline = nil
-        armedDeadlines              = max(0, armedDeadlines - 1)
+    private func expireIPCWait(_ process: UnsafeMutablePointer<Process>) {
+        guard case .blockedOnReceive(let endpoint) = process.pointee.status else {
+            return
+        }
+
+        process.pointee.context?.pointee.x0 = IPCStatus.timeout.rawValue
+        wake(process)
+
+        if let endpoint, endpoint.pointee.queue.isEmpty() {
+            endpoint.pointee.state = .idle
+        }
     }
 
     @inline(__always)
@@ -900,9 +846,10 @@ public struct RendezvousIPC: IPCInterface, Loggable {
         switch cap.target {
             case .endpoint(let endpointPtr)    : rxRetain(endpointPtr)
             case .shared  (let sharedMemoryPtr): rxRetain(sharedMemoryPtr)
+            case .dma     (let dmaRegionPtr)   : rxRetain(dmaRegionPtr)
+            case .interrupt(let setPtr)        : rxRetain(setPtr)
             
-            default: break // This because DeviceRegion is not a object
-                
+            default: break // Targets without reference-counted backing.
         }
     }
 
@@ -921,16 +868,35 @@ public struct RendezvousIPC: IPCInterface, Loggable {
                 heap.pointee.kfree(endpointPtr)
 
             case .shared(let sharedMemoryPtr):
-                guard rxRelease(sharedMemoryPtr) else { return }
-
-                if let failure = sharedMemoryPtr.move().releaseFrame(ppm: ppm) {
+                if let failure = releaseSharedRegion(
+                    sharedMemoryPtr,
+                    ppm : ppm,
+                    heap: heap
+                ) {
                     Self.error("last capability to a shared region dropped but its frame was refused, \(failure.description)")
                 }
 
-                heap.pointee.kfree(UnsafeMutableRawPointer(sharedMemoryPtr))
-                
-                
-            default: break // This because DeviceRegion is not a object
+            case .dma(let dmaRegionPtr):
+               
+                if let failure = releaseSharedRegion(
+                    dmaRegionPtr,
+                    ppm : ppm,
+                    heap: heap
+                ) {
+                    Self.error("last capability to a DMA region dropped but its frame was refused, \(failure.description)")
+                }
+
+            case .interrupt(let setPtr):
+                guard rxRelease(setPtr) else { return }
+
+                for index in 0..<Int(setPtr.pointee.lineCount) {
+                    Kernel.gic.pointee.disableInterrupt(id: setPtr.pointee.lines[index])
+                }
+
+                InterruptClaims.releaseAll(of: setPtr)
+                heap.pointee.kfree(setPtr)
+
+            default: break // Targets without reference-counted backing.
         }
     }
     
@@ -950,6 +916,8 @@ public struct RendezvousIPC: IPCInterface, Loggable {
     }
 
     public mutating func releaseCapabilities(of process: UnsafeMutablePointer<Process>) {
+        disarmDeadline(on: process)
+
         guard let metadata = process.pointee.metadata else { return }
         
         for i in 0..<metadata.pointee.capsTable.caps.count where metadata.pointee.capsTable.caps[i] != nil {

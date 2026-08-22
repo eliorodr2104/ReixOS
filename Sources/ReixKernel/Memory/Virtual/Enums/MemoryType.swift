@@ -8,6 +8,16 @@
 public enum MemoryType {
     case normal
     case device
+
+    /// Normal memory with the caches out of the picture, for buffers a device
+    /// reads and writes behind the CPU's back.
+    ///
+    /// Not `.device`: that is strongly ordered and forbids the unaligned and
+    /// speculative accesses ordinary code makes, so a driver filling a ring
+    /// would be writing through a keyhole. Non-cacheable is what makes what the
+    /// CPU wrote visible to a device that never looks in a cache, without the
+    /// maintenance operations this kernel does not issue.
+    case dma
     
     var attributes: MemoryAttributes {
         return switch self {
@@ -19,6 +29,11 @@ public enum MemoryType {
             case .device: MemoryAttributes(
                 mair : .deviceMemory,
                 share: .nonShareable
+            )
+
+            case .dma: MemoryAttributes(
+                mair : .normalNonCacheable,
+                share: .innerShareable
             )
         }
     }

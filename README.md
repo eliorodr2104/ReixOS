@@ -122,6 +122,7 @@ The foundational subsystems are in place and working:
 * Round-robin scheduler with real time-slice preemption (quantum-based) and ready/waiting/terminated queues.
 * Full process model with hot/cold field separation, flat parent→child relationships, and real context switching.
 * ELF64 loader mapping `PT_LOAD` segments page-by-page into isolated address spaces.
+* Immutable, page-aligned segments are mapped read-only straight out of the initrd's resident frames instead of being copied, shared across every process running the same binary.
 * Functional user-space execution from binaries packed in the initrd.
 
 **System Calls (~22)**

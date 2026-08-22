@@ -19,6 +19,15 @@ public func dmbISH()
 /// `UnsafeMutableRawPointer` the load is loop-invariant to LLVM, which hoists it
 /// out and then deletes the wait, so bytes reach the data register with no check
 /// that there is room for them. `count <= 0` writes nothing.
+@_silgen_name("pl011_try_read_byte")
+public func pl011TryReadByte(_ base: UnsafeMutableRawPointer) -> UInt32
+
+@_silgen_name("pl011_enable_receive")
+public func pl011EnableReceive(_ base: UnsafeMutableRawPointer)
+
+@_silgen_name("pl011_clear_receive")
+public func pl011ClearReceive(_ base: UnsafeMutableRawPointer)
+
 @_silgen_name("pl011_write_span")
 public func pl011WriteSpan(
     _ base : UnsafeMutableRawPointer,
@@ -111,9 +120,8 @@ public func _syscall(
     _asm_syscall_raw(type.rawValue, arg1, arg2, 0, 0, 0, 0, 0)
 }
 
-/// `arg1`, `arg2`, `arg3` land in `x0`, `x1`, `x2`. `procStats` is this
-/// overload's only caller today: a sub-operation selector, its argument,
-/// and the output buffer's address.
+/// `arg1`, `arg2`, `arg3` land in `x0`, `x1`, `x2`. `profileControl` uses them
+/// for its operation, argument, and authority handle.
 public func _syscall(
     _ type: SyscallNumber,
     _ arg1: UInt64,
@@ -121,6 +129,18 @@ public func _syscall(
     _ arg3: UInt64
 ) -> UInt64 {
     _asm_syscall_raw(type.rawValue, arg1, arg2, arg3, 0, 0, 0, 0)
+}
+
+/// `arg4` lands in `x3`. `procStats` uses the four for a sub-operation selector,
+/// its cursor, the output buffer's address, and the authority handle.
+public func _syscall(
+    _ type: SyscallNumber,
+    _ arg1: UInt64,
+    _ arg2: UInt64,
+    _ arg3: UInt64,
+    _ arg4: UInt64
+) -> UInt64 {
+    _asm_syscall_raw(type.rawValue, arg1, arg2, arg3, arg4, 0, 0, 0)
 }
 
 

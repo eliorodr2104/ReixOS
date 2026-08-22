@@ -7,6 +7,50 @@
 
 import ReixABI
 
+struct TraceExportBatch {
+    static let tailOffset    = 0
+    static let recordsOffset = 16
+    static let recordSize    = 32
+
+    private let ring   : UnsafeMutableRawPointer
+    private let mask   : UInt32
+    private var pending: UInt32 = 0
+
+    private(set) var producer: UInt32
+
+    init(
+        ring    : UnsafeMutableRawPointer,
+        producer: UInt32,
+        mask    : UInt32
+    ) {
+        self.ring     = ring
+        self.producer = producer
+        self.mask     = mask
+    }
+
+    mutating func append(_ event: TraceEvent) {
+        let offset = Self.recordsOffset + Int(producer & mask) * Self.recordSize
+
+        ring.storeBytes(of: event.timestamp, toByteOffset: offset,      as: UInt64.self)
+        ring.storeBytes(of: event.code,      toByteOffset: offset +  8, as: UInt16.self)
+        ring.storeBytes(of: event.info,      toByteOffset: offset + 10, as: UInt16.self)
+        ring.storeBytes(of: event.pid,       toByteOffset: offset + 12, as: UInt32.self)
+        ring.storeBytes(of: event.a,         toByteOffset: offset + 16, as: UInt64.self)
+        ring.storeBytes(of: event.b,         toByteOffset: offset + 24, as: UInt64.self)
+
+        producer &+= 1
+        pending  &+= 1
+    }
+
+    mutating func publish() {
+        guard pending != 0 else { return }
+
+        Arch.MMU.pageTableBarrier()
+        ring.storeBytes(of: producer, toByteOffset: Self.tailOffset, as: UInt32.self)
+        pending = 0
+    }
+}
+
 /// The live half of the profiler: kernel state published into a page the
 /// consumer owns, refreshed from the timer tick.
 ///
@@ -24,10 +68,10 @@ import ReixABI
 ///
 ///     @0   seq          UInt32   odd while being written
 ///     @4   reserved     UInt32
-///     @8   SystemStats  48 B
-///     @56  processCount UInt32
-///     @60  reserved     UInt32
-///     @64  ProcessStats 48 B each, up to 16
+///     @8   SystemStats  56 B
+///     @64  processCount UInt32
+///     @68  reserved     UInt32
+///     @72  ProcessStats 48 B each, up to 16
 ///
 /// Pages 1 and up are an event ring:
 ///
@@ -50,13 +94,8 @@ import ReixABI
 ///
 /// ## Lifetime
 ///
-/// Attaching pins nothing beyond the reference the caller's capability already
-/// holds, so the region lives exactly as long as that caps table does. The
-/// exporter therefore remembers who attached and `detach(pid:)` drops the
-/// region as its owner is torn down, before the capability release that hands
-/// its frames back to the allocator. Retaining instead would keep the pointer
-/// valid and the frames unreclaimable for the rest of the uptime, since nothing
-/// would ever drop the exporter's own reference.
+/// The exporter retains the backing independently of the caller's capability
+/// and releases it on detach, replacement, or owner teardown.
 enum TraceExport {
 
     // MARK: - Wire layout
@@ -65,8 +104,8 @@ enum TraceExport {
     /// hardcodes the same numbers, so add fields, never move one.
     private static let seqOffset          = 0
     private static let systemStatsOffset  = 8
-    private static let processCountOffset = 56
-    private static let processStatsOffset = 64
+    private static let processCountOffset = 64
+    private static let processStatsOffset = 72
 
     /// `ProcessStats` on the wire, and how many of them page 0 has room for.
     /// The stride is the ABI struct's own, restated here because the offsets
@@ -75,26 +114,37 @@ enum TraceExport {
     private static let processLimit       = 16
 
     /// Byte offsets inside the ring header, which starts at page 1.
-    private static let ringTailOffset    = 0
+    private static let ringTailOffset    = TraceExportBatch.tailOffset
     private static let ringHeadOffset    = 4
     private static let ringDroppedOffset = 8
-    private static let ringRecordsOffset = 16
+    private static let ringRecordsOffset = TraceExportBatch.recordsOffset
 
     /// One `TraceEvent` on the wire: the six fields of the struct at their
     /// natural offsets, no padding and no hole.
-    private static let recordSize = 32
+    private static let recordSize = TraceExportBatch.recordSize
 
 
     // MARK: - Budget
 
-    /// Records moved per tick.
+    /// Records moved per tick while `TraceRing` is close to empty.
     ///
-    /// Eight is a rate of 800 per second against a 256-slot ring, which drains
-    /// any burst the kernel can produce without letting one tick copy an
-    /// unbounded amount. The overflow is not lost: whatever a tick leaves
-    /// behind, the next one takes, and only a producer that outruns 800 per
-    /// second for longer than the ring is deep loses anything at all.
-    private static let eventBudget = 8
+    /// Sixteen is 1,600 events per second sustained at the 100 Hz tick rate,
+    /// which is what an idle-to-normal kernel needs and costs a quiet system
+    /// only 96 stores a tick for it.
+    private static let baseEventBudget = 16
+
+    /// Records moved per tick once `TraceRing` is filling up faster than
+    /// `baseEventBudget` drains it.
+    ///
+    /// A quarter of `TraceRing.capacity` (256): a backlog that reaches the
+    /// whole ring drains in at most four ticks instead of thirty-two, while a
+    /// single tick still never copies more than 64 * 32 = 2,048 bytes, a few
+    /// hundred stores that cannot meaningfully delay the scheduler, sleep
+    /// wakeups, or IPC timeouts riding the same tick. The overflow is not
+    /// lost either way: whatever a tick leaves behind, the next one takes,
+    /// and only a producer that outruns the catch-up rate for longer than the
+    /// ring is deep loses anything at all.
+    private static let catchUpEventBudget = 64
 
     /// Ticks between stats refreshes. At 10 ms per tick this is three
     /// refreshes a second, which is faster than anybody reads a `top` and slow
@@ -116,12 +166,14 @@ enum TraceExport {
     /// is attached. No process is ever numbered zero, so a pid can never match
     /// an unattached exporter.
     private static var owner: PID = 0
+    private static var backing: UnsafeMutablePointer<SharedRegion>? = nil
 
     private static var ringCapacity: UInt32 = 0
     private static var ringMask    : UInt32 = 0
 
     private static var scheduler     : UnsafeMutablePointer<KernelScheduler>? = nil
     private static var ppm           : UnsafeMutablePointer<KernelPPM>?       = nil
+    private static var heap          : UnsafeMutablePointer<KernelHeap>?      = nil
     private static var processManager: UnsafeMutablePointer<ProcessManager>?  = nil
 
     /// The producer cursor, mirrored here so publishing does not have to read
@@ -144,7 +196,7 @@ enum TraceExport {
 
     // MARK: - Attach
 
-    /// Takes ownership of `base` as the export region and starts publishing.
+    /// Retains `backing` as the export region and starts publishing through `base`.
     ///
     /// `base` is the kernel's linear-map window on the region's frames and
     /// `pageCount` its length, both already validated by the caller against
@@ -157,8 +209,7 @@ enum TraceExport {
     /// mid-run holding the exporter for the rest of the uptime.
     ///
     /// The owner recorded is whoever is running, which on this path is the
-    /// caller of `profileControl(.attachExport, handle)`: the region is reached
-    /// through that process's capability and dies with it.
+    /// caller of `profileControl(.attachExport, handle)`.
     ///
     /// Page 0 is cleared here so every reserved word and every process slot
     /// past `processCount` reads as zero rather than as whatever the frame was
@@ -166,9 +217,11 @@ enum TraceExport {
     /// `TraceRing.currentHead`.
     static func attach(
         base          : UnsafeMutableRawPointer,
+        backing       : UnsafeMutablePointer<SharedRegion>,
         pageCount     : UInt32,
         scheduler     : UnsafeMutablePointer<KernelScheduler>,
         ppm           : UnsafeMutablePointer<KernelPPM>,
+        heap          : UnsafeMutablePointer<KernelHeap>,
         processManager: UnsafeMutablePointer<ProcessManager>
     ) -> Bool {
         guard pageCount >= 2 else { return false }
@@ -179,6 +232,9 @@ enum TraceExport {
         guard let capacity = largestPowerOfTwo(
             atMost: (ringBytes - ringRecordsOffset) / recordSize
         ) else { return false }
+
+        retainSharedRegion(backing)
+        detachCurrent()
 
         let ring = base + pageSize
 
@@ -192,6 +248,7 @@ enum TraceExport {
         Self.ringMask       = capacity &- 1
         Self.scheduler      = scheduler
         Self.ppm            = ppm
+        Self.heap           = heap
         Self.processManager = processManager
 
         Self.producer     = 0
@@ -200,12 +257,13 @@ enum TraceExport {
         Self.sequence     = 0
         Self.exportCursor = TraceRing.currentHead
 
-        Self.owner  = Arch.CPU.getCurrentProcess()?.pointee.pid ?? 0
-        Self.region = base
+        Self.owner   = Arch.CPU.getCurrentProcess()?.pointee.pid ?? 0
+        Self.backing = backing
 
         // One refresh now, so a reader that polls immediately finds an even
         // `seq` and real numbers instead of a page of zeroes for 320 ms.
         refreshStats(into: base)
+        Self.region = base
 
         return true
     }
@@ -217,9 +275,8 @@ enum TraceExport {
     ///
     /// Every process teardown calls this, unconditionally: the pid test is the
     /// whole guard, so no teardown path has to know whether anybody is watching.
-    /// It has to run before the capability release that returns the region's
-    /// frames to the allocator, or the next tick writes trace records into pages
-    /// the buddy allocator has already handed to somebody else.
+    /// It runs before the address-space and capability teardown so the exporter
+    /// releases its ownership before those paths release theirs.
     ///
     /// `region` is cleared first because it is what every entry point gates on,
     /// so a tick can only ever see the exporter attached or wholly gone. Every
@@ -229,7 +286,16 @@ enum TraceExport {
     static func detach(pid: PID) {
         guard pid == owner, region != nil else { return }
 
+        detachCurrent()
+    }
+
+    private static func detachCurrent() {
+        let releasedBacking = backing
+        let releasedPPM     = ppm
+        let releasedHeap    = heap
+
         region = nil
+        backing = nil
         owner  = 0
 
         ringCapacity = 0
@@ -237,6 +303,7 @@ enum TraceExport {
 
         scheduler      = nil
         ppm            = nil
+        heap           = nil
         processManager = nil
 
         producer     = 0
@@ -244,6 +311,14 @@ enum TraceExport {
         ticks        = 0
         sequence     = 0
         exportCursor = 0
+
+        if let releasedBacking, let releasedPPM, let releasedHeap {
+            _ = releaseSharedRegion(
+                releasedBacking,
+                ppm : releasedPPM,
+                heap: releasedHeap
+            )
+        }
     }
 
 
@@ -283,14 +358,16 @@ enum TraceExport {
     ///
     /// ## Budget
     ///
-    /// Worst case for an ordinary tick: eight records, each six stores, one
-    /// `dsb ishst` and one cursor store, plus a single read of the consumer's
-    /// head. One tick in 32 adds a stats refresh, which is one 48-byte store
-    /// for the system counters and, for at most sixteen processes, a 48-byte
-    /// store and a 16-byte name copy each. Every figure it reports is a
-    /// counter somebody else already maintains, so there is no walk inside the
-    /// walk: roughly a kilobyte of stores is the whole of the interrupt
-    /// latency this subsystem adds.
+    /// Worst case for an ordinary tick: `catchUpEventBudget` (64) records of
+    /// six stores each, one `dsb ishst`, one cursor store, and one read of the
+    /// consumer's head — bounded regardless of how far behind the kernel ring
+    /// has fallen, since the budget never exceeds that constant. One tick in
+    /// 32 adds a stats refresh, which is one 48-byte store for the system
+    /// counters and, for at most sixteen processes, a 48-byte store and a
+    /// 16-byte name copy each. Every figure it reports is a counter somebody
+    /// else already maintains, so there is no walk inside the walk: a few
+    /// kilobytes of stores at the worst is the whole of the interrupt latency
+    /// this subsystem adds.
     ///
     /// - Note: IRQs are masked for the length of the tick handler, so no emit
     ///   can reach `TraceRing` while the drain below reads it. That is the
@@ -311,8 +388,9 @@ enum TraceExport {
 
     // MARK: - Event ring
 
-    /// Moves as many records as the shared ring has room for, up to
-    /// `eventBudget`, and reports whatever the kernel ring evicted meanwhile.
+    /// Moves as many records as the shared ring has room for, up to an
+    /// occupancy-driven budget, and reports whatever the kernel ring evicted
+    /// meanwhile.
     ///
     /// The free-slot count is what bounds the copy, so the body below cannot
     /// overrun a reader that has fallen behind: a record with nowhere to go is
@@ -320,6 +398,14 @@ enum TraceExport {
     /// absorbs a consumer's bad second. Only when the kernel ring evicts one
     /// before the cursor reaches it does anything become unrecoverable, and
     /// that is exactly what `drainForExport` returns.
+    ///
+    /// `occupancy` is how far `TraceRing`'s writer has gotten ahead of
+    /// `exportCursor`, the same quantity `drainForExport` computes internally
+    /// to decide whether it must skip. Reading it here only chooses between
+    /// `baseEventBudget` and `catchUpEventBudget`: a stale or even a wrapped
+    /// value can never push the chosen budget past `catchUpEventBudget`, so
+    /// it is a hint that sizes the drain and never a hazard that could size
+    /// it unboundedly.
     ///
     /// The consumer's cursor is read once per tick rather than once per record:
     /// it only moves forward, so a stale read costs a record its place on this
@@ -333,7 +419,12 @@ enum TraceExport {
         let consumer = ring.load(fromByteOffset: ringHeadOffset, as: UInt32.self)
         let used     = producer &- consumer
         let free     = used >= ringCapacity ? 0 : Int(ringCapacity &- used)
-        let budget   = free < eventBudget ? free : eventBudget
+
+        let occupancy = TraceRing.currentHead &- exportCursor
+        let want      = occupancy > UInt32(baseEventBudget) ? catchUpEventBudget : baseEventBudget
+        let budget    = free < want ? free : want
+
+        var batch = TraceExportBatch(ring: ring, producer: producer, mask: ringMask)
 
         // Called even with a budget of zero: a reader that is not keeping up
         // still has to be told how much of the stream it has lost.
@@ -341,45 +432,16 @@ enum TraceExport {
             from: &exportCursor,
             max : budget
         ) { event in
-
-            store(
-                event,
-                into: ring,
-                at  : ringRecordsOffset + Int(producer & ringMask) * recordSize
-            )
-
-            // The record has to be whole before the cursor that names it is
-            // visible, or the reader takes a slot the kernel is still writing.
-            publishBarrier()
-
-            producer &+= 1
-            ring.storeBytes(of: producer, toByteOffset: ringTailOffset, as: UInt32.self)
+            batch.append(event)
         }
 
-        guard evicted != 0 else { return }
+        if evicted != 0 {
+            dropped &+= UInt64(evicted)
+            ring.storeBytes(of: dropped, toByteOffset: ringDroppedOffset, as: UInt64.self)
+        }
 
-        dropped &+= UInt64(evicted)
-        ring.storeBytes(of: dropped, toByteOffset: ringDroppedOffset, as: UInt64.self)
-    }
-
-
-    /// One record, field by field at the offsets the consumer decodes.
-    ///
-    /// Written out rather than assigned as a whole `TraceEvent` so the wire
-    /// format is this function and not the Swift layout of a type that belongs
-    /// to the kernel. Every store lands naturally aligned: slots begin 16 bytes
-    /// into a page-aligned ring and are 32 bytes apart.
-    private static func store(
-        _ event  : TraceEvent,
-        into ring: UnsafeMutableRawPointer,
-        at offset: Int
-    ) {
-        ring.storeBytes(of: event.timestamp, toByteOffset: offset,      as: UInt64.self)
-        ring.storeBytes(of: event.code,      toByteOffset: offset +  8, as: UInt16.self)
-        ring.storeBytes(of: event.info,      toByteOffset: offset + 10, as: UInt16.self)
-        ring.storeBytes(of: event.pid,       toByteOffset: offset + 12, as: UInt32.self)
-        ring.storeBytes(of: event.a,         toByteOffset: offset + 16, as: UInt64.self)
-        ring.storeBytes(of: event.b,         toByteOffset: offset + 24, as: UInt64.self)
+        batch.publish()
+        producer = batch.producer
     }
 
 
@@ -435,27 +497,26 @@ enum TraceExport {
         stats.counterFreq = Arch.Timer.frequency()
         stats.traceLost   = TraceRing.lost
 
+        stats.kernelStackPeak    = UInt32(StackUsage.kernelStack)
+        stats.exceptionStackPeak = UInt32(StackUsage.exceptionStack)
+
         sequence &+= 1
         page.storeBytes(of: sequence, toByteOffset: seqOffset, as: UInt32.self)
         publishBarrier()
 
         let systemSlot = page + systemStatsOffset
         systemSlot.assumingMemoryBound(to: SystemStats.self).pointee = stats
-
-        var visited: UInt32 = 0
+        var slotIndex: UInt32 = 0
 
         // The family tree, not the scheduler queues: those miss every process
         // blocked on an endpoint, which is where the servers live.
-        processManager.pointee.forEachProcess { process in
-            guard visited < UInt32(processLimit) else { return }
-
-            let slot = page + processStatsOffset + Int(visited) * processStatsStride
+        let visited = processManager.pointee.forEachProcess(upTo: UInt32(processLimit)) { process in
+            let slot = page + processStatsOffset + Int(slotIndex) * processStatsStride
             slot.assumingMemoryBound(to: ProcessStats.self).pointee = snapshot(
                 of : process,
                 now: now
             )
-
-            visited &+= 1
+            slotIndex &+= 1
         }
 
         page.storeBytes(of: visited, toByteOffset: processCountOffset, as: UInt32.self)
@@ -497,6 +558,9 @@ enum TraceExport {
         stats.scheduledAt = scheduledAt
 
         stats.residentPages = process.pointee.addressSpace.vmaManager?.pointee.residentPages ?? 0
+
+        let stackPages = process.pointee.addressSpace.vmaManager?.pointee.stackPages ?? 0
+        stats.stackPages = UInt16(min(stackPages, UInt32(UInt16.max)))
 
         if let metadata = process.pointee.metadata {
             stats.nameLength = metadata.pointee.nameLength

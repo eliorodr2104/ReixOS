@@ -90,18 +90,10 @@ public func decommit(addr: UInt64, size: UInt64) -> UInt64 {
 @inline(__always)
 public func shmCreate(pageCount: UInt64) -> SharedMemory {
 
-    var raw = ShmCreateRaw()
-
-    withUnsafeMutablePointer(to: &raw) { ptr in
-        _ = _asm_spawn_raw(
-            SyscallNumber.shmCreate.rawValue,
-            pageCount,
-            0,
-            0,
-            0,
-            UnsafeMutableRawPointer(ptr)
-        )
-    }
+    let raw = ShmCreateRaw(
+        SyscallNumber.shmCreate.rawValue,
+        pageCount
+    )
 
     return SharedMemory(
         handle : UInt32(truncatingIfNeeded: raw.handle),
@@ -112,4 +104,45 @@ public func shmCreate(pageCount: UInt64) -> SharedMemory {
 @inline(__always)
 public func shmMap(handle: UInt32) -> UInt64 {
     _syscall(.shmMap, UInt64(handle))
+}
+
+
+// MARK: - Direct Memory Access
+
+/// Allocate `pageCount` physically contiguous, non-cacheable pages a device can
+/// transfer into, mapped read/write into the caller.
+///
+/// `device` is a device-window capability this process holds. It is the price of
+/// entry rather than a parameter of the buffer: what the returned capability is
+/// allowed to reveal is a physical address, and with no IOMMU on this machine
+/// that is authority over all of memory. Requiring a device capability keeps
+/// that authority with the processes that already had it.
+///
+/// `handle == UInt32.max` means the allocation failed, or the caller does not
+/// hold the device capability it named.
+@inline(__always)
+public func dmaAlloc(
+    device   : UInt32,
+    pageCount: UInt64
+) -> DmaBuffer {
+
+    let raw = ShmCreateRaw(
+        SyscallNumber.dmaAlloc.rawValue,
+        pageCount,
+        UInt64(device)
+    )
+
+    return DmaBuffer(
+        handle : UInt32(truncatingIfNeeded: raw.handle),
+        address: raw.address
+    )
+}
+
+
+/// The physical base of a buffer `dmaAlloc` returned, for writing into a
+/// device's descriptors. `UInt64.max` when the handle does not name one, which
+/// includes every ordinary shared region.
+@inline(__always)
+public func dmaPhysical(handle: UInt32) -> UInt64 {
+    _syscall(.dmaPhysical, UInt64(handle))
 }

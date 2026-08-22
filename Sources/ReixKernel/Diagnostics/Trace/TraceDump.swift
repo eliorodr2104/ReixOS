@@ -7,17 +7,12 @@
 
 /// Writes the ring out in the one format the host decoder parses.
 ///
-/// Straight to the UART through `PanicConsole`, never through `LogRing`, for
-/// two of the three reasons the panic report has: the sink would interleave
-/// framed log records into the middle of a trace record, and a dump that landed
-/// in the ring would be drained by the timer tick long after the tool asking
-/// for it had given up. Borrowing `PanicConsole` entangles nothing, its
-/// primitives are `_logger.kputc` and a hex writer and they touch no panic
-/// state.
+/// Each line is committed atomically to the bounded serial transmit queue.
+/// The timer IRQ only drains a fixed byte budget and never formats a dump.
 ///
 /// The framing is a contract, not a layout choice:
 ///
-///     [TRACE] begin v=1 freq=<dec> lost=<dec>
+///     [TRACE] begin v=2 freq=<dec> lost=<dec> stack=<dec> exstack=<dec>
 ///     [TRACE] t=<dec> ev=<name> pid=<dec> info=<dec> a=<val> b=<val>
 ///     [TRACE] end count=<dec>
 ///
@@ -41,8 +36,9 @@
 ///   needs a case in `name(of:)` below and stays in step with `TraceCode` in
 ///   `Events/TraceCode.swift`.
 enum TraceDump {
+    private static let terminalReserve = 128
 
-    /// Walks the whole ring onto the console.
+    /// Formats the whole ring into the bounded serial transmit queue.
     ///
     /// Race-free without any locking: the only caller is the `profileControl`
     /// provider, which runs in a syscall body with IRQs masked at EL1, so no
@@ -50,22 +46,59 @@ enum TraceDump {
     /// `TraceRing` states, and the only place it has to be honoured by a
     /// reader.
     @inline(never)
-    static func toConsole(processManager: UnsafeMutablePointer<ProcessManager>) {
-        PanicConsole.write("[TRACE] begin v=1 freq=")
-        PanicConsole.writeDec(Arch.Timer.frequency())
-        PanicConsole.write(" lost=")
-        PanicConsole.writeDec(TraceRing.lost)
-        PanicConsole.newline()
+    static func toConsole(processManager: UnsafeMutablePointer<ProcessManager>?) -> Bool {
+        LogSink.beginTransmission(reserving: terminalReserve)
+        LogSink.transmit("[TRACE] begin v=2 freq=")
+        LogSink.transmitDec(Arch.Timer.frequency())
+        LogSink.transmit(" lost=")
+        LogSink.transmitDec(TraceRing.lost)
 
-        // Boot phases live outside the ring so eviction cannot reach them.
-        // They are the oldest stamps, so replaying them first keeps the order.
-        let phases  = TraceRing.forEachBootPhase { writeRecord($0) }
-        let names   = writeLiveNames(processManager)
-        let visited = TraceRing.forEachEvent     { writeRecord($0) }
+        // Machine state at dump time, like `lost`: bytes ever written on the
+        // two kernel stacks. See `StackUsage` for what the figures do not say.
+        LogSink.transmit(" stack=")
+        LogSink.transmitDec(StackUsage.kernelStack)
+        LogSink.transmit(" exstack=")
+        LogSink.transmitDec(StackUsage.exceptionStack)
+        LogSink.transmit(10)
+        guard LogSink.endTransmission() else { return false }
 
-        PanicConsole.write("[TRACE] end count=")
-        PanicConsole.writeDec(UInt64(phases + names + visited))
-        PanicConsole.newline()
+        var total = 0
+        var queued = 0
+        var accepting = true
+
+        TraceRing.forEachBootPhase {
+            total &+= 1
+            guard accepting else { return }
+            accepting = writeRecord($0, reserving: terminalReserve)
+            if accepting { queued &+= 1 }
+        }
+
+        writeLiveNames(
+            processManager,
+            accepting: &accepting,
+            total: &total,
+            queued: &queued
+        )
+
+        TraceRing.forEachEvent {
+            total &+= 1
+            guard accepting else { return }
+            accepting = writeRecord($0, reserving: terminalReserve)
+            if accepting { queued &+= 1 }
+        }
+
+        var terminalCommitted = true
+        if !accepting {
+            terminalCommitted = writeDropNotice(omitted: total &- queued)
+        }
+
+        LogSink.beginTransmission()
+        LogSink.transmit("[TRACE] end count=")
+        LogSink.transmitDec(UInt64(queued))
+        LogSink.transmit(10)
+        terminalCommitted = LogSink.endTransmission() && terminalCommitted
+
+        return accepting && terminalCommitted
     }
 
 
@@ -76,13 +109,20 @@ enum TraceDump {
     /// happens, and the names still sit in every `ProcessMetadata`. Replaying
     /// them from there makes the mapping independent of the ring's history.
     private static func writeLiveNames(
-        _ processManager: UnsafeMutablePointer<ProcessManager>
-    ) -> Int {
+        _ processManager: UnsafeMutablePointer<ProcessManager>?,
+        accepting: inout Bool,
+        total: inout Int,
+        queued: inout Int
+    ) {
+        guard let processManager else { return }
+
         let now = Arch.Timer.counterUnordered()
-        var written = 0
 
         processManager.pointee.forEachProcess { process in
             guard let metadata = process.pointee.metadata else { return }
+
+            total &+= 1
+            guard accepting else { return }
 
             var a: UInt64 = 0
             var b: UInt64 = 0
@@ -92,39 +132,51 @@ enum TraceDump {
                 b |= UInt64(metadata.pointee.name[index + 8]) << (8 * index)
             }
 
-            writeRecord(TraceEvent(
+            accepting = writeRecord(TraceEvent(
                 timestamp: now,
                 code     : TraceCode.procName,
                 info     : UInt16(metadata.pointee.nameLength),
                 pid      : UInt32(truncatingIfNeeded: process.pointee.pid),
                 a        : a,
                 b        : b
-            ))
+            ), reserving: terminalReserve)
 
-            written += 1
+            if accepting { queued &+= 1 }
         }
-
-        return written
     }
 
 
     /// One `[TRACE] t=... ev=... pid=... info=... a=... b=...` line.
-    private static func writeRecord(_ event: TraceEvent) {
+    private static func writeRecord(
+        _ event: TraceEvent,
+        reserving reservedBytes: Int
+    ) -> Bool {
         let hex = hexFields(for: event.code)
 
-        PanicConsole.write("[TRACE] t=")
-        PanicConsole.writeDec(event.timestamp)
-        PanicConsole.write(" ev=")
+        LogSink.beginTransmission(reserving: reservedBytes)
+        LogSink.transmit("[TRACE] t=")
+        LogSink.transmitDec(event.timestamp)
+        LogSink.transmit(" ev=")
         writeEventName(event.code)
-        PanicConsole.write(" pid=")
-        PanicConsole.writeDec(UInt64(event.pid))
-        PanicConsole.write(" info=")
-        PanicConsole.writeDec(UInt64(event.info))
-        PanicConsole.write(" a=")
+        LogSink.transmit(" pid=")
+        LogSink.transmitDec(UInt64(event.pid))
+        LogSink.transmit(" info=")
+        LogSink.transmitDec(UInt64(event.info))
+        LogSink.transmit(" a=")
         writeValue(event.a, hex: hex.a)
-        PanicConsole.write(" b=")
+        LogSink.transmit(" b=")
         writeValue(event.b, hex: hex.b)
-        PanicConsole.newline()
+        LogSink.transmit(10)
+        return LogSink.endTransmission()
+    }
+
+
+    private static func writeDropNotice(omitted: Int) -> Bool {
+        LogSink.beginTransmission()
+        LogSink.transmit("[TRACE-DROP] omitted=")
+        LogSink.transmitDec(UInt64(omitted))
+        LogSink.transmit(10)
+        return LogSink.endTransmission()
     }
 
 
@@ -134,10 +186,10 @@ enum TraceDump {
     private static func writeEventName(_ code: UInt16) {
         
         if let known = name(of: code) {
-            PanicConsole.write(known)
+            LogSink.transmit(known)
             
         } else {
-            PanicConsole.write("0x")
+            LogSink.transmit("0x")
             writeHex4(code)
         }
         
@@ -150,10 +202,10 @@ enum TraceDump {
     private static func writeValue(_ value: UInt64, hex: Bool) {
         
         if hex {
-            PanicConsole.write("0x")
-            PanicConsole.writeHex(value)
+            LogSink.transmit("0x")
+            LogSink.transmitHex(value)
             
-        } else { PanicConsole.writeDec(value) }
+        } else { LogSink.transmitDec(value) }
         
     }
 
@@ -201,7 +253,7 @@ enum TraceDump {
     /// Four lowercase hex digits, zero-padded, no `0x` prefix.
     ///
     /// The only caller needing padding is the unknown-code fallback: every
-    /// named code already prints as a string, so `PanicConsole.writeHex`
+    /// named code already prints as a string, so `transmitHex`
     /// covers the address-like fields without it.
     @inline(never)
     private static func writeHex4(_ value: UInt16) {
@@ -209,7 +261,7 @@ enum TraceDump {
 
         while shift >= 0 {
             let nibble = Int((value >> UInt16(shift)) & 0xF)
-            PanicConsole.put(nibble < 10 ? UInt8(48 &+ nibble) : UInt8(87 &+ nibble))
+            LogSink.transmit(nibble < 10 ? UInt8(48 &+ nibble) : UInt8(87 &+ nibble))
             shift -= 4
         }
     }

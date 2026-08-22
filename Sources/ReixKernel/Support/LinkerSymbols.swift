@@ -62,6 +62,18 @@ public var __stack_guard_bottom: UInt8
 @_silgen_name("__stack_guard_top")
 public var __stack_guard_top: UInt8
 
+@_silgen_name("__stack_bottom")
+public var __stack_bottom: UInt8
+
+@_silgen_name("stack_top")
+public var stack_top: UInt8
+
+@_silgen_name("__exception_stack_bottom")
+public var __exception_stack_bottom: UInt8
+
+@_silgen_name("__exception_stack_top")
+public var __exception_stack_top: UInt8
+
 public func getOfaddressWithSymbol(of symbol: inout UInt8) -> PhysicalAddress {
     return withUnsafePointer(to: &symbol) {
         UInt64(UInt(bitPattern: $0))

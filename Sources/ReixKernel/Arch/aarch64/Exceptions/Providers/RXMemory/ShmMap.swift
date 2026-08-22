@@ -49,7 +49,8 @@ public struct ShmMap: SyscallProvider {
                 physicalBase: region.pointee.physicalPage.address,
                 pageCount   : Int(region.pointee.pageCount),
                 kind        : .shared,
-                permissions : permissions
+                permissions : permissions,
+                sharedRegion: region
             )
             frame.pointee.x0 = vaddr
             

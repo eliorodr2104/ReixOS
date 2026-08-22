@@ -15,8 +15,8 @@ public func memcpy(
     guard let d = dst?.assumingMemoryBound(to: UInt8.self),
           let s = src?.assumingMemoryBound(to: UInt8.self) else { return dst }
 
-    var i: UInt = 0
-    while i < n { d[Int(i)] = s[Int(i)]; i &+= 1 }
+    var i: Int = 0
+    while i < n { d[i] = s[i]; i &+= 1 }
     return dst
 }
 
@@ -30,8 +30,8 @@ public func memset(
     guard let p = s?.assumingMemoryBound(to: UInt8.self) else { return s }
 
     let byte = UInt8(truncatingIfNeeded: c)
-    var i: UInt = 0
-    while i < n { p[Int(i)] = byte; i &+= 1 }
+    var i: Int = 0
+    while i < n { p[i] = byte; i &+= 1 }
     return s
 }
 
@@ -46,11 +46,13 @@ public func memmove(
           let s = src?.assumingMemoryBound(to: UInt8.self) else { return dst }
 
     if UInt(bitPattern: d) < UInt(bitPattern: s) {
-        var i: UInt = 0
-        while i < n { d[Int(i)] = s[Int(i)]; i &+= 1 }
+        var i: Int = 0
+        while i < n { d[i] = s[i]; i &+= 1 }
+    
     } else if UInt(bitPattern: d) > UInt(bitPattern: s) {
-        var i = n
-        while i > 0 { i &-= 1; d[Int(i)] = s[Int(i)] }
+        var i: Int = Int(n)
+        while i > 0 { i &-= 1; d[i] = s[i] }
     }
+    
     return dst
 }

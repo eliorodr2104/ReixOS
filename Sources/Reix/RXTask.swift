@@ -81,6 +81,39 @@ public func spawnProcess(path: StaticString) -> SpawnResult {
     )
 }
 
+/// Spawn the image whose name is `length` bytes at `path`, seeded with `grants`.
+///
+/// The counterpart of the `StaticString` overloads, for a caller that read the
+/// name at runtime instead of writing it into its own binary. Which is every
+/// shell there has ever been.
+@inline(__always)
+public func spawnProcess(
+    path  : UnsafePointer<UInt8>,
+    length: Int,
+    grants: UnsafePointer<CapGrant>,
+    count : Int
+) -> SpawnResult {
+
+    var raw = SpawnResultRaw()
+
+    withUnsafeMutablePointer(to: &raw) { ptr in
+        _ = _asm_spawn_raw(
+            SyscallNumber.spawnProcess.rawValue,
+            UInt64(UInt(bitPattern: path)),
+            UInt64(length),
+            UInt64(UInt(bitPattern: grants)),
+            UInt64(count),
+            UnsafeMutableRawPointer(ptr)
+        )
+    }
+
+    return SpawnResult(
+        pid   : raw.pid,
+        handle: UInt32(truncatingIfNeeded: raw.handle)
+    )
+}
+
+
 @inline(__always)
 public func spawnProcess(
     path  : StaticString,

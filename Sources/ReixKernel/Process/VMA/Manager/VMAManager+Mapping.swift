@@ -12,13 +12,15 @@ extension VMAManager {
     /// region: the actual PTE mapping is done by the caller (eager) or deferred to
     /// the first page-fault (lazy).
     public mutating func registerRegion(
-        start      : VirtualAddress,
-        size       : UInt64,
-        permissions: VMAPermissions,
-        backing    : BackingType,
-        flags      : MappingFlags
+        start       : VirtualAddress,
+        size        : UInt64,
+        permissions : VMAPermissions,
+        backing     : BackingType,
+        flags       : MappingFlags,
+        sharedRegion: UnsafeMutablePointer<SharedRegion>? = nil
     ) throws(VMAError) {
         guard size > 0 else { throw .invalidLayout }
+        guard (backing == .shared) == (sharedRegion != nil) else { throw .invalidLayout }
 
         let end = start + size
         guard start >= UserSpaceLayout.userMin,
@@ -39,9 +41,12 @@ extension VMAManager {
                 endAddress  : end,
                 permissions : permissions,
                 backingType : backing,
-                mappingFlags: flags
+                mappingFlags: flags,
+                sharedRegion: sharedRegion
             )
         )
+
+        if let sharedRegion { retainSharedRegion(sharedRegion) }
 
         vmaList.insert(nodePtr)
 
@@ -70,10 +75,16 @@ extension VMAManager {
         physicalBase: PhysicalAddress,
         pageCount   : Int,
         kind        : RegionKind,
-        permissions : VMAPermissions
+        permissions : VMAPermissions,
+        sharedRegion: UnsafeMutablePointer<SharedRegion>? = nil
     ) throws(VMAError) -> VirtualAddress {
 
         guard pageCount > 0 else { throw .invalidLayout }
+        // Both region kinds that name an object have to bring one, and the one
+        // that does not must not: a device window has no region to account to.
+        guard (kind == .shared || kind == .dma) == (sharedRegion != nil) else {
+            throw .invalidLayout
+        }
 
         let alignedSize = UInt64(pageCount) * UserSpaceLayout.pageSize
 
@@ -90,7 +101,8 @@ extension VMAManager {
             size       : alignedSize,
             permissions: permissions,
             backing    : kind.backing,
-            flags      : .none
+            flags      : .none,
+            sharedRegion: sharedRegion
         )
 
         for i in 0..<pageCount {

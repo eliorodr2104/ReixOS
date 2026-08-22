@@ -8,9 +8,9 @@
 /// Drives preemptive scheduling on every Virtual Timer tick.
 ///
 /// On each tick the handler snapshots the running process context into
-/// the process trap frame, rearms the core timer (`ect`), signals
-/// end-of-interrupt to the GIC and asks the scheduler if the quantum
-/// has expired.
+/// the process trap frame, rearms this core's timer and asks the scheduler
+/// if the quantum has expired. End-of-interrupt is not its business: the
+/// dispatcher signals it once, for every interrupt, on the way out.
 ///
 /// When it has, the handler only *asks* for a switch. It never performs one,
 /// because the frame it was handed may be a nested one taken at EL1, in the
@@ -27,8 +27,7 @@ public struct VirtualTimerInterruptHandler: InterruptHandler {
     public static func handle(frame: UnsafeMutablePointer<Arch.TrapFrame>) {        
         snapshotCurrentContext(frame: frame)
 
-        AArch64VirtualTimer.ect()
-        Kernel.gic.pointee.endOfInterrupt(id: id)
+        AArch64VirtualTimer.rearm()
 
         TraceSampler.onTick(frame: frame)
 
@@ -36,14 +35,11 @@ public struct VirtualTimerInterruptHandler: InterruptHandler {
 
         let systemTicks = Kernel.scheduler.pointee.systemTicks
 
-        SleepSyscall.wakeExpired(at: systemTicks)
-
         if Kernel.ipc.pointee.hasDeadlineDue(at: systemTicks) {
             Kernel.ipc.pointee.checkTimeouts(now: systemTicks)
         }
 
-        // The one periodic path already holding the CPU with IRQs masked, which is
-        // what `LogRing` needs; bounded by the UART being slower than the tick.
+        // A fixed number of non-blocking TX probes; queued bytes resume next tick.
         LogSink.drain(budget: LogSink.tickBudget)
 
         TraceExport.pump()

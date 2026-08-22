@@ -85,6 +85,19 @@ extension VMAManager {
 
     /// The lowest VMA overlapping `range`, refusing the request unless every
     /// region the range covers is backed by frames this address space may free.
+    ///
+    /// `.anonymous` is the only backing that qualifies, and the refusal is the
+    /// whole point of the pass rather than a missing feature. A decommit promises
+    /// the frames are gone and the next touch faults back in a zeroed page, and
+    /// none of the other backings can keep that promise: `.fileBacked` maps
+    /// permanently resident initrd frames owned by a reserved range, `.shared`
+    /// frames belong to a `SharedRegion` other address spaces still hold, and
+    /// `.device` frames are not RAM. See `BackingType.fileBacked`.
+    ///
+    /// Refusing the whole request rather than skipping the offending regions keeps
+    /// the syscall's report honest: a partial decommit would return success while
+    /// leaving pages resident, and the caller has no way to learn which. Retiring
+    /// such a region is unmap-only work `munmap` does, not this.
     private func ownedRegions(
         over range: (start: VirtualAddress, end: VirtualAddress)
     ) throws(VMAError) -> UnsafeMutablePointer<VirtualMemoryArea> {

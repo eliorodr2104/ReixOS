@@ -40,4 +40,20 @@ public protocol FileSystemInterface: RXAllocatable {
 
 
     func getInfo(path: UnsafePointer<CChar>) -> Result<FileInfo, FSError>
+
+
+    /// Physical/identity base of an open handle's resident data, for
+    /// filesystems whose pages stay pinned in place (e.g. an initrd).
+    /// Returns nil for a closed/unused handle or when no such guarantee exists.
+    mutating func residentBase(handle: FileHandle) -> PhysicalAddress?
+}
+
+
+public extension FileSystemInterface {
+
+    /// Default for filesystems that cannot promise a stable physical base;
+    /// returning nil here keeps them honest instead of forcing a made-up value.
+    mutating func residentBase(handle: FileHandle) -> PhysicalAddress? {
+        nil
+    }
 }

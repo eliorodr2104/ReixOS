@@ -24,6 +24,11 @@
 			path = Plugins;
 			sourceTree = "<group>";
 		};
+		1F5244B02F95357500E5E2C8 /* Tests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Tests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXGroup section */
@@ -52,6 +57,7 @@
 				1F52448C2F95364400E5E2C8 /* linker.ld */,
 				1F5244872F95357500E5E2C8 /* Sources */,
 				1F5244AA2F95352500E5E2C8 /* Plugins */,
+				1F5244B02F95357500E5E2C8 /* Tests */,
 			);
 			sourceTree = "<group>";
 		};
@@ -74,6 +80,22 @@
 			passBuildSettingsInEnvironment = 1;
 			productName = ReixOS;
 		};
+		1F5244B12F95352500E5E2C8 /* ReixOSTests */ = {
+			isa = PBXLegacyTarget;
+			buildArgumentsString = test;
+			buildConfigurationList = 0488CB1B3028BCD600951CCA /* Build configuration list for PBXLegacyTarget "ReixOSTests" */;
+			buildPhases = (
+			);
+			buildToolPath = /usr/bin/make;
+			buildWorkingDirectory = "$(PROJECT_DIR)";
+			dependencies = (
+			);
+			name = ReixOSTests;
+			packageProductDependencies = (
+			);
+			passBuildSettingsInEnvironment = 0;
+			productName = ReixOSTests;
+		};
 /* End PBXLegacyTarget section */
 
 /* Begin PBXProject section */
@@ -84,6 +106,9 @@
 				LastUpgradeCheck = 2650;
 				TargetAttributes = {
 					1F5244812F95352500E5E2C8 = {
+						CreatedOnToolsVersion = 26.4.1;
+					};
+					1F5244B12F95352500E5E2C8 = {
 						CreatedOnToolsVersion = 26.4.1;
 					};
 				};
@@ -104,11 +129,31 @@
 			projectRoot = "";
 			targets = (
 				1F5244812F95352500E5E2C8 /* ReixOS */,
+				1F5244B12F95352500E5E2C8 /* ReixOSTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin XCBuildConfiguration section */
+		0488CB183028B89F00951CCA /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				COPY_PHASE_STRIP = NO;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				PRODUCT_NAME = ReixOSTests;
+			};
+			name = Debug;
+		};
+		0488CB193028B89F00951CCA /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				COPY_PHASE_STRIP = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				PRODUCT_NAME = ReixOSTests;
+			};
+			name = Release;
+		};
 		1F5244822F95352500E5E2C8 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -254,6 +299,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		0488CB1B3028BCD600951CCA /* Build configuration list for PBXLegacyTarget "ReixOSTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0488CB183028B89F00951CCA /* Debug */,
+				0488CB193028B89F00951CCA /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		1F5244802F95352500E5E2C8 /* Build configuration list for PBXProject "ReixOS" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

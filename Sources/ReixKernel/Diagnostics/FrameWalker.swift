@@ -5,29 +5,6 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 04/08/2026.
 //
 
-/// The AAPCS64 frame-pointer chain walk, and the three rules that stop it from
-/// becoming a second failure on top of the one it was called to explain.
-///
-/// This was `PanicBacktrace`'s private loop until the tick sampler needed the
-/// same walk on a machine that is still running. Nothing in it belongs to
-/// either caller, and a second copy would be a second place to get the cycle
-/// guard wrong, so the loop lives here and the callers bring only what they do
-/// with an address:
-///
-/// - **Plausibility.** AAPCS64 keeps the stack, and therefore `x29`, 16-byte
-///   aligned, so anything else in there is garbage and reading through it would
-///   fault inside the caller. This does not make the read safe, it just makes
-///   the obvious cases free. What covers the rest is the caller's own guard:
-///   the re-entrancy check in `DefaultPanicFormatter` for the panic report, and
-///   for the sampler the refusal to walk a chain that is not the kernel's.
-/// - **Monotonicity.** Stacks grow down, so a caller's frame sits above its
-///   callee's. Following anything else is how an unwinder hangs on a cycle,
-///   which is the normal state of affairs after the kind of corruption that
-///   gets a panic printed in the first place.
-/// - **The cap.** `limit` belongs to the caller: a panic report can afford 32
-///   frames on a console nobody is waiting on, and a sampler firing at tick
-///   rate can afford four records before it starts evicting the ring it is
-///   writing into.
 enum FrameWalker {
 
     /// Follows the chain from `fp`, handing `visit` every return address on it,
@@ -47,12 +24,62 @@ enum FrameWalker {
         limit     : Int,
         _    visit: (UInt64) -> Bool
     ) {
+        let stackLow  = getOfaddressWithSymbol(of: &__stack_bottom)
+        let stackHigh = getOfaddressWithSymbol(of: &stack_top)
+
+        if containsRecord(fp, low: stackLow, high: stackHigh) {
+            walk(from: fp, stackLow: stackLow, stackHigh: stackHigh, limit: limit, visit)
+            return
+        }
+
+        let (virtualStackLow, lowOverflow) = stackLow.addingReportingOverflow(
+            VirtualMemoryManager.physicalOffset
+        )
+        let (virtualStackHigh, highOverflow) = stackHigh.addingReportingOverflow(
+            VirtualMemoryManager.physicalOffset
+        )
+
+        if !lowOverflow, !highOverflow,
+           containsRecord(fp, low: virtualStackLow, high: virtualStackHigh) {
+            walk(
+                from: fp,
+                stackLow: virtualStackLow,
+                stackHigh: virtualStackHigh,
+                limit: limit,
+                visit
+            )
+            return
+        }
+
+        let exceptionLow = getOfaddressWithSymbol(of: &__exception_stack_bottom)
+        let exceptionHigh = getOfaddressWithSymbol(of: &__exception_stack_top)
+
+        if containsRecord(fp, low: exceptionLow, high: exceptionHigh) {
+            walk(from: fp, stackLow: exceptionLow, stackHigh: exceptionHigh, limit: limit, visit)
+        }
+    }
+
+
+    @inline(__always)
+    static func walk(
+        from fp       : UInt64,
+        stackLow      : UInt64,
+        stackHigh     : UInt64,
+        limit         : Int,
+        _        visit: (UInt64) -> Bool
+    ) {
         var framePointer = fp
         var visited      = 0
 
-        while visited < limit, isPlausible(framePointer) {
-            let returnAddress = word(at: framePointer &+ 8)
+        while visited < limit,
+              containsRecord(
+                    framePointer,
+                    low : stackLow,
+                    high: stackHigh
+              ) {
+            
             let previous      = word(at: framePointer)
+            let returnAddress = word(at: framePointer + 8)
 
             guard returnAddress != 0, visit(returnAddress) else { break }
 
@@ -65,10 +92,24 @@ enum FrameWalker {
     }
 
 
-    /// Cheapest possible sanity check before dereferencing a frame pointer.
     @inline(__always)
     static func isPlausible(_ framePointer: UInt64) -> Bool {
         framePointer != 0 && framePointer & 0xF == 0
+    }
+
+
+    @inline(__always)
+    private static func containsRecord(
+        _ framePointer: UInt64,
+          low         : UInt64,
+          high        : UInt64
+    ) -> Bool {
+        
+        guard low < high, framePointer >= low,
+              isPlausible(framePointer) else { return false }
+        
+        let (end, overflow) = framePointer.addingReportingOverflow(16)
+        return !overflow && end <= high
     }
 
 

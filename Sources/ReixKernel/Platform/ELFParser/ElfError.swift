@@ -9,6 +9,7 @@ public enum ElfError: KernelDiagnostic {
     case invalidMagicNumber
     case noLoadableSegments
     case malformedLayout
+    case writeExecuteConflict
     case allocationFailed (PPMError)
     case mappingFailed    (PPMError)
 
@@ -24,6 +25,9 @@ public enum ElfError: KernelDiagnostic {
 
             case .malformedLayout:
                 "ELF Error: the ELF segment layout is malformed or corrupted."
+
+            case .writeExecuteConflict:
+                "ELF Error: the image would map a page writable and executable."
 
             case .allocationFailed(let inner):
                 switch inner.reportedCause {

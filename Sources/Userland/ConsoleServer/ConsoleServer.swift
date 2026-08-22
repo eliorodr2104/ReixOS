@@ -57,6 +57,11 @@ public struct ConsoleServer: Service {
             case .register:
                 register(&request)
 
+            case .drainPartial:
+                if let slot = slot(for: request.identity), let ring = rings[slot] {
+                    drain(ring, includingPartialLine: true)
+                }
+
             case .kick:
                 for offset in 0..<clients.count {
                     let slot = (indexClient + offset) % clients.count
@@ -128,7 +133,15 @@ public struct ConsoleServer: Service {
     /// assembly. The same loop spelled in Swift lost its wait: `uartBase + 0x18`
     /// is not a volatile read, so LLVM hoisted the load out of the loop and then
     /// dropped it, and the shipped code stored into a FIFO it never checked.
-    private func drain(_ ring: Ring) {
+    /// Writes out what a ring holds.
+    ///
+    /// Whole lines only, unless the caller asks otherwise or the ring is full.
+    /// A ring that has filled without closing a line has to be emptied whatever
+    /// it holds, or its writer is wedged behind bytes nobody will ever take.
+    private func drain(
+        _                    ring   : Ring,
+        includingPartialLine partial: Bool = false
+    ) {
 
         func writeSpan(
             _ bytes: UnsafeRawPointer,
@@ -139,8 +152,8 @@ public struct ConsoleServer: Service {
 
         while ring.consumeLine(writeSpan) { }
 
-        guard ring.isFull else { return }
-        ring.consumeAll(writeSpan)
+        guard partial || ring.isFull else { return }
+        _ = ring.consumeAll(writeSpan)
     }
 
     private mutating func release(slot: Int) {

@@ -323,3 +323,38 @@ public func capExists(_ handle: UInt32) -> Bool {
 public func capDrop(_ handle: UInt32) -> Bool {
     _syscall(.capDrop, UInt64(handle)) == 0
 }
+
+
+// MARK: - Interrupts
+
+/// Blocks until one of the lines `handle` names fires, and answers which.
+///
+/// The answer is a bit per line, in the order the set was built, so a holder of
+/// several lines learns in one wake-up which of them need servicing. Lines that
+/// fired while nobody was waiting are not lost: the first call collects them
+/// without blocking.
+///
+/// Every line in the answer is *masked* when this returns. The device will not
+/// interrupt again on it until `irqAck` is called, which is what stops a device
+/// that holds its line up from re-entering the handler forever. Service the
+/// device first, acknowledge second.
+///
+/// `UInt64.max` means the handle is not an interrupt set, or somebody is
+/// already waiting on it.
+public func irqWait(handle: UInt32) -> UInt64 {
+    _syscall(.irqWait, UInt64(handle))
+}
+
+
+/// Unmasks the lines named by `bits`, after their device has been serviced.
+///
+/// Bits for lines this holder does not have masked are ignored rather than
+/// arming a line nobody is ready for. Answers `0`, or `UInt64.max` when the
+/// handle is not an interrupt set.
+public func irqAck(
+    handle: UInt32,
+    bits  : UInt64
+    
+) -> UInt64 {
+    _syscall(.irqAck, UInt64(handle), bits)
+}

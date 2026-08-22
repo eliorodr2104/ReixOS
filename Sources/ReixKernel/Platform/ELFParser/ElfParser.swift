@@ -8,11 +8,16 @@
 public struct ElfParser {
     
     private static let PT_LOAD : UInt32 = 1
-    private static let pageSize: UInt64 = 4096
 
-    private static let PF_X: UInt32 = 0x1
-    private static let PF_W: UInt32 = 0x2
-    private static let PF_R: UInt32 = 0x4
+    /// The MMU granule, not a number of this loader's own: the counts
+    /// `ImageSharing` returns are in these pages and are multiplied by this.
+    static let pageSize: UInt64 = UserSpaceLayout.pageSize
+
+    /// `p_flags` bits. Internal rather than private because `ImageSharing` asks
+    /// the same question of the same field, and one vocabulary cannot drift.
+    static let PF_X: UInt32 = 0x1
+    static let PF_W: UInt32 = 0x2
+    static let PF_R: UInt32 = 0x4
 
     private static let ELFCLASS64 : UInt8  = 2
     private static let ELFDATA2LSB: UInt8  = 1
@@ -22,9 +27,9 @@ public struct ElfParser {
 
     /// Ceiling on the virtual span a single image may cover, enforced while
     /// the headers are still being read. `p_memsz` and `p_vaddr` are taken
-    /// from the file and pass 1 backs every page of the span with its own
-    /// frame, so without this one crafted header, or two segments placed
-    /// terabytes apart, drains the physical page manager 4 KiB at a time.
+    /// from the file and the mapping pass backs every page it cannot share with
+    /// a frame of its own, so without this one crafted header, or two segments
+    /// placed terabytes apart, drains the physical page manager 4 KiB at a time.
     ///
     /// The real binaries span 9 to 12 pages, so 64 MiB is pure headroom.
     private static let maxImageSize: UInt64 = 64 * 1024 * 1024
@@ -32,6 +37,32 @@ public struct ElfParser {
     private init() {}
 
 
+    /// Read `handle` as an ELF64 executable and lay its PT_LOAD segments into
+    /// `addressSpace`.
+    ///
+    /// ## The four passes
+    ///
+    /// 1. Headers. Every field the later passes trust is bounded here against
+    ///    the size of the file, and the segment table is copied out so nothing
+    ///    below re-reads a header it already validated.
+    /// 2. W^X. One walk of the whole image span unioning `p_flags` per page,
+    ///    which rejects a page that would end up writable *and* executable
+    ///    before any collaborator has been called. It stays first for that
+    ///    reason: a rejected layout must leave no VMA, no frame and no PTE.
+    /// 3. Mapping, shareable segments first (see `ImageSharing`) and then a
+    ///    page-driven walk over everything they did not claim. A shareable
+    ///    segment's pages are aliased straight to the initrd frames, read-only,
+    ///    and the walk backs each remaining page with a zeroed frame.
+    /// 4. Copy, for the bytes that did not arrive by being aliased.
+    ///
+    /// ## Unwinding
+    ///
+    /// Every page mapped here is inside a region registered *before* it, which
+    /// is what lets `destroyPartialAddressSpace` clean up a failure at any
+    /// point by walking the VMA list alone. The two backings unwind differently
+    /// and correctly: `.anonymous` regions release their frames, `.fileBacked`
+    /// ones only drop translations, because the initrd frames were never this
+    /// address space's to free.
     public static func loadSegments(
         handle      : FileHandle,
         fileSystem  : UnsafeMutablePointer<KernelInternalFileSystem>,
@@ -147,17 +178,130 @@ public struct ElfParser {
             throw .malformedLayout
         }
 
-
         var pageVA = loadBase
         while pageVA < loadEnd {
             var permissions: VMAPermissions = [.user]
-            var covered                     = false
 
             for index in 0..<segmentCount {
                 guard let range = Self.pageRange(of: segments[index]),
                       pageVA >= range.start,
                       pageVA <  range.end
                 else { continue }
+
+                let segmentFlags = segments[index].p_flags
+                if (segmentFlags & Self.PF_W) != 0 { permissions.insert(.write)   }
+                if (segmentFlags & Self.PF_X) != 0 { permissions.insert(.execute) }
+            }
+
+            guard !permissions.contains(.write) ||
+                  !permissions.contains(.execute)
+            else { throw .writeExecuteConflict }
+
+            pageVA += Self.pageSize
+        }
+
+        // Leading pages of each segment `ImageSharing` cleared, indexed like
+        // `segments`. A non-zero entry means that whole segment is handled below.
+        var sharedRuns = InlineArray<16, UInt64>(repeating: 0)
+
+        let residentBase = fileSystem.pointee.residentBase(handle: handle)
+
+        var sharedPages  : UInt64 = 0
+        var copiedPages  : UInt64 = 0
+        let declinedStart         = ImageSharing.declinedTailPages
+
+        for index in 0..<segmentCount {
+            let phdr = segments[index]
+
+            let shared = ImageSharing.shareablePageCount(
+                of          : index,
+                in          : segments.span,
+                count       : segmentCount,
+                residentBase: residentBase,
+                fileSize    : fileSize
+            )
+
+            guard shared > 0, let base = residentBase else { continue }
+
+            guard let range = Self.pageRange(of: phdr) else {
+                throw .malformedLayout
+            }
+
+            sharedRuns[index] = shared
+
+            // Shareable implies non-writable, so `.write` cannot appear here and
+            // `toPageFlags` yields RX for text and R for rodata.
+            var permissions: VMAPermissions = [.user]
+            if (phdr.p_flags & Self.PF_R) != 0 { permissions.insert(.read)    }
+            if (phdr.p_flags & Self.PF_X) != 0 { permissions.insert(.execute) }
+
+            let sharedEnd = range.start + shared * Self.pageSize
+
+            try Self.register(
+                vmaManager : vmaManager,
+                start      : range.start,
+                end        : sharedEnd,
+                permissions: permissions,
+                backing    : .fileBacked
+            )
+
+            var cursor = range.start
+            var offset = phdr.p_offset
+            while cursor < sharedEnd {
+                do {
+                    try vmm.pointee.mapUserPage(
+                        addressSpace: addressSpace,
+                        virtual     : cursor,
+                        physical    : base + offset,
+                        flags       : permissions.toPageFlags()
+                    )
+                } catch { throw .mappingFailed(error) }
+
+                cursor += Self.pageSize
+                offset += Self.pageSize
+            }
+
+            sharedPages += shared
+
+            guard sharedEnd < range.end else { continue }
+
+            // What is left of a shared segment is zero-fill, or a tail page the
+            // archive did not pad: this process's own, in its own region.
+            try Self.register(
+                vmaManager : vmaManager,
+                start      : sharedEnd,
+                end        : range.end,
+                permissions: permissions,
+                backing    : .anonymous
+            )
+
+            while cursor < range.end {
+                try Self.materialize(
+                    page        : cursor,
+                    permissions : permissions,
+                    addressSpace: addressSpace,
+                    vmm         : vmm,
+                    ppm         : ppm
+                )
+
+                copiedPages += 1
+                cursor      += Self.pageSize
+            }
+        }
+
+        pageVA = loadBase
+        while pageVA < loadEnd {
+            var permissions: VMAPermissions = [.user]
+            var covered                     = false
+            var alreadyMapped               = false
+
+            for index in 0..<segmentCount {
+                guard let range = Self.pageRange(of: segments[index]),
+                      pageVA >= range.start,
+                      pageVA <  range.end
+                else { continue }
+
+                if sharedRuns[index] > 0 { alreadyMapped = true }
 
                 let segmentFlags = segments[index].p_flags
                 if (segmentFlags & Self.PF_R) != 0 { permissions.insert(.read)    }
@@ -167,61 +311,49 @@ public struct ElfParser {
                 covered = true
             }
 
-            guard covered else {
+            guard covered, !alreadyMapped else {
                 pageVA += Self.pageSize
                 continue
             }
 
-            if permissions.contains(.write), permissions.contains(.execute) {
-                kprint("[ ELF ] W^X violation: page 0x\(hex: pageVA) maps RWX")
-            }
+            // One page at a time, and still one VMA per run: `registerRegion`
+            // merges an anonymous region into the identical one before it.
+            try Self.register(
+                vmaManager : vmaManager,
+                start      : pageVA,
+                end        : pageVA + Self.pageSize,
+                permissions: permissions,
+                backing    : .anonymous
+            )
 
-            do {
-                try vmaManager.pointee.registerRegion(
-                    start      : pageVA,
-                    size       : Self.pageSize,
-                    permissions: permissions,
-                    backing    : .anonymous,
-                    flags      : .none
-                )
-            } catch {
+            try Self.materialize(
+                page        : pageVA,
+                permissions : permissions,
+                addressSpace: addressSpace,
+                vmm         : vmm,
+                ppm         : ppm
+            )
 
-                if case .heapAllocationFailed(let inner) = error {
-                    throw .allocationFailed(inner)
-                }
-
-                throw .malformedLayout
-            }
-
-            let frame: PhysicalPage
-            do { frame = try ppm.pointee.alloc(4096) }
-            catch { throw .allocationFailed(error) }
-
-            let dst: UnsafeMutablePointer<UInt8> = vmm.pointee.physToVirt(frame.address)
-            dst.initialize(repeating: 0, count: Int(Self.pageSize))
-
-            do {
-                try vmm.pointee.mapUserPage(
-                    addressSpace: addressSpace,
-                    virtual     : pageVA,
-                    physical    : frame.address,
-                    flags       : permissions.toPageFlags()
-                )
-            } catch {
-               try? ppm.pointee.release(frame.address)
-                throw .mappingFailed(error)
-            }
-
-            pageVA += Self.pageSize
+            copiedPages += 1
+            pageVA      += Self.pageSize
         }
 
         for index in 0..<segmentCount {
             let phdr = segments[index]
 
-            try Self.seek(handle: handle, fileSystem: fileSystem, to: phdr.p_offset)
+            // Bytes the aliased pages already carry, skipped so the write below
+            // cannot reach an initrd frame through `physToVirt`.
+            let aliased = sharedRuns[index] * Self.pageSize
+            guard aliased < phdr.p_filesz else { continue }
 
-            var remaining = phdr.p_filesz
-            var va        = phdr.p_vaddr
+            try Self.seek(
+                handle    : handle,
+                fileSystem: fileSystem,
+                to        : phdr.p_offset + aliased
+            )
+
+            var remaining = phdr.p_filesz - aliased
+            var va        = phdr.p_vaddr  + aliased
             while remaining > 0 {
                 let pageBase = va &  ~(Self.pageSize - 1)
                 let pageOff  = va &   (Self.pageSize - 1)
@@ -249,12 +381,86 @@ public struct ElfParser {
             }
         }
 
+        ImageSharing.report(
+            shared  : sharedPages,
+            copied  : copiedPages,
+            declined: ImageSharing.declinedTailPages - declinedStart
+        )
+
         return LoadedELF(
             entryPoint: ehdr.e_entry,
             image     : nil,
             loadBase  : loadBase,
             loadEnd   : loadEnd
         )
+    }
+
+
+    // MARK: - Mapping helpers
+
+    /// Register `[start, end)` and translate the VMA manager's refusals into
+    /// this loader's vocabulary.
+    ///
+    /// Every mapping path goes through here first, because a page mapped outside
+    /// a registered region is a page `destroyPartialAddressSpace` cannot see.
+    private static func register(
+        vmaManager : UnsafeMutablePointer<VMAManager>,
+        start      : VirtualAddress,
+        end        : VirtualAddress,
+        permissions: VMAPermissions,
+        backing    : BackingType
+    ) throws(ElfError) {
+
+        do {
+            try vmaManager.pointee.registerRegion(
+                start      : start,
+                size       : end - start,
+                permissions: permissions,
+                backing    : backing,
+                flags      : .none
+            )
+        } catch {
+
+            if case .heapAllocationFailed(let inner) = error {
+                throw .allocationFailed(inner)
+            }
+
+            throw .malformedLayout
+        }
+    }
+
+
+    /// Back one page of an `.anonymous` region with a zeroed frame.
+    ///
+    /// Zeroed before it is mapped and not after: the frame comes from the buddy
+    /// allocator carrying whatever the last owner left in it, and the copy pass
+    /// only writes the bytes the file actually has.
+    private static func materialize(
+        page        : VirtualAddress,
+        permissions : VMAPermissions,
+        addressSpace: borrowing AddressSpace,
+        vmm         : UnsafeMutablePointer<VirtualMemoryManager>,
+        ppm         : UnsafeMutablePointer<PhysicalPageManager<BuddyAllocator>>
+    ) throws(ElfError) {
+
+        let frame: PhysicalPage
+        do { frame = try ppm.pointee.alloc(Int(Self.pageSize)) }
+        catch { throw .allocationFailed(error) }
+
+        let dst: UnsafeMutablePointer<UInt8> = vmm.pointee.physToVirt(frame.address)
+        dst.initialize(repeating: 0, count: Int(Self.pageSize))
+
+        do {
+            try vmm.pointee.mapUserPage(
+                addressSpace: addressSpace,
+                virtual     : page,
+                physical    : frame.address,
+                flags       : permissions.toPageFlags()
+            )
+        } catch {
+            try? ppm.pointee.release(frame.address)
+            throw .mappingFailed(error)
+        }
     }
 
 

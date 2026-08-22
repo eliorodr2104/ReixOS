@@ -7,24 +7,21 @@
 
 import ReixABI
 
-/// `profileControl(op, arg)` syscall provider: the only door into the trace
+/// `profileControl(op, arg, authority)` syscall provider: the only door into the trace
 /// ring from user space.
 ///
-/// `x0` = `ProfileOperation` raw, `x1` = the operation's argument. Writes `0`
-/// on success and `1` on failure, an operation number this kernel does not know
-/// included. A single failure value is deliberate: nothing about a profiler
-/// control needs to be distinguishable, and the caller that gets `1` back has
-/// exactly one thing to do about it either way.
+/// `x0` = `ProfileOperation` raw, `x1` = the operation's argument, `x2` = the
+/// profiler capability handle. Writes `0` on success and `1` on failure, an
+/// operation number this kernel does not know included.
 ///
 /// `pmuProbe` is the one exception, and the only op whose `x0` is a value
 /// rather than a status: it answers with the count of programmable event
 /// counters. No count is reserved as an error because a probe cannot fail, and
-/// zero is a real answer meaning the block was never initialized.
+/// zero is a real answer meaning the block was never initialized, so a refusal
+/// is reported as that same zero.
 ///
-/// This is not a privileged syscall. The ring holds pids, syscall numbers and
-/// durations, which is a real side channel between processes, and closing it is
-/// an entitlement question that belongs with the rest of them rather than a
-/// check bolted on here.
+/// Every operation requires the `profileControl` capability target, and the
+/// right that matches its category. See `ProfileABI.category(of:)`.
 public struct ProfileControlSyscall: SyscallProvider {
 
     public static let number: SyscallNumber = .profileControl
@@ -35,6 +32,16 @@ public struct ProfileControlSyscall: SyscallProvider {
     ) {
         guard let operation = ProfileOperation(rawValue: frame.pointee.x0) else {
             frame.pointee.x0 = 1
+            return
+        }
+
+        guard let authority = ProfileABI.authorityHandle(frame.pointee.x2),
+              ProfileAuthorization.allowsCurrent(
+                handle  : authority,
+                category: ProfileABI.category(of: operation)
+              ) else {
+            
+            frame.pointee.x0 = operation == .pmuProbe ? 0 : 1
             return
         }
 
@@ -60,15 +67,23 @@ public struct ProfileControlSyscall: SyscallProvider {
                 frame.pointee.x0 = 0
 
             case .dumpConsole:
-                TraceDump.toConsole(processManager: context.processManager)
-                frame.pointee.x0 = 0
+                frame.pointee.x0 = TraceDump.toConsole(
+                    processManager: context.processManager
+                ) ? 0 : 1
+
+                _ = LogSink.drain()
 
             case .setSampleDivider:
                 frame.pointee.x0 = TraceSampler.setDivider(argument) ? 0 : 1
 
             case .attachExport:
+                guard let handle = ProfileABI.attachHandle(argument) else {
+                    frame.pointee.x0 = 1
+                    return
+                }
+                
                 frame.pointee.x0 = attachExport(
-                    handle : UInt32(truncatingIfNeeded: argument),
+                    handle : handle,
                     context: context
                 ) ? 0 : 1
 
@@ -112,9 +127,11 @@ public struct ProfileControlSyscall: SyscallProvider {
 
         return TraceExport.attach(
             base          : base,
+            backing       : region,
             pageCount     : pageCount,
             scheduler     : context.scheduler,
             ppm           : context.ppm,
+            heap          : context.ipc.pointee.heap,
             processManager: context.processManager
         )
     }

@@ -25,3 +25,10 @@ public struct Logger<Driver: SerialDriver> {
     @_transparent
     func writeStatic(_ s: StaticString) { driver.writeString(s) }
 }
+
+extension Logger where Driver == PL011UART {
+    @_transparent
+    func tryKputc(_ val: UInt8) -> Bool {
+        driver.tryWrite(val)
+    }
+}

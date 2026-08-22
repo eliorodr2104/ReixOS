@@ -7,14 +7,18 @@
 
 import ReixABI
 
-/// `procStats(op, cursor, buffer)` syscall provider: the pull side of the
-/// profiler, for a reader that wants numbers rather than a trace.
+/// `procStats(op, cursor, buffer, authority)` syscall provider: the pull side of
+/// the profiler, for a reader that wants numbers rather than a trace.
 ///
-/// `x0` = the sub-operation, `x1` = its cursor, `x2` = a 48-byte user buffer.
-/// Sub-operation 0 fills a `SystemStats` and answers `0`; sub-operation 1 fills
-/// a `ProcessStats` and answers the pid it described. `UInt64.max` is the only
-/// failure value, and also the end of the process sweep: a caller walking the
-/// table has one thing to test either way.
+/// `x0` = the sub-operation, `x1` = its cursor, `x2` = a 48-byte user buffer,
+/// `x3` = the profiler capability handle. Sub-operation 0 fills a `SystemStats`
+/// and answers `0`; sub-operation 1 fills a `ProcessStats` and answers the pid
+/// it described. `UInt64.max` is the only failure value, and also the end of the
+/// process sweep: a caller walking the table has one thing to test either way.
+///
+/// The authority is not a formality. What this syscall hands out is the process
+/// table itself, names, pids, cpu time and footprint included, so it answers to
+/// `CapRights.profileStats` exactly like the export region that republishes it.
 public struct ProcStatsSyscall: SyscallProvider {
 
     public static let number: SyscallNumber = .procStats
@@ -24,6 +28,15 @@ public struct ProcStatsSyscall: SyscallProvider {
         context: SyscallContext
     ) {
         guard let operation = StatsSubOperation(rawValue: frame.pointee.x0) else {
+            frame.pointee.x0 = UInt64.max
+            return
+        }
+
+        guard let authority = ProfileABI.authorityHandle(frame.pointee.x3),
+              ProfileAuthorization.allowsCurrent(
+                handle  : authority,
+                category: .profileStats
+              ) else {
             frame.pointee.x0 = UInt64.max
             return
         }
@@ -39,8 +52,7 @@ public struct ProcStatsSyscall: SyscallProvider {
             case .processOperation:
                 frame.pointee.x0 = reportProcess(
                     after  : frame.pointee.x1,
-                    into   : frame.pointee.x2,
-                    context: context
+                    into   : frame.pointee.x2
                 )
         }
     }
@@ -74,6 +86,9 @@ public struct ProcStatsSyscall: SyscallProvider {
         stats.counterFreq = Arch.Timer.frequency()
         stats.traceLost   = TraceRing.lost
 
+        stats.kernelStackPeak    = UInt32(StackUsage.kernelStack)
+        stats.exceptionStackPeak = UInt32(StackUsage.exceptionStack)
+
         record.assumingMemoryBound(to: SystemStats.self).pointee = stats
 
         return 0
@@ -87,9 +102,8 @@ public struct ProcStatsSyscall: SyscallProvider {
     /// same whether the sweep had anything left or not, and the two failures are
     /// reported as the one value the ABI has.
     private static func reportProcess(
-        after   cursor: UInt64,
-        into    buffer: UInt64,
-        context       : SyscallContext
+        after cursor: UInt64,
+        into  buffer: UInt64
     ) -> UInt64 {
 
         guard let record = userRecord(
@@ -97,40 +111,13 @@ public struct ProcStatsSyscall: SyscallProvider {
             size: MemoryLayout<ProcessStats>.size
         ) else { return UInt64.max }
 
-        guard let process = successor(
-            of     : cursor,
-            context: context
-        ) else { return UInt64.max }
+        guard let process = ProcessStatsIndex.successor(after: cursor) else {
+            return UInt64.max
+        }
 
         record.assumingMemoryBound(to: ProcessStats.self).pointee = snapshot(of: process)
 
         return process.pointee.pid
-    }
-
-
-    /// The live process with the smallest pid strictly above `cursor`.
-    ///
-    /// One pass over the process family tree, keeping the best candidate,
-    /// because the queues are ordered by arrival and not by pid: sorting them
-    /// would be the reporter dictating the scheduler's data structure.
-    private static func successor(
-        of cursor: UInt64,
-        context  : SyscallContext
-    ) -> UnsafeMutablePointer<Process>? {
-
-        var best: UnsafeMutablePointer<Process>? = nil
-
-        context.processManager.pointee.forEachProcess { candidate in
-            let pid = candidate.pointee.pid
-
-            guard pid > cursor else { return }
-
-            if let current = best, current.pointee.pid <= pid { return }
-
-            best = candidate
-        }
-
-        return best
     }
 
 
@@ -169,6 +156,9 @@ public struct ProcStatsSyscall: SyscallProvider {
         stats.scheduledAt = scheduledAt
 
         stats.residentPages = process.pointee.addressSpace.vmaManager?.pointee.residentPages ?? 0
+
+        let stackPages = process.pointee.addressSpace.vmaManager?.pointee.stackPages ?? 0
+        stats.stackPages = UInt16(min(stackPages, UInt32(UInt16.max)))
 
         if let metadata = process.pointee.metadata {
             stats.nameLength = metadata.pointee.nameLength

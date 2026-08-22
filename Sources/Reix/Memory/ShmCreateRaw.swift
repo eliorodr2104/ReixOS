@@ -10,4 +10,23 @@
 internal struct ShmCreateRaw {
     var handle : UInt64 = 0
     var address: UInt64 = 0
+    
+    init(
+        _ number     : UInt64,
+        _ path       : UInt64,
+        _ length     : UInt64 = 0,
+    ) {
+        
+        withUnsafeMutablePointer(to: &self) { ptr in
+            _ = _asm_spawn_raw(
+                number,
+                path,
+                length,
+                0,
+                0,
+                UnsafeMutableRawPointer(ptr)
+            )
+        }
+        
+    }
 }
