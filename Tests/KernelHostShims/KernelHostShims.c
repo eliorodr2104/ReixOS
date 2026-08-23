@@ -57,6 +57,11 @@ void instruction_barrier(void) {}
 uint8_t is_mmu_enabled(void) { return 0; }
 void jump_to_user_mode(void *trapFrame, uint64_t rootTable) { (void)trapFrame; (void)rootTable; }
 void kernel_idle_loop(void) {}
+// Reads and writes host memory on the host, which is what a suite that hands
+// these a buffer of its own wants: the bounds are the behaviour under test, the
+// device is not.
+uint32_t mmio_read32(void *address) { return *(volatile uint32_t *)address; }
+void mmio_write32(void *address, uint32_t value) { *(volatile uint32_t *)address = value; }
 void nop(void) {}
 void page_table_barrier(void) { barrier_count += 1; }
 uint64_t page_table_barrier_count(void) { return barrier_count; }

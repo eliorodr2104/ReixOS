@@ -28,6 +28,13 @@ private func cpuHandlers() -> [AsmRoutine] {
             label(".L_trampoline_target")
             ret()
         },
+        // One 32-bit load and one 32-bit store to a device register, in
+        // assembly for the reason `PL011UART` documents at length: Swift cannot
+        // spell a volatile access, and over a plain pointer the optimiser is
+        // free to hoist, merge or drop one. x0 is the address, x1 the value.
+        fn("mmio_read32")  { raw("    ldr w0, [x0]"); ret() },
+        fn("mmio_write32") { raw("    str w1, [x0]"); ret() },
+
         fn("set_vbar")             { msr("vbar_el1", "x0"); ret() },
         fn("set_current_process")  { msr("tpidr_el1", "x0"); ret() },
         fn("get_current_process")  { mrs("x0", "tpidr_el1"); ret() },

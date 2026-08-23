@@ -29,6 +29,7 @@ public struct Capability: Equatable {
         case shared
         case dma
         case device
+        case bus
         case interrupt
         case profileControl
     }
@@ -86,6 +87,11 @@ public struct Capability: Equatable {
                 extent = region.size
                 kind   = .device
 
+            case .bus(let authority):
+                word   = UInt64(UInt(bitPattern: UnsafeMutableRawPointer(authority)))
+                extent = 0
+                kind   = .bus
+
             case .interrupt(let set):
                 word   = UInt64(UInt(bitPattern: UnsafeMutableRawPointer(set)))
                 extent = 0
@@ -124,6 +130,11 @@ public struct Capability: Equatable {
 
             case .device:
                 .device(DeviceRegion(address: word, size: extent))
+
+            case .bus:
+                .bus(
+                    UnsafeMutablePointer<BusAuthority>(bitPattern: UInt(word)).unsafelyUnwrapped
+                )
 
             case .interrupt:
                 .interrupt(

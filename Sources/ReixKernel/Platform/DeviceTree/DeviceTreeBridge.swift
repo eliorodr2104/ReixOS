@@ -178,6 +178,7 @@ func parsePlatformInfo(
     var rootClosed = false
     var isUart     = false
     var isGic      = false
+    var isVirtio   = false
     var isMem      = false
     var isChosen   = false
 
@@ -234,6 +235,7 @@ func parsePlatformInfo(
             isChosen = ceq(name, nlen + 1, "chosen")
             isUart   = false
             isGic    = false
+            isVirtio = false
             isMem    = depth == 2 &&
                        nlen >= 2 &&
                        name[0] == UInt8(ascii: "m") &&
@@ -346,6 +348,9 @@ func parsePlatformInfo(
                         
                     } else if ceq(compat, left, "arm,gic-400") || ceq(compat, left, "arm,cortex-a15-gic") {
                         isGic = true
+
+                    } else if ceq(compat, left, "virtio,mmio") {
+                        isVirtio = true
                     }
 
                     guard let stringSize = checkedAdd(slen, 1),
@@ -371,6 +376,21 @@ func parsePlatformInfo(
                         out.uart.irq = number + base
                     }
                 }
+            } else if isVirtio,
+                      let reg = curReg, curRegLen >= (pac + psc) * 4,
+                      let intr = curIntr, curIntrLen >= 8 {
+
+                let base = readCells(fdt, reg, pac)
+                let size = readCells(fdt, reg + Int(pac) * 4, psc)
+
+                let kind    = fdt32(fdt, intr)
+                let intBase = kind == 1 ? UInt32(16) : UInt32(32)
+                let number  = fdt32(fdt, intr + 4)
+
+                if base != 0, size != 0, number < FDT.reservedInterrupt - intBase {
+                    out.virtioBus.include(base: base, size: size, line: number + intBase)
+                }
+
             } else if isGic, let reg = curReg {
                 let stride = pac + psc
                 if curRegLen >= stride * 4 {

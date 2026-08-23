@@ -127,6 +127,15 @@ public struct SyscallHandler: RXAllocatable {
             case .dmaPhysical   : DmaPhysical          .handle(frame: frame, context: context)
 
 
+            // Device registers
+            case .deviceRead    : DeviceReadSyscall    .handle(frame: frame, context: context)
+            case .deviceWrite   : DeviceWriteSyscall   .handle(frame: frame, context: context)
+
+
+            // Buses
+            case .busDeriveDevice   : BusDeriveDeviceSyscall   .handle(frame: frame, context: context)
+            case .busDeriveInterrupt: BusDeriveInterruptSyscall.handle(frame: frame, context: context)
+
             // Caps
             case .capExists     : CapExistsSyscall     .handle(frame: frame, context: context)
             case .capDrop       : CapDropSyscall       .handle(frame: frame, context: context)

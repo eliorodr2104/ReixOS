@@ -358,3 +358,61 @@ public func irqAck(
 ) -> UInt64 {
     _syscall(.irqAck, UInt64(handle), bits)
 }
+
+
+// MARK: - Device registers
+
+/// Reads one 32-bit register at `offset` inside the window `handle` names.
+///
+/// For a device window too small to map: the smallest thing the memory unit can
+/// hand over is a 4 KiB page, and a 512-byte window shares its page with seven
+/// other devices, so a window that size is reached one access at a time with
+/// the kernel checking the bound instead.
+///
+/// Answers the register zero-extended, or `UInt64.max` when the handle names no
+/// device, the capability does not carry `read`, or the offset falls outside.
+@inline(__always)
+public func deviceRead(handle: UInt32, offset: UInt64) -> UInt64 {
+    _syscall(.deviceRead, UInt64(handle), offset)
+}
+
+
+/// Writes one 32-bit register at `offset`. Answers `0`, or `UInt64.max` on the
+/// same refusals as `deviceRead` with `write` in place of `read`.
+@inline(__always)
+public func deviceWrite(handle: UInt32, offset: UInt64, value: UInt32) -> UInt64 {
+    _syscall(.deviceWrite, UInt64(handle), offset, UInt64(value))
+}
+
+
+// MARK: - Buses
+
+/// Carves the window `[offset, offset + size)` out of a bus and answers a
+/// device capability for it.
+///
+/// The window comes back exactly the size asked for, so a transport that is an
+/// eighth of a page stays an eighth of a page and is reached with `deviceRead`
+/// rather than mapped. Rights are whatever the bus carried, never more.
+///
+/// `UInt32.max` when the handle names no bus, the bus does not carry `derive`,
+/// or the window falls outside it.
+@inline(__always)
+public func busDeriveDevice(handle: UInt32, offset: UInt64, size: UInt64) -> UInt32 {
+    UInt32(truncatingIfNeeded: _syscall(.busDeriveDevice, UInt64(handle), offset, size))
+}
+
+
+/// Carves the line of one transport out of a bus and answers a capability that
+/// waits on it.
+///
+/// `index` counts transports from the base of the bus, the same way the window
+/// offset does. No interrupt numbers appear here: which line the third slot
+/// raises is the machine's business, and the kernel read it from the machine's
+/// own description.
+///
+/// `UInt32.max` when the bus has no such transport, or when somebody already
+/// holds that line: one line has one owner, and a bus is not an exception.
+@inline(__always)
+public func busDeriveInterrupt(handle: UInt32, index: UInt32) -> UInt32 {
+    UInt32(truncatingIfNeeded: _syscall(.busDeriveInterrupt, UInt64(handle), UInt64(index)))
+}

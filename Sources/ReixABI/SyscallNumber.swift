@@ -70,4 +70,14 @@ public enum SyscallNumber: UInt64 {
     // DMA
     case dmaAlloc
     case dmaPhysical
+
+
+    // Device registers, for windows too small to map
+    case deviceRead
+    case deviceWrite
+
+
+    // Buses: carving a window or a line out of one
+    case busDeriveDevice
+    case busDeriveInterrupt
 }

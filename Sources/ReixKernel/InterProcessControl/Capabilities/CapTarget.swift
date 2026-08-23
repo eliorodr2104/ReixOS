@@ -15,6 +15,9 @@ public enum CapTarget: Equatable {
     /// region never is.
     case dma     (UnsafeMutablePointer<SharedRegion>)
     case device  (DeviceRegion)
+
+    /// A bus, from which windows and lines are carved. Never driven directly.
+    case bus     (UnsafeMutablePointer<BusAuthority>)
     case interrupt(UnsafeMutablePointer<InterruptSet>)
     case profileControl
 }

@@ -260,6 +260,25 @@ public struct VirtualMemoryManager: Loggable {
             physical: gicCpuInterfaceBase,
             type    : .device
         )
+
+        let bus = Kernel.platformInfo.virtioBus
+        if bus.isPresent, bus.base &+ bus.size <= Self.maxPhysicalAddress {
+
+            var page = bus.base & ~(Self.pageSize - 1)
+            let end  = bus.base &+ bus.size
+
+            while page < end {
+                try map(table: identityRootTable, virtual: page, physical: page, type: .device)
+                try map(
+                    table   : kernelRootTable,
+                    virtual : Self.physicalOffset + page,
+                    physical: page,
+                    type    : .device
+                )
+
+                page &+= Self.pageSize
+            }
+        }
         
         Arch.MMU.enableMMU(
             lowTable : self.identityTableAddress,

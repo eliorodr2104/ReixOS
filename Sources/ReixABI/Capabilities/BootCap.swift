@@ -16,4 +16,8 @@ public enum BootCap: UInt32 {
     /// The terminal service endpoint: where a process asks for a line of input.
     /// Not the hardware, which belongs to the terminal server alone.
     case terminal            = 8
+
+    /// The virtio bus, from which a bus process carves the window and the line
+    /// of each transport it finds occupied.
+    case virtioBus           = 9
 }

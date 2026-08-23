@@ -269,6 +269,17 @@ public struct Kernel: Loggable {
             ProcessManager.warning("no interrupt authority minted, the device tree named no line")
         }
 
+        // The virtio bus as one authority, for a process whose job is carving
+        // it up. The kernel says where the bus is; what sits on it is read by
+        // whoever holds this, which is the only place a device id belongs.
+        if !BusBootAuthority.install(
+            bus : Kernel.platformInfo.virtioBus,
+            into: &firstProcess.pointee.metadata.pointee.capsTable,
+            heap: heap
+        ) {
+            ProcessManager.warning("no virtio bus authority minted, the device tree described none")
+        }
+
         ProcessManager.info("Handing control to user space.")
         kprint()
 

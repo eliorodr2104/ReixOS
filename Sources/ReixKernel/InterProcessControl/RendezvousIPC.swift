@@ -848,6 +848,7 @@ public struct RendezvousIPC: IPCInterface, Loggable {
             case .shared  (let sharedMemoryPtr): rxRetain(sharedMemoryPtr)
             case .dma     (let dmaRegionPtr)   : rxRetain(dmaRegionPtr)
             case .interrupt(let setPtr)        : rxRetain(setPtr)
+            case .bus     (let busPtr)         : rxRetain(busPtr)
             
             default: break // Targets without reference-counted backing.
         }
@@ -885,6 +886,11 @@ public struct RendezvousIPC: IPCInterface, Loggable {
                 ) {
                     Self.error("last capability to a DMA region dropped but its frame was refused, \(failure.description)")
                 }
+
+            case .bus(let busPtr):
+                guard rxRelease(busPtr) else { return }
+
+                heap.pointee.kfree(busPtr)
 
             case .interrupt(let setPtr):
                 guard rxRelease(setPtr) else { return }

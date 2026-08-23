@@ -22,4 +22,8 @@ public struct PlatformInfo {
     
     public var uart      : UartInfo  = UartInfo()  // 24 byte
     public var gic       : GicInfo   = GicInfo()   // 16 byte
+
+    /// The virtio bus: where its transports are and which lines they raise.
+    /// What sits on them is not discovery's business.
+    public var virtioBus: VirtioBusInfo = VirtioBusInfo() // 24 byte
 }
