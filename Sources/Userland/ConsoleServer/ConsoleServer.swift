@@ -110,6 +110,10 @@ public struct ConsoleServer: Service {
 
         if let stale = slot(for: badge) { release(slot: stale) }
 
+        // Before refusing, ask which of the thirty-two are still there: a client
+        // that died used to hold its slot, and its page, for the whole boot.
+        if freeSlot() == nil { sweepDeadClients() }
+
         guard let slot = freeSlot() else {
             print("[ SERVE ] Console register refused: no free slot")
             return
@@ -170,6 +174,21 @@ public struct ConsoleServer: Service {
         clients[slot]     = nil
         rings[slot]       = nil
         grantedCaps[slot] = nil
+    }
+
+    /// Lets go of every slot whose client is no longer running.
+    ///
+    /// What is drained before it goes is deliberate: a dead writer's last lines
+    /// were written into a ring this process can still read, and throwing them
+    /// away would lose exactly the output of whatever killed it.
+    private mutating func sweepDeadClients() {
+        for index in 0..<clients.count {
+            guard let badge = clients[index], !identityAlive(badge) else { continue }
+
+            if let ring = rings[index] { drain(ring, includingPartialLine: true) }
+
+            release(slot: index)
+        }
     }
 
     /// Slot held by the client with this badge, if any.

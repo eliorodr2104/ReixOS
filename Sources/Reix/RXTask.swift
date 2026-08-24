@@ -168,6 +168,20 @@ public func reapChild(for pid: PID) -> ExitCode {
     return _syscall(.reapChild, pid)
 }
 
+/// Whether the principal a message's `identity` names is still running.
+///
+/// What a server asks before it goes on holding something for a client. A
+/// process is never told that one of its clients has died, and the state it
+/// keyed on that client's badge - a mapped window, a granted capability, a claim
+/// on a file - would otherwise be held for the rest of the boot.
+///
+/// `false` is final: identities are never reused within a boot, so an answer of
+/// no cannot become yes afterwards.
+@inline(__always)
+public func identityAlive(_ identity: UInt32) -> Bool {
+    _syscall(.identityAlive, UInt64(identity)) != 0
+}
+
 /// Milliseconds in one scheduler tick.
 ///
 /// The contract shared with the kernel
