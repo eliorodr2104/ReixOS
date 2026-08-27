@@ -164,6 +164,14 @@ let package = Package(
             path: "Tests/FileSystemTests"
         ),
 
+        // The pipe's wire format, over nothing at all: frames, acknowledgements
+        // and the transfer state, with no shared page and no syscalls.
+        .testTarget(
+            name: "PipeTests",
+            dependencies: ["ReixABI"],
+            path: "Tests/PipeTests"
+        ),
+
         // Layout locks only: sizes, strides and the all-zero patterns the wire
         // formats and the per-frame records depend on. No behaviour is exercised.
         .testTarget(
