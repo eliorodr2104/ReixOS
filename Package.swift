@@ -177,6 +177,15 @@ let package = Package(
             path: "Tests/PipeTests"
         ),
 
+        // The shell frame and the terminal's events, decoded and encoded on the
+        // host: a wire format is exactly the thing worth exercising without a
+        // machine at either end of it.
+        .testTarget(
+            name: "ShellProtocolTests",
+            dependencies: ["ReixABI"],
+            path: "Tests/ShellProtocolTests"
+        ),
+
         // Layout locks only: sizes, strides and the all-zero patterns the wire
         // formats and the per-frame records depend on. No behaviour is exercised.
         .testTarget(

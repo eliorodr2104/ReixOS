@@ -28,7 +28,7 @@ public func main() {
         exit(code: 1)
     }
 
-    guard let terminal = Terminal(endpoint: service) else {
+    guard var terminal = Terminal(endpoint: service) else {
         print("[ SHELL ] the terminal refused to register this reader")
         exit(code: 1)
     }
