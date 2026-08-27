@@ -2,7 +2,6 @@
 //  Client.swift
 //  ReixOS
 //
-//  Client-side stub for the Name Server: a human-level API over the IPC.
 //
 
 import ReixABI
@@ -15,12 +14,20 @@ public struct NameServerClient {
 
     /// Resolve a service to a capability, or nil if not registered.
     public func lookup(_ service: Services) -> UInt32? {
-        guard case .success(let answer) = call(
+
+        guard case .success(var answer) = call(
             handle : endpoint,
             message: NameServerOperation.lookup.message(for: service)
         ) else { return nil }
 
-        return answer.grantedCap
+        // The capability is the answer. A reply with any other label did not
+        // come from a lookup that found something.
+        guard answer.message.tag.label == NameServerResponse.ack.rawValue else {
+            if let stray = answer.takeGrant() { _ = capDrop(stray) }
+            return nil
+        }
+
+        return answer.takeGrant()
     }
 
     /// Register `cap` under `service` (one-way; the cap is granted to the NS).

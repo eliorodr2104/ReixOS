@@ -70,16 +70,6 @@ public func main() {
         handle: nameServer.handle
     ).grantedCap else { return }
 
-    guard let registrar = derive(
-        handle : nameServerEndpoint,
-        session: UInt64(NameServerSession.registrar),
-        rights : [.send, .grant]
-
-    ) else {
-        print("[ INIT  ] cannot mint the Name Server registrar capability")
-        return
-    }
-
     guard let spawnCap = spawnService() else { return }
 
     let environment = Environment(
@@ -88,12 +78,11 @@ public func main() {
         spawn     : spawnCap
     )
 
-    // TODO: - the Process Server was launched here, with a registrar capability
-    // minted for the one name it may publish. It went with the images it existed
-    // to start: it named a program by an enum the build compiled in, and what
-    // comes back in its place reads one off the volume. Nothing publishes a name
-    // while it is gone, because minting the registrar was the only place a name
-    // could be claimed.
+    // TODO: - the Process Server was launched here, with a registrar minted for
+    // the one name it may publish. It went with the images it existed to start,
+    // and no registrar is minted now: a badge names one service, and there is
+    // nobody to name. `NameServerSession.registrar(for:)` is the only place a
+    // name can be claimed, so nothing publishes one while it is gone.
 
     // Narrowed to `.profileStats` on the way in by `ProfileAuthorityGrant.tool`:
     // a stats reader has no business dumping the trace ring over the console.
