@@ -68,6 +68,7 @@ let package = Package(
         .library(name: "VirtioBus",     type: .static, targets: ["VirtioBus"]),
         .library(name: "BlockServer",   type: .static, targets: ["BlockServer"]),
         .library(name: "FileSystemServer", type: .static, targets: ["FileSystemServer"]),
+        .library(name: "StorageCheck",  type: .static, targets: ["StorageCheck"]),
     ],
     targets: [
         // Shared ABI: IPC types + syscall numbers. No dependencies.
@@ -93,6 +94,10 @@ let package = Package(
         // The two processes the disk needs: the walker that reads device ids
         // off the bus, and the driver it starts for what it found.
         app("VirtioBus", bareMetal), app("BlockServer", bareMetal),
+
+        // The one program that holds nothing: it exercises the whole storage
+        // stack through capabilities somebody handed it.
+        app("StorageCheck", bareMetal),
         .target(
             name: "FileSystemServer",
             dependencies: ["Reix", "ReixFS"],

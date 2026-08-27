@@ -31,7 +31,8 @@ struct ReixPlugin: CommandPlugin {
     let triple = "aarch64-none-none-elf"
     let outputDir = ".reix"
     let apps = ["Init", "NameServer", "ConsoleServer", "TerminalServer", "Top",
-                "Shell", "VirtioBus", "BlockServer", "FileSystemServer"]
+                "Shell", "VirtioBus", "BlockServer", "FileSystemServer",
+                "StorageCheck"]
     
     let kernelNative = [
         "Sources/ReixKernel/Arch/aarch64/Boot/boot.S",

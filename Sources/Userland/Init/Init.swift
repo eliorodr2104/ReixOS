@@ -140,8 +140,9 @@ public func main() {
     // The whole disk comes back out of this: the driver hands its endpoint to
     // the bus, the bus checks the sectors while it is still the only process
     // that can reach them, and then hands it here and keeps nothing.
-    var disk  : UInt32? = nil
-    var warden: UInt32? = nil
+    var disk       : UInt32? = nil
+    var diagnostic : UInt32? = nil
+    var warden     : UInt32? = nil
 
     if capExists(BootCap.virtioBus.rawValue) {
         let bus = withUnsafeTemporaryAllocation(
@@ -189,14 +190,26 @@ public func main() {
             disk = receive(handle: bus.handle).grantedCap
         }
 
-        // Cut before the disk is given away, because afterwards init holds
-        // nothing to cut it from.
+        // Two views, both cut before the disk is given away, because afterwards
+        // init holds nothing to cut them from.
         //
-        // A warden may say that whoever held the volume is gone, and may do
-        // nothing else at all. Init holds it because init started the file
-        // system, so init is the process the kernel wakes when the file system
-        // dies. Nothing else on the machine is told.
+        // The first is for looking: it cannot write a byte, cannot claim the
+        // volume, and while somebody holds the volume cannot read one either.
+        // `.grant` is the right to hand it on and not a right over the disk -
+        // the shell gets `.send` and nothing else below, and rights only ever
+        // narrow on the way down.
+        //
+        // The second is narrower still, and is the one init keeps: a warden may
+        // say that whoever held the volume is gone, and may do nothing else at
+        // all. Init holds it because init started the file system, so init is
+        // the process the kernel wakes when the file system dies. Nothing else
+        // on the machine is told.
         if let disk {
+            diagnostic = derive(
+                handle : disk,
+                session: BlockOperation.Badge.readOnly,
+                rights : [.send, .grant]
+            )
             warden = derive(
                 handle : disk,
                 session: BlockOperation.Badge.warden,
@@ -251,12 +264,16 @@ public func main() {
         _ = capDrop(disk)
     }
 
-    // Held and handed to nobody. The machine's container is the root every
-    // narrower view is cut from, and there is not yet a program that has been
-    // given one, so it stops here.
-    if machine != nil {
-        print("[ INIT  ] the machine's container is held, with nobody to give it to yet\n")
+    if let machine {
+        startStorageCheck(
+            machine    : machine,
+            environment: environment,
+            diagnostic : diagnostic
+        )
     }
+
+    // After the storage check, not before: it is handed the same view.
+    if let diagnostic { _ = capDrop(diagnostic) }
 
     _ = withUnsafeTemporaryAllocation(
         of      : CapGrant.self,
@@ -397,4 +414,232 @@ private func environmentClock() -> UInt32? {
 /// hardware can honestly claim.
 private enum BuildStamp {
     static let civil = Civil(year: 2026, month: 8, day: 23, hour: 12, minute: 0, second: 0)
+}
+
+
+/// How many bytes of gift there are, and what they are.
+///
+/// Position-dependent so a transfer that repeats or shifts a block fails the
+/// comparison at the far end instead of passing it.
+private let giftSize = 2000
+
+private func giftByte(_ index: Int) -> UInt8 {
+    UInt8((index * 7 + 13 + (index >> 8) * 31) & 0xFF)
+}
+
+
+/// Makes a container for the storage check and starts it inside that and
+/// nothing else, then hands it a piece of somewhere else two different ways.
+///
+/// This is the model end to end. Init holds the machine, cuts a room out of it
+/// with a size, and gives away a capability naming only that room. Then it puts
+/// a file in a *different* container and lets the child at it twice: once by
+/// handing over a read-only capability naming that one file and nothing around
+/// it, and once by copying the bytes down a pipe, where the child gets the
+/// bytes and learns nothing else at all.
+private func startStorageCheck(
+    machine    : UInt32,
+    environment: Environment,
+    diagnostic : UInt32?
+) {
+
+    guard let files = FileSystemClient(fileSystem: machine) else {
+        print("[ INIT  ] cannot attach to the machine's container")
+        return
+    }
+
+    guard let container = place(files, "check", room: 64),
+          let vault     = place(files, "vault", room: 32)
+    else { return }
+
+    guard let gift = fillGift(files, in: vault) else { return }
+
+    // A tenant, not an administrator. It keeps files in a container of its own
+    // and hands one piece of it back to a child of its own, so it needs to
+    // delegate; what it has no business doing is moving room between
+    // containers, speaking for the volume, or unmounting the disk out from
+    // under everybody else holding a piece of it.
+    guard let handed = files.bind(container, rights: FSRights.occupant.union(.delegate)),
+          let lent   = files.bind(gift, rights: .reader)
+    else {
+        print("[ INIT  ] cannot hand over what the storage check needs")
+        return
+    }
+
+    // Four when there is a disk to look at, three when there is not. The fourth
+    // is the same read-only view the shell gets, and nothing more.
+    let count = diagnostic == nil ? 3 : 4
+
+    let child = withUnsafeTemporaryAllocation(of: CapGrant.self, capacity: 4) { grants in
+
+        grants[0] = CapGrant(
+            source: environment.console!,
+            slot  : BootCap.console.rawValue,
+            rights: [.send, .grant]
+        )
+        grants[1] = CapGrant(
+            source: handed,
+            slot  : BootCap.container.rawValue,
+            rights: [.send, .grant]
+        )
+        // One file out of a container the child has no other way into, and it
+        // may only look at it.
+        grants[2] = CapGrant(
+            source: lent,
+            slot  : BootCap.shared.rawValue,
+            rights: [.send, .grant]
+        )
+
+        if let diagnostic {
+            grants[3] = CapGrant(
+                source: diagnostic,
+                slot  : BootCap.block.rawValue,
+                rights: [.send]
+            )
+        }
+
+        return spawnProcess(
+            path  : "StorageCheck.elf",
+            grants: grants.baseAddress!,
+            count : count
+        )
+    }
+
+    _ = capDrop(handed)
+    _ = capDrop(lent)
+
+    guard child.hasEndpoint else { return }
+
+    pourGift(files, gift: gift, to: child.handle)
+
+    orphanedClaim(files, in: container, of: child.pid)
+}
+
+
+/// Writes a file the dead storage check was still holding a claim on.
+///
+/// The other half of `claimAbandoned` in StorageCheck, and the reason it needs
+/// two processes: a claim is an application lock, so one held by a corpse is a
+/// file nobody can ever write again. Nothing tells the file system that a client
+/// has died - it asks, when a refusal is about to be the answer.
+///
+/// `reapChild` first, and not a sleep: it comes back for one reason only, that
+/// there is no live process with that pid, which is the condition the whole check
+/// is about. Written and not unlocked, because a `lock` from here would say the
+/// claim table let go while a write says the *refusal* did.
+private func orphanedClaim(_ files: FileSystemClient, in container: UInt32, of pid: PID) {
+
+    _ = reapChild(for: pid)
+
+    let name  = "orphan.bin" as StaticString
+    let bytes = UnsafeRawPointer(name.utf8Start)
+
+    guard let file = files.open(
+        bytes, length: name.utf8CodeUnitCount, in: container
+    ).file?.object else {
+        print("[ INIT  ] the file the storage check died holding is not there")
+        return
+    }
+
+    var payload: UInt8 = 0x5A
+
+    let written = withUnsafePointer(to: &payload) {
+        files.write(file, at: 0, from: UnsafeRawPointer($0), count: 1)
+    }
+
+    guard written.status == .ok else {
+        print("[ INIT  ] a claim its holder took to the grave still refuses everybody")
+        return
+    }
+
+    print("[ INIT  ] a claim whose holder died was let go")
+}
+
+
+/// The container called `name`, made if this is the first boot to want it.
+private func place(_ files: FileSystemClient, _ name: StaticString, room: UInt32) -> UInt32? {
+
+    let bytes = UnsafeRawPointer(name.utf8Start)
+    let count = name.utf8CodeUnitCount
+
+    if let existing = files.open(bytes, length: count).file?.object { return existing }
+
+    let made = files.createContainer(bytes, length: count, room: room)
+
+    guard made.status == .ok, let object = made.file?.object else {
+        print("[ INIT  ] no room for a container the storage check needs")
+        return nil
+    }
+
+    return object
+}
+
+
+/// Writes the gift into the vault and answers the file.
+private func fillGift(_ files: FileSystemClient, in vault: UInt32) -> UInt32? {
+
+    let name  = "gift.txt" as StaticString
+    let bytes = UnsafeRawPointer(name.utf8Start)
+    let count = name.utf8CodeUnitCount
+
+    var file = files.open(bytes, length: count, in: vault).file?.object
+
+    if file == nil {
+        let made = files.create(bytes, length: count, kind: .file, in: vault)
+        guard made.status == .ok else {
+            print("[ INIT  ] the gift could not be made")
+            return nil
+        }
+        file = made.file?.object
+    }
+
+    guard let file else { return nil }
+
+    let payload = UnsafeMutableRawPointer.allocate(byteCount: giftSize, alignment: 8)
+    defer { payload.deallocate() }
+
+    let out = payload.assumingMemoryBound(to: UInt8.self)
+    for index in 0..<giftSize { out[index] = giftByte(index) }
+
+    guard files.write(file, at: 0, from: UnsafeRawPointer(payload), count: UInt64(giftSize)).status == .ok
+    else {
+        print("[ INIT  ] the gift could not be written")
+        return nil
+    }
+
+    return file
+}
+
+
+/// Copies the gift down a pipe, a page at a time.
+///
+/// The other end gets bytes and nothing else: no object number, no name, no way
+/// to ask for anything more. It is the same file the child can also read
+/// through the capability it was handed, which is what lets it check the two
+/// against each other.
+private func pourGift(_ files: FileSystemClient, gift: UInt32, to endpoint: UInt32) {
+
+    guard var producer = PipeProducer(to: endpoint) else {
+        print("[ INIT  ] no pipe to pour the gift down")
+        return
+    }
+
+    var offset = UInt64(0)
+
+    let poured = producer.pump { page, capacity in
+        let room = UInt64(capacity)
+        let left = UInt64(giftSize) - offset
+
+        guard left > 0 else { return PipeFill(.ok) }
+
+        let wanted = left < room ? left : room
+        let read   = files.read(gift, at: offset, into: page, count: wanted)
+
+        guard read.status == .ok, read.bytes > 0 else { return PipeFill(.sourceFailed) }
+
+        offset += read.bytes
+        return PipeFill(.ok, Int(read.bytes))
+    }
+
+    if poured != .ok { print("[ INIT  ] the pipe transfer was refused") }
 }

@@ -276,13 +276,75 @@ dma_barriers_in() {
     ' "$1"
 }
 
+# post=queue-depth: how many requests one client ever had accepted and not yet
+# collected, read out of the block server's own log lines.
+#
+# A post-check and not a required marker, because the answer is printed by one
+# process while others are printing theirs: two processes writing to one console
+# are ordered by when their lines arrive, so a line has no fixed position between
+# somebody else's. A marker chain is an ordered subsequence and could only pin it
+# by pinning that race.
+#
+# This reads `queue depth` and deliberately not `device depth`. The server prints
+# both: the first is how deep one client's own asking got, the second is how many
+# were out with the device at once. Only the first is a property of the code. The
+# second was asserted for a while and failed about one run in three on the 4 MiB
+# row, because QEMU can answer a one-block read before the next `begin` arrives
+# and then the driver never holds two however hard the client pipelines - so the
+# check reported a shallow queue when what had happened was a quick disk.
+#
+# Two and not four, though four is what it reads. The read that drives this spans
+# four blocks and the client pipelines all four, so there is headroom; the
+# threshold stays at the floor that separates a queue from a line rather than
+# tracking `BlockQueue.depth`, so raising that constant does not break a check
+# that was not about its value. One would mean the stack had gone back to serving
+# a request at a time, which is a regression it has already had once and did not
+# notice.
+post_queue_depth() {
+    pq_log=$1
+    pq_out=$2
+
+    grep -E '^\[ DISK  \] queue depth [0-9]+' "$pq_log" > "$pq_out" 2>&1 || true
+
+    pq_deepest=$(
+        awk '{ if ($6 + 0 > n) n = $6 + 0 } END { print n + 0 }' "$pq_out"
+    )
+
+    if [ "$pq_deepest" -lt 2 ]; then
+        printf 'the block server never had two requests out at once (deepest %s)' \
+            "$pq_deepest"
+        return 1
+    fi
+
+    return 0
+}
+
+
+# One row may name several, comma-separated: the storage row wants the barriers
+# read out of the image *and* the queue's depth read out of the log, and neither
+# is the other's business. Each gets its own output file so a failure says which
+# check wrote what.
 run_post() {
-    case $1 in
-        -)          return 0 ;;
-        trace-boot)   post_trace_boot "$2" "$3" ;;
-        dma-barriers) post_dma_barriers "$2" "$3" ;;
-        *)          setup_error "unknown post-check '$1'" ;;
-    esac
+    [ "$1" = "-" ] && return 0
+
+    rp_rest=$1
+    while [ -n "$rp_rest" ]; do
+        case $rp_rest in
+            *,*) rp_name=${rp_rest%%,*}; rp_rest=${rp_rest#*,} ;;
+            *)   rp_name=$rp_rest;       rp_rest= ;;
+        esac
+
+        rp_out="${3%.txt}-$rp_name.txt"
+
+        case $rp_name in
+            trace-boot)   post_trace_boot "$2" "$rp_out" || return 1 ;;
+            dma-barriers) post_dma_barriers "$2" "$rp_out" || return 1 ;;
+            queue-depth)  post_queue_depth "$2" "$rp_out" || return 1 ;;
+            *)            setup_error "unknown post-check '$rp_name'" ;;
+        esac
+    done
+
+    return 0
 }
 
 
