@@ -105,6 +105,30 @@ public enum FileOperation: UInt32, IPCLabel {
     /// holds instead of failing there.
     case up
 
+    /// Make a container and name it, out of the caller's own room.
+    ///
+    /// A door of its own, and not a `kind` on `create`, because it costs a
+    /// different authority: a container is a grant of room, so making one needs
+    /// `.quota` as well as `.write`. It used to travel as a word in a `create`
+    /// payload, which meant every tenant that could write a file could carve a
+    /// container out of the room it had been lent - and the price of `create` is
+    /// `.write`, which every tenant has.
+    case createContainer
+
+
+    /// Which kinds an operation may make.
+    ///
+    /// The rule and not a comment about the rule, so a server cannot decide it
+    /// per call site. A `kind` in a payload is a client's word about what it
+    /// wants; which door it came through is not.
+    public func makes(_ kind: FSKind) -> Bool {
+        switch self {
+            case .create         : kind == .file || kind == .folder
+            case .createContainer: kind == .container
+            default              : false
+        }
+    }
+
 
     /// A `relocate` request: two folders, and the two names in the window with
     /// the old one first.
@@ -232,24 +256,42 @@ public enum FileOperation: UInt32, IPCLabel {
     }
 
 
-    /// The answer to `list`: how it went, what the name refers to, how long the
-    /// name written into the window is, and where to carry on from.
-    ///
-    /// A shape of its own rather than `describing` with the size reused for the
-    /// length. Two meanings in one word is how a wire format starts lying.
+    /// A `list` request: which folder, where to carry on from, and how many
+    /// entries there is room for.
     public static func listing(
+        folder  : UInt32,
+        from cursor: UInt32,
+        capacity: UInt32
+    ) -> Message {
+
+        var words = InlineArray<4, UInt32>(repeating: 0)
+        words[0] = folder
+        words[1] = cursor
+        words[2] = capacity
+
+        return Message(tag: MessageTag(FileOperation.list, length: 3), words: words)
+    }
+
+
+    /// The answer to `list`: how it went, how many entries went into the window,
+    /// where to carry on from, and whether the folder ends here.
+    ///
+    /// Four words and four facts, one each. The end of a folder used to be the
+    /// *absence* of an answer, which made it the same event as a server that had
+    /// gone - so a caller told them apart by asking a second question, about the
+    /// moment after rather than the moment in question.
+    public static func listed(
         _ status: FSStatus,
-          object: UInt32,
-          kind  : FSKind,
-          length: UInt32,
-          next  : UInt32
+          count : UInt32,
+          next  : UInt32,
+          eof   : Bool
     ) -> Message {
 
         var words = InlineArray<4, UInt32>(repeating: 0)
         words[0] = status.rawValue
-        words[1] = object
-        words[2] = length
-        words[3] = (UInt32(kind.rawValue) << 24) | (next & 0x00FF_FFFF)
+        words[1] = count
+        words[2] = next
+        words[3] = eof ? 1 : 0
 
         return Message(
             tag  : MessageTag(FileOperation.list, length: 4),
@@ -257,20 +299,20 @@ public enum FileOperation: UInt32, IPCLabel {
         )
     }
 
-    /// Where a listing carries on from. Sixteen million entries in one folder
-    /// is not a limit this disk will reach before the object table does.
-    public static func listedNext(_ message: Message) -> UInt32 {
-        message.words[3] & 0x00FF_FFFF
-    }
+    /// How many entries a `listed` answer wrote.
+    public static func listedCount(_ message: Message) -> UInt32 { message.words[1] }
 
-    /// How long the name in the window is, from a `listing` answer.
-    public static func listedLength(_ message: Message) -> Int {
-        Int(message.words[2])
-    }
+    /// Where a listing carries on from. A whole word now: it used to share one
+    /// with the kind, which capped a folder at sixteen million entries for no
+    /// reason anybody needed.
+    public static func listedNext(_ message: Message) -> UInt32 { message.words[2] }
+
+    /// Whether the folder ends here.
+    public static func listedEnd(_ message: Message) -> Bool { message.words[3] != 0 }
 
 
-    /// The answer to `status`: how it went, then what the caller's own
-    /// container looks like.
+    /// The answer to `status`: how it went, then what the caller's own root
+    /// looks like.
     ///
     /// The root comes back on every attach rather than being told to the client
     /// beforehand, because the client does not get to choose it. It is whatever
@@ -296,6 +338,20 @@ public enum FileOperation: UInt32, IPCLabel {
     }
 
 
+    /// The complete `status` shape used as the acknowledgement of `attach`.
+    ///
+    /// A short `.ok` only says that an ordinary operation succeeded.  It
+    /// cannot name the capability root, so accepting it while constructing a
+    /// client would make an incomplete attach look usable.  The root can be a
+    /// container, folder, or file; direct file and folder roots correctly have
+    /// zero delegable room.
+    public static func isAttachAcknowledgement(_ message: Message) -> Bool {
+        message.tag.label == FileOperation.status.rawValue
+            && message.tag.length == 4
+            && status(of: message) == .ok
+    }
+
+
     /// The status word every reply starts with.
     public static func status(of message: Message) -> FSStatus {
         FSStatus(rawValue: message.words[0]) ?? .deviceFailed
@@ -306,7 +362,9 @@ public enum FileOperation: UInt32, IPCLabel {
     ///
     /// The part of a badge that does not depend on the disk, so it is the one
     /// thing readable without knowing which disk the badge is about.
-    public static func rights(badge: UInt32) -> FSRights {
-        FSRights(rawValue: (badge >> FSBadge.rightsShift) & FSRights.everything.rawValue)
+    public static func rights(badge: UInt64) -> FSRights {
+        FSRights(rawValue: UInt32(
+            truncatingIfNeeded: (badge >> FSBadge.rightsShift)
+        ) & FSRights.everything.rawValue)
     }
 }

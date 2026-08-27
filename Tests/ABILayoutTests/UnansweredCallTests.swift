@@ -105,6 +105,10 @@ struct UnansweredCallTests {
                 == FileOperation.open.rawValue
         )
         #expect(
+            FileOperation.listed(.ok, count: 1, next: 0, eof: false).tag.label
+                == FileOperation.list.rawValue
+        )
+        #expect(
             BlockOperation.geometry(sectorSize: 512, sectorCount: 8, durability: .onFlush).tag.label
                 == BlockOperation.geometry.rawValue
         )

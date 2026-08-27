@@ -216,6 +216,11 @@ extension FileSystem {
     /// saying "the file now says this". Both are here because both are wanted,
     /// and the difference is one word rather than a second round trip that
     /// something could happen in the middle of.
+    ///
+    /// No bytes are reported unless the metadata commit stood. The blocks may
+    /// well have been written, but the size that would have named them was not,
+    /// and a caller told otherwise would carry on from an offset the file never
+    /// reached.
     public mutating func write(
         _    object   : UInt32,
         at   offset   : UInt64,
@@ -224,12 +229,37 @@ extension FileSystem {
              replacing: Bool = false
     ) -> (status: FSStatus, bytes: UInt64) {
 
-        guard var record = self.object(object) else { return (.notFound, 0) }
+        // Bitmap, container room, extents and size in one transaction, and the
+        // new file data written *before* it: the data reaches the medium at the
+        // flush that makes the images stable, so a committed size never names a
+        // block whose contents never arrived.
+        //
+        // The bytes of a file are not journalled and are not meant to be. What a
+        // transaction promises is coherent metadata, not that a power cut cannot
+        // land in the middle of an overwrite.
+        let begun = begin()
+        guard begun == .ok else { return (begun, 0) }
+
+        let done  = writeStaged(
+            object, at: offset, from: source, count: count, replacing: replacing
+        )
+        let ended = finish(done.status)
+
+        return (ended, ended == .ok ? done.bytes : 0)
+    }
+
+
+    mutating func writeStaged(
+        _    object   : UInt32,
+        at   offset   : UInt64,
+        from source   : UnsafeRawPointer,
+             count    : UInt64,
+             replacing: Bool = false
+    ) -> (status: FSStatus, bytes: UInt64) {
+
+        guard var record = self.object(object) else { return (explain(.notFound), 0) }
         guard record.kind == .file else { return (.wrongKind, 0) }
         guard count > 0 else { return (.ok, 0) }
-
-        let end = offset &+ count
-        guard end > offset else { return (.noSpace, 0) }
 
         // How far this file has ever reached, taken before it grows.
         //
@@ -240,15 +270,18 @@ extension FileSystem {
         // easily as this one.
         let held = record.size
 
+        // **Dense, and refused before anything is spent.** Overwriting what is
+        // there and carrying on from the end are the two writes this format has;
+        // an offset past the size is a hole. Nothing is charged, nothing is
+        // allocated and nothing is written on this path, and the one read that
+        // has already happened is the record that says how long the file is.
+        guard offset <= held else { return (.pastTheEnd, 0) }
+
+        let end = offset &+ count
+        guard end > offset else { return (.noSpace, 0) }
+
         let status = grow(&record, to: end, of: object)
         guard status == .ok else { return (status, 0) }
-
-        // The blocks a growth added below the write itself. Nothing in the loop
-        // will touch them and a read of them is coming, because the size is
-        // about to say they are inside the file.
-        guard zeroUntouched(record, beyond: held, upTo: offset) == .ok else {
-            return (.deviceFailed, 0)
-        }
 
         var moved = UInt64(0)
 
@@ -275,9 +308,8 @@ extension FileSystem {
                     )
 
                 } else {
-                    guard readBlock(block, into: dataBuffer) == .ok else {
-                        return (.deviceFailed, moved)
-                    }
+                    let loaded = readBlock(block, into: dataBuffer)
+                    guard loaded == .ok else { return (loaded, moved) }
                 }
             }
 
@@ -286,9 +318,8 @@ extension FileSystem {
                 byteCount: Int(chunk)
             )
 
-            guard writeBlock(block, from: dataBuffer) == .ok else {
-                return (.deviceFailed, moved)
-            }
+            let written = writeDataBlock(block, from: dataBuffer)
+            guard written == .ok else { return (written, moved) }
 
             moved += chunk
         }
@@ -297,11 +328,16 @@ extension FileSystem {
             let cut = shrink(&record, toBytes: end, of: object)
             guard cut == .ok else { return (cut, moved) }
 
-        } else if end > record.size {
-            record.size     = end
+        } else {
+            // Any write that got this far changed at least one byte, so the time
+            // changes whether the size did or not. It used to change only when
+            // the file grew, which made an overwrite in place the one change to a
+            // file that left no trace of itself.
+            if end > record.size { record.size = end }
             record.modified = now
 
-            guard store(record, at: object) == .ok else { return (.deviceFailed, moved) }
+            let published = store(record, at: object)
+            guard published == .ok else { return (published, moved) }
         }
 
         return (.ok, moved)
@@ -382,62 +418,20 @@ extension FileSystem {
         record.size     = bytes
         record.modified = now
 
-        // Published, then made durable, and only then given back. A failure at
-        // either of the first two steps leaves the record owning every block it
-        // owned before, all of them still marked used: the disk is exactly as it
-        // was.
-        guard store(record, at: index) == .ok else { return .deviceFailed }
-        guard barrier() == .ok else { return .deviceFailed }
+        // No ordering here any more, and no barrier. The shortened record and the
+        // blocks it stopped naming are staged into one transaction, so there is no
+        // moment at which one is true of the disk and the other is not.
+        let published = store(record, at: index)
+        guard published == .ok else { return published }
 
         for run in 0..<freed {
-            releaseRun(start: freeing[run].start, count: freeing[run].count)
+            let released = releaseRun(
+                start: freeing[run].start, count: freeing[run].count
+            )
+            guard released == .ok else { return released }
         }
 
-        refund(given, to: index)
-
-        return .ok
-    }
-
-
-    /// Zeroes the blocks between where an object had reached and where a write is
-    /// about to start.
-    ///
-    /// A write past the end of a file leaves a gap, and the gap is made of blocks
-    /// this object was handed a moment ago with somebody else's bytes still in
-    /// them. Nothing in the write loop goes near them, and the moment the size
-    /// grows past them a read will. So they are filled in here, once, and only
-    /// the ones that need it: the blocks the write itself covers are covered by
-    /// the write.
-    ///
-    /// The alternative was zeroing every block at the moment it is allocated,
-    /// which costs a write per block on the commonest path there is - appending
-    /// to a file - to fix a leak that only a gap can open. This costs a write per
-    /// block of gap, which is a write per block that a sparse write actually
-    /// skipped.
-    private mutating func zeroUntouched(
-        _      record: FSObject,
-        beyond held  : UInt64,
-        upTo   offset: UInt64
-    ) -> FSStatus {
-
-        // The first block wholly past what the object held, and the first the
-        // write will touch. A block straddling `held` keeps this object's own
-        // bytes and is already zero above them, because the write that made it
-        // wrote the whole block.
-        var index  = FSLayout.divideUp(held, FSLayout.blockSize)
-        let stop   = offset / FSLayout.blockSize
-
-        while index < stop {
-            guard let block = record.block(at: index * FSLayout.blockSize) else {
-                return .notFound
-            }
-
-            guard zeroBlock(block) == .ok else { return .deviceFailed }
-
-            index += 1
-        }
-
-        return .ok
+        return refund(given, to: index)
     }
 
 
@@ -471,12 +465,16 @@ extension FileSystem {
         // Re-read for the same reason `link` does: charging rewrites the
         // container's record, and a folder that is itself a container has just
         // had the copy in hand go stale.
-        guard let reread = object(index) else {
-            refund(extra, to: index)
-            return explain(.notFound)
-        }
+        guard let reread = object(index) else { return explain(.notFound) }
         record = reread
 
+        // No ledger and no rolling back by hand. Every claim below is a staged
+        // write, so a growth that cannot be finished is abandoned with the
+        // transaction: the bitmap never heard of the blocks and the container was
+        // never charged. What used to be here was a snapshot of the record, a
+        // walk of the difference between it and the grown one, and a quarantine
+        // for the case where undoing it failed - all of which the transaction
+        // does by not committing.
         var missing = extra
 
         while missing > 0 {
@@ -486,38 +484,44 @@ extension FileSystem {
             // and it is the difference between a file the disk can read in one
             // request and a file it reads in eight.
             if record.extents > 0 {
-                let last = record.runs[Int(record.extents) - 1]
+                let last  = record.runs[Int(record.extents) - 1]
+                let after = allocateAt(last.start + last.count, count: missing)
 
-                if allocateAt(last.start + last.count, count: missing) {
-                    guard record.append(start: last.start + last.count, count: missing) else {
-                        releaseRun(start: last.start + last.count, count: missing)
-                        refund(missing, to: index)
-                        return .tooFragmented
-                    }
+                switch after {
+                    case .ok:
+                        guard record.append(
+                            start: last.start + last.count, count: missing
+                        ) else { return .tooFragmented }
 
-                    missing = 0
-                    continue
+                        missing = 0
+                        continue
+
+                    // Those blocks are somebody else's, so the search below looks
+                    // elsewhere. Anything else is a refusal and is not a hint.
+                    case .noSpace:
+                        break
+
+                    default:
+                        return after
                 }
             }
 
-            guard let run = allocateUpTo(missing) else {
-                refund(missing, to: index)
-                return explain(.noSpace)
-            }
+            let run = allocateUpTo(missing)
+            guard case .taken(let start, let count) = run else { return run.refusal }
 
-            guard record.append(start: run.start, count: run.count) else {
-                releaseRun(start: run.start, count: run.count)
-                refund(missing, to: index)
+            guard record.append(start: start, count: count) else {
                 return .tooFragmented
             }
 
-            missing -= run.count
+            missing -= count
         }
 
         record.modified = now
 
         return store(record, at: index)
     }
+
+
 
 
     /// Rewrites an object's blocks into one run, when the disk has one to
@@ -536,15 +540,32 @@ extension FileSystem {
     /// And the old runs are released only once the record naming the new one is
     /// on the medium. They used to go first, which meant a crash in between left
     /// a file whose extents pointed at blocks the map had already given back.
+    ///
+    /// Nothing gives the new run back by hand any more. The claim on it is a
+    /// staged image like every other, so abandoning the transaction is what
+    /// un-claims it, and releasing it here would be staging a second image of
+    /// the same bitmap block to undo the first.
     public mutating func compact(_ index: UInt32) -> FSStatus {
 
-        guard var record = object(index) else { return .notFound }
+        // The new run, the rewritten extent map and the release of the old runs,
+        // in one transaction. The copy itself is file data and goes to the medium
+        // before the transaction is promised, which is why twice the space is
+        // needed for the moment of the copy and not for longer.
+        let begun = begin()
+        guard begun == .ok else { return begun }
+
+        return finish(compactStaged(index))
+    }
+
+
+    mutating func compactStaged(_ index: UInt32) -> FSStatus {
+
+        guard var record = object(index) else { return explain(.notFound) }
         guard record.kind == .file, record.blocks > 0 else { return .ok }
         guard record.extents > 1 else { return .ok }
 
-        guard let fresh = allocateRun(record.blocks) else {
-            return explain(.noSpace)
-        }
+        let room = allocateRun(record.blocks)
+        guard case .taken(let fresh, _) = room else { return room.refusal }
 
         var written = UInt32(0)
 
@@ -552,12 +573,11 @@ extension FileSystem {
             let extent = record.runs[run]
 
             for block in extent.start..<(extent.start + extent.count) {
-                guard readBlock(block, into: dataBuffer) == .ok,
-                      writeBlock(fresh + written, from: dataBuffer) == .ok
-                else {
-                    releaseRun(start: fresh, count: record.blocks)
-                    return .deviceFailed
-                }
+                let loaded = readBlock(block, into: dataBuffer)
+                guard loaded == .ok else { return loaded }
+
+                let copied = writeDataBlock(fresh + written, from: dataBuffer)
+                guard copied == .ok else { return copied }
 
                 written += 1
             }
@@ -575,17 +595,14 @@ extension FileSystem {
         record.extents  = 1
         record.modified = now
 
-        guard store(record, at: index) == .ok else {
-            // The copy is wasted and the old run is still the file's. Giving the
-            // new blocks back is safe because nothing on the disk names them.
-            releaseRun(start: fresh, count: record.blocks)
-            return .deviceFailed
-        }
+        let published = store(record, at: index)
+        guard published == .ok else { return published }
 
-        guard barrier() == .ok else { return .deviceFailed }
-
+        // Same as `shrink`: the new extent map and the release of the old runs are
+        // one act, so there is nothing for a barrier to order.
         for run in 0..<oldCount {
-            releaseRun(start: old[run].start, count: old[run].count)
+            let released = releaseRun(start: old[run].start, count: old[run].count)
+            guard released == .ok else { return released }
         }
 
         return .ok
@@ -598,7 +615,23 @@ extension FileSystem {
         to bytes: UInt64 = 0
     ) -> FSStatus {
 
-        guard var record = object(index) else { return .notFound }
+        // The shortened record, the blocks given back and the room given back, in
+        // one transaction. It used to be an ordering: publish, flush, then
+        // release, so that a crash left a leak rather than a block two objects
+        // owned. There is no ordering to keep any more and no leak to leave.
+        let begun = begin()
+        guard begun == .ok else { return begun }
+
+        return finish(truncateStaged(index, to: bytes))
+    }
+
+
+    mutating func truncateStaged(
+        _  index: UInt32,
+        to bytes: UInt64 = 0
+    ) -> FSStatus {
+
+        guard var record = object(index) else { return explain(.notFound) }
         guard record.kind == .file else { return .wrongKind }
         guard bytes < record.size else { return .ok }
 

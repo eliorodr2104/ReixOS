@@ -17,6 +17,9 @@ func isBlank(_ found: FSMount) -> Bool { if case .blank = found { return true };
 func isCorrupt(_ found: FSMount) -> Bool { if case .corrupt = found { return true }; return false }
 func isUnusable(_ found: FSMount) -> Bool { if case .unusable = found { return true }; return false }
 func isDeviceFailed(_ found: FSMount) -> Bool { if case .deviceFailed = found { return true }; return false }
+func isDurabilityUnknown(_ found: FSMount) -> Bool {
+    if case .durabilityUnknown = found { return true }; return false
+}
 
 func unsupportedVersion(_ found: FSMount) -> UInt16? {
     if case .unsupportedVersion(let version) = found { return version }
@@ -51,6 +54,34 @@ struct MountRefusalTests {
         defer { scratch.deallocate() }
 
         body(scratch)
+    }
+
+
+    /// Damages the same offset in both superblocks.
+    ///
+    /// One whole copy is enough to mount from, which is the whole point of there
+    /// being two: a torn write costs the newer copy and not the disk. So a test
+    /// about a *disk* that cannot be read has to reach both, and the tests that
+    /// reach one are about the surviving copy being used.
+    private func pokeBoth(_ disk: MemoryDisk, _ byte: UInt8, at offset: Int) {
+        let block = Int(FSLayout.blockSize)
+
+        disk.poke(byte, at: Int(FSLayout.superblockA) * block + offset)
+        disk.poke(byte, at: Int(FSLayout.superblockB) * block + offset)
+    }
+
+    private func pokeBoth(_ disk: MemoryDisk, _ value: UInt32, at offset: Int) {
+        let block = Int(FSLayout.blockSize)
+
+        disk.poke(value, at: Int(FSLayout.superblockA) * block + offset)
+        disk.poke(value, at: Int(FSLayout.superblockB) * block + offset)
+    }
+
+    private func pokeBoth(_ disk: MemoryDisk, _ value: UInt64, at offset: Int) {
+        let block = Int(FSLayout.blockSize)
+
+        disk.poke(value, at: Int(FSLayout.superblockA) * block + offset)
+        disk.poke(value, at: Int(FSLayout.superblockB) * block + offset)
     }
 
 
@@ -115,7 +146,7 @@ struct MountRefusalTests {
         // a write that did not finish - and the disk was classified as having
         // no file system, so the next mount erased everything on it.
         withFormatted { disk, scratch in
-            disk.poke(UInt8(0), at: 0)
+            pokeBoth(disk, UInt8(0), at: 0)
 
             let before  = disk.writes
             let attempt = FileSystem.mount(disk, scratch: scratch)
@@ -134,7 +165,7 @@ struct MountRefusalTests {
         // case answerable at all: everything else on block zero is still there,
         // so the disk plainly held a file system a moment ago.
         withFormatted { disk, scratch in
-            disk.poke(UInt64(0), at: 0)
+            pokeBoth(disk, UInt64(0), at: 0)
 
             let before  = disk.writes
             let attempt = FileSystem.mount(disk, scratch: scratch)
@@ -152,7 +183,7 @@ struct MountRefusalTests {
         // magic is right and the arithmetic is not, and the old code called
         // that "not formatted" too.
         withFormatted { disk, scratch in
-            disk.poke(UInt32(12345), at: Field.totalBlocks)
+            pokeBoth(disk, UInt32(12345), at: FSSuperblockField.totalBlocks)
 
             let before  = disk.writes
             let attempt = FileSystem.mount(disk, scratch: scratch)
@@ -196,7 +227,7 @@ struct MountRefusalTests {
             // The version lives in the top two bytes of the magic, so bumping
             // it is what a disk written by a later build looks like.
             let newer = FSLayout.magicFamily | (UInt64(0x3239) << 48)   // "REIXFS92"
-            disk.poke(newer, at: Field.magic)
+            pokeBoth(disk, newer, at: FSSuperblockField.magic)
 
             let before  = disk.writes
             let attempt = FileSystem.mount(disk, scratch: scratch)
@@ -204,6 +235,35 @@ struct MountRefusalTests {
             #expect(attempt.disk == nil)
             #expect(unsupportedVersion(attempt.found) == 0x3239)
             #expect(disk.writes == before)
+        }
+    }
+
+
+    @Test("one damaged copy is not a damaged disk")
+    func oneCopyIsEnough() {
+        // Why there are two. A superblock update writes the copy it is not
+        // reading from, so a power cut in the middle of one costs the newer copy
+        // and leaves the older one whole - and the older one still says where
+        // everything is.
+        withFormatted { disk, scratch in
+            let block = Int(FSLayout.blockSize)
+
+            // The copy `format` wrote second, which is the one a mount would
+            // pick: the higher generation.
+            disk.poke(UInt8(0), at: Int(FSLayout.superblockB) * block)
+
+            let attempt = FileSystem.mount(disk, scratch: scratch)
+
+            #expect(attempt.disk != nil)
+            #expect(isOK(attempt.found))
+        }
+
+        // And the other way round, so neither copy is the special one.
+        withFormatted { disk, scratch in
+            let block = Int(FSLayout.blockSize)
+            disk.poke(UInt8(0), at: Int(FSLayout.superblockA) * block)
+
+            #expect(isOK(FileSystem.mount(disk, scratch: scratch).found))
         }
     }
 
@@ -245,15 +305,15 @@ struct MountRefusalTests {
         // that was refused must not come back looking like it was mounted once
         // and never let go.
         withFormatted { disk, scratch in
-            disk.poke(UInt8(0), at: 0)
+            pokeBoth(disk, UInt8(0), at: 0)
 
             let writesBefore = disk.writes
-            let markBefore   = disk.byte(at: Field.state)
+            let markBefore   = disk.byte(at: FSSuperblockField.state)
 
             _ = FileSystem.mount(disk, scratch: scratch)
 
             #expect(disk.writes == writesBefore)
-            #expect(disk.byte(at: Field.state) == markBefore)
+            #expect(disk.byte(at: FSSuperblockField.state) == markBefore)
         }
     }
 }

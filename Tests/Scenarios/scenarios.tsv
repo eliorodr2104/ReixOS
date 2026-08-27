@@ -85,16 +85,17 @@ dtb-squeeze	4M	qemu	-	verdict	15	Not enough space for DTB after kernel/initrd	[ 
 # come out in TraceBootPhase order.
 trace-boot	-	qemu	-	window	12	[ reix ] ReixOS|[PPM ] Physical Page Manager ready.|[VMM ] Virtual Memory Manager ready.|[HEAP] Kernel heap ready.|[SCHD] Scheduler ready.|[SYS ] Syscall Handler ready.|[KERN] Kernel is running.|Handing control to user space.|[ INIT  ] Hi, this is init process!|[TRACE] begin v=2|[TRACE] end|[ SERVE ] Terminal Server running	[ PANIC ]|REIX-PANIC|[ ERROR ]	trace-boot	skip-if:no-host-swift
 
-# The disk, from the bus to a driver that serves it. The walker reads a device id
-# off a transport, carves the window and the line for it, starts a driver, and
-# then checks the sectors while it is still the only process that can reach them.
-# Every line is printed by a different process, and the order they appear in is
-# the order the authority travelled.
+# The disk, end to end and in one boot: the bus walker reads a device id off a
+# transport, starts a driver for it, checks the sectors while it is still the
+# only process that can reach them, and hands the whole disk to a file system
+# that mounts it. Every line below is printed by a different process, and the
+# order they appear in is the order the authority travelled.
 #
-# `window` and not `verdict` because all of it happens after the marker a verdict
-# row stops on. `post=dma-barriers` reads the virtqueue's barriers back out of the
-# linked image, which is the only check a barrier can be given.
+# `window` and not `verdict` because all of it happens after the marker a
+# verdict row stops on, and the disk is not asserted to be blank: a row that
+# required the formatting line would pass once and fail on every run after,
+# since the image outlives the boot on purpose.
 
-disk	-	qemu	-	window	20	[ BUS   ] slot 31 version 1  block|[ DISK  ] serving 32768 sectors of 512 bytes|[ BUS   ] disk ready, 32768 sectors|[ BUS   ] two sectors read, one past the end refused|[ BUS   ] read 8 sectors in one request|[ INIT  ] the disk is held	[ PANIC ]|REIX-PANIC|[ ERROR ]|no virtio bus on this machine|no block device|its line is taken|the device did not answer in time|the device asked to be reset|completed more than was asked of it|finished a chain that was never submitted|out of service|refused to come up|sector 0 unreadable|past the end of the disk was read|would not start|would not attach|came up without an endpoint	dma-barriers	pass
+storage	-	qemu	-	window	25	[ BUS   ] slot 31 version 1  block|[ DISK  ] serving 32768 sectors of 512 bytes|[ BUS   ] disk ready, 32768 sectors|[ BUS   ] two sectors read, one past the end refused|[ BUS   ] read 8 sectors in one request|[ FS    ] mounted|[ INIT  ] the machine's container is held	[ PANIC ]|REIX-PANIC|[ ERROR ]|no virtio bus on this machine|no block device|its line is taken|the device did not answer in time|the device asked to be reset|out of service|refused to come up|sector 0 unreadable|no disk was handed to this process|the volume is held by somebody else|not a file system this build can mount|holds nothing this build can mount|nobody said to format it|never answered, carrying on without one|the file system gave back no container|the disk could not be checked, so it is not being served	dma-barriers	pass
 
-disk-4m	4M	embedded	-	window	20	[ DISK  ] serving 32768 sectors of 512 bytes|[ INIT  ] the disk is held	[ PANIC ]|REIX-PANIC|[ ERROR ]|no virtio bus on this machine|no block device|its line is taken|the device did not answer in time|the device asked to be reset|completed more than was asked of it|finished a chain that was never submitted|out of service|refused to come up|sector 0 unreadable|past the end of the disk was read|would not start|would not attach|came up without an endpoint	-	pass
+storage-4m	4M	embedded	-	window	25	[ DISK  ] serving 32768 sectors of 512 bytes|[ FS    ] mounted|[ INIT  ] the machine's container is held	[ PANIC ]|REIX-PANIC|[ ERROR ]|no virtio bus on this machine|no block device|its line is taken|the device did not answer in time|the device asked to be reset|out of service|refused to come up|sector 0 unreadable|no disk was handed to this process|the volume is held by somebody else|not a file system this build can mount|holds nothing this build can mount|nobody said to format it|never answered, carrying on without one|the file system gave back no container|the disk could not be checked, so it is not being served	-	pass

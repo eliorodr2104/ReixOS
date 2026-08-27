@@ -9,29 +9,49 @@ import ReixABI
 
 /// Finding out whether the disk still adds up, and only then making it.
 ///
-/// Two acts, not one, and keeping them apart is the whole of this file. A scan
-/// reads and writes nothing. A repair writes, and refuses to unless the scan
-/// that preceded it **finished** and found nothing that needs a person.
+/// **Three acts, and keeping them apart is the whole of this file.**
 ///
-/// The coupling is not tidiness. The one repair on offer is giving back blocks
-/// the map calls used that no record owns, and "no record owns them" is a claim
+/// A `scan` reads. It writes nothing, whatever it finds, and it holds the volume
+/// still when what it finds is two things on the disk contradicting each other.
+///
+/// `putRight` is what a dirty mount runs. It corrects exactly the two things that
+/// are *functions of the object table* - the block map, and every container's
+/// room - because a function can be recomputed. Nothing else is touched, and the
+/// reason is one sentence: everything else a scan can find is a disagreement
+/// between two accounts, and there is no third account to derive the answer from.
+///
+/// `repair` is the writing half of the first of those, and it is not public. The
+/// only ways to it are from inside this module, with findings just taken. It
+/// checks their ticket anyway: "nothing owns these blocks" is a claim about every
+/// record there was at one moment, and a mutation since then may have written one
+/// of those owners.
+///
+/// The coupling to `complete` is not tidiness. "No record owns them" is a claim
 /// about *every* record: a scan that stopped half way through the object table
 /// has not looked at the owner, and freeing on the strength of it would hand a
 /// live file's blocks to the next thing that asks. So an unfinished scan repairs
 /// nothing, and says so rather than reporting a number that means less than it
 /// looks like.
 ///
-/// The write order this format keeps means the ordinary residue of a crash is
-/// exactly one thing - blocks marked used that nobody owns, see `barrier` - so
-/// the ordinary case still puts itself right at mount. Everything else that a
-/// scan can find is reported and left alone, because everything else is a
-/// disagreement between two things on the disk and choosing a winner is
-/// guessing with somebody's file.
-///
 /// Depth is a choice because cost is. `blocks` is what a crash can disturb and
-/// what a dirty mount pays for; `everything` walks every directory and every
-/// container's arithmetic besides, which is a great many more reads and belongs
-/// to somebody asking rather than to every boot.
+/// what a dirty mount pays for; `everything` walks every directory besides, which
+/// is a great many more reads and belongs to somebody asking rather than to every
+/// boot. The container arithmetic is in neither category and in both: a dirty
+/// mount recomputes it because it is cheap next to what it protects, and a deep
+/// scan reports it.
+/// One more of something, and never one fewer.
+///
+/// A count of findings is a report, and a report is only useful while it is
+/// true. `+= 1` traps at the top of the range and `&+= 1` says there were none,
+/// so neither is an answer: saturating is the one that stays true, because "at
+/// least this many" is what a caller does anything with.
+@inline(__always)
+private func found(_ value: inout UInt32, by many: UInt32 = 1) {
+    let (sum, over) = value.addingReportingOverflow(many)
+    value = over ? UInt32.max : sum
+}
+
+
 extension FileSystem {
 
     /// How much of the disk a scan looks at.
@@ -51,6 +71,11 @@ extension FileSystem {
     /// What a scan found. Nothing here changed the disk.
     public struct Findings {
 
+        public enum NameScrubState: Equatable {
+            case complete
+            case budgetExhausted
+        }
+
         /// Whether the scan saw everything it set out to.
         ///
         /// The most important field, because every other number means nothing
@@ -65,10 +90,35 @@ extension FileSystem {
 
         /// Whether the container arithmetic was checked.
         ///
-        /// Separate from `complete` because it can be skipped for a reason that
-        /// is not a failure: the accumulator is a fixed table, and a disk with
-        /// more containers than it holds is scanned honestly for everything else.
+        /// Separate from `complete`, and it used to mean "there were more
+        /// containers than the accumulator holds". It cannot mean that any more:
+        /// the walk windows over the table, so every container is reached
+        /// whatever the disk holds. What is left is the honest reason - a device
+        /// that stopped answering part way through the walk.
         public var quotasChecked = false
+
+        public var safeToServe = false
+
+        // MARK: - Which moment this is a report about
+
+        /// The superblock generation when the scan ran.
+        ///
+        /// Bumped by every mount, so it separates two mounts of one disk: a set
+        /// of findings taken before a reboot cannot be applied after it.
+        public var generation: UInt64 = 0
+
+        /// How many transactions the volume had committed when the scan ran.
+        ///
+        /// A scan is a statement about one moment. "Nothing owns these blocks" is
+        /// a claim about every record there was *then*, and applying it after a
+        /// mutation would free blocks whose owner was written in between. So a
+        /// repair takes the ticket and refuses one that does not match exactly.
+        ///
+        /// There is no third field naming the instance, and it would be a
+        /// pretence: a `FileSystem` is a value, so two copies of one mount share
+        /// everything a nonce could be made of. What separates two *mounts* is
+        /// the generation above, and that is the boundary that matters.
+        public var mutations: UInt64 = 0
 
         // MARK: - Blocks
 
@@ -115,6 +165,22 @@ extension FileSystem {
         /// delete.
         public var duplicateNames: UInt32 = 0
 
+        public var duplicateTargets: UInt32 = 0
+
+        public var nameScrubState: NameScrubState = .complete
+
+        public var nameScrubBudgetExhausted: Bool {
+            nameScrubState == .budgetExhausted
+        }
+
+        /// Slots in a folder whose bytes are not an entry at all.
+        ///
+        /// A length past the field, or a name holding a character no name may
+        /// hold. Both are clamped when they are read so that nothing walks off
+        /// the end of the field, and the clamp made them look like unused slots:
+        /// `link` would lay a name over one and this walk would not see it.
+        public var brokenEntries: UInt32 = 0
+
         /// Objects that are their own parent and are not the machine's root.
         ///
         /// The one shape of loop this can see without a table's worth of memory.
@@ -129,6 +195,38 @@ extension FileSystem {
         /// to them.
         public var wrongQuota: UInt32 = 0
 
+        /// Live records charged to something that is not a live container.
+        ///
+        /// A quota that adds up to no container. Nothing writing this disk can
+        /// make one - `charged` refuses it at runtime - and there is no third
+        /// account to derive the right answer from, so it is said and held.
+        public var strayCharges: UInt32 = 0
+
+        /// Whether the disk holds more containers than this format keeps an index
+        /// of, in which case the room was not checked at all.
+        ///
+        /// Separate from `quotasChecked`, which is a device that stopped
+        /// answering: this one is a disk this build is not sized for. See
+        /// `maxContainersV02`.
+        public var tooManyContainers = false
+
+        /// How many of those were recomputed rather than reported.
+        ///
+        /// Only a dirty mount does it, and the difference is the whole rule: a
+        /// volume that was interrupted has arithmetic that is behind, and a volume
+        /// that was not has arithmetic that is wrong. One is finished, the other
+        /// is held.
+        public var roomsMended: UInt32 = 0
+
+        /// Whether the block map was actually rewritten.
+        ///
+        /// The other half of `repairable`, and it was missing: the repair's own
+        /// status was discarded, so a caller could be handed findings saying the
+        /// map *could* be put right by a call that had already tried and been
+        /// refused. A disk served on the strength of that is a disk whose map is
+        /// still the one the crash left.
+        public var mapMended = false
+
 
         /// Whether the map on the disk disagreed with the object table.
         public var changed: Bool { reclaimable > 0 || ownedButFree > 0 }
@@ -141,8 +239,28 @@ extension FileSystem {
         /// volume still, which stops the repair below on their own.
         public var damaged: Bool {
             claimedTwice > 0 || impossible > 0
-                || strayNames > 0 || duplicateNames > 0
-                || selfParented > 0 || wrongQuota > 0
+                || strayNames > 0 || duplicateNames > 0 || duplicateTargets > 0
+                || brokenEntries > 0 || nameScrubBudgetExhausted
+                || selfParented > 0 || wrongQuota > 0 || strayCharges > 0
+        }
+
+        /// What no derivation can put right.
+        ///
+        /// The map and every container's room are functions of the object table,
+        /// so both can be recomputed. Everything here is two things on the disk
+        /// contradicting each other - two records claiming one block, a record
+        /// that cannot be true, a name whose target disagrees - and there is no
+        /// third thing to derive the answer from. Choosing between them would be
+        /// guessing with somebody's file, so the volume is held instead.
+        ///
+        /// A room that was *recomputed* is not here, which is the difference
+        /// between putting something right and finding it wrong.
+        public var unfixable: Bool {
+            claimedTwice > 0 || impossible > 0
+                || strayNames > 0 || duplicateNames > 0 || duplicateTargets > 0
+                || brokenEntries > 0 || nameScrubBudgetExhausted
+                || selfParented > 0 || strayCharges > 0
+                || wrongQuota > roomsMended
         }
 
         /// Whether the map may be rebuilt from the table.
@@ -170,7 +288,9 @@ extension FileSystem {
     public mutating func scan(_ depth: Scrub = .blocks) -> Findings {
 
         var findings = Findings()
-        findings.depth = depth
+        findings.depth      = depth
+        findings.generation = superblockGeneration
+        findings.mutations  = mutations
 
         guard scanBlocks(&findings) else { return findings }
 
@@ -179,6 +299,8 @@ extension FileSystem {
         }
 
         findings.complete = true
+        findings.safeToServe = findings.quotasChecked && !findings.tooManyContainers
+            && !findings.unfixable && !findings.changed
         return findings
     }
 
@@ -189,6 +311,13 @@ extension FileSystem {
     /// object table. That is a table read per bitmap block, which on this disk is
     /// thirty-two reads, and it needs no memory beyond the two scratch blocks
     /// this type already has.
+    ///
+    /// `fits` is asked here and not only at `object`, because this loop reads
+    /// records straight out of the table: believing one whose runs point at the
+    /// bitmap would mean rebuilding the map out of the map. And it is asked
+    /// *before* the free-slot skip, because a kind byte this format never writes
+    /// arrives clamped to `.free` - so the skip used to discard precisely the
+    /// records worth refusing over.
     private mutating func scanBlocks(_ findings: inout Findings) -> Bool {
 
         let perBitmapBlock = Self.blocksPerBitmapBlock
@@ -218,22 +347,24 @@ extension FileSystem {
                     let record = FSObject(
                         reading: metaBuffer.advanced(by: slot * Int(FSLayout.objectSize))
                     )
-                    guard record.kind != .free else { continue }
 
                     let index = table * UInt32(perTableBlock) + UInt32(slot)
 
-                    // Asked here and not only at `object`, because this loop
-                    // reads records straight out of the table: believing one
-                    // whose runs point at the bitmap would mean rebuilding the
-                    // map out of the map.
+                    // Asked here and not only at `object`, and asked before the
+                    // free-slot skip. See the doc above.
                     guard record.fits(plan) else {
-                        findings.impossible += 1
+                        found(&findings.impossible)
                         quarantine()
                         continue
                     }
 
+                    guard record.standing == .live else { continue }
+
                     if index != FSLayout.rootObject, record.parent == index {
-                        findings.selfParented += 1
+                        found(&findings.selfParented)
+
+                        // A chain with no end, and nothing derives the way out.
+                        quarantine()
                     }
 
                     for run in 0..<Int(record.extents) {
@@ -243,7 +374,7 @@ extension FileSystem {
                         where block >= first && block < last {
 
                             if mark(UInt32(block)) {
-                                findings.claimedTwice += 1
+                                found(&findings.claimedTwice)
                                 quarantine()
                             }
                         }
@@ -261,8 +392,8 @@ extension FileSystem {
 
                 guard truth != stored else { continue }
 
-                findings.reclaimable  += UInt32(count(of: stored & ~truth))
-                findings.ownedButFree += UInt32(count(of: truth & ~stored))
+                found(&findings.reclaimable,  by: UInt32(count(of: stored & ~truth)))
+                found(&findings.ownedButFree, by: UInt32(count(of: truth & ~stored)))
             }
         }
 
@@ -272,51 +403,246 @@ extension FileSystem {
 
     /// Every name in every folder, against what it points at.
     ///
-    /// One question per entry, and it answers two: looking the entry's own name
-    /// up in its own folder has to come back with the entry's own object. It
-    /// does not when the target disagrees about where it lives, and it does not
-    /// when an earlier entry of the same name shadows this one - and those are
-    /// exactly the two things worth finding.
+    /// One question per entry, and it answers three: looking the entry's own name
+    /// up in its own folder has to come back with the entry's own object. It does
+    /// not when the target disagrees about where it lives, it does not when an
+    /// earlier entry of the same name shadows this one, and the bytes may not be
+    /// an entry at all.
     ///
-    /// Object by object rather than table block by table block, because walking
-    /// a folder reads records itself and would overwrite the block being walked.
+    /// **Not through `entries`.** That is the public listing, and a listing now
+    /// refuses a folder whose entry points at a slot nobody uses rather than
+    /// reporting it - which is right for a client and useless for a scan, whose
+    /// whole job is to count the ones a client would trip on. So the directory
+    /// blocks are read here, into the accumulator page, and only `lookup` and
+    /// `object` are borrowed. Three separate buffers, which is why this can walk
+    /// a folder and resolve a name inside the walk.
+    static var nameScrubDescriptorCapacity: Int { Int(FSLayout.blockSize) / 8 }
+    static var nameScrubTargetCapacity: UInt32 { UInt32(FSLayout.blockSize * 8) }
+    static var nameScrubPassBudget: Int { 32 }
+
+    static func nameScrubPartitions(named: Int) -> Int? {
+        guard named >= 0 else { return nil }
+        let capacity = nameScrubDescriptorCapacity
+        guard named <= capacity * nameScrubPassBudget else { return nil }
+        return named == 0 ? 0 : nameScrubPassBudget
+    }
+
+    private func nameScrubHash(_ entry: FSEntry, key: UInt64) -> UInt32 {
+        var value = key ^ UInt64(entry.length)
+        for index in 0..<Int(entry.length) {
+            value ^= UInt64(entry.name[index])
+            value &*= 0x100000001B3
+            value ^= value >> 29
+        }
+        value ^= value >> 32
+        return UInt32(truncatingIfNeeded: value)
+    }
+
+    private func sameName(_ left: FSEntry, _ right: FSEntry) -> Bool {
+        guard left.length == right.length else { return false }
+        for index in 0..<Int(left.length) where left.name[index] != right.name[index] {
+            return false
+        }
+        return true
+    }
+
+    private mutating func markNameScrubTarget(_ object: UInt32) -> Bool {
+        let byte = Int(object / 8)
+        let mask = UInt8(1) << UInt8(object % 8)
+        let previous = targetBuffer.loadUnaligned(fromByteOffset: byte, as: UInt8.self)
+        targetBuffer.storeBytes(of: previous | mask, toByteOffset: byte, as: UInt8.self)
+        return previous & mask != 0
+    }
+
+    private mutating func nameScrubEntry(_ ordinal: UInt32, in record: FSObject) -> FSEntry? {
+        let perBlock = UInt32(Self.entriesPerBlock)
+        var blockOffset = ordinal / perBlock
+        let slot = Int(ordinal % perBlock)
+
+        for run in 0..<Int(record.extents) {
+            let extent = record.runs[run]
+            if blockOffset < extent.count {
+                guard readBlock(extent.start + blockOffset, into: dataBuffer) == .ok else {
+                    return nil
+                }
+                return FSEntry(
+                    reading: dataBuffer.advanced(by: slot * Int(FSLayout.entrySize))
+                )
+            }
+            blockOffset -= extent.count
+        }
+
+        return nil
+    }
+
+    private mutating func scanNamePartition(
+        _ record: FSObject,
+        partition: Int,
+        partitions: Int,
+        key: UInt64,
+        findings: inout Findings
+    ) -> Bool {
+        let capacity = Self.nameScrubDescriptorCapacity
+        scrubBuffer.initializeMemory(as: UInt8.self, repeating: 0, count: Int(FSLayout.blockSize))
+
+        var descriptors = 0
+        var ordinal: UInt32 = 0
+
+        for run in 0..<Int(record.extents) {
+            let extent = record.runs[run]
+
+            for block in extent.start..<(extent.start + extent.count) {
+                guard readBlock(block, into: tallyBuffer) == .ok else { return false }
+
+                for slot in 0..<Int(Self.entriesPerBlock) {
+                    guard ordinal < UInt32.max else {
+                        findings.nameScrubState = .budgetExhausted
+                        return false
+                    }
+
+                    let entry = FSEntry(
+                        reading: tallyBuffer.advanced(by: slot * Int(FSLayout.entrySize))
+                    )
+                    ordinal += 1
+
+                    guard entry.standing == .named else { continue }
+
+                    let hash = nameScrubHash(entry, key: key)
+                    guard Int(hash % UInt32(partitions)) == partition else { continue }
+
+                    var duplicate = false
+                    for descriptor in 0..<descriptors {
+                        let offset = descriptor * 8
+                        guard scrubBuffer.loadUnaligned(
+                            fromByteOffset: offset, as: UInt32.self
+                        ) == hash else { continue }
+
+                        let earlierOrdinal = scrubBuffer.loadUnaligned(
+                            fromByteOffset: offset + 4, as: UInt32.self
+                        )
+                        guard let earlier = nameScrubEntry(earlierOrdinal, in: record),
+                              earlier.standing == .named
+                        else {
+                            findings.nameScrubState = .budgetExhausted
+                            return false
+                        }
+
+                        if sameName(earlier, entry) {
+                            duplicate = true
+                            break
+                        }
+                    }
+
+                    if duplicate {
+                        found(&findings.duplicateNames)
+                        quarantine()
+                        continue
+                    }
+
+                    guard descriptors < capacity else {
+                        findings.nameScrubState = .budgetExhausted
+                        return false
+                    }
+
+                    let offset = descriptors * 8
+                    scrubBuffer.storeBytes(of: hash, toByteOffset: offset, as: UInt32.self)
+                    scrubBuffer.storeBytes(of: ordinal - 1, toByteOffset: offset + 4, as: UInt32.self)
+                    descriptors += 1
+                }
+            }
+        }
+
+        return true
+    }
+
     private mutating func scanNames(_ findings: inout Findings) -> Bool {
+        guard plan.objectCount <= Self.nameScrubTargetCapacity else {
+            findings.nameScrubState = .budgetExhausted
+            return false
+        }
+
+        targetBuffer.initializeMemory(as: UInt8.self, repeating: 0, count: Int(FSLayout.blockSize))
+        let key = superblockGeneration &* 0x9E3779B97F4A7C15
+            ^ mutations
 
         for index in 0..<plan.objectCount {
+            let record: FSObject
+            switch readObject(index) {
+                case .live(let value):
+                    record = value
+                case .free:
+                    continue
+                case .outside:
+                    findings.nameScrubState = .budgetExhausted
+                    return false
+                case .failed:
+                    return false
+                case .corrupt:
+                    continue
+            }
 
-            guard let record = object(index) else {
-                // A record that could not be read is one thing; one that could
-                // not be true was counted already and is not a scan failure.
-                guard !corrupted else { continue }
+            guard record.kind != .file else { continue }
+
+            var named = 0
+            for run in 0..<Int(record.extents) {
+                let extent = record.runs[run]
+
+                for block in extent.start..<(extent.start + extent.count) {
+                    guard readBlock(block, into: tallyBuffer) == .ok else { return false }
+
+                    for slot in 0..<Int(Self.entriesPerBlock) {
+                        let entry = FSEntry(
+                            reading: tallyBuffer.advanced(by: slot * Int(FSLayout.entrySize))
+                        )
+
+                        switch entry.standing {
+                            case .free:
+                                continue
+                            case .impossible:
+                                found(&findings.brokenEntries)
+                                quarantine()
+                            case .named:
+                                guard named < Int.max else {
+                                    findings.nameScrubState = .budgetExhausted
+                                    return false
+                                }
+                                named += 1
+
+                                switch readObject(entry.object) {
+                                    case .live(let target):
+                                        guard target.parent == index else {
+                                            found(&findings.strayNames)
+                                            quarantine()
+                                            continue
+                                        }
+                                        if markNameScrubTarget(entry.object) {
+                                            found(&findings.duplicateTargets)
+                                            quarantine()
+                                        }
+                                    case .free, .outside, .corrupt:
+                                        found(&findings.strayNames)
+                                        quarantine()
+                                    case .failed:
+                                        return false
+                                }
+                        }
+                    }
+                }
+            }
+
+            guard let partitions = Self.nameScrubPartitions(named: named) else {
+                findings.nameScrubState = .budgetExhausted
                 return false
             }
 
-            guard record.kind != .free, record.kind != .file else { continue }
-
-            var cursor = UInt32(0)
-
-            while let found = entry(from: cursor, in: index) {
-                cursor = found.next
-
-                let name = found.entry.name
-
-                let resolved = withUnsafePointer(to: name) { bytes in
-                    lookup(
-                        UnsafeRawPointer(bytes),
-                        length: Int(found.entry.length),
-                        in    : index
-                    )
-                }
-
-                guard resolved != found.entry.object else { continue }
-
-                if resolved == nil {
-                    findings.strayNames += 1
-                } else {
-                    findings.duplicateNames += 1
-                }
-
-                quarantine()
+            for partition in 0..<partitions {
+                guard scanNamePartition(
+                    record,
+                    partition: partition,
+                    partitions: partitions,
+                    key: key,
+                    findings: &findings
+                ) else { return false }
             }
         }
 
@@ -324,19 +650,74 @@ extension FileSystem {
     }
 
 
+    /// How many containers this version of the format keeps an index of.
+    ///
+    /// One page of counters, so a thousand and twenty-four. It is a *bound* and
+    /// not a window: the walk below reads the object table twice however many
+    /// containers there are, and a disk with more than this many is reported
+    /// rather than checked in pieces.
+    ///
+    /// It used to be a window, and that was the mistake. A pass over the whole
+    /// object table per window meant the thousand and twenty-fifth container
+    /// bought a second pass, and on a large disk a pass is the whole table: the
+    /// room walk went from one table read per block to as many as there are
+    /// windows. Measured, the step was visible; see `ScaleTests`.
+    ///
+    /// Past this the answer is a persistent quota index, which is v03: a number
+    /// kept up to date as blocks are charged needs no walk at all.
+    static var maxContainersV02: Int { Int(FSLayout.blockSize) / 4 }
+
+
     /// Every container's room against what is actually charged to it.
     ///
-    /// One pass over the table, accumulating into a fixed table of containers.
-    /// A disk with more containers than it holds is not a failure and not a
-    /// silence: `quotasChecked` comes back false and the rest of the report
-    /// stands.
+    /// Writes nothing, whatever it finds, and holds the volume still when it
+    /// finds a container whose room does not add up. A volume that was not
+    /// interrupted and does not add up is damaged; the one that was interrupted
+    /// is put right instead, by `putRight`, and that is the only place a room is
+    /// ever recomputed.
     private mutating func scanRoom(_ findings: inout Findings) -> Bool {
+        roomWalk(&findings, mending: false)
+    }
 
-        var containers = InlineArray<32, UInt32>(repeating: 0)
-        var charged    = InlineArray<32, UInt32>(repeating: 0)
-        var known      = 0
+
+    /// Rebuilds every container's room from the records charged to it.
+    ///
+    /// Each correction is its own transaction: a container's `used` derived from
+    /// the records is right whatever the other containers say, so correcting one
+    /// is an act that stands alone and does not have to fit in a journal beside
+    /// the rest.
+    private mutating func roomRebuild(_ findings: inout Findings) -> Bool {
+        roomWalk(&findings, mending: true)
+    }
+
+
+    /// Two passes over the object table, and never more.
+    ///
+    /// The first finds the containers, in ascending order because that is the
+    /// order the table is walked in. The second adds up what every live record is
+    /// charged to, by looking its container up in that index - a binary search of
+    /// ten comparisons rather than a pass of the table. Then the counts are
+    /// compared against what each container says about itself.
+    ///
+    /// Two buffers, and both are free here: the accumulator page holds the index
+    /// and the data page holds the counts. A thousand and twenty-four of each,
+    /// which is `maxContainersV02`.
+    private mutating func roomWalk(
+        _ findings: inout Findings,
+        mending   : Bool
+    ) -> Bool {
 
         let perTableBlock = Int(FSLayout.blockSize / FSLayout.objectSize)
+
+        tallyBuffer.initializeMemory(
+            as: UInt8.self, repeating: 0, count: Int(FSLayout.blockSize)
+        )
+        dataBuffer.initializeMemory(
+            as: UInt8.self, repeating: 0, count: Int(FSLayout.blockSize)
+        )
+
+        // Pass one: which containers there are.
+        var containers = 0
 
         for table in 0..<plan.tableBlocks {
             guard readBlock(plan.tableStart + table, into: metaBuffer) == .ok else {
@@ -347,7 +728,38 @@ extension FileSystem {
                 let record = FSObject(
                     reading: metaBuffer.advanced(by: slot * Int(FSLayout.objectSize))
                 )
-                guard record.kind != .free, record.fits(plan) else { continue }
+
+                guard record.fits(plan), record.standing == .live,
+                      record.kind == .container else { continue }
+
+                guard containers < Self.maxContainersV02 else {
+                    // Said out loud rather than checked in pieces. See
+                    // `maxContainersV02`.
+                    findings.tooManyContainers = true
+                    return true
+                }
+
+                let index = table * UInt32(perTableBlock) + UInt32(slot)
+                tallyBuffer.storeBytes(
+                    of: index, toByteOffset: containers * 4, as: UInt32.self
+                )
+
+                containers += 1
+            }
+        }
+
+        // Pass two: what is charged to each of them.
+        for table in 0..<plan.tableBlocks {
+            guard readBlock(plan.tableStart + table, into: metaBuffer) == .ok else {
+                return false
+            }
+
+            for slot in 0..<perTableBlock {
+                let record = FSObject(
+                    reading: metaBuffer.advanced(by: slot * Int(FSLayout.objectSize))
+                )
+
+                guard record.fits(plan), record.standing == .live else { continue }
 
                 let index = table * UInt32(perTableBlock) + UInt32(slot)
 
@@ -355,38 +767,86 @@ extension FileSystem {
                 // rule rather than two.
                 let place = record.kind == .container ? index : record.container
 
-                var at = -1
-                for seen in 0..<known where containers[seen] == place { at = seen }
-
-                if at < 0 {
-                    guard known < 32 else { return true }   // more than the table holds
-
-                    containers[known] = place
-                    charged[known]    = 0
-                    at                = known
-                    known            += 1
+                guard let at = position(of: place, among: containers) else {
+                    // No disk this build wrote has one, and there is no third
+                    // account to derive the right answer from.
+                    found(&findings.strayCharges)
+                    quarantine()
+                    continue
                 }
 
-                let (total, over) = charged[at].addingReportingOverflow(record.blocks)
-                guard !over else { return true }
+                let held = dataBuffer.loadUnaligned(fromByteOffset: at * 4, as: UInt32.self)
 
-                charged[at] = total
+                // Checked, because the numbers come off a disk: a table of
+                // records that between them claim more blocks than the counter
+                // holds is a table this must refuse rather than wrap around.
+                let (total, over) = held.addingReportingOverflow(record.blocks)
+                guard !over else {
+                    found(&findings.impossible)
+                    return false
+                }
+
+                dataBuffer.storeBytes(of: total, toByteOffset: at * 4, as: UInt32.self)
             }
         }
 
-        for seen in 0..<known {
-            guard let container = object(containers[seen]),
-                  container.kind == .container
-            else { continue }
+        // And the comparison, container by container.
+        for at in 0..<containers {
+            let index = tallyBuffer.loadUnaligned(fromByteOffset: at * 4, as: UInt32.self)
+            let counted = dataBuffer.loadUnaligned(fromByteOffset: at * 4, as: UInt32.self)
 
-            guard container.used != charged[seen] else { continue }
+            guard var container = object(index),
+                      container.standing == .live,
+                      container.kind == .container else { continue }
 
-            findings.wrongQuota += 1
-            quarantine()
+            guard container.used != counted else { continue }
+
+            found(&findings.wrongQuota)
+
+            // Reported and held, or corrected. Which of the two depends on how
+            // the volume was found, and that is the whole rule: a dirty volume
+            // was interrupted, so its arithmetic is behind and recomputing it is
+            // finishing what was started. A clean one was not interrupted, so a
+            // number that does not add up is damage or a bug, and tidying it away
+            // would be tidying away the evidence.
+            guard mending else {
+                quarantine()
+                continue
+            }
+
+            container.used = counted
+
+            guard begin() == .ok else { return false }
+            guard finish(store(container, at: index)) == .ok else { return false }
+
+            found(&findings.roomsMended)
         }
 
-        findings.quotasChecked = true
+        findings.quotasChecked = !findings.tooManyContainers
         return true
+    }
+
+
+    /// Where `container` sits in the index, by binary search.
+    ///
+    /// Ascending because the table is walked in order, which is what makes ten
+    /// comparisons enough where a scan of the index would be a thousand.
+    private func position(of container: UInt32, among count: Int) -> Int? {
+
+        var low  = 0
+        var high = count - 1
+
+        while low <= high {
+            let middle = (low + high) / 2
+            let value  = tallyBuffer.loadUnaligned(
+                fromByteOffset: middle * 4, as: UInt32.self
+            )
+
+            if value == container { return middle }
+            if value <  container { low = middle + 1 } else { high = middle - 1 }
+        }
+
+        return nil
     }
 
 
@@ -394,17 +854,38 @@ extension FileSystem {
 
     /// Gives back the blocks a scan found nobody owning, and nothing else.
     ///
-    /// Refuses unless the findings say it may: something to give back, a scan
-    /// that finished, and nothing found that a person should see first. Passing
-    /// findings from a different disk, or older than the last write, is the one
-    /// way to misuse this - so the caller that has both is the one that calls it.
-    public mutating func repair(_ findings: Findings) -> FSStatus {
+    /// **Not public.** The only ways in are `putRight`, which is what a dirty
+    /// mount runs, and a caller inside this module that has just scanned. That is
+    /// the whole answer to stale findings: there is no door through which a set of
+    /// them can arrive from somewhere else, or from earlier.
+    ///
+    /// The ticket is checked anyway, because a door that cannot be misused and a
+    /// door that is checked are not the same thing. "Nothing owns these blocks"
+    /// is a claim about every record there was at one moment; a mutation since
+    /// then may have written one of those owners.
+    mutating func repair(_ findings: Findings) -> FSStatus {
+
+        guard findings.generation == superblockGeneration,
+              findings.mutations  == mutations
+        else { return .busy }
 
         guard findings.repairable else { return .notFound }
 
         let perTableBlock = Int(FSLayout.blockSize / FSLayout.objectSize)
 
+        // One transaction per bitmap block, and not one for the whole repair.
+        //
+        // Each block is rebuilt from the records alone, so each is independently
+        // true of the disk: stopping between two of them leaves a correct map for
+        // the blocks already done and the old one for the rest, which is a state
+        // the next scan puts right the same way. One transaction for all of them
+        // would be bounded by the journal instead - sixteen images - and a disk
+        // big enough to need seventeen bitmap blocks could then never be
+        // repaired at all.
         for map in 0..<plan.bitmapBlocks {
+
+            let begun = begin()
+            guard begun == .ok else { return begun }
 
             let first = UInt64(map) * Self.blocksPerBitmapBlock
             let last  = first + Self.blocksPerBitmapBlock
@@ -419,6 +900,7 @@ extension FileSystem {
 
             for table in 0..<plan.tableBlocks {
                 guard readBlock(plan.tableStart + table, into: metaBuffer) == .ok else {
+                    abort()
                     return .deviceFailed
                 }
 
@@ -426,7 +908,7 @@ extension FileSystem {
                     let record = FSObject(
                         reading: metaBuffer.advanced(by: slot * Int(FSLayout.objectSize))
                     )
-                    guard record.kind != .free, record.fits(plan) else { continue }
+                    guard record.fits(plan), record.standing == .live else { continue }
 
                     for run in 0..<Int(record.extents) {
                         let extent = record.runs[run]
@@ -439,30 +921,72 @@ extension FileSystem {
                 }
             }
 
-            guard writeBlock(plan.bitmapStart + map, from: dataBuffer) == .ok else {
-                return .deviceFailed
-            }
+            guard finish(
+                stageStructuralBlock(plan.bitmapStart + map, from: dataBuffer)
+            ) == .ok else { return .deviceFailed }
         }
 
         return .ok
     }
 
 
-    /// Scans, and puts right what is safe to put right.
+    /// Scans, and puts right what can be derived. What a dirty mount runs.
     ///
-    /// What a dirty mount runs. The depth is `blocks` because that is what a
-    /// power cut can disturb and a mount should not pay for a walk of every
-    /// directory on the disk.
+    /// Three things, in this order, and the order is the point:
+    ///
+    /// 1. the journal is already replayed - `mount` does it before this is
+    ///    reachable - so what is read here is the disk *after* the last
+    ///    transaction, not one behind it;
+    /// 2. the block map is rebuilt from the extents, which frees what nobody owns
+    ///    and marks used what somebody does;
+    /// 3. every container's room is rebuilt from the records that are charged to
+    ///    it.
+    ///
+    /// Both repairs are *derivations*: the map and the room are both functions of
+    /// the object table, so putting them right is recomputing them rather than
+    /// choosing between two accounts. Everything that is not a derivation is left
+    /// alone and holds the volume still: two records claiming one block, a record
+    /// that cannot be true, a name whose target disagrees. Those are two things on
+    /// the disk contradicting each other, and picking a winner is guessing with
+    /// somebody's file.
+    ///
+    /// A device that stops answering part way through leaves the volume dirty -
+    /// nothing marks it clean but `unmount` - and the findings say `complete` is
+    /// false, which is what a caller reads to decide not to serve it.
     @discardableResult
-    public mutating func check(_ depth: Scrub = .blocks) -> Findings {
+    public mutating func putRight() -> Findings {
 
-        let findings = scan(depth)
+        var findings = scan(.blocks)
 
-        guard findings.repairable else { return findings }
+        // The room, and only on a dirty mount. A clean volume whose containers do
+        // not add up was not interrupted: something wrote a number that cannot be
+        // true, and recomputing it would be tidying away the evidence of a bug or
+        // of damage. So it is corruption there and a repair here.
+        if wasDirty, findings.complete {
+            guard roomRebuild(&findings) else { return findings }
+        }
 
-        _ = repair(findings)
+        // Before the repair, and whether or not the map can also be rebuilt: it
+        // used to be inside the branch below.
+        if findings.unfixable { quarantine() }
 
-        return findings
+        if findings.changed {
+            guard findings.repairable else { return findings }
+            findings.mapMended = repair(findings) == .ok
+            guard findings.mapMended else { return findings }
+        }
+
+        var verified = scan(.everything)
+        verified.reclaimable  = findings.reclaimable
+        verified.ownedButFree = findings.ownedButFree
+        verified.claimedTwice = findings.claimedTwice
+        verified.impossible   = findings.impossible
+        verified.wrongQuota   = findings.wrongQuota
+        verified.strayCharges = findings.strayCharges
+        verified.tooManyContainers = findings.tooManyContainers
+        verified.roomsMended = findings.roomsMended
+        verified.mapMended  = findings.mapMended
+        return verified
     }
 
 

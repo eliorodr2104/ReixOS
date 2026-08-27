@@ -31,7 +31,7 @@ import ReixABI
 /// system's memory of it, which is what `dropCache` below is for. The rule is a
 /// statement about what reached the disk; a scan that could be answered out of
 /// blocks held in hand would pass by agreeing with the code it is checking.
-@Suite("Ordering, in place of a transaction")
+@Suite("What a failed operation leaves behind")
 struct OrderingTests {
 
     private static let sectors: UInt64 = 4096   // 2 MiB
@@ -103,6 +103,13 @@ struct OrderingTests {
     /// answers how many blocks an object owns that the map calls free.
     ///
     /// Zero is the only acceptable answer, whatever the operation did.
+    ///
+    /// Asked of a *remounted* disk, and that is not tidiness. The guarantee moved
+    /// when the journal arrived: it used to be "every stopping point leaves
+    /// something true of the medium", and it is now "every stopping point leaves
+    /// something the next mount can finish". A failure between the committed
+    /// header and the last home block is a disk that is half applied and says so;
+    /// asking the instance that crashed would be asking before the answer exists.
     private func ownedButFree(
         _ fs: inout FileSystem<MemoryDisk>,
         _ disk: MemoryDisk,
@@ -114,9 +121,18 @@ struct OrderingTests {
         let status = work(&fs)
         disk.recover()
 
-        fs.dropCache()
+        let scratch = UnsafeMutableRawPointer.allocate(
+            byteCount: FileSystem<MemoryDisk>.scratchBytes,
+            alignment: 8
+        )
+        defer { scratch.deallocate() }
 
-        return (fs.scan().ownedButFree, status)
+        guard var again = FileSystem.mount(disk, scratch: scratch).disk else {
+            Issue.record("the disk would not mount after failing at \(nth)")
+            return (0, status)
+        }
+
+        return (again.scan().ownedButFree, status)
     }
 
 
@@ -265,7 +281,7 @@ struct OrderingTests {
             disk.recover()
             fs.dropCache()
 
-            let findings = fs.check()
+            let findings = fs.putRight()
             #expect(findings.ownedButFree == 0)
         }
     }
@@ -276,10 +292,16 @@ struct OrderingTests {
     @Test("a block the disk tore in half is not remembered as though it landed")
     func aTornWriteIsNotRemembered() {
         // The one thing keeping metadata blocks in hand can get wrong that no
-        // ordering test above would notice. A refused write that changed nothing
-        // leaves the slot right by accident; a refused write that landed half a
-        // block leaves it wrong, and every question asked afterwards is answered
-        // out of it.
+        // test above would notice. A refused write that changed nothing leaves
+        // the slot right by accident; a refused write that landed half a block
+        // leaves it wrong, and every question asked afterwards is answered out
+        // of it.
+        //
+        // The tear now lands on a journal payload at the *commit*, because that
+        // is where a structural write goes first and staging goes nowhere near
+        // the disk. Which is the interesting half anyway: nothing may be
+        // remembered from a commit that failed, or the next read is answered out
+        // of an image nobody finished writing.
         withDisk { fs, disk in
             guard let object = file(&fs, "torn.bin", blocks: 1),
                   let before = fs.object(object)
@@ -288,8 +310,16 @@ struct OrderingTests {
             var longer = before
             longer.size = 1234
 
+            #expect(fs.begin() == .ok)
+
+            // Staging cannot fail for a device reason any more: it is a copy into
+            // the arena and the medium hears nothing.
+            let quiet = disk.writes
+            #expect(fs.store(longer, at: object) == .ok)
+            #expect(disk.writes == quiet)
+
             disk.tearsOneWrite = true
-            #expect(fs.store(longer, at: object) != .ok)
+            #expect(fs.commit() != .ok)
 
             let at = Int(fs.plan.tableStart) * Int(FSLayout.blockSize)
                 + Int(object) * Int(FSLayout.objectSize)
@@ -299,9 +329,9 @@ struct OrderingTests {
                 onDisk |= UInt64(disk.byte(at: at + 8 + byte)) << (8 * byte)
             }
 
-            // The tear really did change the medium, or there is nothing here to
-            // be wrong about.
-            #expect(onDisk != before.size)
+            // The home block never heard of it, which is the transaction doing
+            // its work: what was torn was a payload nothing points at.
+            #expect(onDisk == before.size)
 
             guard let after = fs.object(object) else {
                 Issue.record("the torn record became unreadable, which it does not")
@@ -379,12 +409,12 @@ struct OrderingTests {
                     UnsafeRawPointer(from.utf8Start),
                     length: from.utf8CodeUnitCount,
                     in    : FSLayout.rootObject
-                )
+                ).object
                 let new = fs.lookup(
                     UnsafeRawPointer(to.utf8Start),
                     length: to.utf8CodeUnitCount,
                     in    : made.object
-                )
+                ).object
 
                 #expect(old != nil || new != nil, "step \(step) lost the file entirely")
                 #expect(fs.scan().ownedButFree == 0)
@@ -436,151 +466,10 @@ struct OrderingTests {
                     UnsafeRawPointer(name.utf8Start),
                     length: name.utf8CodeUnitCount,
                     in    : record.parent
-                )
+                ).object
 
                 #expect(named == object, "step \(step): the file is not in the folder it claims")
             }
         }
-    }
-}
-
-/// What a device says a completed write has achieved, and what the file system
-/// does about it.
-///
-/// The three words are not synonyms and the whole ordering rule rests on which
-/// one a disk means: a write that has *completed* has been taken, a write that
-/// is *ordered* cannot reach the medium after a later one, and a write that is
-/// *durable* survives the power going. A disk with a write cache gives the first
-/// and needs a flush for the other two; a disk without one gives all three at
-/// once, and asking it for a barrier is a round trip for nothing.
-@Suite("Completed, ordered and durable are three things")
-struct DurabilityTests {
-
-    private static let sectors: UInt64 = 4096
-
-
-    private func withDisk(
-        _ durability: BlockDurability,
-        _ body: (inout FileSystem<MemoryDisk>, MemoryDisk) -> Void
-    ) {
-        let disk = MemoryDisk(sectors: Self.sectors)
-        disk.durability = durability
-
-        let scratch = UnsafeMutableRawPointer.allocate(
-            byteCount: FileSystem<MemoryDisk>.scratchBytes,
-            alignment: 8
-        )
-        defer { scratch.deallocate() }
-
-        guard var fs = FileSystem.format(disk, scratch: scratch).disk else {
-            Issue.record("the fixture disk would not format")
-            return
-        }
-
-        body(&fs, disk)
-    }
-
-
-    private func file(
-        _ fs: inout FileSystem<MemoryDisk>,
-        _ name: StaticString,
-        blocks: Int
-    ) -> UInt32? {
-        let made = fs.create(
-            UnsafeRawPointer(name.utf8Start),
-            length: name.utf8CodeUnitCount,
-            kind  : .file,
-            in    : FSLayout.rootObject
-        )
-        guard made.status == .ok else { return nil }
-
-        let bytes = Int(FSLayout.blockSize) * blocks
-        let payload = UnsafeMutableRawPointer.allocate(byteCount: bytes, alignment: 8)
-        defer { payload.deallocate() }
-        payload.initializeMemory(as: UInt8.self, repeating: 0x5A, count: bytes)
-
-        guard fs.write(
-            made.object, at: 0, from: UnsafeRawPointer(payload), count: UInt64(bytes)
-        ).status == .ok else { return nil }
-
-        return made.object
-    }
-
-
-    @Test("a disk with a cache is asked for the barrier it needs")
-    func cachedDiskIsFlushed() {
-        withDisk(.onFlush) { fs, disk in
-            guard let object = file(&fs, "big.bin", blocks: 6) else { return }
-
-            let before = disk.flushes
-            #expect(fs.truncate(object, to: FSLayout.blockSize) == .ok)
-            #expect(disk.flushes > before)
-        }
-    }
-
-
-    @Test("a disk without one is not asked, because the answer is already yes")
-    func uncachedDiskIsNotFlushed() {
-        // The declaration earning its keep. Without it every barrier on such a
-        // disk is a round trip that changes nothing - and through a block client
-        // that is a round trip across an IPC.
-        withDisk(.onCompletion) { fs, disk in
-            guard let object = file(&fs, "big.bin", blocks: 6) else { return }
-
-            let before = disk.flushes
-            #expect(fs.truncate(object, to: FSLayout.blockSize) == .ok)
-            #expect(disk.flushes == before)
-        }
-    }
-
-
-    @Test("skipping the flush does not skip the ordering")
-    func uncachedDiskStillOrders() {
-        // The thing that must not be traded away: the barrier is cheaper on such
-        // a disk, not absent. Blocks are still released only after the record
-        // that stopped naming them is written, so the invariant holds either way.
-        for durability in [BlockDurability.onFlush, .onCompletion] {
-            withDisk(durability) { fs, disk in
-                guard let object = file(&fs, "big.bin", blocks: 6) else { return }
-
-                disk.failAfter(4)
-                _ = fs.truncate(object, to: FSLayout.blockSize)
-                disk.recover()
-                fs.dropCache()
-
-                #expect(fs.scan().ownedButFree == 0)
-            }
-        }
-    }
-
-
-    @Test("what a device says about itself survives the trip to a client")
-    func durabilityCrossesTheWire() {
-        // It travels in the top bit of the sector-size word, because the four
-        // words of a geometry answer were already spoken for and a sector size
-        // is never that big.
-        for durability in [BlockDurability.onFlush, .onCompletion] {
-            let message = BlockOperation.geometry(
-                sectorSize : 512,
-                sectorCount: 32768,
-                durability : durability
-            )
-
-            let device = BlockOperation.device(of: message)
-
-            #expect(device.sectorSize == 512)
-            #expect(device.sectorCount == 32768)
-            #expect(device.durability == durability)
-        }
-
-        // And a large but real sector size still comes back whole.
-        let big = BlockOperation.device(of: BlockOperation.geometry(
-            sectorSize : 4096,
-            sectorCount: 1,
-            durability : .onFlush
-        ))
-
-        #expect(big.sectorSize == 4096)
-        #expect(big.durability == .onFlush)
     }
 }

@@ -73,6 +73,12 @@ struct FSRightsTests {
             (.relocate,    .remove),
             (.bind,        .delegate),
             (.grantRoom,   .quota),
+
+            // Two rights, and the only entry here that needs both: a container
+            // is room set aside, so making one is a use of the room-moving
+            // authority as much as of the writing one.
+            (.createContainer, [.write, .quota]),
+
             (.nameMachine, .admin),
             (.scrub,       .admin),
             (.unmount,     .unmount)
@@ -105,6 +111,58 @@ struct FSRightsTests {
     }
 
 
+    /// Making a container is not the same act as making a file, and it used to
+    /// travel as a word in the same message.
+    ///
+    /// `create` costs `.write`, which every tenant has. So the only thing between
+    /// a tenant and a container of its own - carved out of the room it had been
+    /// lent, with a quota it chose - was the `kind` field of a payload it wrote
+    /// itself.
+    @Test("an occupant cannot make a container, and the room-holder can")
+    func containersCostQuota() {
+        let needed = FSRights.required(for: .createContainer)
+
+        #expect(needed.contains(.write))
+        #expect(needed.contains(.quota))
+
+        // A tenant holds everything `create` costs and not everything this does.
+        #expect(FSRights.occupant.contains(FSRights.required(for: .create)))
+        #expect(!FSRights.occupant.contains(needed))
+
+        // A reader holds neither.
+        #expect(!FSRights.reader.contains(needed))
+
+        // And whoever was handed the room may hand a piece of it on.
+        #expect(FSRights.everything.contains(needed))
+    }
+
+
+    @Test("which door a request came through decides what it may make")
+    func theKindDoesNotChooseTheDoor() {
+        // The kind in a payload is the client's word about what it wants. Which
+        // operation it arrived as is not, because that is what the rights were
+        // checked against - so a `.container` sent through `.create` is refused
+        // rather than made at the price of a file.
+        #expect(FileOperation.create.makes(.file))
+        #expect(FileOperation.create.makes(.folder))
+        #expect(!FileOperation.create.makes(.container))
+        #expect(!FileOperation.create.makes(.free))
+
+        #expect(FileOperation.createContainer.makes(.container))
+        #expect(!FileOperation.createContainer.makes(.file))
+        #expect(!FileOperation.createContainer.makes(.folder))
+        #expect(!FileOperation.createContainer.makes(.free))
+
+        // Nothing else makes anything at all, whatever kind it names.
+        for operation in Self.operations
+        where operation != .create && operation != .createContainer {
+            for kind in [FSKind.free, .file, .folder, .container] {
+                #expect(!operation.makes(kind), "\(operation) makes \(kind)")
+            }
+        }
+    }
+
+
     @Test("looking is not touching")
     func readingChangesNothing() {
         let reader = FSRights.reader
@@ -115,6 +173,27 @@ struct FSRightsTests {
         for right in [FSRights.write, .remove, .delegate, .quota, .admin, .unmount] {
             #expect(!reader.contains(right))
         }
+    }
+
+
+    /// A capability may deliberately root a client at one file (or folder),
+    /// not only at a container.  `FileSystemClient` uses the full `status`
+    /// reply as the attach acknowledgement, so this zero-room status must not
+    /// be confused with the short successful status used for ordinary calls.
+    @Test("a direct file root has a full zero-room attach acknowledgement")
+    func directFileRootCanAcknowledgeAttach() {
+        let fileRoot: UInt32 = 37
+        let acknowledgement = FileOperation.standing(
+            root: fileRoot, free: 0, used: 0, dirty: false
+        )
+
+        #expect(FileOperation.isAttachAcknowledgement(acknowledgement))
+        #expect(acknowledgement.words[3] == fileRoot)
+        #expect(acknowledgement.words[1] == 0)
+
+        // A short `.ok` cannot name the root or prove the attach finished.
+        #expect(!FileOperation.isAttachAcknowledgement(FileOperation.answer(.ok)))
+        #expect(!FileOperation.isAttachAcknowledgement(FileOperation.answer(.wrongKind)))
     }
 
 

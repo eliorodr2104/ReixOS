@@ -70,7 +70,7 @@ struct FileSystemTests {
         in folder: UInt32 = FSLayout.rootObject
     ) -> UInt32? {
         var found: UInt32? = nil
-        name(text) { pointer, length in found = fs.lookup(pointer, length: length, in: folder) }
+        name(text) { pointer, length in found = fs.lookup(pointer, length: length, in: folder).object }
         return found
     }
 
@@ -277,32 +277,53 @@ struct FileSystemTests {
                 }
             }
 
+            let room = UnsafeMutableRawPointer.allocate(
+                byteCount: 32 * FSListEntry.width, alignment: 8
+            )
+            defer { room.deallocate() }
+
             var cursor = UInt32(0)
             var seen   = 0
             var last   = UInt32.max
+            var rounds = 0
 
             let before = disk.reads
 
-            while let found = fs.entry(from: cursor, in: FSLayout.rootObject) {
-                // Never the same one twice: a cursor that did not advance would
-                // hand back the first name for ever, and a bounded caller would
-                // never notice.
-                #expect(found.entry.object != last)
-                last   = found.entry.object
-                cursor = found.next
-                seen  += 1
+            while rounds < 20 {
+                rounds += 1
 
-                if seen > 400 { break }
+                let batch = fs.entries(
+                    from: cursor, in: FSLayout.rootObject, into: room, capacity: 32
+                )
+                #expect(batch.status == .ok)
+
+                for index in 0..<batch.count {
+                    let entry = FSListEntry(
+                        reading: room.advanced(by: index * FSListEntry.width)
+                    )
+
+                    // Never the same one twice: a cursor that did not advance
+                    // would hand back the first name for ever, and a bounded
+                    // caller would never notice.
+                    #expect(entry.reference != last)
+                    last  = entry.reference
+                    seen += 1
+                }
+
+                if batch.eof { break }
+                cursor = batch.next
             }
 
             #expect(seen == 200)
 
-            // Two hundred names in four blocks. Each step reads the folder's
-            // record and the one block the cursor is in, so the whole walk is
-            // about two reads a name. Scanning the folder from the front for
-            // every name - which is what asking by position did - is three or
-            // four times that, and the gap grows with the folder.
-            #expect(disk.reads - before < 600)
+            // Two hundred names in seven batches of thirty-two. Each batch reads
+            // the folder's record, the blocks its own names live in, and the
+            // table blocks those names' records share - so the walk is a few
+            // reads per batch and not per name. Asking one name at a time was
+            // about two reads a name; asking by position, which is what came
+            // before that, was three or four times *that* and grew with the
+            // folder.
+            #expect(disk.reads - before < 120)
         }
     }
 
@@ -511,14 +532,27 @@ struct FileSystemTests {
             defer { out.deallocate() }
             out.initializeMemory(as: UInt8.self, repeating: 0x33, count: 8192)
 
-            disk.failFrom = disk.reads + disk.writes + 3
+            disk.failAfter(3)
 
             let written = fs.write(file, at: 0, from: UnsafeRawPointer(out), count: 8192)
-            #expect(written.status == .deviceFailed)
 
-            // The size is only written after the bytes are, so the record never
-            // claims more than reached the disk.
-            #expect(written.bytes < 8192)
+            // Failed, and nothing more. There is no accounting to put right,
+            // because a growth that is not committed is one the disk never heard
+            // of: the claim on the blocks and the record that owns them are staged
+            // images in a transaction nobody promised.
+            #expect(written.status == .deviceFailed)
+            #expect(!fs.corrupted)
+
+            // The size never changes without the bytes, so the record never
+            // claims more than reached the disk. It cannot claim any of it now:
+            // the size is in the same transaction as the blocks.
+            //
+            // Asked once the disk answers again, because a disk that refuses
+            // every read has no answer to give about anything.
+            disk.recover()
+            fs.dropCache()
+
+            #expect(fs.object(file)?.size == 0)
         }
     }
 }

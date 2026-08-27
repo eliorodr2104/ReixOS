@@ -55,8 +55,15 @@ public struct FSLeases {
 
 
     /// What a slot holds, for a caller sweeping the table against a disk.
+    ///
+    /// Both ends of the range, and the lower one is not decoration: a sweep
+    /// walking a table with an index it worked out from something else can arrive
+    /// here with a negative one, and a negative subscript on a fixed array is not
+    /// a wrong answer, it is the server gone.
     public func entry(at index: Int) -> (object: UInt32, age: UInt32)? {
-        guard index < Self.capacity, let object = objects[index] else { return nil }
+        guard index >= 0, index < Self.capacity, let object = objects[index] else {
+            return nil
+        }
 
         return (object, ages[index])
     }
@@ -64,7 +71,7 @@ public struct FSLeases {
 
     /// Lets go of whatever is in `index`.
     public mutating func forget(at index: Int) {
-        guard index < Self.capacity else { return }
+        guard index >= 0, index < Self.capacity else { return }
 
         objects[index] = nil
         holders[index] = nil

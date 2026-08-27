@@ -259,11 +259,11 @@ struct GenerationTests {
         let small = FSBadge(objectCount: 512)
         #expect(small.objectBits == 10)
 
-        // Capped: the object number cannot grow into the rights, so a disk this
-        // wide gets every bit under them and the generation gets none. See
-        // "the generation still spans enough reuses of one slot".
+        // Wide, and still leaving the generation room: the object number stops
+        // where the rights begin, and the rights begin at bit fifty-six now
+        // rather than at bit twenty-four.
         let big = FSBadge(objectCount: 1 << 24)
-        #expect(big.objectBits == 24)
+        #expect(big.objectBits == 25)
 
         // Whatever the split, the extremes have to survive the round trip.
         for layout in [small, big] {
@@ -281,26 +281,26 @@ struct GenerationTests {
         // had the badge's problem and now has the badge's answer, in the word it
         // already occupied: the object number is ten bits on this disk and the
         // word is thirty-two.
-        let layout = FSBadge(objectCount: 512)
+        //
+        // Its own encoding, and not the badge's with the rights zeroed. Sharing
+        // one meant the badge was as narrow as this word, and the generation is
+        // what paid.
+        let layout = FSHandle(objectBits: FSBadge(objectCount: 512).objectBits)
 
         for object in [UInt32(0), 1, 511] {
             for generation in [UInt32(0), 9, 1 << 20] {
-                let handle = layout.handle(object: object, generation: generation)
+                let handle = layout.encode(object: object, generation: generation)
 
                 #expect(layout.object(of: handle) == object)
-                #expect(layout.names(generation: generation, badge: handle))
+                #expect(layout.names(generation: generation, handle: handle))
 
                 // A client answered nought has been answered nothing, and
                 // sending nought back gets nothing too. That is what makes it
                 // usable as "not set yet".
                 #expect(handle != 0)
 
-                // No rights: those belong to capabilities, and a handle in a
-                // message carries no authority of its own.
-                #expect(FileOperation.rights(badge: handle).isEmpty)
-
                 // And the thing this exists for.
-                #expect(!layout.names(generation: generation &+ 1, badge: handle))
+                #expect(!layout.names(generation: generation &+ 1, handle: handle))
             }
         }
 
@@ -308,25 +308,34 @@ struct GenerationTests {
     }
 
 
-    @Test("a count wider than the badge is cut down, and the limit is known")
+    @Test("the limit is the handle's, and a slot never passes it")
     func theLimitIsStated() {
-        // Said out loud rather than left to be discovered: the comparison is
-        // made on as much of the count as a badge can carry, so it takes that
-        // many removals of one slot before an old capability could match again.
-        // On this disk that is two million, which is the honest answer for a
-        // thirty-two bit word and not a claim of never.
-        let layout = FSBadge(objectCount: 512)
+        // The badge carries every bit of a record's counter now, so the narrower
+        // of the two comparisons is the *handle*: ten bits of object out of
+        // thirty-two leaves twenty-two of generation.
+        let layout  = FSBadge(objectCount: 512)
+        let handles = layout.handles
 
-        let inside  = UInt32((1 << 21) - 1)
-        let wrapped = inside &+ 1
+        #expect(layout.lastGeneration  == UInt32.max)
+        #expect(handles.lastGeneration == (1 << 22) - 1)
 
-        let badge = layout.encode(object: 3, generation: inside, rights: .occupant)
+        let inside = handles.lastGeneration
+
+        // Inside the limit both comparisons agree.
+        let badge  = layout.encode(object: 3, generation: inside, rights: .occupant)
+        let handle = handles.encode(object: 3, generation: inside)
 
         #expect(layout.names(generation: inside, badge: badge))
-        #expect(!layout.names(generation: wrapped, badge: badge))
+        #expect(handles.names(generation: inside, handle: handle))
 
-        // And the wrap itself, which is the limit rather than a bug.
-        #expect(layout.fits(wrapped) == 0)
-        #expect(layout.fits(UInt32(1 << 21)) == layout.fits(0))
+        #expect(!layout.names(generation: inside &+ 1, badge: badge))
+        #expect(!handles.names(generation: inside &+ 1, handle: handle))
+
+        // Past it the handle would count round, and a token that counts round is
+        // one an old capability comes to match again. Which is why nothing ever
+        // gets here: a slot whose counter reaches this is retired rather than
+        // reused. See `FSObject.retired` and `releaseObject`.
+        #expect(handles.fits(inside &+ 1) == 0)
+        #expect(handles.fits(inside &+ 1) == handles.fits(0))
     }
 }

@@ -89,4 +89,102 @@ struct DeliveryPackingTests {
             #expect(carried >> 32 != 0)
         }
     }
+
+
+    // MARK: - The file system's badge, which is why the session widened
+
+    @Test("a file system badge fits in a session and comes back whole")
+    func fsBadgeSurvivesTheWire() {
+        let layout = FSBadge(objectCount: 1024)
+
+        for object in [UInt32(0), 1, 1023] {
+            for generation in [UInt32(0), 1, 1 << 21, UInt32.max] {
+                for rights in [FSRights.everything, .occupant, .reader, []] {
+
+                    let badge = layout.encode(
+                        object: object, generation: generation, rights: rights
+                    )
+
+                    #expect(layout.object(of: badge) == object)
+                    #expect(layout.generation(of: badge) == generation)
+                    #expect(FileOperation.rights(badge: badge) == rights)
+
+                    // Every one of these needs more than thirty-two bits the
+                    // moment the rights are not empty, which is what the old
+                    // word could not hold alongside a full generation.
+                    if !rights.isEmpty { #expect(badge >> 32 != 0) }
+                }
+            }
+        }
+    }
+
+
+    @Test("the rights come out of the top eight bits and nowhere else")
+    func rightsAreWhereTheySay() {
+        let layout = FSBadge(objectCount: 1024)
+
+        // One right at a time, so a mask that reached one bit too far shows up as
+        // the wrong right rather than as no right.
+        let each: [FSRights] = [
+            .lookup, .read, .write, .remove, .delegate, .quota, .admin, .unmount
+        ]
+
+        for right in each {
+            let badge = layout.encode(object: 5, generation: 99, rights: right)
+
+            #expect(FileOperation.rights(badge: badge) == right)
+            #expect(layout.object(of: badge) == 5)
+            #expect(layout.generation(of: badge) == 99)
+        }
+
+        // And an object number and generation of all ones do not spill into the
+        // rights: a badge with no rights has none however wide the rest is.
+        let bare = layout.encode(object: 1023, generation: UInt32.max, rights: [])
+        #expect(FileOperation.rights(badge: bare).isEmpty)
+    }
+
+
+    @Test("a handle and a badge disagreeing about the generation resolve to nothing")
+    func handleAndBadgeMustAgree() {
+        let layout  = FSBadge(objectCount: 1024)
+        let handles = layout.handles
+
+        // A handle names an object and an incarnation, and so does a badge. A
+        // client speaking through a capability for one incarnation, naming an
+        // object at another, is refused by whichever of the two is checked - and
+        // both are.
+        let badge  = layout.encode(object: 7, generation: 40, rights: .occupant)
+        let handle = handles.encode(object: 7, generation: 41)
+
+        #expect(layout.names(generation: 40, badge: badge))
+        #expect(!layout.names(generation: 41, badge: badge))
+
+        #expect(handles.names(generation: 41, handle: handle))
+        #expect(!handles.names(generation: 40, handle: handle))
+
+        // The object is the same in both, which is what makes the generation the
+        // only thing they can disagree about.
+        #expect(layout.object(of: badge) == handles.object(of: handle))
+    }
+
+
+    @Test("a handle carries no rights, whatever is put in it")
+    func handlesCarryNoAuthority() {
+        let handles = FSBadge(objectCount: 1024).handles
+
+        // A handle is a word in a message, so a client writes it. The whole
+        // thirty-two bits above the object number are generation, so there is no
+        // field a client could set to claim a right - and reading rights out of a
+        // handle is not something the code can be asked to do: the two types are
+        // different and only one of them has rights in it.
+        let handle = handles.encode(object: 7, generation: handles.lastGeneration)
+
+        #expect(handles.object(of: handle) == 7)
+        #expect(handles.generation(of: handle) == handles.lastGeneration)
+
+        // Zero is not a handle: a client answered nought has been answered
+        // nothing, and sending nought back gets nothing too.
+        #expect(handles.object(of: 0) == nil)
+        #expect(handle != 0)
+    }
 }

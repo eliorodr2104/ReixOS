@@ -22,16 +22,23 @@ import ReixABI
 /// still written afterwards? The second matters as much as the first: a disk that
 /// has contradicted itself once is a disk whose next write is the one that makes
 /// the damage permanent.
+///
+/// There are two doors, and which one answers depends on when the damage
+/// arrived. Damage that was already on the medium is met by the scan every mount
+/// runs, so the volume is never served at all: `mount` answers `.corrupt` and
+/// leaves the disk byte for byte as it found it. Damage that arrives under a
+/// live mount is met by the decoder, which hands back nothing for the record and
+/// holds the volume still. The tests below ask the first of a record damaged
+/// while nothing was mounted and the second of one damaged while somebody was.
 @Suite("A record that could not be true is not believed")
 struct CorruptRecordTests {
 
     private static let sectors: UInt64 = 4096   // 2 MiB
 
 
-    /// A disk with one file on it, and where that file's record sits.
-    private func withDamaged(
-        _ damage: (MemoryDisk, Int, FSLayout.Plan) -> Void,
-        _ body  : (inout FileSystem<MemoryDisk>, MemoryDisk, UInt32) -> Void
+    /// A mounted disk with one file on it, and where that file's record sits.
+    private func withVictim(
+        _ body: (inout FileSystem<MemoryDisk>, MemoryDisk, UInt32, Int, FSLayout.Plan) -> Void
     ) {
         let disk = MemoryDisk(sectors: Self.sectors)
 
@@ -69,50 +76,49 @@ struct CorruptRecordTests {
             return
         }
 
-        #expect(fs.unmount() == .ok)
-
-        // Behind the file system's back, straight into the object table.
-        let plan  = fs.plan
+        // Where that record sits, behind the file system's back.
+        let plan   = fs.plan
         let where_ = Int(plan.tableStart) * Int(FSLayout.blockSize)
             + Int(made.object) * Int(FSLayout.objectSize)
 
-        damage(disk, where_, plan)
-
-        guard var again = FileSystem.mount(disk, scratch: scratch).disk else {
-            Issue.record("the disk would not mount again")
-            return
-        }
-
-        body(&again, disk, made.object)
+        body(&fs, disk, made.object, where_, plan)
     }
 
 
-    /// Asks the two questions every test here asks.
-    private func refusedAndHeldStill(
-        _ fs: inout FileSystem<MemoryDisk>,
-        _ disk: MemoryDisk,
-        _ object: UInt32
+    /// Damages one field of the victim's record with nothing mounted, and asks
+    /// the door what it made of the disk.
+    ///
+    /// The mount is the assertion, which is why it lives in the fixture rather
+    /// than in every test: a table that contradicts itself is found by the scan
+    /// `mount` runs before it serves anything, so there is no file system to
+    /// hand back. Both halves of the old question are still asked, of the volume
+    /// instead of the record: not served, and not written to either.
+    private func refusedAtTheDoor(
+        _ damage: (MemoryDisk, Int, FSLayout.Plan) -> Void
     ) {
-        // Not served. The record reads the same as nothing at that number, which
-        // is what every caller already knows how to handle.
-        #expect(fs.object(object) == nil)
+        withVictim { fs, disk, _, at, plan in
+            #expect(fs.unmount() == .ok)
 
-        // And held still, from that moment. `writeBlock` is the one door every
-        // change comes through, so one guard holds the whole volume.
-        #expect(fs.corrupted)
+            damage(disk, at, plan)
 
-        let before = disk.writes
+            // A mount of its own, with its own scratch: the one above belongs to
+            // a file system that has been unmounted.
+            let scratch = UnsafeMutableRawPointer.allocate(
+                byteCount: FileSystem<MemoryDisk>.scratchBytes,
+                alignment: 8
+            )
+            defer { scratch.deallocate() }
 
-        let name = "after.bin" as StaticString
-        let made = fs.create(
-            UnsafeRawPointer(name.utf8Start),
-            length: name.utf8CodeUnitCount,
-            kind  : .file,
-            in    : FSLayout.rootObject
-        )
+            let before = disk.writes
+            let opened = FileSystem.mount(disk, scratch: scratch)
 
-        #expect(made.status != .ok)
-        #expect(disk.writes == before, "the disk was written to after being quarantined")
+            #expect(opened.disk == nil)
+            #expect(isCorrupt(opened.found))
+            #expect(
+                disk.writes == before,
+                "the disk was written to after being refused"
+            )
+        }
     }
 
 
@@ -123,22 +129,18 @@ struct CorruptRecordTests {
         // The one that mattered. Block one is the bitmap on this layout, so the
         // old reader turned this record into a file whose bytes *were* the map
         // of which blocks are free.
-        withDamaged({ disk, at, _ in
+        refusedAtTheDoor { disk, at, _ in
             disk.poke(UInt32(1), at: at + 64)          // runs[0].start
             disk.poke(UInt32(1), at: at + 68)          // runs[0].count
-        }) { fs, disk, object in
-            refusedAndHeldStill(&fs, disk, object)
         }
     }
 
 
     @Test("a run reaching past the end of the disk is not believed")
     func runPastTheEndIsRefused() {
-        withDamaged({ disk, at, plan in
+        refusedAtTheDoor { disk, at, plan in
             disk.poke(plan.totalBlocks - 1, at: at + 64)
             disk.poke(UInt32(8), at: at + 68)
-        }) { fs, disk, object in
-            refusedAndHeldStill(&fs, disk, object)
         }
     }
 
@@ -147,11 +149,9 @@ struct CorruptRecordTests {
     func wrappingRunIsRefused() {
         // The dangerous shape: added narrow, `start + count` comes back small
         // and passes every bound. Added wide, it does not.
-        withDamaged({ disk, at, plan in
+        refusedAtTheDoor { disk, at, plan in
             disk.poke(plan.dataStart, at: at + 64)
             disk.poke(UInt32.max, at: at + 68)
-        }) { fs, disk, object in
-            refusedAndHeldStill(&fs, disk, object)
         }
     }
 
@@ -160,27 +160,23 @@ struct CorruptRecordTests {
 
     @Test("a run of no blocks is not believed")
     func emptyRunIsRefused() {
-        withDamaged({ disk, at, _ in
+        refusedAtTheDoor { disk, at, _ in
             disk.poke(UInt32(0), at: at + 68)          // runs[0].count
-        }) { fs, disk, object in
-            refusedAndHeldStill(&fs, disk, object)
         }
     }
 
 
     @Test("runs that do not add up to the block count are not believed")
     func blockCountMismatchIsRefused() {
-        withDamaged({ disk, at, _ in
+        refusedAtTheDoor { disk, at, _ in
             disk.poke(UInt32(9), at: at + 4)           // blocks
-        }) { fs, disk, object in
-            refusedAndHeldStill(&fs, disk, object)
         }
     }
 
 
     @Test("a record whose runs overlap each other is not believed")
     func overlappingRunsAreRefused() {
-        withDamaged({ disk, at, plan in
+        refusedAtTheDoor { disk, at, plan in
             // Two runs over the same block, and a block count that agrees with
             // the sum so only the overlap gives it away.
             disk.poke(UInt8(2), at: at + 1)            // extents
@@ -189,38 +185,71 @@ struct CorruptRecordTests {
             disk.poke(UInt32(1), at: at + 68)
             disk.poke(plan.dataStart, at: at + 72)
             disk.poke(UInt32(1), at: at + 76)
-        }) { fs, disk, object in
-            refusedAndHeldStill(&fs, disk, object)
         }
     }
 
 
     @Test("more runs than a record has room for is not believed")
     func tooManyExtentsIsRefused() {
-        withDamaged({ disk, at, _ in
+        refusedAtTheDoor { disk, at, _ in
             disk.poke(UInt8(200), at: at + 1)          // extents
-        }) { fs, disk, object in
-            refusedAndHeldStill(&fs, disk, object)
         }
     }
 
 
     @Test("a size longer than the blocks to hold it is not believed")
     func oversizeIsRefused() {
-        withDamaged({ disk, at, _ in
+        refusedAtTheDoor { disk, at, _ in
             disk.poke(UInt64(1 << 40), at: at + 8)     // size
-        }) { fs, disk, object in
-            refusedAndHeldStill(&fs, disk, object)
         }
     }
 
 
     @Test("a container or folder number past the table is not believed")
     func wildParentIsRefused() {
-        withDamaged({ disk, at, _ in
+        refusedAtTheDoor { disk, at, _ in
             disk.poke(UInt32(0xFFFF), at: at + 44)     // parent
-        }) { fs, disk, object in
-            refusedAndHeldStill(&fs, disk, object)
+        }
+    }
+
+
+    // MARK: - The same record, damaged under a live mount
+
+    @Test("a record damaged while mounted is refused where it is read")
+    func theReaderRefusesTheRecordItself() {
+        // The other door. The volume is already open, so nothing gets to refuse
+        // it at the door: what answers is the decoder, on the read.
+        withVictim { fs, disk, object, at, _ in
+            disk.poke(UInt32(1), at: at + 64)          // runs[0].start
+            disk.poke(UInt32(1), at: at + 68)          // runs[0].count
+
+            // The cache dropped so the next read goes to the medium, which is
+            // where the damage is.
+            fs.dropCache()
+
+            // Not served. The record reads the same as nothing at that number,
+            // which is what every caller already knows how to handle.
+            #expect(fs.object(object) == nil)
+
+            // And held still, from that moment. `writeBlock` is the one door
+            // every change comes through, so one guard holds the whole volume.
+            #expect(fs.corrupted)
+
+            let before = disk.writes
+
+            let name = "after.bin" as StaticString
+            let made = fs.create(
+                UnsafeRawPointer(name.utf8Start),
+                length: name.utf8CodeUnitCount,
+                kind  : .file,
+                in    : FSLayout.rootObject
+            )
+
+            #expect(made.status != .ok)
+            #expect(
+                disk.writes == before,
+                "the disk was written to after being quarantined"
+            )
         }
     }
 
@@ -275,8 +304,6 @@ struct CorruptRecordTests {
         }
         #expect(first.runs[0].start != second.runs[0].start)
 
-        #expect(fs.unmount() == .ok)
-
         // Point the second record's run at the first record's block. Both
         // records are perfectly well formed; it is the pair that is wrong.
         let plan = fs.plan
@@ -284,23 +311,23 @@ struct CorruptRecordTests {
             + Int(made[1]) * Int(FSLayout.objectSize)
 
         disk.poke(first.runs[0].start, at: at + 64)
+        fs.dropCache()
 
-        guard var again = FileSystem.mount(disk, scratch: scratch).disk else {
-            Issue.record("the disk would not mount again")
-            return
-        }
-
+        // Planted under the live mount and asked of it, because a pair like this
+        // one on the medium is a disk `mount` refuses outright: that is what the
+        // tests above assert, and it would leave nothing here to scrub.
+        //
         // Both records pass on their own, so nothing is quarantined until the
         // scrub puts them side by side.
-        #expect(again.object(made[0]) != nil)
-        #expect(again.object(made[1]) != nil)
-        #expect(!again.corrupted)
+        #expect(fs.object(made[0]) != nil)
+        #expect(fs.object(made[1]) != nil)
+        #expect(!fs.corrupted)
 
-        let findings = again.check()
+        let findings = fs.putRight()
 
         #expect(findings.claimedTwice > 0)
         #expect(findings.damaged)
-        #expect(again.corrupted)
+        #expect(fs.corrupted)
     }
 
 
@@ -397,13 +424,13 @@ struct CorruptRecordTests {
             UnsafeRawPointer(planted.utf8Start),
             length: planted.utf8CodeUnitCount,
             in    : folder.object
-        ) == nil)
+        ).object == nil)
 
         // While the same object is still perfectly reachable where it does live.
         #expect(fs.lookup(
             UnsafeRawPointer(secret.utf8Start),
             length: secret.utf8CodeUnitCount,
             in    : room.object
-        ) == hidden.object)
+        ).object == hidden.object)
     }
 }

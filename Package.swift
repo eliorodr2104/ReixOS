@@ -53,9 +53,11 @@ let package = Package(
         .library(name: "Top",           type: .static, targets: ["Top"]),
         .library(name: "Shell",         type: .static, targets: ["Shell"]),
         .library(name: "ShellLanguage", type: .static, targets: ["ShellLanguage"]),
+        .library(name: "ReixFS",        type: .static, targets: ["ReixFS"]),
         .library(name: "TerminalServer", type: .static, targets: ["TerminalServer"]),
         .library(name: "VirtioBus",     type: .static, targets: ["VirtioBus"]),
         .library(name: "BlockServer",   type: .static, targets: ["BlockServer"]),
+        .library(name: "FileSystemServer", type: .static, targets: ["FileSystemServer"]),
     ],
     targets: [
         // Shared ABI: IPC types + syscall numbers. No dependencies.
@@ -81,6 +83,13 @@ let package = Package(
         // The two processes the disk needs: the walker that reads device ids
         // off the bus, and the driver it starts for what it found.
         app("VirtioBus", bareMetal), app("BlockServer", bareMetal),
+        .target(
+            name: "FileSystemServer",
+            dependencies: ["Reix", "ReixFS"],
+            path: "Sources/Userland/FileSystemServer",
+            swiftSettings: bareMetal
+        ),
+
         // The command language, with no dependency on the SDK on purpose: it is
         // a parser over bytes, and keeping it free of the bare-metal runtime is
         // what lets a host suite exercise it.
@@ -90,6 +99,15 @@ let package = Package(
             swiftSettings: bareMetal
         ),
 
+        // The on-disk format and everything that reads or writes it, over any
+        // `BlockDevice`. No syscalls, so a host suite can mount it on a slab of
+        // memory and exercise the whole thing without a disk.
+        .target(
+            name: "ReixFS",
+            dependencies: ["ReixABI"],
+            path: "Sources/ReixFS",
+            swiftSettings: bareMetal
+        ),
         .target(
             name: "Shell",
             dependencies: ["Reix", "ShellLanguage"],
@@ -126,6 +144,14 @@ let package = Package(
             name: "ShellTests",
             dependencies: ["ShellLanguage"],
             path: "Tests/ShellTests"
+        ),
+
+        // The file system over a slab of host memory: format, allocate, name,
+        // grow and delete, with no disk and no kernel anywhere near it.
+        .testTarget(
+            name: "FileSystemTests",
+            dependencies: ["ReixFS", "ReixABI"],
+            path: "Tests/FileSystemTests"
         ),
 
         // Layout locks only: sizes, strides and the all-zero patterns the wire

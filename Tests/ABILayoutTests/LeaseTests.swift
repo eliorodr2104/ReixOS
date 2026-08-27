@@ -234,4 +234,27 @@ struct LeaseTests {
         #expect(leases.saturations == 1)
     }
 
+
+    @Test("a slot number outside the table is refused at both ends")
+    func slotNumbersAreBounded() {
+        var leases = FSLeases()
+        #expect(leases.claim(7, generation: 1, for: 9) == true)
+
+        // Above the table, which was already refused.
+        #expect(leases.entry(at: FSLeases.capacity) == nil)
+        leases.forget(at: FSLeases.capacity)
+
+        // And below it, which was not. A sweep walking this table with an index
+        // it worked out from something else can arrive with a negative one, and a
+        // negative subscript on a fixed array is not a wrong answer - it is the
+        // server gone.
+        #expect(leases.entry(at: -1) == nil)
+        #expect(leases.entry(at: Int.min) == nil)
+
+        leases.forget(at: -1)
+        leases.forget(at: Int.min)
+
+        // Nothing was disturbed by any of it.
+        #expect(leases.entry(at: 0)?.object == 7)
+    }
 }

@@ -117,6 +117,13 @@ public struct FSRights: OptionSet {
             case .create, .write, .replace, .lock, .unlock, .compact:
                 .write
 
+            // Two rights and not one. A container is room set aside, so making
+            // one is a use of the room-moving authority as much as of the
+            // writing one - and `grantRoom` below already costs `.quota` for
+            // moving room that has already been set aside.
+            case .createContainer:
+                [.write, .quota]
+
             case .remove, .relocate:
                 .remove
 

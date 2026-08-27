@@ -35,6 +35,33 @@ final class MemoryDisk: BlockDevice {
     private(set) var writes  = 0
     private(set) var flushes = 0
 
+    /// Where the journal and the file data begin, in sectors, when somebody has
+    /// said. Nothing here reads the layout: a test that wants its writes split
+    /// hands over the two boundaries it formatted.
+    ///
+    /// The split is the point of it. A write to the journal, a write to a
+    /// metadata block's own place and a write of somebody's file are three
+    /// different costs, and a total hides which of the three a change moved.
+    var journalSectors: Range<UInt64>? = nil
+    var dataSector    : UInt64?        = nil
+
+    private(set) var journalWrites = 0
+    private(set) var homeWrites    = 0
+    private(set) var dataWrites    = 0
+
+
+    /// Splits one write between the three, by where it landed.
+    private func classify(_ sector: UInt64) {
+        if let journalSectors, journalSectors.contains(sector) {
+            journalWrites += 1
+            return
+        }
+
+        guard let dataSector else { return }
+
+        if sector >= dataSector { dataWrites += 1 } else { homeWrites += 1 }
+    }
+
     /// Set to refuse every request from the nth onward, for testing what the
     /// file system does when a disk stops answering half way through.
     var failFrom: Int? = nil
@@ -54,7 +81,21 @@ final class MemoryDisk: BlockDevice {
     /// Stops refusing, so that a test can look at the disk it just broke.
     func recover() {
         failFrom = nil
+        refusals = 0
     }
+
+
+    /// Refuses exactly the next `count` requests, and then answers again.
+    ///
+    /// A bad sector that reads on the second try. It is the only way to reach the
+    /// class of bug where a failed *read* authorises a write: a device that stays
+    /// broken refuses the write as well, so the wrong decision never reaches the
+    /// medium and a probe cannot tell it was made.
+    func refuseNext(_ count: Int) {
+        refusals = count
+    }
+
+    private var refusals = 0
 
     init(sectors: UInt64) {
         self.sectorCount = sectors
@@ -70,6 +111,12 @@ final class MemoryDisk: BlockDevice {
 
     private func refuses() -> Bool {
         requests += 1
+
+        if refusals > 0 {
+            refusals -= 1
+            return true
+        }
+
         guard let failFrom else { return false }
         return requests >= failFrom
     }
@@ -125,6 +172,8 @@ final class MemoryDisk: BlockDevice {
         }
 
         writes += 1
+        classify(sector)
+
         bytes.advanced(by: Int(sector * sectorSize)).copyMemory(
             from     : source,
             byteCount: Int(count * sectorSize)

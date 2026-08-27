@@ -18,6 +18,10 @@ public struct FSObject {
 
     public var kind    : FSKind
     public var extents : UInt8
+
+    /// Bits about the slot rather than about the object in it.
+    ///
+    /// One is used: `Flags.retired`. See `retired`.
     public var flags   : UInt16
     public var blocks  : UInt32
     public var size    : UInt64
@@ -76,12 +80,82 @@ public struct FSObject {
     /// that reset with the record it lives in would count the same numbers
     /// again.
     ///
-    /// It goes round eventually. Thirty-two bits is four thousand million
-    /// removals of one slot, and the badge carries fewer than that - see
-    /// `FSBadge`.
+    /// It does **not** go round. When the count reaches the last value a badge
+    /// and a handle can both tell apart, the slot is retired instead: see
+    /// `retired` and `FSBadge.lastGeneration`. Counting on past that point would
+    /// hand out a token some old capability still believes in, which is the one
+    /// thing this whole field exists to prevent.
     public var generation: UInt32
 
     public var runs: InlineArray<8, FSExtent>
+
+
+    /// Which bits of `flags` mean what.
+    public enum Flags {
+
+        /// This slot has been reused as many times as a capability can tell
+        /// apart, so it is never handed out again.
+        ///
+        /// The cost is one object slot out of a thousand after a few thousand
+        /// million reuses of it, which is a cost nothing on this machine will
+        /// ever pay. What it buys is that the alternative - counting round - can
+        /// never happen: an old capability naming generation zero of slot twelve
+        /// would otherwise, eventually, name a live file again.
+        public static let retired: UInt16 = 1 << 0
+    }
+
+    /// Whether this slot is out of use for good.
+    public var retired: Bool {
+        get { flags & Flags.retired != 0 }
+        set { flags = newValue ? (flags | Flags.retired) : (flags & ~Flags.retired) }
+    }
+
+    /// Whether the bytes this record was read from described a shape this format
+    /// can hold.
+    ///
+    /// In memory only, never written back, and there is no field on the disk for
+    /// it. Two fields are clamped when they are read, because every loop below
+    /// depends on them: the extent count, so nothing walks off the end of an
+    /// array of eight, and the kind, so a byte this format never writes does not
+    /// arrive as a value nothing knows what to do with.
+    ///
+    /// Clamping is exactly what threw the evidence away. A record claiming two
+    /// hundred runs became a record claiming eight, which is a number this format
+    /// writes; a record whose kind byte was seven became a *free slot*, which is
+    /// worse, because a free slot is one `create` hands out while the map still
+    /// calls its blocks used. The clamps stay, for the loops, and this remembers
+    /// what was clamped. See `standing`.
+    public private(set) var recordEncodingValid: Bool = true
+
+
+    /// What a slot in the object table is.
+    public enum Standing: Equatable {
+
+        /// A record describing something that is on the disk.
+        case live
+
+        /// A slot nobody is using, and one a `create` may take.
+        case free
+
+        /// Bytes that are not a record of this format at all.
+        ///
+        /// Neither live nor free, and that is the whole reason for a third
+        /// answer: it must not be walked, and it must not be handed out.
+        case impossible
+    }
+
+
+    /// Which of the three this slot is.
+    ///
+    /// Never `kind == .free` at a call site, and that difference is the point.
+    /// The kind is clamped to `.free` when the byte on the disk is not a kind, so
+    /// every question of the form "is this slot free" was answering yes for a
+    /// record that could not be read.
+    public var standing: Standing {
+        guard recordEncodingValid else { return .impossible }
+
+        return kind == .free ? .free : .live
+    }
 
     public init(
         kind     : FSKind = .free,
@@ -105,8 +179,19 @@ public struct FSObject {
 
 
     public init(reading base: UnsafeRawPointer) {
-        self.kind      = FSKind(rawValue: base.loadUnaligned(fromByteOffset: 0, as: UInt8.self)) ?? .free
-        self.extents   = base.loadUnaligned(fromByteOffset: 1,  as: UInt8.self)
+
+        // Read raw, judged, and only then clamped. The judgement is what `fits`
+        // refuses on; the clamp is what keeps the loops in bounds while it does.
+        let rawKind    = FSKind(rawValue: base.loadUnaligned(fromByteOffset: 0, as: UInt8.self))
+        let rawExtents = base.loadUnaligned(fromByteOffset: 1, as: UInt8.self)
+
+        let wholeExtents = Int(rawExtents) <= FSLayout.extentLimit
+
+        self.kind    = rawKind ?? .free
+        self.extents = wholeExtents ? rawExtents : UInt8(FSLayout.extentLimit)
+
+        self.recordEncodingValid = rawKind != nil && wholeExtents
+
         self.flags     = base.loadUnaligned(fromByteOffset: 2,  as: UInt16.self)
         self.blocks    = base.loadUnaligned(fromByteOffset: 4,  as: UInt32.self)
         self.size      = base.loadUnaligned(fromByteOffset: 8,  as: UInt64.self)
@@ -127,12 +212,6 @@ public struct FSObject {
             )
         }
         self.runs = runs
-
-        // A record claiming more runs than it has room for is a corrupt record,
-        // and clamping is what keeps every loop below in bounds.
-        if Int(self.extents) > FSLayout.extentLimit {
-            self.extents = UInt8(FSLayout.extentLimit)
-        }
     }
 
 

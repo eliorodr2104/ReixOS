@@ -46,6 +46,34 @@ struct ScrubTests {
     }
 
 
+    /// Blocks marked used that no record owns, which is what a scan is for.
+    ///
+    /// Inside a transaction and committed, because claiming a block is a change
+    /// to the disk's own bookkeeping: outside one it is refused. Three of these
+    /// call sites used to be `guard fs.allocateRun(6) != nil else { return }`
+    /// with no transaction open, so the allocation was refused, the guard sent
+    /// the test home, and the body never ran.
+    @discardableResult
+    private func orphan(
+        _ fs: inout FileSystem<MemoryDisk>,
+        _ count: UInt32 = 6
+    ) -> Bool {
+        guard fs.begin() == .ok else {
+            Issue.record("no transaction for the orphaned blocks")
+            return false
+        }
+
+        let taken = fs.allocateRun(count)
+
+        guard fs.finish(taken.refusal) == .ok, case .taken = taken else {
+            Issue.record("the blocks were not allocated: \(taken.refusal)")
+            return false
+        }
+
+        return true
+    }
+
+
     @discardableResult
     private func make(
         _ fs: inout FileSystem<MemoryDisk>,
@@ -72,12 +100,11 @@ struct ScrubTests {
     @Test("a scan changes nothing, whatever it finds")
     func scanIsReadOnly() {
         withDisk { fs, disk in
-            // Something to find: blocks taken and never owned, which is exactly
-            // what a machine dying between the two writes leaves behind.
-            guard fs.allocateRun(6) != nil else {
-                Issue.record("the blocks were not allocated")
-                return
-            }
+            // Something to find: blocks taken and never owned. Committed on
+            // purpose, because that is the only way to put a disk in this state
+            // now - the journal makes the claim and the record that owns them one
+            // act, so no crash produces it.
+            guard orphan(&fs) else { return }
 
             let before = disk.writes
             let findings = fs.scan()
@@ -92,7 +119,7 @@ struct ScrubTests {
     @Test("and a repair afterwards does")
     func repairWrites() {
         withDisk { fs, disk in
-            guard fs.allocateRun(6) != nil else { return }
+            guard orphan(&fs) else { return }
 
             let findings = fs.scan()
             #expect(findings.repairable)
@@ -119,7 +146,7 @@ struct ScrubTests {
         // So the blocks are counted by the shallow pass, which succeeds, and the
         // failure lands in the walk of the names afterwards.
         withDisk { fs, disk in
-            guard fs.allocateRun(6) != nil else { return }
+            guard orphan(&fs) else { return }
 
             guard let folder = make(&fs, "docs", kind: .folder),
                   make(&fs, "a.txt", in: folder) != nil
@@ -134,7 +161,7 @@ struct ScrubTests {
             // hundred and forty.
             for step in [5, 8, 11, 14] {
                 withDisk { inner, disk in
-                    guard inner.allocateRun(6) != nil,
+                    guard orphan(&inner),
                           let folder = make(&inner, "docs", kind: .folder),
                           make(&inner, "a.txt", in: folder) != nil
                     else { return }
@@ -283,7 +310,75 @@ struct ScrubTests {
                 UnsafeRawPointer(name.utf8Start),
                 length: name.utf8CodeUnitCount,
                 in    : folder
-            ) == first)
+            ).object == first)
+        }
+    }
+
+
+    @Test("a second name for one target is found")
+    func duplicateTargetIsFound() {
+        withDisk { fs, disk in
+            guard let folder = make(&fs, "docs", kind: .folder),
+                  let first = make(&fs, "a.txt", in: folder),
+                  make(&fs, "b.txt", in: folder) != nil
+            else { return }
+
+            guard let host = fs.object(folder) else { return }
+            let block = Int(host.runs[0].start) * Int(FSLayout.blockSize)
+
+            for index in 0..<Int(FSLayout.blockSize / FSLayout.entrySize) {
+                let at = block + index * Int(FSLayout.entrySize)
+                guard disk.byte(at: at + 4) == 5,
+                      disk.byte(at: at + 8) == UInt8(ascii: "b")
+                else { continue }
+                disk.poke(first, at: at)
+            }
+
+            let deep = fs.scan(.everything)
+
+            #expect(deep.complete)
+            #expect(deep.duplicateTargets > 0)
+            #expect(!deep.safeToServe)
+        }
+    }
+
+
+    @Test("ordinary folders do not share one name scrub budget")
+    func nameScrubBudgetIsPerFolder() {
+        withDisk { fs, _ in
+            for index in 0...32 {
+                var name = InlineArray<4, UInt8>(repeating: 0)
+                name[0] = UInt8(ascii: "d")
+                name[1] = UInt8(0x30 + UInt8(index / 10))
+                name[2] = UInt8(0x30 + UInt8(index % 10))
+
+                let folder = name.span.withUnsafeBufferPointer { bytes in
+                    fs.create(
+                        UnsafeRawPointer(bytes.baseAddress!),
+                        length: 3,
+                        kind: .folder,
+                        in: FSLayout.rootObject
+                    )
+                }
+                guard folder.status == .ok else {
+                    Issue.record("folder \(index)")
+                    return
+                }
+
+                let child = "x" as StaticString
+                #expect(fs.create(
+                    UnsafeRawPointer(child.utf8Start),
+                    length: child.utf8CodeUnitCount,
+                    kind: .file,
+                    in: folder.object
+                ).status == .ok)
+            }
+
+            let findings = fs.scan(.everything)
+            #expect(findings.nameScrubState == .complete)
+            #expect(!findings.nameScrubBudgetExhausted)
+            #expect(findings.complete)
+            #expect(findings.safeToServe)
         }
     }
 

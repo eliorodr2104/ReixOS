@@ -7,7 +7,7 @@
 
 /// What was found on a disk somebody tried to mount.
 ///
-/// Five answers where there used to be two, and the two were the problem: a
+/// Six answers where there used to be two, and the two were the problem: a
 /// disk was either mountable or "not formatted", and not formatted led straight
 /// to being formatted. So a torn write of the magic, a version this build does
 /// not know, and a disk belonging to another system all arrived at the same
@@ -34,6 +34,14 @@ public enum FSMount {
     /// rather than seeing an unfamiliar number and calling the disk empty.
     case unsupportedVersion(UInt16)
 
+    /// This format, on a disk larger than this build is declared to work on.
+    ///
+    /// Refused rather than served slowly, and refused *unread*: a dirty mount runs
+    /// a recovery whose cost grows with the square of the disk, and a geometry
+    /// nobody has measured is one nobody can say the boot will come back from.
+    /// See `FSLayout.maxSupportedBlocksV02`.
+    case tooLarge(UInt32)
+
     /// There is something on this disk, and it is not a file system this build
     /// can mount.
     ///
@@ -50,4 +58,12 @@ public enum FSMount {
     /// The device cannot hold this format at all: too few blocks, or a sector
     /// size a block is not a whole number of.
     case unusable
+
+    /// The device cannot say what a completed write has achieved, so there is no
+    /// order to be had on it and this format has nothing else to build on.
+    ///
+    /// Refused before block zero is even read, because the one write a
+    /// successful mount does - the mounted mark - is already a write, and a
+    /// volume this build cannot mount read-only is a volume it must not open.
+    case durabilityUnknown
 }

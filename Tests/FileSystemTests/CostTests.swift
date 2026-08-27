@@ -78,12 +78,18 @@ struct CostTests {
     func allocateAtReadsOneBitmapBlock() {
         withFileSystem { fs, disk in
 
+            // Inside a transaction, because claiming a block is a change to the
+            // disk's own bookkeeping and there is no longer a path from one of
+            // those to the medium that does not go through a journal.
+            #expect(fs.begin() == .ok)
+            defer { fs.abort() }
+
             for count in [UInt32(1), 8, 32, 256] {
                 let reads  = disk.reads
                 let writes = disk.writes
 
                 let claimed = fs.allocateAt(fs.plan.dataStart + 2000 + count * 4, count: count)
-                #expect(claimed, "count \(count)")
+                #expect(claimed == .ok, "count \(count)")
 
                 // Was 33 for count 32, then 2, and 1 now.
                 #expect(disk.reads  - reads  <= 1, "count \(count)")
@@ -110,7 +116,7 @@ struct CostTests {
 
             let reads   = disk.reads
             let claimed = fs.allocateAt(perBlock - 4, count: 8)
-            #expect(claimed)
+            #expect(claimed == .ok)
             #expect(disk.reads - reads <= 4)
         }
     }
@@ -119,34 +125,38 @@ struct CostTests {
     /// Listing. Every step re-reads the folder's own record and the directory
     /// block the name sits in, and the first of those two is now free: the
     /// folder's record is one of the file system's own blocks and stays in hand.
-    /// Twenty-four reads for eleven names became eleven.
+    /// Twenty-four reads for eleven names, then eleven, then two.
     ///
-    /// What is left is one read of the directory block per name, and it stays.
-    /// Handing back several names per request would take it, and that is a wire
-    /// change for a saving nobody can feel on a disk this size. The number is
-    /// here so that stops being a guess.
-    @Test("listing a folder costs about one read per name")
-    func listingCostsOneReadPerName() {
+    /// The middle number was one read of the directory block per name, and the
+    /// note here said taking it would be "a wire change for a saving nobody can
+    /// feel on a disk this size". That was wrong twice over: the wire change is
+    /// four words, and the saving is not the reads - it is the round trips, one
+    /// per name, each of which parks the caller.
+    @Test("listing a folder costs one pass, not one read per name")
+    func listingCostsOnePass() {
         withFileSystem { fs, disk in
 
             let names: [StaticString] = ["a0","a1","a2","a3","a4","a5","a6","a7","a8","a9"]
             for name in names { make(&fs, name) }
 
+            let room = UnsafeMutableRawPointer.allocate(
+                byteCount: 32 * FSListEntry.width, alignment: 8
+            )
+            defer { room.deallocate() }
+
             let reads = disk.reads
 
-            var cursor = UInt32(0)
-            var seen   = 0
+            let batch = fs.entries(
+                from: 0, in: FSLayout.rootObject, into: room, capacity: 32
+            )
 
-            while let step = fs.entry(from: cursor, in: FSLayout.rootObject) {
-                cursor = step.next
-                seen  += 1
-            }
+            #expect(batch.count == names.count)
+            #expect(batch.eof)
 
-            #expect(seen == names.count)
-
-            // Was 22 for ten names plus the step that finds nothing. Measured
-            // at 11 now: the directory block, once per name.
-            #expect(disk.reads - reads <= seen + 2)
+            // Measured at two: the one directory block, and the one table block
+            // the ten records share. Was 11 for the same ten names, and 22
+            // before the cache.
+            #expect(disk.reads - reads <= 2)
         }
     }
 
@@ -186,17 +196,33 @@ struct CostTests {
 
     /// What durability costs, recorded rather than trimmed.
     ///
-    /// Sixteen calls of four kilobytes each measured at 144 reads and 80 writes.
-    /// The reads were the object record, the container's record for the quota,
-    /// and the bitmap - each of them read again inside one call and again in the
-    /// next. Every one of the three is one of the file system's own blocks, and
-    /// there are two distinct ones on a disk this size, so all 144 are gone.
+    /// Sixteen calls of four kilobytes each. The history of this number is the
+    /// history of the format:
     ///
-    /// The writes are not, and are not meant to be. They are the block map
-    /// reaching the disk *before* the record that points at the blocks, which is
-    /// the whole of why a power cut here does not lose the file. Holding a write
-    /// back is the one thing this cache does not do: it is what would make "on
-    /// the disk" a guess, and this format has no journal to guess with.
+    /// - 144 reads and 80 writes, before the metadata cache;
+    /// - 0 reads and 80 writes, with it;
+    /// - 0 reads and 160 writes, with the journal.
+    ///
+    /// The reads stayed gone, which took work: staging puts the after-image in
+    /// the cache under the target's own number, and finishing a commit takes the
+    /// image from there rather than reading back the payload it just wrote.
+    /// Without either of those this is 80 reads.
+    ///
+    /// The writes doubled and the reason is the whole point of the journal. Each
+    /// append is one transaction of ten writes: one of file data, five journal
+    /// payload writes, three headers, and two home blocks. The two home blocks
+    /// are the bitmap and the object table, which is what it always was; the
+    /// other eight are what buys the property that the eighty writes never had -
+    /// that a power cut anywhere in the sixteen leaves a file of some whole
+    /// number of blocks and never a size pointing at a block the map calls free.
+    ///
+    /// Five payload writes for two distinct blocks, because the object table is
+    /// staged three times in one call - the container's room, the extent map, the
+    /// size - and each staging rewrites its payload. They share one slot and one
+    /// home write, which is the coalescing that matters; writing the payload once
+    /// as well would need the whole transaction's images held in memory, which is
+    /// sixteen blocks of scratch this server does not have. The way out is fewer
+    /// and larger writes from the client, and that is a measurement for later.
     @Test("writing pays for the ordering rule, and the bill is this")
     func writingPaysForOrdering() {
         withFileSystem { fs, disk in
@@ -215,10 +241,16 @@ struct CostTests {
                 #expect(done.status == .ok)
             }
 
-            // Was 144 and 80. Measured at 0 and 80: the write path no longer
-            // asks the disk for anything it did not itself put there.
+            // Measured, not chosen. The reads are the number to defend: the
+            // write path still asks the disk for nothing it did not itself put
+            // there, journal or no journal.
             #expect(disk.reads  - reads  <= 2)
-            #expect(disk.writes - writes <= 85)
+
+            // Was a hundred and sixty. Each of the sixteen appends staged the
+            // bitmap block and the table block, and staging used to write a
+            // payload per call; now the arena holds the image and the commit
+            // writes each one once, so two of the ten writes per append are gone.
+            #expect(disk.writes - writes == 128)
         }
     }
 
@@ -256,14 +288,21 @@ struct CostTests {
             let unknown = fs.allFree(start: start, count: 8)
             #expect(!unknown)
 
+            #expect(fs.begin() == .ok)
+
             let refused = fs.allocateAt(start, count: 8)
-            #expect(!refused)
+
+            // The disk stopping and the blocks being somebody else's are not the
+            // same answer any more, and this is the one that used to be lost.
+            #expect(refused == .deviceFailed)
 
             // And nothing was claimed on the way out: the same run is still
             // there to be had once the disk answers again.
             disk.recover()
             let claimed = fs.allocateAt(start, count: 8)
-            #expect(claimed)
+            #expect(claimed == .ok)
+
+            fs.abort()
         }
     }
 
@@ -304,7 +343,7 @@ struct CostTests {
                 UnsafeRawPointer(name.utf8Start),
                 length: name.utf8CodeUnitCount,
                 in    : FSLayout.rootObject
-            ) != nil)
+            ).object != nil)
             let once = disk.reads - coldName
 
             let warmName = disk.reads
@@ -312,7 +351,7 @@ struct CostTests {
                 UnsafeRawPointer(name.utf8Start),
                 length: name.utf8CodeUnitCount,
                 in    : FSLayout.rootObject
-            )
+            ).object
 
             // Was 3 cold and 3 warm. Measured at 2 and 1.
             #expect(disk.reads - warmName < once)

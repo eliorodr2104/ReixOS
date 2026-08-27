@@ -23,15 +23,29 @@ extension FSObject {
 
     /// `true` when every field of a live record is one this disk could hold.
     ///
-    /// Only live records are asked. A free slot's other fields are nobody's
-    /// business - nothing walks them - and demanding that they be zero would
-    /// make a tidy disk a requirement rather than a consequence.
+    /// Only live records are asked about their *fields*. A free slot's other
+    /// fields are nobody's business - nothing walks them - and demanding that
+    /// they be zero would make a tidy disk a requirement rather than a
+    /// consequence.
+    ///
+    /// The **encoding**, though, is asked about first, and before the free-slot
+    /// shortcut. The reader clamps two fields so that nothing walks out of
+    /// bounds - the extent count to eight, an unknown kind to `.free` - and both
+    /// clamps used to be judged after this function had already decided.
+    ///
+    /// The kind is why the order matters. A record whose kind byte is seven
+    /// arrived here looking like a free slot, took the shortcut, and was
+    /// pronounced fine, so `create` would hand its slot out while the map still
+    /// called its blocks used.
     func fits(_ plan: FSLayout.Plan) -> Bool {
+
+        guard recordEncodingValid else { return false }
 
         guard kind != .free else { return true }
 
-        // More runs than there is room to record is a record that was not
-        // written by this format.
+        // Belt and braces, and cheap: the clamp above makes this true, so a
+        // reader that stopped clamping would be caught here rather than in a
+        // loop.
         guard Int(extents) <= FSLayout.extentLimit else { return false }
 
         guard container < plan.objectCount, parent < plan.objectCount else { return false }
