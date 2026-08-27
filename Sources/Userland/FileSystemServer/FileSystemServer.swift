@@ -124,7 +124,10 @@ public struct FileSystemServer: Service {
     }
 
 
-    public init(environment: Environment, endpoint: UInt32) {
+    public init(
+          environment: Environment,
+          endpoint   : UInt32
+    ) {
 
         self.endpoint = endpoint
 
@@ -205,6 +208,42 @@ public struct FileSystemServer: Service {
         }
 
         exit(code: 1)
+    }
+
+
+    private static func encodeScrub(
+        _ findings: FileSystem<BlockClient>.Findings,
+        into window: UnsafeMutableRawPointer,
+        capacity: Int
+    ) -> Int {
+        guard var writer = ShellFrameWriter(
+            window.assumingMemoryBound(to: UInt8.self),
+            capacity: capacity,
+            schema: .fileSystemFindings,
+            sequence: 0,
+            flags: findings.safeToServe ? [.end] : [.end, .error]
+        ) else { return 0 }
+        func append(
+            _ field: ShellField,
+            _ value: UInt32
+        ) -> Bool {
+            writer.appendScalar(field == .status ? .status : .scalar, field: field, value: value)
+        }
+        guard append(.status, findings.safeToServe ? FSStatus.ok.rawValue : FSStatus.deviceFailed.rawValue),
+              append(.complete, findings.complete ? 1 : 0),
+              append(.scrubDepth, findings.depth == .everything ? 1 : 0),
+              append(.quotasChecked, findings.quotasChecked ? 1 : 0),
+              append(.reclaimableBlocks, findings.reclaimable), append(.ownedButFree, findings.ownedButFree),
+              append(.claimedTwice, findings.claimedTwice), append(.impossible, findings.impossible),
+              append(.strayNames, findings.strayNames), append(.duplicateNames, findings.duplicateNames),
+              append(.duplicateTargets, findings.duplicateTargets), append(.brokenEntries, findings.brokenEntries),
+              append(.nameScrubBudgetExhausted, findings.nameScrubBudgetExhausted ? 1 : 0),
+              append(.wrongQuota, findings.wrongQuota), append(.strayCharges, findings.strayCharges),
+              append(.selfParented, findings.selfParented), append(.roomsMended, findings.roomsMended),
+              append(.mapMended, findings.mapMended ? 1 : 0), append(.tooManyContainers, findings.tooManyContainers ? 1 : 0),
+              append(.safeToServe, findings.safeToServe ? 1 : 0)
+        else { return 0 }
+        return writer.finish()
     }
 
 
@@ -507,10 +546,10 @@ public struct FileSystemServer: Service {
                 }
 
                 _ = reply(message: FileOperation.standing(
-                    root : handle(for: root),
-                    free : free,
-                    used : used,
-                    dirty: disk.wasDirty,
+                    root       : handle(for: root),
+                    free       : free,
+                    used       : used,
+                    dirty      : disk.wasDirty,
                     quarantined: disk.corrupted
                 ))
 
@@ -541,16 +580,21 @@ public struct FileSystemServer: Service {
                     return
                 }
 
-                // The verdict and nothing else. The scan counts twenty separate
-                // findings and a caller that could read them would have to be
-                // handed a window of records, which is a wire format and not a
-                // status word. Until there is a reader for that, what travels is
-                // the one thing every caller acts on: whether it is safe to
-                // carry on serving this volume.
                 let findings = disk.scan(.everything)
+                guard let slot = slot(for: request.identity), let window = window(slot),
+                      let length = UInt32(exactly: Self.encodeScrub(
+                        findings,
+                        into: window,
+                        capacity: Int(extent(slot))
+                      )), length > 0
+                else {
+                    _ = reply(message: FileOperation.answer(.bufferTooSmall))
+                    return
+                }
 
                 _ = reply(message: FileOperation.answer(
-                    findings.safeToServe ? .ok : .deviceFailed
+                    findings.safeToServe ? .ok : .deviceFailed,
+                    value: length
                 ))
 
             case .compact:
@@ -663,7 +707,10 @@ public struct FileSystemServer: Service {
     /// Refused for anything outside the caller's own container, and refused
     /// with `notFound` rather than a refusal of its own: telling a caller that
     /// something exists but is not theirs is telling them something.
-    private mutating func bind(request: ReceivedMessage, root: UInt32) {
+    private mutating func bind(
+          request: ReceivedMessage,
+          root   : UInt32
+    ) {
 
         // Anything the caller can reach: a container, a folder, or one file.
         // What it cannot do is widen. The rights asked for are intersected with
@@ -692,7 +739,10 @@ public struct FileSystemServer: Service {
 
 
     /// Writes what an object is into the caller's window.
-    private mutating func describe(request: ReceivedMessage, root: UInt32) {
+    private mutating func describe(
+          request: ReceivedMessage,
+          root   : UInt32
+    ) {
 
         guard let slot = slot(for: request.identity), let window = window(slot) else {
             _ = reply(message: FileOperation.answer(.notFound))
@@ -725,7 +775,10 @@ public struct FileSystemServer: Service {
     /// Both names arrive in the window, the old one first, because a name is
     /// bytes and bytes travel there. One request, so the thing is never
     /// nameless and never named twice from anybody else's point of view.
-    private mutating func relocate(request: ReceivedMessage, root: UInt32) {
+    private mutating func relocate(
+          request: ReceivedMessage,
+          root   : UInt32
+    ) {
 
         guard let slot = slot(for: request.identity), let window = window(slot) else {
             _ = reply(message: FileOperation.answer(.notFound))
@@ -776,7 +829,10 @@ public struct FileSystemServer: Service {
 
 
     /// Renames the machine, for a caller that holds the machine.
-    private mutating func rename(request: ReceivedMessage, root: UInt32) {
+    private mutating func rename(
+          request: ReceivedMessage,
+          root   : UInt32
+    ) {
 
         guard let slot = slot(for: request.identity), let window = window(slot),
               root == FSLayout.rootObject
@@ -803,7 +859,10 @@ public struct FileSystemServer: Service {
     /// From the caller's own root and no higher. A path that started above it
     /// would be a name for a place it was never told about, which is the one
     /// thing this must not hand out.
-    private mutating func written(request: ReceivedMessage, root: UInt32) {
+    private mutating func written(
+          request: ReceivedMessage,
+          root   : UInt32
+    ) {
 
         guard let slot = slot(for: request.identity), let window = window(slot) else {
             _ = reply(message: FileOperation.answer(.notFound))
@@ -832,7 +891,10 @@ public struct FileSystemServer: Service {
 
 
     /// Moves room from the caller's container into one directly inside it.
-    private mutating func grantRoom(request: ReceivedMessage, root: UInt32) {
+    private mutating func grantRoom(
+          request: ReceivedMessage,
+          root   : UInt32
+    ) {
 
         let blocks = request.message.words[1]
 
@@ -977,7 +1039,10 @@ public struct FileSystemServer: Service {
     /// protocol's own limit. The middle one is not the client's word for it -
     /// `extents` comes from `shmPages`, so a client claiming a bigger window than
     /// it granted has this server writing into pages it does not have.
-    private mutating func listing(request: ReceivedMessage, root: UInt32) {
+    private mutating func listing(
+          request: ReceivedMessage,
+          root   : UInt32
+    ) {
 
         guard let slot = slot(for: request.identity), let window = window(slot) else {
             _ = reply(message: FileOperation.answer(.notFound))
@@ -1174,7 +1239,11 @@ public struct FileSystemServer: Service {
 
 
     /// Claims `object` for `badge`, or says who has it.
-    private mutating func claim(_ object: UInt32, for badge: UInt32, root: UInt32) -> FSStatus {
+    private mutating func claim(
+        _ object   : UInt32,
+          for badge: UInt32,
+          root     : UInt32
+    ) -> FSStatus {
 
         guard disk.contains(object, within: root),
               let age = generation(of: object)
@@ -1208,7 +1277,10 @@ public struct FileSystemServer: Service {
 
 
     /// Lets go of a claim, if this caller is the one holding it.
-    private mutating func release(_ object: UInt32, from badge: UInt32) {
+    private mutating func release(
+        _ object    : UInt32,
+          from badge: UInt32
+    ) {
         leases.release(object, from: badge)
     }
 
@@ -1254,7 +1326,10 @@ public struct FileSystemServer: Service {
     /// everybody for ever, and this is the path where that is felt: the holder is
     /// not coming back to call `unlock`, and nothing else on a write goes near
     /// the claim table. So a no is asked twice, with a sweep in between.
-    private mutating func mayChange(_ object: UInt32, _ badge: UInt32) -> Bool {
+    private mutating func mayChange(
+        _ object: UInt32,
+        _ badge : UInt32
+    ) -> Bool {
 
         let age = generation(of: object)
 

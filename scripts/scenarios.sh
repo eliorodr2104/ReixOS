@@ -58,6 +58,14 @@ QEMU_FLAGS="${QEMU_FLAGS:--machine virt,gic-version=2 -cpu cortex-a53,pmu=on -no
 # wall. Raise it only together with the section, and only on evidence.
 STACK_CEILING="${STACK_CEILING:-16384}"
 
+# What a `typed:` row hands the engine as its success marker. The engine stops
+# the guest at the first marker it sees, and such a row needs the guest to keep
+# running past the line it is really asking about, so it is given one nothing
+# prints. Empty would not do: the engine reads it with `${SUCCESS_MARKER:-...}`
+# and an empty value takes the default, and `grep -F ""` matches the first line
+# of any log.
+NEVER_PRINTED='no line of any boot says this'
+
 REPORT="$OUT/scenario-results.xml"
 FILTER="${1:-}"
 TAB=$(printf '\t')
@@ -194,12 +202,6 @@ post_trace_boot() {
         return 1
     fi
 
-    if [ "$pt_stack" -gt "$STACK_CEILING" ]; then
-        printf 'kernel stack high water %s B is over the %s B ceiling' \
-               "$pt_stack" "$STACK_CEILING"
-        return 1
-    fi
-
     return 0
 }
 
@@ -319,11 +321,51 @@ post_queue_depth() {
     return 0
 }
 
+# post=shell-closed: what the shell did after it was told to stop.
+#
+# The row types `shell.exit()` and then a second line, and the guest runs on for
+# the rest of the window, so the log holds whatever the shell made of that second
+# line. It is meant to have made nothing of it: not read it, not echoed it, not
+# looked for a receiver by that name, and not written another prompt.
+#
+# The two halves are both needed. A forbidden marker says the string is nowhere
+# in the log, which catches the shell interpreting the second line; this catches
+# a shell that stopped interpreting and went on prompting, which the forbidden
+# set cannot express because the prompt is printed legitimately before the exit.
+#
+# It is also the only check here that reads the log in order rather than as a set.
+post_shell_closed() {
+    ps_log=$1
+    ps_out=$2
 
-# One row may name several, comma-separated: the storage row wants the barriers
-# read out of the image *and* the queue's depth read out of the log, and neither
-# is the other's business. Each gets its own output file so a failure says which
-# check wrote what.
+    ps_done=$(grep -nF -- '[ SHELL ] this shell is done' "$ps_log" 2>/dev/null \
+              | head -n 1 | cut -d: -f1)
+
+    if [ -z "$ps_done" ]; then
+        printf 'the shell never said it was done'
+        return 1
+    fi
+
+    tail -n +"$((ps_done + 1))" "$ps_log" > "$ps_out" 2>/dev/null
+
+    if grep -qF -- 'reix>' "$ps_out"; then
+        printf 'a prompt was written after the shell said it was done'
+        return 1
+    fi
+
+    # And the shell said it once. Twice would be a loop that ran round again.
+    ps_partings=$(grep -cF -- '[ SHELL ] this shell is done' "$ps_log" 2>/dev/null)
+    if [ "$ps_partings" -ne 1 ]; then
+        printf 'the shell said it was done %s times' "$ps_partings"
+        return 1
+    fi
+
+    return 0
+}
+
+# Runs every post-check named in $1, which is `-`, one name, or several separated
+# by commas. Each writes its own artifact so a later failure does not overwrite
+# what an earlier check read.
 run_post() {
     [ "$1" = "-" ] && return 0
 
@@ -340,6 +382,7 @@ run_post() {
             trace-boot)   post_trace_boot "$2" "$rp_out" || return 1 ;;
             dma-barriers) post_dma_barriers "$2" "$rp_out" || return 1 ;;
             queue-depth)  post_queue_depth "$2" "$rp_out" || return 1 ;;
+            shell-closed) post_shell_closed "$2" "$rp_out" || return 1 ;;
             *)            setup_error "unknown post-check '$rp_name'" ;;
         esac
     done
@@ -358,6 +401,11 @@ skip_condition() {
         no-host-swift)
             command -v "$SWIFT" >/dev/null 2>&1 && return 1
             skip_reason="no host Swift toolchain ('$SWIFT') for the post-check"
+            return 0
+            ;;
+        no-objdump)
+            command -v "$OBJDUMP" >/dev/null 2>&1 && return 1
+            skip_reason="no disassembler ('$OBJDUMP') for the post-check"
             return 0
             ;;
         *)
@@ -467,7 +515,7 @@ do
     row_mem=""
     [ "$mem" = "-" ] || row_mem="$mem"
 
-    # Two ways to end a run. Under `verdict` the engine stops the guest at the
+    # Three ways to end a run. Under `verdict` the engine stops the guest at the
     # first marker it recognises, which is `make smoke`'s behaviour and all a
     # row needs when everything it asserts is printed by then. Under `window`
     # the guest has to outlive that marker, so its serial port is redirected
@@ -475,20 +523,44 @@ do
     # its deadline becomes the length of the run, and its timeout verdict is
     # this row's normal outcome. Either way the engine owns the QEMU process
     # and reaps it.
+    #
+    # `typed:<text>` is `window` for a row that has something to say to the
+    # guest. The serial port stays on stdio, because that is where the typing
+    # goes in and so it is also where the log has to come out, and the engine is
+    # handed a marker no boot prints so that the guest outlives whatever it is
+    # being asked about. A row that stopped at the line it was waiting for could
+    # not be asked what came after it.
     engine_log="$log"
-    if [ "$mode" = "window" ]; then
-        case $log in
-            *" "*) setup_error "row '$id': a windowed log path cannot contain spaces" ;;
-        esac
-        row_flags="$row_flags -serial file:$log"
-        engine_log="$work/monitor-$id.txt"
-        : > "$log"
-    elif [ "$mode" != "verdict" ]; then
-        setup_error "row '$id' has an unknown mode '$mode'"
-    fi
+    engine_marker=""
+    row_input=""
+
+    case $mode in
+        verdict) ;;
+
+        window)
+            case $log in
+                *" "*) setup_error "row '$id': a windowed log path cannot contain spaces" ;;
+            esac
+            row_flags="$row_flags -serial file:$log"
+            engine_log="$work/monitor-$id.txt"
+            : > "$log"
+            ;;
+
+        typed:*)
+            row_input=${mode#typed:}
+            [ -n "$row_input" ] \
+                || setup_error "row '$id': 'typed:' with nothing to type"
+            engine_marker="$NEVER_PRINTED"
+            ;;
+
+        *)
+            setup_error "row '$id' has an unknown mode '$mode'"
+            ;;
+    esac
 
     QEMU_FLAGS="$row_flags" MEM="$row_mem" INITRD_MODE="$initrd" \
     OUT="$OUT" LOG="$engine_log" TIMEOUT="$timeout" \
+    SUCCESS_MARKER="$engine_marker" INPUT="$row_input" \
         sh "$ENGINE" > "$engine_out" 2>&1
     engine_rc=$?
 

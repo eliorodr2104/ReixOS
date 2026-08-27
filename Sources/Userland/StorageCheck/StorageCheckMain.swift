@@ -108,7 +108,7 @@ public func main() {
 /// its own, and refused before anything is charged or allocated.
 private func denseFiles(_ files: FileSystemClient) -> Bool {
 
-    let name = "dense.bin" as StaticString
+    let name  = "dense.bin" as StaticString
     let bytes = UnsafeRawPointer(name.utf8Start)
 
     let made = files.create(bytes, length: name.utf8CodeUnitCount)
@@ -237,7 +237,10 @@ private func secondAttachment(_ environment: Environment) -> Bool {
 /// It is a `send` and not a `call`, because nothing answers one: a notification
 /// has no reply. What says it was refused is the server's own line and the disk
 /// still working afterwards.
-private func forgedInterrupt(_ endpoint: UInt32, _ disk: BlockClient) -> Bool {
+private func forgedInterrupt(
+    _ endpoint: UInt32,
+    _ disk    : BlockClient
+) -> Bool {
 
     var words = InlineArray<4, UInt32>(repeating: 0)
 
@@ -472,7 +475,7 @@ private func poured(matches lent: UnsafeMutableRawPointer) -> Bool {
 
     while true {
         let taken = consumer.take(
-            into: arrived.advanced(by: filled),
+            into    : arrived.advanced(by: filled),
             capacity: giftSize - filled
         )
         guard taken.status == .ok else {
@@ -725,7 +728,7 @@ private func mayNotAdminister(_ files: FileSystemClient) -> Bool {
         return false
     }
 
-    guard files.scrub() == .readOnly else {
+    guard files.scrub().status == .readOnly else {
         print("[ CHECK ] this process could scrub the whole disk")
         return false
     }
@@ -774,7 +777,10 @@ private func mayNotAdminister(_ files: FileSystemClient) -> Bool {
 
 
 /// Makes a file, fills it, reads it back, finds it by name, and takes it away.
-private func roundTrip(_ files: FileSystemClient, listing: Bool) -> Bool {
+private func roundTrip(
+    _ files  : FileSystemClient,
+      listing: Bool
+) -> Bool {
 
     let name  = "check.bin" as StaticString
     let bytes = UnsafeRawPointer(name.utf8Start)
@@ -859,7 +865,10 @@ private func roundTrip(_ files: FileSystemClient, listing: Bool) -> Bool {
 /// build stamp; the counter behind it moves forward regardless, which is what
 /// makes a difference between two readings mean something even when the date
 /// does not. An unset clock prints nothing rather than a duration of nowhere.
-private func took(_ started: Time, _ what: StaticString) {
+private func took(
+    _ started: Time,
+    _ what   : StaticString
+) {
 
     let now = SystemClock.now()
     guard started.isKnown, now.isKnown else { return }
@@ -872,7 +881,10 @@ private func took(_ started: Time, _ what: StaticString) {
 
 
 /// Whether the root folder lists the name, and prints everything it does list.
-private func listed(_ files: FileSystemClient, is wanted: StaticString) -> Bool {
+private func listed(
+    _ files    : FileSystemClient,
+      is wanted: StaticString
+) -> Bool {
 
     var found = false
 

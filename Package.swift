@@ -44,7 +44,10 @@ let kernelNativeExclude: [String] = [
     "Arch/aarch64/Exceptions/Handlers/ContextSaving.S",
 ]
 
-func app(_ name: String, _ settings: [SwiftSetting]) -> Target {
+func app(
+    _ name    : String,
+    _ settings: [SwiftSetting]
+) -> Target {
     .target(name: name, dependencies: ["Reix"], path: "Sources/Userland/\(name)", swiftSettings: settings)
 }
 
@@ -79,10 +82,10 @@ let package = Package(
 
         // Kernel: everything else. Imports the header-only CElf module via -I.
         .target(
-            name: "Kernel",
-            dependencies: ["ReixABI"],
-            path: "Sources/ReixKernel",
-            exclude: kernelNativeExclude,
+            name         : "Kernel",
+            dependencies : ["ReixABI"],
+            path         : "Sources/ReixKernel",
+            exclude      : kernelNativeExclude,
             swiftSettings: bareMetal
         ),
 
@@ -99,18 +102,20 @@ let package = Package(
         // stack through capabilities somebody handed it.
         app("StorageCheck", bareMetal),
         .target(
-            name: "FileSystemServer",
-            dependencies: ["Reix", "ReixFS"],
-            path: "Sources/Userland/FileSystemServer",
+            name         : "FileSystemServer",
+            dependencies : ["Reix", "ReixFS"],
+            path         : "Sources/Userland/FileSystemServer",
             swiftSettings: bareMetal
         ),
 
-        // The command language, with no dependency on the SDK on purpose: it is
-        // a parser over bytes, and keeping it free of the bare-metal runtime is
-        // what lets a host suite exercise it.
+        // The shell language is userland implementation, not a kernel facility.
+        // It is deliberately SDK-free: syntax, resolution and typed values are
+        // exercised on the host, while the executable supplies capabilities via
+        // public Reix protocols only.
         .target(
-            name: "ShellLanguage",
-            path: "Sources/ShellLanguage",
+            name         : "ShellLanguage",
+            dependencies : ["ReixABI"],
+            path         : "Sources/Userland/Shell/Language",
             swiftSettings: bareMetal
         ),
 
@@ -118,22 +123,29 @@ let package = Package(
         // `BlockDevice`. No syscalls, so a host suite can mount it on a slab of
         // memory and exercise the whole thing without a disk.
         .target(
-            name: "ReixFS",
-            dependencies: ["ReixABI"],
-            path: "Sources/ReixFS",
+            name         : "ReixFS",
+            dependencies : ["ReixABI"],
+            path         : "Sources/ReixFS",
             swiftSettings: bareMetal
         ),
         .target(
-            name: "Shell",
-            dependencies: ["Reix", "ShellLanguage"],
-            path: "Sources/Userland/Shell",
+            name         : "Shell",
+            dependencies : ["Reix", "ShellLanguage"],
+            path         : "Sources/Userland/Shell",
+            exclude      : ["Language"],
             swiftSettings: bareMetal
         ),
 
     ] + (isFreestanding ? [] : [
+        .executableTarget(
+            name        : "ShellBench",
+            dependencies: ["ShellLanguage", "ReixABI"],
+            path        : "Tests/ShellBench"
+        ),
+
         .target(
-            name: "KernelHostShims",
-            path: "Tests/KernelHostShims",
+            name             : "KernelHostShims",
+            path             : "Tests/KernelHostShims",
             publicHeadersPath: "include"
         ),
 
@@ -148,58 +160,58 @@ let package = Package(
         ),
 
         .testTarget(
-            name: "KernelPolicyTests",
+            name        : "KernelPolicyTests",
             dependencies: ["Kernel", "ReixABI", "KernelHostShims", "KernelTestSupport"],
-            path: "Tests/KernelPolicyTests"
+            path        : "Tests/KernelPolicyTests"
         ),
 
         // The shell's command language, which is the one piece of it that is
         // pure logic: a line in, a parsed command or a placed error out.
         .testTarget(
-            name: "ShellTests",
+            name        : "ShellTests",
             dependencies: ["ShellLanguage"],
-            path: "Tests/ShellTests"
+            path        : "Tests/ShellTests"
         ),
 
         // The file system over a slab of host memory: format, allocate, name,
         // grow and delete, with no disk and no kernel anywhere near it.
         .testTarget(
-            name: "FileSystemTests",
+            name        : "FileSystemTests",
             dependencies: ["ReixFS", "ReixABI"],
-            path: "Tests/FileSystemTests"
+            path        : "Tests/FileSystemTests"
         ),
 
         // The pipe's wire format, over nothing at all: frames, acknowledgements
         // and the transfer state, with no shared page and no syscalls.
         .testTarget(
-            name: "PipeTests",
+            name        : "PipeTests",
             dependencies: ["ReixABI"],
-            path: "Tests/PipeTests"
+            path        : "Tests/PipeTests"
         ),
 
         // The shell frame and the terminal's events, decoded and encoded on the
         // host: a wire format is exactly the thing worth exercising without a
         // machine at either end of it.
         .testTarget(
-            name: "ShellProtocolTests",
-            dependencies: ["ReixABI"],
-            path: "Tests/ShellProtocolTests"
+            name        : "ShellProtocolTests",
+            dependencies: ["ReixABI", "ShellLanguage"],
+            path        : "Tests/ShellProtocolTests"
         ),
 
         // Layout locks only: sizes, strides and the all-zero patterns the wire
         // formats and the per-frame records depend on. No behaviour is exercised.
         .testTarget(
-            name: "ABILayoutTests",
+            name        : "ABILayoutTests",
             dependencies: ["Kernel", "ReixABI", "KernelHostShims", "KernelTestSupport"],
-            path: "Tests/ABILayoutTests"
+            path        : "Tests/ABILayoutTests"
         ),
 
         // The memory subsystem in isolation: buddy allocator, slab core, physical
         // page manager, VMA list and page retirement, over host-owned arenas.
         .testTarget(
-            name: "KernelUnitTests",
+            name        : "KernelUnitTests",
             dependencies: ["Kernel", "ReixABI", "KernelHostShims", "KernelTestSupport"],
-            path: "Tests/KernelUnitTests"
+            path        : "Tests/KernelUnitTests"
         ),
     ]) + [
         // Bare-metal orchestrator: link + objcopy + tar + qemu over the .a files

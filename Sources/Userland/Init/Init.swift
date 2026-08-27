@@ -36,13 +36,13 @@ public func main() {
         of      : CapGrant.self,
         capacity: 1
     ) { buffer in
-        
+
         buffer[0] = CapGrant(
             source: device,
             slot  : BootCap.device.rawValue,
             rights: [.grant, .read, .write]
         )
-        
+
         return spawnProcess(
             path  : "ConsoleServer.elf",
             grants: buffer.baseAddress!,
@@ -53,11 +53,11 @@ public func main() {
     guard let consoleEndpoint = receive(
         handle: console.handle
     ).grantedCap else { return }
-    
+
     Console.attach(console: consoleEndpoint)
 
     print("[ INIT  ] Console attached, launching Name Server")
-    
+
     let nameServer = launch(
         "NameServer.elf",
         environment: Environment(
@@ -78,20 +78,21 @@ public func main() {
         spawn     : spawnCap
     )
 
-    // TODO: - the Process Server was launched here, with a registrar minted for
-    // the one name it may publish. It went with the images it existed to start,
-    // and no registrar is minted now: a badge names one service, and there is
-    // nobody to name. `NameServerSession.registrar(for:)` is the only place a
-    // name can be claimed, so nothing publishes one while it is gone.
+    // TODO: - the Process Server was launched here, with a registrar capability
+    // minted for the one name it may publish. It is disabled until the file
+    // system can hand it an image: see Sources/Userland/ProcessServer. What
+    // comes back with it is the `derive` of `NameServerSession.registrar(for:)`
+    // above this line, which is the only place in the boot that mints one, so
+    // nothing publishes a name while it is gone.
 
     // Narrowed to `.profileStats` on the way in by `ProfileAuthorityGrant.tool`:
     // a stats reader has no business dumping the trace ring over the console.
     sleep(for: .milliseconds(800))
-    
+
     print("")
     print("============ PROFILE DUMP ============")
     print("\n")
-    
+
     profileDump(authority: profiler)
 
     profileControl(.enable, authority: profiler, arg: 0x3F)
@@ -140,9 +141,9 @@ public func main() {
     // The whole disk comes back out of this: the driver hands its endpoint to
     // the bus, the bus checks the sectors while it is still the only process
     // that can reach them, and then hands it here and keeps nothing.
-    var disk       : UInt32? = nil
-    var diagnostic : UInt32? = nil
-    var warden     : UInt32? = nil
+    var disk      : UInt32? = nil
+    var diagnostic: UInt32? = nil
+    var warden    : UInt32? = nil
 
     if capExists(BootCap.virtioBus.rawValue) {
         let bus = withUnsafeTemporaryAllocation(
@@ -275,38 +276,89 @@ public func main() {
     // After the storage check, not before: it is handed the same view.
     if let diagnostic { _ = capDrop(diagnostic) }
 
+    // Counted as they are written rather than placed at fixed indices: which
+    // capabilities the shell gets depends on what this machine turned out to
+    // have, and an index worked out from two optionals is an index that gets
+    // worked out wrong.
     _ = withUnsafeTemporaryAllocation(
         of      : CapGrant.self,
-        capacity: 4
+        capacity: 8
     ) { grants in
 
-        grants[0] = CapGrant(
+        var count = 0
+
+        func give(_ grant: CapGrant) {
+            grants[count] = grant
+            count += 1
+        }
+
+        give(CapGrant(
             source: consoleEndpoint,
             slot  : BootCap.console.rawValue,
             rights: [.send, .grant]
-        )
-        grants[1] = CapGrant(
+        ))
+        // Lookup only. The shell can find the services that have names; it
+        // cannot publish one, which is what would let it answer as one. The
+        // disk is not among them any more.
+        give(CapGrant(
+            source: nameServerEndpoint,
+            slot  : BootCap.nameServer.rawValue,
+            rights: [.send]
+        ))
+        give(CapGrant(
             source: spawnCap,
             slot  : BootCap.spawn.rawValue,
             rights: [.spawn, .grant]
-        )
-        grants[2] = CapGrant(
+        ))
+        give(CapGrant(
             source: terminalEndpoint,
             slot  : BootCap.terminal.rawValue,
             rights: [.send, .grant]
-        )
+        ))
         // `launcher` and not `tool`: the shell has to be able to pass a
         // reader's share to the commands it runs, and what it passes drops the
         // right to pass it further.
-        grants[3] = ProfileAuthorityGrant.launcher(source: profiler)
+        give(ProfileAuthorityGrant.launcher(source: profiler))
+
+        // The whole machine, because the person at the keyboard is meant to see
+        // the whole disk. Not a privilege the shell has: a capability it was
+        // handed, exactly like every narrower one below it.
+        if let machine {
+            give(CapGrant(
+                source: machine,
+                slot  : BootCap.container.rawValue,
+                rights: [.send, .grant]
+            ))
+        }
+
+        // And the disk underneath it, to look at and not to touch. Reading raw
+        // sectors is how you find out whether the layer above is telling the
+        // truth, so the shell keeps that; what it no longer has is any way to
+        // write one, or to read one while the file system is mounted.
+        if let diagnostic {
+            give(CapGrant(
+                source: diagnostic,
+                slot  : BootCap.block.rawValue,
+                rights: [.send]
+            ))
+        }
+
+        // And the right to stop the machine, for the same reason: the person at
+        // the keyboard is the one who turns it off.
+        if capExists(BootCap.power.rawValue) {
+            give(CapGrant(
+                source: BootCap.power.rawValue,
+                slot  : BootCap.power.rawValue,
+                rights: [.write]
+            ))
+        }
 
         return spawnProcess(
             path  : "Shell.elf",
             grants: grants.baseAddress!,
-            count : 4
+            count : count
         )
     }
-
 
     if let warden, let filesPid {
         awaitFileSystem(pid: filesPid, warden: warden)
@@ -385,7 +437,10 @@ private func awaitContainer(from files: UInt32) -> UInt32? {
 /// Init blocks here for the rest of a healthy boot, which is what it did before
 /// in a sleep loop. A child that dies while init waits on a different one still
 /// dies properly; it is simply not reaped, which was already true.
-private func awaitFileSystem(pid: PID, warden: UInt32) {
+private func awaitFileSystem(
+      pid   : PID,
+      warden: UInt32
+) {
 
     _ = reapChild(for: pid)
 
@@ -527,7 +582,11 @@ private func startStorageCheck(
 /// there is no live process with that pid, which is the condition the whole check
 /// is about. Written and not unlocked, because a `lock` from here would say the
 /// claim table let go while a write says the *refusal* did.
-private func orphanedClaim(_ files: FileSystemClient, in container: UInt32, of pid: PID) {
+private func orphanedClaim(
+    _ files       : FileSystemClient,
+      in container: UInt32,
+      of pid      : PID
+) {
 
     _ = reapChild(for: pid)
 
@@ -557,7 +616,11 @@ private func orphanedClaim(_ files: FileSystemClient, in container: UInt32, of p
 
 
 /// The container called `name`, made if this is the first boot to want it.
-private func place(_ files: FileSystemClient, _ name: StaticString, room: UInt32) -> UInt32? {
+private func place(
+    _ files: FileSystemClient,
+    _ name : StaticString,
+      room : UInt32
+) -> UInt32? {
 
     let bytes = UnsafeRawPointer(name.utf8Start)
     let count = name.utf8CodeUnitCount
@@ -576,7 +639,10 @@ private func place(_ files: FileSystemClient, _ name: StaticString, room: UInt32
 
 
 /// Writes the gift into the vault and answers the file.
-private func fillGift(_ files: FileSystemClient, in vault: UInt32) -> UInt32? {
+private func fillGift(
+    _ files   : FileSystemClient,
+      in vault: UInt32
+) -> UInt32? {
 
     let name  = "gift.txt" as StaticString
     let bytes = UnsafeRawPointer(name.utf8Start)
@@ -617,7 +683,11 @@ private func fillGift(_ files: FileSystemClient, in vault: UInt32) -> UInt32? {
 /// to ask for anything more. It is the same file the child can also read
 /// through the capability it was handed, which is what lets it check the two
 /// against each other.
-private func pourGift(_ files: FileSystemClient, gift: UInt32, to endpoint: UInt32) {
+private func pourGift(
+    _ files      : FileSystemClient,
+      gift       : UInt32,
+      to endpoint: UInt32
+) {
 
     guard var producer = PipeProducer(to: endpoint) else {
         print("[ INIT  ] no pipe to pour the gift down")

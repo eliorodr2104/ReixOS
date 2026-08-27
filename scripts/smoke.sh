@@ -25,6 +25,10 @@
 #   INITRD_MODE qemu | embedded             (default: qemu)
 #   LOG         serial capture file         (default: $OUT/smoke.log)
 #   TIMEOUT     seconds to wait for a verdict (default: 30)
+#   SUCCESS_MARKER  the line that ends the run (default: the terminal server's).
+#               Override it to watch for something printed later than that.
+#   INPUT       bytes to type at the guest's serial port, expanded by
+#               `printf %b` so `\n` is a newline (default: empty, nothing typed)
 
 set -u
 
@@ -42,13 +46,14 @@ INITRD="${INITRD:-$OUT/initrd.tar}"
 INITRD_MODE="${INITRD_MODE:-qemu}"
 LOG="${LOG:-$OUT/smoke.log}"
 TIMEOUT="${TIMEOUT:-30}"
+INPUT="${INPUT:-}"
 POLL_INTERVAL=0.5
 
-# The lines a boot can end on. The terminal server prints the first once it holds
-# the serial window and its interrupt line, which is as far into userland as a
-# boot with nobody at the keyboard goes; a panic always opens with the banner
-# below regardless of which trap fired, nested fault or not.
-SUCCESS_MARKER='[ SERVE ] Terminal Server running'
+# The lines a boot can end on. The terminal server prints the first once it
+# holds the serial window and its interrupt line, which is as far into userland
+# as a boot with nobody at the keyboard goes; a panic always opens with the
+# banner below regardless of which trap fired, nested fault or not.
+SUCCESS_MARKER="${SUCCESS_MARKER:-[ SERVE ] Terminal Server running}"
 FAIL_REGEX='REIX-PANIC'
 
 qemu_pid=
@@ -97,9 +102,33 @@ fi
 mkdir -p "$(dirname "$LOG")"
 : > "$LOG"
 
+# Synthetic serial input: `-nographic` puts the guest's UART on our stdin, so a
+# file there is a typist. Nothing has to be timed, because QEMU pushes only what
+# the receive FIFO will take and holds the rest, and the terminal server drains
+# that FIFO before it waits on the interrupt: bytes that arrived before the guest
+# was ready to read are still read.
+#
+# Which is only true while the UART is on stdio. A run that redirects it (the
+# matrix's `window` mode does, with `-serial file:`) would swallow the input
+# whole, and a probe that types nothing is a probe that proves nothing, so that
+# combination is refused rather than run.
+stdin_file=/dev/null
+if [ -n "$INPUT" ]; then
+    case $QEMU_FLAGS in
+        *-serial*)
+            echo "SETUP: INPUT needs the guest's serial port on stdin, and" \
+                 "QEMU_FLAGS redirects it" >&2
+            exit 3
+            ;;
+    esac
+
+    stdin_file="$LOG.input"
+    printf '%b' "$INPUT" > "$stdin_file"
+fi
+
 # shellcheck disable=SC2086 # QEMU_FLAGS and the two arg strings are deliberately
 # unquoted word lists; an empty one has to vanish rather than become "".
-"$QEMU" $QEMU_FLAGS $mem_args -kernel "$KERNEL" $initrd_args </dev/null >"$LOG" 2>&1 &
+"$QEMU" $QEMU_FLAGS $mem_args -kernel "$KERNEL" $initrd_args <"$stdin_file" >"$LOG" 2>&1 &
 qemu_pid=$!
 
 start_ts=$(date +%s)

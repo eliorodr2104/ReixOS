@@ -5,70 +5,10 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 22/08/2026.
 //
 
-/// A stretch of the typed line, by offset and length.
-///
-/// Nothing is copied out of the line buffer, here or anywhere below: the parse
-/// hands back where things are, and the caller reads them in place. That is not
-/// only about allocation, it is what lets an error point at a column.
-public struct Span {
-    public let start: Int
-    public let count: Int
-
-    public init(start: Int, count: Int) {
-        self.start = start
-        self.count = count
-    }
-}
-
-
-/// One parsed command: `receiver.verb(arguments)`.
-public struct Command {
-    public let receiver : Span
-    public let verb     : Span
-    public var arguments: InlineArray<4, Span> = InlineArray(repeating: Span(start: 0, count: 0))
-    public var argumentCount: Int = 0
-}
-
-
-/// Why a line was refused, and where.
-///
-/// The column travels with the reason so the shell can point at the character
-/// that broke, rather than answering "syntax error" and leaving the reader to
-/// find it. A terminal with no cursor addressing can still draw a caret under
-/// the right column.
-public struct ParseFailure: Error {
-    public let reason: Reason
-    public let column: Int
-
-    public enum Reason: Equatable {
-        case empty
-        case expectedName
-        case expectedOpenParenthesis
-        case expectedCloseParenthesis
-        case expectedArgument
-        case unterminatedText
-        case tooManyArguments
-        case trailingCharacters
-    }
-
-    public var message: StaticString {
-        switch reason {
-            case .empty                    : "nothing to run"
-            case .expectedName             : "expected a name"
-            case .expectedOpenParenthesis  : "expected '(' after the verb"
-            case .expectedCloseParenthesis : "expected ')'"
-            case .expectedArgument         : "expected a quoted argument"
-            case .unterminatedText         : "this text is missing its closing quote"
-            case .tooManyArguments         : "too many arguments"
-            case .trailingCharacters       : "unexpected characters after ')'"
-        }
-    }
-}
-
-
 /// The grammar of the shell, which is a deliberate subset of Swift's own:
 ///
-///     ( receiver '.' )? verb ( '(' ( text ( ',' text )* )? ')' )?
+///     ( receiver '.' )? verb ( '(' args? ')' | ' ' args )?
+///     args := argument ( ( ',' | ' ' ) argument )*
 ///
 /// Small enough to be written by hand and honest about what it will become. The
 /// receiver is not decoration: it names the authority the shell is acting
@@ -84,15 +24,31 @@ public struct ParseFailure: Error {
 /// left out is the shell's business, not the parser's: an absent receiver comes
 /// back as an empty span.
 ///
-/// Arguments are quoted text only. Numbers, nesting and pipelines are absent
-/// rather than half-built: each of them wants a value model the system does not
-/// carry between processes yet.
+/// An argument is a quoted text or a bare run of printable characters with no
+/// space, comma, quote or parenthesis in it. Quotes were once required, on the
+/// reasoning that a mistyped name should not quietly become an argument. Paths
+/// changed that: `move reix::app::child/doc/file.txt` is how a path is written,
+/// and making people quote it would make the shell's syntax a thing to remember
+/// rather than a thing to recognise. Quotes are still what carries a space.
+///
+/// The parentheses and the commas are optional together with them: `move x`,
+/// `move("x")` and `fs.move "x"` are one command written three ways, which is
+/// the point. Nesting and pipelines are absent rather than half-built: both
+/// want a value model the system does not carry between processes yet.
 public enum CommandParser {
 
     public static func parse(
         _ line: UnsafePointer<UInt8>,
-        count : Int
+          count : Int
     ) -> Result<Command, ParseFailure> {
+
+        // A length of less than nothing is not a short line, it is not a line.
+        // The obvious source is a reader answering -1 for "the terminal is
+        // gone": every loop below is written `cursor < count` and would simply
+        // fall through, handing back spans that point outside the buffer.
+        guard count >= 0 else {
+            return .failure(ParseFailure(reason: .notALine, column: 0))
+        }
 
         var cursor = skipSpaces(line, from: 0, count: count)
 
@@ -124,10 +80,36 @@ public enum CommandParser {
 
         cursor = skipSpaces(line, from: cursor, count: count)
 
-        // Parentheses that would hold nothing may be left off entirely.
-        guard cursor < count, line[cursor] == Self.openParenthesis else {
-            guard cursor == count else {
-                return .failure(ParseFailure(reason: .trailingCharacters, column: cursor))
+        // Nothing after the verb at all.
+        guard cursor < count else { return .success(command) }
+
+        // Parentheses that would hold nothing may be left off entirely, and so
+        // may the parentheses that would hold something.
+        guard line[cursor] == Self.openParenthesis else {
+            while cursor < count {
+                let text: Span
+
+                switch argument(line, from: &cursor, count: count) {
+                    case .text(let span) : text = span
+                    case .unterminated   : return .failure(ParseFailure(reason: .unterminatedText, column: cursor))
+                    case .missing        : return .failure(ParseFailure(reason: .expectedArgument, column: cursor))
+                }
+
+                guard command.argumentCount < command.arguments.count else {
+                    return .failure(ParseFailure(reason: .tooManyArguments, column: cursor))
+                }
+
+                command.arguments[command.argumentCount] = text
+                command.argumentCount += 1
+
+                cursor = skipSpaces(line, from: cursor, count: count)
+
+                // A comma between them is allowed and means nothing: the space
+                // already separated them.
+                if cursor < count, line[cursor] == Self.comma {
+                    cursor += 1
+                    cursor = skipSpaces(line, from: cursor, count: count)
+                }
             }
 
             return .success(command)
@@ -141,12 +123,12 @@ public enum CommandParser {
 
         } else {
             while true {
-                guard cursor < count, line[cursor] == Self.quote else {
-                    return .failure(ParseFailure(reason: .expectedArgument, column: cursor))
-                }
+                let text: Span
 
-                guard let text = quotedText(line, from: &cursor, count: count) else {
-                    return .failure(ParseFailure(reason: .unterminatedText, column: cursor))
+                switch argument(line, from: &cursor, count: count) {
+                    case .text(let span) : text = span
+                    case .unterminated   : return .failure(ParseFailure(reason: .unterminatedText, column: cursor))
+                    case .missing        : return .failure(ParseFailure(reason: .expectedArgument, column: cursor))
                 }
 
                 guard command.argumentCount < command.arguments.count else {
@@ -205,6 +187,41 @@ public enum CommandParser {
     }
 
 
+    /// What reading one argument produced.
+    ///
+    /// Three outcomes and not two, because a quote that never closes is a
+    /// different mistake from an argument that was never there, and the caret
+    /// in the error should say which.
+    private enum Argument {
+        case text(Span)
+        case missing
+        case unterminated
+    }
+
+
+    /// One argument: a quoted text, or a bare run of printable characters.
+    private static func argument(
+        _ line: UnsafePointer<UInt8>,
+        from cursor: inout Int,
+        count : Int
+    ) -> Argument {
+
+        if cursor < count, line[cursor] == Self.quote {
+            guard let quoted = quotedText(line, from: &cursor, count: count) else {
+                return .unterminated
+            }
+            return .text(quoted)
+        }
+
+        let start = cursor
+        while cursor < count, isArgumentByte(line[cursor]) { cursor += 1 }
+
+        guard cursor > start else { return .missing }
+
+        return .text(Span(start: start, count: cursor - start))
+    }
+
+
     /// The inside of a pair of quotes, cursor left past the closing one. No
     /// escapes: a quote ends the text, and there is nothing a path needs that
     /// this refuses.
@@ -229,8 +246,8 @@ public enum CommandParser {
 
     private static func skipSpaces(
         _ line: UnsafePointer<UInt8>,
-        from  : Int,
-        count : Int
+          from  : Int,
+          count : Int
     ) -> Int {
         var cursor = from
         while cursor < count, line[cursor] == Self.space { cursor += 1 }
@@ -246,14 +263,33 @@ public enum CommandParser {
     }
 
     private static func isNameBody(_ byte: UInt8) -> Bool {
-        isNameStart(byte) || (byte >= 0x30 && byte <= 0x39) // 0-9
+        isNameStart(byte) || isDigit(byte)
     }
 
-    private static let space            : UInt8 = 0x20
-    private static let dot              : UInt8 = 0x2E
-    private static let comma            : UInt8 = 0x2C
-    private static let quote            : UInt8 = 0x22
-    private static let openParenthesis  : UInt8 = 0x28
-    private static let closeParenthesis : UInt8 = 0x29
-    private static let underscore       : UInt8 = 0x5F
+    private static func isDigit(_ byte: UInt8) -> Bool {
+        byte >= 0x30 && byte <= 0x39
+    }
+
+    /// What may appear in a bare argument: anything printable that is not a
+    /// separator of the grammar itself.
+    ///
+    /// Which is to say `/`, `:`, `.` and `-` are ordinary characters here, and
+    /// a path is written the way it is written. A space still has to be quoted,
+    /// because a space is what separates one argument from the next.
+    private static func isArgumentByte(_ byte: UInt8) -> Bool {
+        byte > Self.space
+        && byte < 0x7F
+        && byte != Self.comma
+        && byte != Self.quote
+        && byte != Self.openParenthesis
+        && byte != Self.closeParenthesis
+    }
+
+    private static let space           : UInt8 = 0x20
+    private static let dot             : UInt8 = 0x2E
+    private static let comma           : UInt8 = 0x2C
+    private static let quote           : UInt8 = 0x22
+    private static let openParenthesis : UInt8 = 0x28
+    private static let closeParenthesis: UInt8 = 0x29
+    private static let underscore      : UInt8 = 0x5F
 }

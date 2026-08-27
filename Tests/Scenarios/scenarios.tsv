@@ -21,12 +21,18 @@
 #              exactly like `make smoke`. `window` keeps it running for the full
 #              timeout and judges the log afterwards, which is what a row needs
 #              when it asserts lines printed after the success marker.
+#              `typed:<text>` is `window` plus a typist: the text is written to
+#              the guest's serial port, `\n` for a newline, and the serial port
+#              stays on stdio so the log still comes back through the engine.
 #   timeout    seconds: the deadline under `verdict`, the run length under `window`
 #   required   markers that must all appear, in this order, `|`-separated. The
 #              order is a subsequence, not adjacency: other lines may sit
 #              between two markers, and each marker only has to appear after
 #              the line that satisfied the previous one.
 #   forbidden  markers that must not appear anywhere, `|`-separated (`-` = none)
+#              Every row that types nothing forbids the shell's parting line: with
+#              no command typed, a shell that stopped reading stopped on its own.
+#              The `typed:` rows are the exception, and they require it instead.
 #   post       extra check run after the markers hold (`-` = none). The names are
 #              the post_* functions in scripts/scenarios.sh.
 #   expect     `pass`, `xfail:<reason>`, or `skip-if:<condition>`
@@ -47,24 +53,25 @@
 # The configuration `make smoke` boots: machine default RAM, initrd from QEMU.
 # The required chain is one boot read end to end - the pre-Swift banner, the
 # subsystems in bring-up order, the handoff to EL0, init, and finally the
-# terminal server, which is the last thing init starts that announces itself.
-default	-	qemu	-	verdict	30	[ reix ] ReixOS|[PPM ] Physical Page Manager ready.|[VMM ] Virtual Memory Manager ready.|[HEAP] Kernel heap ready.|[SCHD] Scheduler ready.|[SYS ] Syscall Handler ready.|[KERN] Kernel is running.|Handing control to user space.|[ INIT  ] Hi, this is init process!|[ SERVE ] Terminal Server running	[ PANIC ]|REIX-PANIC|[ ERROR ]	-	pass
+# terminal server, which is the last thing init starts that announces itself and
+# so the latest single-writer line every configuration here prints.
+default	-	qemu	-	verdict	30	[ reix ] ReixOS|[PPM ] Physical Page Manager ready.|[VMM ] Virtual Memory Manager ready.|[HEAP] Kernel heap ready.|[SCHD] Scheduler ready.|[SYS ] Syscall Handler ready.|[KERN] Kernel is running.|Handing control to user space.|[ INIT  ] Hi, this is init process!|[ SERVE ] Terminal Server running	[ PANIC ]|REIX-PANIC|[ ERROR ]|the terminal refused to register this reader|[ SHELL ] this shell is done	-	pass
 
 # The 4 MiB floor the project targets, i.e. `make smoke-4m`. `embedded` is not a
 # preference here: see dtb-squeeze below. The reclaim line is required only on
 # this row, because at 4 MiB giving the device tree's megabyte back to the page
 # manager is what makes the machine fit rather than a nicety.
-mem-4m	4M	embedded	-	verdict	30	[ reix ] ReixOS|[PPM ] Physical Page Manager ready.|Device tree reclaimed: 1024 KiB.|[VMM ] Virtual Memory Manager ready.|[HEAP] Kernel heap ready.|[SCHD] Scheduler ready.|[SYS ] Syscall Handler ready.|[KERN] Kernel is running.|Handing control to user space.|[ INIT  ] Hi, this is init process!|[ SERVE ] Terminal Server running	[ PANIC ]|REIX-PANIC|[ ERROR ]	-	pass
+mem-4m	4M	embedded	-	verdict	30	[ reix ] ReixOS|[PPM ] Physical Page Manager ready.|Device tree reclaimed: 1024 KiB.|[VMM ] Virtual Memory Manager ready.|[HEAP] Kernel heap ready.|[SCHD] Scheduler ready.|[SYS ] Syscall Handler ready.|[KERN] Kernel is running.|Handing control to user space.|[ INIT  ] Hi, this is init process!|[ SERVE ] Terminal Server running	[ PANIC ]|REIX-PANIC|[ ERROR ]|[ SHELL ] this shell is done	-	pass
 
 # The embedded initrd on its own, at default RAM: it isolates the `.initrd`
 # section path from the 4 MiB layout, so a break in one of the two says which.
-embedded-initrd	-	embedded	-	verdict	30	[ reix ] ReixOS|[PPM ] Physical Page Manager ready.|[VMM ] Virtual Memory Manager ready.|[HEAP] Kernel heap ready.|[SCHD] Scheduler ready.|[SYS ] Syscall Handler ready.|[KERN] Kernel is running.|Handing control to user space.|[ INIT  ] Hi, this is init process!|[ SERVE ] Terminal Server running	[ PANIC ]|REIX-PANIC|[ ERROR ]	-	pass
+embedded-initrd	-	embedded	-	verdict	30	[ reix ] ReixOS|[PPM ] Physical Page Manager ready.|[VMM ] Virtual Memory Manager ready.|[HEAP] Kernel heap ready.|[SCHD] Scheduler ready.|[SYS ] Syscall Handler ready.|[KERN] Kernel is running.|Handing control to user space.|[ INIT  ] Hi, this is init process!|[ SERVE ] Terminal Server running	[ PANIC ]|REIX-PANIC|[ ERROR ]|the terminal refused to register this reader|[ SHELL ] this shell is done	-	pass
 
 # A machine with no PMUv3 block. The PMUVer gate is supposed to make profiling
 # optional, so the boot has to reach the same end state with the counters left
 # alone; the forbidden line is the one the PMU prints when it does come up, and
 # its absence is what says the gate closed instead of the boot getting lucky.
-no-pmu	-	qemu	-cpu cortex-a53,pmu=off	verdict	30	[ reix ] ReixOS|[PPM ] Physical Page Manager ready.|[VMM ] Virtual Memory Manager ready.|[HEAP] Kernel heap ready.|[SCHD] Scheduler ready.|[SYS ] Syscall Handler ready.|[KERN] Kernel is running.|Handing control to user space.|[ INIT  ] Hi, this is init process!|[ SERVE ] Terminal Server running	[ PANIC ]|REIX-PANIC|[ ERROR ]|cycle counter on	-	pass
+no-pmu	-	qemu	-cpu cortex-a53,pmu=off	verdict	30	[ reix ] ReixOS|[PPM ] Physical Page Manager ready.|[VMM ] Virtual Memory Manager ready.|[HEAP] Kernel heap ready.|[SCHD] Scheduler ready.|[SYS ] Syscall Handler ready.|[KERN] Kernel is running.|Handing control to user space.|[ INIT  ] Hi, this is init process!|[ SERVE ] Terminal Server running	[ PANIC ]|REIX-PANIC|[ ERROR ]|cycle counter on|[ SHELL ] this shell is done	-	pass
 
 # The guard on smoke-4m's coupling: at 4 MiB, MEM and INITRD_MODE are one knob
 # and not two, because QEMU drops an -initrd halfway up RAM and then 2 MiB-aligns
@@ -76,26 +83,100 @@ no-pmu	-	qemu	-cpu cortex-a53,pmu=off	verdict	30	[ reix ] ReixOS|[PPM ] Physical
 # the guest booted all the way through on `qemu` at 4 MiB, INITRD_MODE=embedded
 # stopped being load-bearing, and the coupling can be relaxed - in `smoke-4m` and
 # `run-4m` in the Makefile, and in the mem-4m row above.
-dtb-squeeze	4M	qemu	-	verdict	15	Not enough space for DTB after kernel/initrd	[ SERVE ] Terminal Server running	-	pass
+dtb-squeeze	4M	qemu	-	verdict	15	Not enough space for DTB after kernel/initrd	[ SERVE ] Terminal Server running|[ SHELL ] this shell is done	-	pass
 
 # The kernel's own account of the boot, cross-checked against the console's.
 # Init dumps the trace ring ~800 ms after the children are done, which is later
 # than the success marker, hence `window`; the post-check then decodes the same
 # log with `swift package reix trace --boot` and asserts all eleven boot phases
 # come out in TraceBootPhase order.
-trace-boot	-	qemu	-	window	12	[ reix ] ReixOS|[PPM ] Physical Page Manager ready.|[VMM ] Virtual Memory Manager ready.|[HEAP] Kernel heap ready.|[SCHD] Scheduler ready.|[SYS ] Syscall Handler ready.|[KERN] Kernel is running.|Handing control to user space.|[ INIT  ] Hi, this is init process!|[TRACE] begin v=2|[TRACE] end|[ SERVE ] Terminal Server running	[ PANIC ]|REIX-PANIC|[ ERROR ]	trace-boot	skip-if:no-host-swift
+trace-boot	-	qemu	-	window	12	[ reix ] ReixOS|[PPM ] Physical Page Manager ready.|[VMM ] Virtual Memory Manager ready.|[HEAP] Kernel heap ready.|[SCHD] Scheduler ready.|[SYS ] Syscall Handler ready.|[KERN] Kernel is running.|Handing control to user space.|[ INIT  ] Hi, this is init process!|[TRACE] begin v=2|[TRACE] end	[ PANIC ]|REIX-PANIC|[ ERROR ]|[ SHELL ] this shell is done	trace-boot	skip-if:no-host-swift
 
-# The disk, end to end and in one boot: the bus walker reads a device id off a
-# transport, starts a driver for it, checks the sectors while it is still the
-# only process that can reach them, and hands the whole disk to a file system
-# that mounts it. Every line below is printed by a different process, and the
-# order they appear in is the order the authority travelled.
+# The storage stack, end to end, in one row: the bus walks the transports and
+# carves a window and a line, gives both to a driver and drops its own copies,
+# the driver hands its endpoint back to the bus, the bus reads the sectors while
+# it is still the only process that can reach them and then hands the disk to
+# init and keeps nothing, init hands it to a file system, the file system claims
+# the volume and mounts and gives its one root capability back. Init then cuts a
+# container out of that and starts a process inside that container and nothing
+# else. That process proves three things: that it can use its own room, that it
+# cannot reach a single object outside it even by naming numbers it was never
+# told, and that the two ways of receiving something from another container both
+# work and agree - a read-only capability naming one file, and a pipe carrying
+# the same bytes with nothing else attached to them.
+# `window` because all of it happens after the success marker.
 #
-# `window` and not `verdict` because all of it happens after the marker a
-# verdict row stops on, and the disk is not asserted to be blank: a row that
-# required the formatting line would pass once and fail on every run after,
-# since the image outlives the boot on purpose.
-
+# The post-check reads the virtqueue's memory barriers out of the linked driver.
+# A barrier has no result to compare and its absence shows up as a race on
+# hardware nobody here runs, so what is checkable is that the instructions exist,
+# that they name the outer-shareable domain the device is in rather than the
+# inner one the console ring uses, and that the queue submission still reaches
+# them. It catches deletion and inlining, and claims no more than that.
+#
+# Every failure any of those four can report is forbidden by name. A stack this
+# deep has too many ways to stop quietly for a missing marker to be a diagnosis.
+#
+# `[ FS    ] mounted` is required now that the handoff is a handover rather than
+# a lookup: the bus finishes reading before init is told the disk exists, so the
+# order of these lines is the order the capability travelled in and not a race.
+#
+# The forbidden line about what a finished write achieves is how this row asserts
+# that QEMU's virtio-blk still negotiates `VIRTIO_BLK_F_FLUSH`. A device that did
+# not would report no durability at all, and the file system refuses to mount one
+# of those rather than guessing - so its absence is the negotiation succeeding,
+# named rather than inferred from the mount marker being there.
+#
+# How deep the queue actually got is the `queue-depth` post-check rather than a
+# marker: the block server prints it while other processes are printing theirs, so
+# where its line lands between somebody else's is a race, and a marker chain is an
+# ordered subsequence. See `post_queue_depth` for why the floor is two and not the
+# four slots the driver has.
+#
+# The forbidden lines starting "the device" are every way a used ring can
+# disagree with what was submitted, plus the two ways a size can move under a
+# request, plus the one refusal that comes from this side: a wait that could not
+# be bounded. None of them is a request failing; each is the device being reset.
+#
+# "a completion had nowhere to be recorded" and "this server lost count of what it
+# owes" are the block server's own bookkeeping contradicting itself: four slots
+# owing more than four answers. It takes the disk out of service, so it is
+# forbidden rather than merely noted.
+#
+# "the file system refused itself" is the journal's own guard reporting: a change
+# to the disk's bookkeeping attempted with no transaction open. No client can
+# provoke it, so its appearance would mean a mutation reached the medium without
+# going through the journal - or rather, tried to and was stopped.
+#
+# The two about checking are the dirty mount's own recovery: a volume it could not
+# check is a volume it refuses to serve, and a room walk that did not finish is a
+# device that stopped answering. Every boot in this matrix mounts dirty - the
+# machine is killed rather than shut down - so both lines are on the path.
 storage	-	qemu	-	window	12	[ BUS   ] slot 31 version 1  block|[ DISK  ] serving 32768 sectors of 512 bytes|[ BUS   ] disk ready, 32768 sectors|[ BUS   ] two sectors read, one past the end refused|[ BUS   ] read 8 sectors in one request|[ FS    ] mounted|[ CHECK ] nothing outside this container can be reached|[ CHECK ] a handle for a removed file reaches nothing, not even its slot|[ CHECK ] wrote and read back 14000 bytes across 4 blocks|[ CHECK ] root holds check.bin|[ CHECK ] a claim is taken, honoured and let go|[ CHECK ] read 2000 bytes of a file lent from another container|[ CHECK ] the loan is read-only and reaches nothing else|[ CHECK ] the same 2000 bytes arrived down the pipe, and match|[ CHECK ] a write past the end is refused and costs nothing|[ CHECK ] a second window on the disk, held while the file system holds it|[ DISK  ] a client sent a message dressed as the device, ignored|[ CHECK ] a forged interrupt reached neither the transport nor the line|[ CHECK ] a claim is taken and this process dies holding it|[ CHECK ] storage stack whole, nothing leaked|[ INIT  ] a claim whose holder died was let go	[ PANIC ]|REIX-PANIC|[ ERROR ]|no virtio bus on this machine|no block device|its line is taken|the device did not answer in time|the device asked to be reset|completed more than was asked of it|finished a chain that was never submitted|out of service|refused to come up|sector 0 unreadable|the file to abandon a claim on was not made|the claim to abandon was refused|the container would not attach a second time|the file the storage check died holding is not there|a claim its holder took to the grave still refuses everybody|never completed|past the end of the disk was read|would not start|would not attach|came up without an endpoint|no disk was handed to this process|the volume is held by somebody else|stopped before the end, so nothing was put right|left alone until somebody looks|blocks claimed by two objects|names whose target disagrees|names shadowed by an earlier one|objects that are their own parent|containers whose room does not add up|the volume stayed held|not a file system this build can mount|which this build cannot read|holds nothing this build can mount|nobody said to format it|never answered, carrying on without one|run of sectors could not be read|too long for the window was accepted|run and the single read disagree|took a request bigger than the window|cannot hold a file system|the file was not created|the write did not finish|no container was given to this process|the container would not attach|was given the whole machine|the file to hold a handle for was not made|a handle for a removed file still read it|a stale handle reached the file that took its slot|cannot be read by its own handle|a forged handle answered|listed itself to a container inside it|was created outside this container|answered a removal|answered from outside this container|was handed the machine's container|the file system gave back no container|cannot hand over what the storage check needs|no room for a container the storage check needs|the gift could not be|no pipe to pour|nothing was lent to this process|the loan would not attach|the lent file did not read|a read-only loan was written to|the loan reached past the file it named|no pipe to receive on|the pipe delivered|the two roads disagree|the claim was refused|was refused its own claim|could not write what it had claimed|a released file would not be removed|the file to claim was not made|did not read back|came back different at byte|not found by name|not in the listing|would not be removed|is still there|space leaks|the disk will not say what a finished write achieves|the device finished a request twice|the device reported a length no completion of that kind has|the device finished a request without writing its status|the device changed size with requests outstanding|the device would not settle on a size|the wait for the device could not be bounded|a completion had nowhere to be recorded|this server lost count of what it owes|a client is out of names|no view of the disk was given to this process|the view of the disk would not attach|a read from a second attachment answered|the disk answered no geometry to a second attachment|the replaced window answered a different disk|the file for the dense check was not made|a write past the end of a file was not refused|a refused write past the end still cost blocks|a write at the end of a file was refused|the dense file is not two bytes long|the dense file would not be removed|the forged interrupt could not be sent|the disk stopped answering after a forged interrupt|the terminal refused to register this reader|this process could carve a container out of its own room|the file system refused itself|the disk could not be checked, so it is not being served|the room was not checked|more containers than this build indexes|records charged to something that is not a container|more than this build is declared to serve|the root listing stopped|[ SHELL ] this shell is done	dma-barriers,queue-depth	pass
 
+# The same stack at the 4 MiB floor, where the file system's two scratch blocks
+# and three more processes are a real fraction of the machine. Shorter marker
+# chain on purpose: what is guarded here is that it all still fits.
 storage-4m	4M	embedded	-	window	16	[ DISK  ] serving 32768 sectors of 512 bytes|[ CHECK ] nothing outside this container can be reached|[ CHECK ] a handle for a removed file reaches nothing, not even its slot|[ CHECK ] the same 2000 bytes arrived down the pipe, and match|[ CHECK ] a write past the end is refused and costs nothing|[ CHECK ] a second window on the disk, held while the file system holds it|[ DISK  ] a client sent a message dressed as the device, ignored|[ CHECK ] a forged interrupt reached neither the transport nor the line|[ CHECK ] a claim is taken and this process dies holding it|[ CHECK ] storage stack whole, nothing leaked|[ INIT  ] a claim whose holder died was let go	[ PANIC ]|REIX-PANIC|[ ERROR ]|the device did not answer in time|the device asked to be reset|completed more than was asked of it|finished a chain that was never submitted|out of service|refused to come up|would not start|would not attach|came up without an endpoint|no disk was handed to this process|the volume is held by somebody else|stopped before the end, so nothing was put right|left alone until somebody looks|blocks claimed by two objects|names whose target disagrees|names shadowed by an earlier one|objects that are their own parent|containers whose room does not add up|the volume stayed held|not a file system this build can mount|which this build cannot read|holds nothing this build can mount|nobody said to format it|never answered, carrying on without one|cannot hold a file system|came back different at byte|space leaks|the file to abandon a claim on was not made|the claim to abandon was refused|the container would not attach a second time|the file the storage check died holding is not there|a claim its holder took to the grave still refuses everybody|no container was given to this process|was given the whole machine|answered from outside this container|gave back no container|the disk will not say what a finished write achieves|the device finished a request twice|the device reported a length no completion of that kind has|the device finished a request without writing its status|the device changed size with requests outstanding|the device would not settle on a size|the wait for the device could not be bounded|a completion had nowhere to be recorded|this server lost count of what it owes|a client is out of names|no view of the disk was given to this process|the view of the disk would not attach|a read from a second attachment answered|the disk answered no geometry to a second attachment|the replaced window answered a different disk|the file for the dense check was not made|a write past the end of a file was not refused|a refused write past the end still cost blocks|a write at the end of a file was refused|the dense file is not two bytes long|the dense file would not be removed|the forged interrupt could not be sent|the disk stopped answering after a forged interrupt|the terminal refused to register this reader|this process could carve a container out of its own room|the file system refused itself|the disk could not be checked, so it is not being served|the room was not checked|more containers than this build indexes|records charged to something that is not a container|more than this build is declared to serve|the root listing stopped|[ SHELL ] this shell is done	queue-depth	pass
+
+# The shell's closing, which is the one thing about it that cannot be shown from
+# a host: that `exit` is the end of reading and not a flag somebody remembered to
+# test. Two lines are typed. The first is `shell.exit()`, and the parting line
+# below is what says it was read - the shell only writes that line because the
+# terminal delivered it, the editor closed it, the parser took it apart, and
+# CoreModule answered that it had been asked to stop.
+#
+# The second typed line is one no module answers to, and both halves of what a
+# shell would make of it are forbidden: its echo appearing anywhere means the
+# shell read a line after it was told to stop, and `no such receiver` means it
+# interpreted one. Neither is in any other output of this machine.
+#
+# The echo of the first line is deliberately not required. Every character of an
+# echo is its own flush, so a second writer can land between two of them, and the
+# rule at the top of this file is that only single-writer lines are asserted. The
+# prompt is one flush and is required; the echo is not.
+#
+# The guest runs to the end of the window rather than stopping at the parting
+# line, because what this row asks about is what came after it. That is the
+# post-check's half: nothing at all, and in particular no further prompt, which a
+# forbidden marker could not say because the prompt before the exit is legitimate.
+shell-exit	-	qemu	-	typed:shell.exit()\nzzz.qqq()\n	25	[ SERVE ] Terminal Server running|ReixOS shell. Type shell.help() to see what this understands.|reix>|[ SHELL ] this shell is done	[ PANIC ]|REIX-PANIC|[ ERROR ]|the terminal refused to register this reader|zzz.qqq|no such receiver	shell-closed	pass

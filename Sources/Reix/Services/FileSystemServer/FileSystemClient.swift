@@ -22,7 +22,7 @@ public struct FileSystemClient {
     /// one request, which is where the file system's read loop can keep the disk
     /// busy instead of waiting for each block in turn.
     public static let windowPages: UInt64 = 4
-    private static let pageSize: UInt64 = 4096
+    private static let pageSize  : UInt64 = 4096
 
     /// The most bytes one call may move, which is the window.
     public static var maximumTransfer: UInt64 { windowPages * pageSize }
@@ -41,7 +41,7 @@ public struct FileSystemClient {
     /// What this client's own root is called, which is the first segment of any
     /// path written from it. For the machine's container that is the machine's
     /// name; for anything else it is the name the folder above knows it by.
-    public let rootName: InlineArray<24, UInt8>
+    public let rootName      : InlineArray<24, UInt8>
     public let rootNameLength: Int
 
 
@@ -145,7 +145,10 @@ public struct FileSystemClient {
 
 
     /// Whether this client's root is the one `text` names.
-    public func rootIsNamed(_ text: UnsafeRawPointer, length: Int) -> Bool {
+    public func rootIsNamed(
+        _ text  : UnsafeRawPointer,
+          length: Int
+    ) -> Bool {
 
         guard length == rootNameLength else { return false }
 
@@ -206,7 +209,10 @@ public struct FileSystemClient {
     ///
     /// A read-only capability can only bind read-only ones. A share never grows
     /// as it travels.
-    public func bind(_ object: UInt32, rights: FSRights = .everything) -> UInt32? {
+    public func bind(
+        _ object: UInt32,
+          rights: FSRights = .everything
+    ) -> UInt32? {
 
         var words = InlineArray<4, UInt32>(repeating: 0)
         words[0] = object
@@ -271,7 +277,10 @@ public struct FileSystemClient {
 
 
     /// Moves `blocks` of this client's room into a container directly inside it.
-    public func grantRoom(_ blocks: UInt32, to container: UInt32) -> FSStatus {
+    public func grantRoom(
+        _ blocks      : UInt32,
+          to container: UInt32
+    ) -> FSStatus {
 
         var words = InlineArray<4, UInt32>(repeating: 0)
         words[0] = container
@@ -288,7 +297,11 @@ public struct FileSystemClient {
 
     // MARK: - Names
 
-    public func open(_ name: UnsafeRawPointer, length: Int, in folder: UInt32? = nil)
+    public func open(
+        _ name     : UnsafeRawPointer,
+          length   : Int,
+          in folder: UInt32? = nil
+    )
     -> (status: FSStatus, file: FSFile?) {
         request(.open, name, length: length, in: folder, kind: .free)
     }
@@ -302,7 +315,11 @@ public struct FileSystemClient {
         request(.create, name, length: length, in: folder, kind: kind)
     }
 
-    public func remove(_ name: UnsafeRawPointer, length: Int, from folder: UInt32? = nil)
+    public func remove(
+        _ name       : UnsafeRawPointer,
+          length     : Int,
+          from folder: UInt32? = nil
+    )
     -> FSStatus {
         request(.remove, name, length: length, in: folder, kind: .free).status
     }
@@ -678,7 +695,10 @@ public struct FileSystemClient {
 
 
     /// Renames the machine. Only a client holding the machine may.
-    public func nameMachine(_ text: UnsafeRawPointer, length: Int) -> FSStatus {
+    public func nameMachine(
+        _ text  : UnsafeRawPointer,
+          length: Int
+    ) -> FSStatus {
 
         guard length > 0, UInt64(length) <= Self.maximumTransfer else { return .badName }
 
@@ -696,8 +716,7 @@ public struct FileSystemClient {
     }
 
 
-    /// Walks the whole volume and answers whether it is still safe to serve.
-    public func scrub() -> FSStatus {
+    public func scrub() -> FSScrubResult {
 
         guard let answer = ask(
             Message(
@@ -705,9 +724,20 @@ public struct FileSystemClient {
                 words: InlineArray<4, UInt32>(repeating: 0)
             ),
             answeredBy: .status
-        ) else { return .unreachable }
+        ) else { return FSScrubResult(status: .unreachable, frame: nil) }
 
-        return FileOperation.status(of: answer.message)
+        let status = FileOperation.status(of: answer.message)
+        let length = Int(answer.message.words[1])
+        guard length >= ShellProtocol.headerBytes,
+              length <= Int(Self.maximumTransfer)
+        else { return FSScrubResult(status: status == .ok ? .bufferTooSmall : status, frame: nil) }
+        let frame = ShellFrame.decode(window.assumingMemoryBound(to: UInt8.self), length: length)
+        guard let frame,
+              ShellFindingsFrame.validates(frame)
+        else {
+            return FSScrubResult(status: status == .ok ? .bufferTooSmall : status, frame: nil)
+        }
+        return FSScrubResult(status: status, frame: frame)
     }
 
 
