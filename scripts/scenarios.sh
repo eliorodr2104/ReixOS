@@ -202,6 +202,27 @@ post_trace_boot() {
         return 1
     fi
 
+    # The exporter, checked for having run at all and written something with the
+    # right shape. Not a JSON parser: the point is to catch a decoder that
+    # crashed or wrote nothing, which is the way this quietly stops working.
+    pt_json="${pt_out%.txt}.json"
+    if ! FREESTANDING= "$SWIFT" package --allow-writing-to-package-directory \
+            reix trace "$pt_log" --export "$pt_json" > /dev/null 2>&1; then
+        printf 'the trace exporter failed'
+        return 1
+    fi
+
+    if [ ! -s "$pt_json" ] || ! head -c 22 "$pt_json" | grep -q 'displayTimeUnit'; then
+        printf 'the exported trace is empty or not a trace event file'
+        return 1
+    fi
+
+    if [ "$pt_stack" -gt "$STACK_CEILING" ]; then
+        printf 'kernel stack high water %s B is over the %s B ceiling' \
+               "$pt_stack" "$STACK_CEILING"
+        return 1
+    fi
+
     return 0
 }
 

@@ -50,26 +50,40 @@ enum TraceDecoder {
     /// `.reix/kernel.elf` and the per-process `.reix/<Name>` ELFs.
     static func run(arguments: [String], root: URL) throws {
         let rest = Array(arguments.dropFirst())
-        let mode: Mode = rest.contains("--boot") ? .boot
+        let mode: Mode = rest.contains("--export") ? .export
+            : rest.contains("--boot") ? .boot
             : rest.contains("--raw") ? .raw
             : rest.contains("--profile") ? .profile
             : .summary
 
         // Not a plain "first token without --" scan: `--symbolizer` takes a
         // value that must not be mistaken for the logfile path.
-        var logPath: String?
+        var logPath   : String?
+        var exportPath: String?
         var index = 0
         while index < rest.count {
             let token = rest[index]
+
+            // Both of these take a value, which must not be mistaken for the
+            // logfile path.
             if token == "--symbolizer" { index += 2; continue }
-            if token.hasPrefix("--")   { index += 1; continue }
-            logPath = token
-            break
+            if token == "--export" {
+                exportPath = index + 1 < rest.count ? rest[index + 1] : nil
+                index += 2
+                continue
+            }
+
+            if token.hasPrefix("--") { index += 1; continue }
+
+            logPath = logPath ?? token
+            index += 1
         }
 
         guard let logPath else {
             Diagnostics.error("""
             Usage: swift package reix trace <logfile> [--boot|--raw|--profile]
+                       [--export <out.json>]   writes a Chrome Trace Event file,
+                                               which ui.perfetto.dev opens
                        [--symbolizer <path>]   (only consulted by --profile)
             """)
             return
@@ -113,10 +127,18 @@ enum TraceDecoder {
             case .boot   : printBoot(block)
             case .raw    : printRaw(block)
             case .profile: printProfile(block, root: root, arguments: arguments)
+
+            case .export:
+                guard let exportPath else {
+                    Diagnostics.error("--export needs a path to write to.")
+                    return
+                }
+
+                export(block, to: exportPath)
         }
     }
 
-    private enum Mode { case summary, boot, raw, profile }
+    private enum Mode { case summary, boot, raw, profile, export }
 }
 
 
@@ -329,7 +351,12 @@ extension TraceDecoder {
 
     /// Mirrors `Sources/ReixABI/SyscallNumber.swift` case-by-case (raw value
     /// = declaration index). Keep this in sync by hand when that enum changes.
-    private static let syscallNames: [String] = [
+    ///
+    /// It drifted once, silently: five syscalls added after `profileControl`
+    /// decoded as `syscall#33` upwards for as long as nobody looked. A name
+    /// falling off the end is the only symptom, so a trace showing a numbered
+    /// syscall means this list, not the kernel.
+    static let syscallNames: [String] = [
         "exit", "yield", "putchar", "getPid", "getParentPid", "parentEndpoint",
         "spawnProcess", "split", "reapChild", "sleep", "terminate",
         "brk", "mmap", "munmap", "decommit",
@@ -337,21 +364,24 @@ extension TraceDecoder {
         "trySend", "tryReceive", "receiveTimeout", "spawnService", "derive",
         "shmCreate", "shmMap",
         "deviceCap", "mapDevice",
-        "capExists", "capDrop", "profileControl",
+        "capExists", "capDrop",
+        "profileControl", "procStats",
+        "irqWait", "irqAck",
+        "dmaAlloc", "dmaPhysical",
     ]
 
-    private static func syscallName(_ raw: UInt16) -> String {
+    static func syscallName(_ raw: UInt16) -> String {
         Int(raw) < syscallNames.count ? syscallNames[Int(raw)] : "syscall#\(raw)"
     }
 
     // Indexed by slot id from PreemptionRegion.swift, which is not declaration order.
-    private static let regionNames = ["CLON", "UNMP", "DCMT", "TDWN", "RBCK"]
+    static let regionNames = ["CLON", "UNMP", "DCMT", "TDWN", "RBCK"]
 
-    private static func regionName(_ slot: UInt16) -> String {
+    static func regionName(_ slot: UInt16) -> String {
         Int(slot) < regionNames.count ? regionNames[Int(slot)] : "slot#\(slot)"
     }
 
-    private static let phaseNames: [UInt16: String] = [
+    static let phaseNames: [UInt16: String] = [
         1: "ppmReady", 2: "vmmReady", 3: "heapReady", 4: "gicReady", 5: "fsReady",
         6: "pmReady", 7: "schedReady", 8: "ipcReady", 9: "syscallReady",
         10: "timerOn", 11: "firstUser",
@@ -359,7 +389,7 @@ extension TraceDecoder {
 
     /// The class/op name for an event code, falling back to hex so codes
     /// added after this table ships still print instead of vanishing.
-    private static func opName(_ code: UInt16) -> String {
+    static func opName(_ code: UInt16) -> String {
         switch code {
         case 0x0100: return "syscallExit"
         case 0x0200: return "ctxSwitch"
@@ -402,7 +432,7 @@ extension TraceDecoder {
 
     /// Unpacks a `procName` event's `a`/`b` into the name string, `a` holding
     /// bytes 0-7 little-endian and `b` bytes 8-15, truncated to `length`.
-    private static func decodeProcName(a: UInt64, b: UInt64, length: UInt16) -> String {
+    static func decodeProcName(a: UInt64, b: UInt64, length: UInt16) -> String {
         var bytes: [UInt8] = []
         bytes.reserveCapacity(16)
 
@@ -417,7 +447,7 @@ extension TraceDecoder {
 
     /// Builds the pid to name map from every `procName` event in the block.
     /// `event.pid` is the named process, not the emitter (see `TraceEvent`).
-    private static func pidNames(_ block: TraceBlock) -> [UInt32: String] {
+    static func pidNames(_ block: TraceBlock) -> [UInt32: String] {
         var names: [UInt32: String] = [:]
         for event in block.events where event.code == 0x0801 {
             names[event.pid] = decodeProcName(a: event.a, b: event.b, length: event.info)
@@ -438,7 +468,7 @@ extension TraceDecoder {
 
 extension TraceDecoder {
 
-    private static func micros(_ counterUnits: UInt64, freq: UInt64) -> Double {
+    static func micros(_ counterUnits: UInt64, freq: UInt64) -> Double {
         guard freq > 0 else { return 0 }
         return Double(counterUnits) * 1_000_000.0 / Double(freq)
     }
@@ -888,7 +918,6 @@ extension TraceDecoder {
                 continue
             }
 
-            // `name` already carries its extension ("Top.elf"), matching
             // the unstripped ELF the build leaves at .reix/<name> (only the
             // initrd copies under .reix/stripped/ lose their symbols).
             let elf = root.appending(path: plugin.outputDir).appending(path: name)

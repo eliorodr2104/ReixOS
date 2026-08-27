@@ -31,8 +31,7 @@ struct ReixPlugin: CommandPlugin {
     let triple = "aarch64-none-none-elf"
     let outputDir = ".reix"
     let apps = ["Init", "NameServer", "ConsoleServer", "TerminalServer", "Top",
-                "Shell", "VirtioBus", "BlockServer", "FileSystemServer",
-                "StorageCheck"]
+                "Shell", "VirtioBus", "BlockServer", "FileSystemServer", "StorageCheck"]
     
     let kernelNative = [
         "Sources/ReixKernel/Arch/aarch64/Boot/boot.S",
@@ -123,10 +122,6 @@ struct ReixPlugin: CommandPlugin {
                 // first section's file offset to it, which `user.ld` cannot
                 // reach: its ALIGN(4096) governs virtual addresses only.
                 "-z", "max-page-size=4096",
-
-                // Drops every section no image reaches from `_start`. The
-                // sections are per function only because of the frontend flags
-                // in Package.swift; the two are one change.
                 "--gc-sections",
 
                 "-o", out.appending(path: "\(app).elf").path,
