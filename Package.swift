@@ -21,7 +21,17 @@ if isFreestanding {
         .enableExperimentalFeature("Embedded"),
         // -Xcc -mstrict-align is not optional: without it LLVM emits unaligned
         // multi-register accesses, which fault with the MMU off in early boot.
-        .unsafeFlags(["-Osize", "-wmo", "-parse-as-library", "-g", "-Xcc", "-mstrict-align"]),
+        .unsafeFlags([
+            "-Osize", "-wmo", "-parse-as-library", "-g",
+            "-Xcc", "-mstrict-align",
+
+            // One section per function and per datum, so the userland link can
+            // drop what no image reaches. Without them `-wmo` emits one object
+            // per module and the linker has nothing finer than a module to
+            // keep: every ELF carried the whole of Reix and ReixABI.
+            "-Xfrontend", "-function-sections",
+            "-Xcc", "-ffunction-sections", "-Xcc", "-fdata-sections",
+        ]),
     ]
 }
 

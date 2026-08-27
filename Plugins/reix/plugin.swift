@@ -123,6 +123,11 @@ struct ReixPlugin: CommandPlugin {
                 // reach: its ALIGN(4096) governs virtual addresses only.
                 "-z", "max-page-size=4096",
 
+                // Drops every section no image reaches from `_start`. The
+                // sections are per function only because of the frontend flags
+                // in Package.swift; the two are one change.
+                "--gc-sections",
+
                 "-o", out.appending(path: "\(app).elf").path,
             ] + reixObjs + [
                 "--whole-archive", buildDir.appending(path: "lib\(app).a").path, "--no-whole-archive",
