@@ -113,7 +113,7 @@ public struct SpawnProcessSyscall: SyscallProvider {
                     handle: grants[i].sourceHandle,
                     to    : childProcess,
                     slot  : grants[i].targetSlot,
-                    rights: CapRights(rawValue: UInt8(truncatingIfNeeded: grants[i].rights))
+                    rights: CapRights(rawValue: UInt16(truncatingIfNeeded: grants[i].rights))
                 )
             }
 

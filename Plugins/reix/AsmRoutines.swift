@@ -35,6 +35,14 @@ private func cpuHandlers() -> [AsmRoutine] {
         fn("mmio_read32")  { raw("    ldr w0, [x0]"); ret() },
         fn("mmio_write32") { raw("    str w1, [x0]"); ret() },
 
+        // The firmware call that turns the machine off. On this machine it is
+        // reached with `hvc`, which is what the device tree's PSCI node says
+        // and what QEMU's virt board provides. `smc` is the other spelling and
+        // is here so a board that wants it is a one-line change rather than a
+        // new routine. Neither returns when the call is SYSTEM_OFF.
+        fn("psci_hvc") { raw("    hvc #0"); ret() },
+        fn("psci_smc") { raw("    smc #0"); ret() },
+
         fn("set_vbar")             { msr("vbar_el1", "x0"); ret() },
         fn("set_current_process")  { msr("tpidr_el1", "x0"); ret() },
         fn("get_current_process")  { mrs("x0", "tpidr_el1"); ret() },
@@ -122,6 +130,43 @@ private func mmuHandlers() -> [AsmRoutine] {
         
         fn("page_table_barrier") {
             dsb("ishst")
+            ret()
+        },
+
+        // clean_dcache_range(base, size): writes back and drops every cache line
+        // covering [base, base + size), then waits for it.
+        //
+        // For memory the kernel wrote through its own cached mapping and a
+        // device is about to read through a non-cacheable one. Two mappings with
+        // different cacheability over the same bytes is a mismatched alias, and
+        // the architecture says nothing about which of them wins: the write may
+        // still be sitting in a cache the device cannot see, and worse, that line
+        // may be written out later and land on top of what the device or the
+        // driver put there since.
+        //
+        // `civac` and not `cvac`: cleaning alone would leave the line valid, and
+        // a stale valid line over memory only a device writes is the same bug
+        // pointing the other way.
+        //
+        // The line size comes from CTR_EL0 rather than a constant, because a
+        // constant that is too large skips lines. `dsb sy` and not `ish`: the
+        // observer that has to see this is a device.
+        fn("clean_dcache_range") {
+            raw("    cbz x1, .L_dcache_done")
+            mrs("x2", "ctr_el0")
+            raw("    ubfx x2, x2, #16, #4")
+            mov("x3", 4)
+            raw("    lsl x3, x3, x2")
+            add("x1", "x0", "x1")
+            raw("    sub x2, x3, #1")
+            raw("    bic x0, x0, x2")
+            label(".L_dcache_loop")
+            raw("    dc civac, x0")
+            add("x0", "x0", "x3")
+            raw("    cmp x0, x1")
+            raw("    b.lo .L_dcache_loop")
+            label(".L_dcache_done")
+            dsb("sy")
             ret()
         },
         
@@ -319,6 +364,22 @@ private func reixRoutines() -> [AsmRoutine] {
         // Inner-shareable memory barrier: orders the SPSC ring's data vs index
         // accesses (release on push, acquire on pop). See Reix `dmbISH()`.
         fn("dmb_ish") { dmb("ish"); ret() },
+
+        // The two halves of handing memory to a device and taking it back.
+        //
+        // Outer shareable, not inner, and that is the whole reason these are not
+        // `dmb_ish`: the other observer is not a CPU in this core's inner domain,
+        // it is a device. The DMA mapping is Normal Non-Cacheable, which buys
+        // visibility without maintenance and says nothing whatever about
+        // ordering, so ordering is these. Linux draws the same line and spells
+        // it the same way: `dma_wmb()` is `dmb oshst`, `dma_rmb()` is `dmb oshld`.
+        //
+        // Store-only and load-only rather than full barriers, because that is
+        // what each side needs: descriptors before the index that publishes them,
+        // and the index that reports a completion before anything written under
+        // it. See Reix `dmaWriteBarrier()` and `dmaReadBarrier()`.
+        fn("dma_write_barrier") { dmb("oshst"); ret() },
+        fn("dma_read_barrier")  { dmb("oshld"); ret() },
 
         // PL011 transmit: poll FR.TXFF (0x18, bit 5) before every store to DR
         // (0x00). x0 base, x1 bytes, x2 count. See Reix `pl011WriteSpan()`.

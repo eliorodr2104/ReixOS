@@ -63,14 +63,14 @@ struct ProfileCapabilityFlowTests {
         let installed = caps.install(at: BootCap.profiler.rawValue, original)
         #expect(installed.installed)
 
-        #expect(!ProfilerBootAuthority.install(into: &caps))
+        #expect(!Kernel.installProfilerCap(into: &caps))
         #expect(caps.resolve(BootCap.profiler.rawValue) == original)
     }
 
     @Test("Init owns grant plus profile while Top receives only profileStats")
     func bootAndToolRights() {
         var caps = CapsTable()
-        #expect(ProfilerBootAuthority.install(into: &caps))
+        #expect(Kernel.installProfilerCap(into: &caps))
 
         let initial = caps.resolve(BootCap.profiler.rawValue)!
         #expect(initial.rights == [.grant, .profile])

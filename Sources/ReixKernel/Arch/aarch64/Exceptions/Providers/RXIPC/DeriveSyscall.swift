@@ -34,7 +34,7 @@ public struct DeriveSyscall: SyscallProvider {
 
         let handle  = UInt32(truncatingIfNeeded: frame.pointee.x0)
         let session = Badge(truncatingIfNeeded: frame.pointee.x1)
-        let rights  = CapRights(rawValue: UInt8(truncatingIfNeeded: frame.pointee.x2))
+        let rights  = CapRights(rawValue: UInt16(truncatingIfNeeded: frame.pointee.x2))
 
         guard let newHandle = current.pointee.metadata.pointee.capsTable.mint(
             from   : handle,
@@ -46,8 +46,13 @@ public struct DeriveSyscall: SyscallProvider {
             return
         }
 
-        if let capability = current.pointee.metadata.pointee.capsTable.resolve(handle) {
-            context.ipc.pointee.retain(capability)
+        // The new capability, not the one it was cut from. Both keep the target
+        // alive so the reference count cannot tell them apart, but the rights
+        // differ, and `release` will be handed this one when it goes: a derive
+        // that retained the source counted a receiver the derived capability
+        // does not have.
+        if let minted = current.pointee.metadata.pointee.capsTable.resolve(newHandle) {
+            context.ipc.pointee.retain(minted)
         }
 
         frame.pointee.x0 = UInt64(newHandle)

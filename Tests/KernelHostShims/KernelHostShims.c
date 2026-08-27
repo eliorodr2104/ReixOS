@@ -66,6 +66,30 @@ void nop(void) {}
 void page_table_barrier(void) { barrier_count += 1; }
 uint64_t page_table_barrier_count(void) { return barrier_count; }
 void reset_page_table_barrier_count(void) { barrier_count = 0; }
+
+// Recorded rather than ignored. There are no caches to clean on the host, but
+// whether the kernel asked, and over which bytes, is the property under test:
+// a DMA buffer zeroed through a cached mapping and not pushed out again is a
+// buffer a device may read as whatever was there before.
+static uint64_t dcache_clean_count = 0;
+static uint64_t dcache_clean_base  = 0;
+static uint64_t dcache_clean_size  = 0;
+
+void clean_dcache_range(void *base, uint64_t size) {
+    dcache_clean_count += 1;
+    dcache_clean_base   = (uint64_t)base;
+    dcache_clean_size   = size;
+}
+
+uint64_t dcache_clean_calls(void)  { return dcache_clean_count; }
+uint64_t dcache_cleaned_base(void) { return dcache_clean_base; }
+uint64_t dcache_cleaned_size(void) { return dcache_clean_size; }
+
+void reset_dcache_clean_record(void) {
+    dcache_clean_count = 0;
+    dcache_clean_base  = 0;
+    dcache_clean_size  = 0;
+}
 void pl011_write_byte(void *base, uint8_t byte) { (void)base; (void)byte; }
 uint8_t pl011_try_write_byte(void *base, uint8_t byte) { (void)base; (void)byte; return 1; }
 void pmu_init(void) {}
@@ -74,6 +98,14 @@ uint64_t pmu_read_event0(void) { return 0; }
 uint64_t pmu_read_id_aa64dfr0(void) { return 0; }
 uint64_t pmu_read_pmcr(void) { return 0; }
 void rearm_core_timer(void) {}
+// The firmware call that stops the machine. On the host there is no firmware
+// and nothing to stop, so it answers "not supported" and comes back - which is
+// also what the caller is written to survive.
+uint64_t psci_hvc(uint64_t function, uint64_t a, uint64_t b, uint64_t c) {
+    (void)function; (void)a; (void)b; (void)c;
+    return (uint64_t)-1;
+}
+
 uint64_t read_counter_frequency(void) { return 0; }
 uint64_t read_virtual_counter(void) { return 0; }
 uint64_t read_virtual_counter_unordered(void) { return 0; }

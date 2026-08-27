@@ -43,7 +43,7 @@ public struct Time: Equatable, Comparable, Sendable {
     /// only and has no table of month lengths and no special case for
     /// centuries. Both directions are here because a system that can only
     /// print a date and not accept one is a system whose clock cannot be set.
-    var civil: Civil {
+    public var civil: Civil {
 
         let total  = Int(seconds)
         let days   = total / Int(Self.secondsPerDay)
@@ -79,7 +79,7 @@ public struct Time: Equatable, Comparable, Sendable {
 
 
     /// The instant a date names. `nil` when the date is not one.
-    init?(_ civil: Civil) {
+    public init?(_ civil: Civil) {
 
         guard civil.month >= 1, civil.month <= 12,
               civil.day >= 1, civil.day <= 31,
@@ -121,12 +121,12 @@ public struct Time: Equatable, Comparable, Sendable {
 
 
     /// This instant plus a number of nanoseconds.
-    static func + (time: Time, nanoseconds: UInt64) -> Time {
+    public static func + (time: Time, nanoseconds: UInt64) -> Time {
         Time(nanoseconds: time.nanoseconds &+ nanoseconds)
     }
 
     /// Nanoseconds from `earlier` to this one, and zero when it is not earlier.
-    func since(_ earlier: Time) -> UInt64 {
+    public func since(_ earlier: Time) -> UInt64 {
         nanoseconds > earlier.nanoseconds ? nanoseconds - earlier.nanoseconds : 0
     }
 }

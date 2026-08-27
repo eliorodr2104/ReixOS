@@ -201,3 +201,84 @@ struct DeviceTreeCorpusTests {
         return outcome.1
     }
 }
+
+extension DeviceTreeCorpusTests {
+
+    /// What the machine this actually runs on says its virtio bus is.
+    ///
+    /// The numbers are here so that a recapture which moved a transport, or a
+    /// QEMU that started declaring them somewhere else, shows up as a failing
+    /// assert rather than as a disk that is never found.
+    ///
+    /// They also record why the merged-range model survived as long as it did:
+    /// thirty-two windows end to end with no hole, and lines that run alongside
+    /// them one for one. Every assumption it made is true here, and none of them
+    /// were ever properties of a device tree.
+    private enum VirtBus {
+        static let count : UInt32 = 32
+        static let base  : UInt64 = 0x0A00_0000
+        static let size  : UInt32 = 0x200
+        static let line  : UInt32 = 48
+    }
+
+
+    @Test("the virtio bus comes back as the thirty-two transports the blob declares")
+    func virtioTransportsAreExact() {
+        guard let info = walk(FixtureCorpus.DeviceTree.virt128M) else { return }
+
+        let bus = info.virtioBus
+
+        #expect(bus.count    == VirtBus.count)
+        #expect(bus.rejected == 0)
+        #expect(bus.isPresent)
+        #expect(bus.transport(at: VirtBus.count) == nil)
+
+        for index in 0..<VirtBus.count {
+            guard let transport = bus.transport(at: index) else {
+                Issue.record("no transport at \(index)")
+                return
+            }
+
+            #expect(transport.base == VirtBus.base + UInt64(index) * UInt64(VirtBus.size))
+            #expect(transport.size == VirtBus.size)
+            #expect(transport.line == VirtBus.line + index)
+        }
+    }
+
+
+    /// Sorted, whichever order the blob listed its nodes in. The walk reads the
+    /// tree in file order and nothing promises that is address order.
+    @Test("the transports come back in address order, with no two overlapping")
+    func virtioTransportsAreSortedAndDisjoint() {
+        guard let info = walk(FixtureCorpus.DeviceTree.virt128M) else { return }
+
+        let bus = info.virtioBus
+
+        for index in 1..<bus.count {
+            guard let previous = bus.transport(at: index - 1),
+                  let current  = bus.transport(at: index)
+            else {
+                Issue.record("no transport at \(index)")
+                return
+            }
+
+            #expect(previous.base < current.base)
+            #expect(previous.end <= current.base)
+            #expect(previous.line != current.line)
+        }
+    }
+
+
+    @Test("the 4M capture describes the same bus as the 128M one")
+    func virtioBusIsTheSameOnBothCaptures() {
+        guard let big   = walk(FixtureCorpus.DeviceTree.virt128M),
+              let small = walk(FixtureCorpus.DeviceTree.virt4M) else { return }
+
+        #expect(big.virtioBus.count == small.virtioBus.count)
+
+        for index in 0..<big.virtioBus.count {
+            #expect(big.virtioBus.transport(at: index)?.base == small.virtioBus.transport(at: index)?.base)
+            #expect(big.virtioBus.transport(at: index)?.line == small.virtioBus.transport(at: index)?.line)
+        }
+    }
+}

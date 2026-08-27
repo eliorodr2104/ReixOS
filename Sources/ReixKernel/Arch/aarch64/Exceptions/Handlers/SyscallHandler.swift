@@ -110,6 +110,7 @@ public struct SyscallHandler: RXAllocatable {
             // SHM
             case .shmCreate     : ShmCreate            .handle(frame: frame, context: context)
             case .shmMap        : ShmMap               .handle(frame: frame, context: context)
+            case .shmPages      : ShmPages             .handle(frame: frame, context: context)
                 
                 
             // Device
@@ -119,6 +120,7 @@ public struct SyscallHandler: RXAllocatable {
 
             // Interrupts
             case .irqWait       : IrqWaitSyscall       .handle(frame: frame, context: context)
+            case .irqBind       : IrqBindSyscall        .handle(frame: frame, context: context)
             case .irqAck        : IrqAckSyscall        .handle(frame: frame, context: context)
 
 
@@ -135,6 +137,15 @@ public struct SyscallHandler: RXAllocatable {
             // Buses
             case .busDeriveDevice   : BusDeriveDeviceSyscall   .handle(frame: frame, context: context)
             case .busDeriveInterrupt: BusDeriveInterruptSyscall.handle(frame: frame, context: context)
+
+            case .clockNow      : ClockNowSyscall     .handle(frame: frame, context: context)
+            case .clockSet      : ClockSetSyscall     .handle(frame: frame, context: context)
+            case .powerOff      : PowerOffSyscall     .handle(frame: frame, context: context)
+
+
+            // Who is still there
+            case .identityAlive : IdentityAliveSyscall .handle(frame: frame, context: context)
+
 
             // Caps
             case .capExists     : CapExistsSyscall     .handle(frame: frame, context: context)

@@ -63,6 +63,28 @@ public struct Environment {
     /// The terminal this process reads lines from, if it was given one.
     public var terminal      : UInt32? { handle(.terminal) }
 
+    /// The virtio bus, for the process that probes it and hands out what it
+    /// finds. Not a window and not a line: the right to carve one.
+    public var virtioBus     : UInt32? { handle(.virtioBus) }
+
+    /// The container of the disk this process may see, if it was given one.
+    ///
+    /// `nil` is the normal answer. A view of the disk is something a parent
+    /// decides to pass down, and a process that was passed none cannot look one
+    /// up: the file system publishes no name.
+    public var container     : UInt32? { handle(.container) }
+
+    /// A piece of somebody else's container this process was let into.
+    public var shared        : UInt32? { handle(.shared) }
+
+    /// The disk this process may reach, if it was handed one.
+    ///
+    /// `nil` for everybody but the file system and whoever was given a
+    /// read-only view for looking. Which of the two this is cannot be read off
+    /// the handle here: it is the badge the server sees, and the server is what
+    /// enforces it.
+    public var block         : UInt32? { handle(.block) }
+
     /// The Name Server capability this process may *register* through, if its
     /// spawner granted it one. `nameServer` resolves names for everybody; this
     /// one is the badged capability that also publishes them.

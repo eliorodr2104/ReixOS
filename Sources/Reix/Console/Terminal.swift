@@ -45,12 +45,10 @@ public struct Terminal {
             grantRights: [.send, .read, .write]
         )
 
-        let answer = call(
+        guard case .success(let answer) = call(
             handle : endpoint,
             message: TerminalOperation.status.message()
-        )
-
-        guard TerminalStatus(rawValue: answer.message.words[0]) == .ok else {
+        ), TerminalStatus(rawValue: answer.message.words[0]) == .ok else {
             return nil
         }
 
@@ -78,10 +76,10 @@ public struct Terminal {
 
         for index in 0..<length { bytes[index] = prompt.utf8Start[index] }
 
-        let answer = call(
+        guard case .success(let answer) = call(
             handle : endpoint,
             message: TerminalOperation.readLine.message(word0: UInt32(length))
-        )
+        ) else { return -1 }
 
         let count = answer.message.words[0]
         guard count != UInt32.max, Int(count) <= Self.lineLimit else {

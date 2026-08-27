@@ -5,22 +5,73 @@
 //  Created by Eliomar on 31/07/2026.
 //
 
+
 public struct ReceivedMessage {
     public var message   : Message
     public var grantedCap: UInt32?
+
+    /// Which process sent this.
     public var identity: UInt32
-    public var session: UInt32
+
+    /// Which conversation it belongs to. Sixty-four bits, so a server's token can
+    /// carry more than one fact without either of them running out. See
+    /// `IPCDelivery` for how the two travel.
+    public var session: UInt64
+
+    /// How the IPC itself went, which is a different question from what the
+    /// message says.
+    ///
+    /// A server that answers "no such file" and a server that is not there any
+    /// more are two different things, and only this tells them apart. It is the
+    /// word the kernel leaves in the caller's frame, and it used to be thrown
+    /// away: a reply that never came was read as though it had.
+    public var status: IPCStatus
+
+    /// Whether there is really a message here.
+    ///
+    /// `false` and the message is `Message.unanswered`, not the reply that
+    /// never came and not the request that went out. Nothing in `message` is
+    /// worth reading, and everything that reads it is built to say so.
+    public var arrived: Bool { status.isDelivered }
 
     init(
-        message   : Message,
-        grantedCap: UInt32,
-        badgeWord : UInt64
+        message      : Message,
+        sessionWord  : UInt64,
+        principalWord: UInt64,
+        status       : IPCStatus = .ok
     ) {
-        self.message    = message
-        self.grantedCap = grantedCap == UInt32.max ? nil : UInt32(grantedCap)
+        self.status  = status
+        self.message = status.isDelivered ? message : Message.unanswered
 
-        self.identity   = UInt32(truncatingIfNeeded: badgeWord >> 32)
-        self.session    = UInt32(truncatingIfNeeded: badgeWord)
+        self.grantedCap = status.isDelivered
+            ? IPCDelivery.grant(of: principalWord)
+            : nil
+
+        self.identity = IPCDelivery.identity(of: principalWord)
+        self.session  = sessionWord
+    }
+
+
+    /// Whether this is an interrupt notification the kernel wrote.
+    ///
+    /// The one door, so no driver has to remember that the label is not the
+    /// check. See `InterruptNotification.fromKernel`.
+    public var isInterruptNotification: Bool {
+        InterruptNotification.fromKernel(
+            tag       : message.tag,
+            identity  : identity,
+            session   : session,
+            grantedCap: grantedCap
+        )
+    }
+
+
+    /// The interrupt this message is, or nothing when it is not one the kernel
+    /// wrote. See `KernelInterrupt`.
+    public var kernelInterrupt: KernelInterrupt? {
+        guard isInterruptNotification else { return nil }
+
+        return KernelInterrupt(lines: InterruptNotification.lines(of: message))
     }
 
 

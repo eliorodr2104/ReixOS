@@ -46,6 +46,12 @@ struct ABILayoutTests {
     func capabilityLayout() {
         // The cap space is an array indexed by handle. A wider slot silently moves
         // every handle a process already holds.
+        //
+        // It survived the session widening to sixty-four bits, which took two
+        // things: the device window's *width* down to thirty-two bits, and the
+        // narrow fields moved to sit after the wide ones. Either one alone leaves
+        // the stride at thirty-two and `ProcessMetadata` in the 2048 byte slab
+        // bucket instead of the 1024 one.
         #expect(MemoryLayout<Capability>.stride == 24)
 
         // The slot is the optional: `CapsTable` stores `Capability?`, so an empty
@@ -58,8 +64,21 @@ struct ABILayoutTests {
     func processLayout() {
         // Both are kmalloc'ed per process. Crossing a power-of-two bucket doubles
         // the slab block each spawn takes, on a machine targeting 4 MiB.
+        //
+        // The metadata crossed from 512 to 1024 on purpose when the capability
+        // table went from sixteen slots to thirty-two, because a view of the
+        // disk became a capability like any other and sixteen stopped being
+        // enough. The next crossing is not free either: this is the assertion
+        // that will notice.
         #expect(MemoryLayout<Process>.stride         <= 256)
-        #expect(MemoryLayout<ProcessMetadata>.stride <= 512)
+        #expect(MemoryLayout<ProcessMetadata>.stride <= 1024)
+
+        // `Process` holds a `PendingMessage`, which holds a session. Widening
+        // the session took that struct from a thirty-two byte stride to
+        // forty-eight and `Process` over the edge; storing the grant as the
+        // sentinel the wire already uses rather than as an optional took the
+        // five-byte field to four and brought both back.
+        #expect(MemoryLayout<PendingMessage>.stride <= 40)
     }
 
 
@@ -108,11 +127,11 @@ struct ABILayoutTests {
     private func zeroBytes<T>(_ value: T) -> Bool {
         withUnsafeBytes(of: value) { bytes in bytes.allSatisfy { $0 == 0 } }
     }
-}
 
 
-/// A label to build a tag from. The real ones live in the userland SDK, which the
-/// kernel's own suites do not link.
-private enum ProbeLabel: UInt32, IPCLabel {
-    case probe = 0x1234_5678
+    /// A label to build a tag from. The real ones live in the userland SDK, which the
+    /// kernel's own suites do not link.
+    private enum ProbeLabel: UInt32, IPCLabel {
+        case probe = 0x1234_5678
+    }
 }

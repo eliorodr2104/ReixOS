@@ -105,7 +105,11 @@ struct BlockProtocolTests {
 
     @Test("the geometry answer carries the whole device")
     func geometrySurvivesPacking() {
-        let message = BlockOperation.geometry(sectorSize: 512, sectorCount: Self.sectors)
+        let message = BlockOperation.geometry(
+            sectorSize : 512,
+            sectorCount: Self.sectors,
+            durability : .onFlush
+        )
         let device  = BlockOperation.device(of: message)
 
         #expect(BlockOperation.status(of: message) == .ok)
@@ -114,7 +118,8 @@ struct BlockProtocolTests {
 
         let huge = BlockOperation.device(of: BlockOperation.geometry(
             sectorSize : 512,
-            sectorCount: 0x3_0000_0000
+            sectorCount: 0x3_0000_0000,
+            durability : .onFlush
         ))
         #expect(huge.sectorCount == 0x3_0000_0000)
     }

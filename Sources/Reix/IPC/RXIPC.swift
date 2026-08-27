@@ -45,11 +45,16 @@ public func send(
 }
 
 
+/// Wait for a message on `handle`.
+///
+/// A receive that failed comes back with a `status` that says so and a message
+/// nobody sent, rather than with whatever the frame happened to hold: see
+/// `ReceivedMessage.arrived`.
 @inline(__always)
 public func receive(handle: UInt32) -> ReceivedMessage {
     var raw = ReceivedMessageRaw()
 
-    _ = withUnsafeMutablePointer(to: &raw) { ptr in
+    let outcome = withUnsafeMutablePointer(to: &raw) { ptr in
         _asm_recv_raw(
             SyscallNumber.receive.rawValue,
             UInt64(handle),
@@ -64,9 +69,10 @@ public func receive(handle: UInt32) -> ReceivedMessage {
     w[3] = UInt32(truncatingIfNeeded: raw.word3)
 
     return ReceivedMessage(
-        message   : Message(tag: raw.tag.packed, words: w),
-        grantedCap: UInt32(truncatingIfNeeded: raw.grantedHandle),
-        badgeWord : raw.badgeWord
+        message      : Message(tag: raw.tag.packed, words: w),
+        sessionWord  : raw.sessionWord,
+        principalWord: raw.principalWord,
+        status       : IPCStatus(rawValue: outcome) ?? .invalidMessage
     )
 }
 
@@ -96,9 +102,10 @@ public func receive(
     w[3] = UInt32(truncatingIfNeeded: raw.word3)
 
     return ReceivedMessage(
-        message   : Message(tag: raw.tag.packed, words: w),
-        grantedCap: UInt32(truncatingIfNeeded: raw.grantedHandle),
-        badgeWord : raw.badgeWord
+        message      : Message(tag: raw.tag.packed, words: w),
+        sessionWord  : raw.sessionWord,
+        principalWord: raw.principalWord,
+        status       : .ok
     )
 }
 
@@ -109,15 +116,33 @@ public func spawnEndpoint() -> UInt32 {
 }
 
 
+/// Send `message` on `handle` and wait for the reply.
+///
+/// Two kinds of fact come back from a call and they are not the same kind. What
+/// a server *said* is a status inside the message. Whether there is a message at
+/// all is the transport's answer, and the kernel leaves it in the caller's
+/// frame: `.ok` for a reply that came, `.peerDied` when the server died holding
+/// the request, `.noReply` when it dropped it, and a refusal of its own when the
+/// capability could not be used.
+///
+/// They come back on separate channels here, which is the whole point of the
+/// `Result`. The assembly copies `x1` through `x7` into the reply buffer
+/// whatever happened, so on a failed call those words are the *request* looking
+/// like an answer - and `ok` is zero in every status enum this system has, so
+/// the most likely reading of a failure was success.
+///
+/// A caller cannot get at the message without saying what it will do about the
+/// exchange not having happened. That is not politeness; it is the only way this
+/// is checkable at compile time rather than remembered at thirty call sites.
 @inline(__always)
 public func call(
     handle : UInt32,
     message: Message
-) -> ReceivedMessage {
+) -> Result<ReceivedMessage, IPCStatus> {
     
     var raw = ReceivedMessageRaw()
 
-    _ = withUnsafeMutablePointer(to: &raw) { ptr in
+    let outcome = withUnsafeMutablePointer(to: &raw) { ptr in
         _asm_call_raw(
             SyscallNumber.call.rawValue,
             UInt64(handle),
@@ -130,25 +155,43 @@ public func call(
         )
     }
 
+    let status = IPCStatus(rawValue: outcome) ?? .invalidMessage
+
+    // `grantRejected` is a delivered reply whose capability did not travel, so
+    // the words are real and only the grant is missing.
+    guard status.isDelivered else { return .failure(status) }
+
     var w = InlineArray<4, UInt32>(repeating: 0)
     w[0] = UInt32(truncatingIfNeeded: raw.word0)
     w[1] = UInt32(truncatingIfNeeded: raw.word1)
     w[2] = UInt32(truncatingIfNeeded: raw.word2)
     w[3] = UInt32(truncatingIfNeeded: raw.word3)
 
-    return ReceivedMessage(
-        message   : Message(tag: raw.tag.packed, words: w),
-        grantedCap: UInt32(truncatingIfNeeded: raw.grantedHandle),
-        badgeWord : raw.badgeWord
-    )
+    return .success(ReceivedMessage(
+        message      : Message(tag: raw.tag.packed, words: w),
+        sessionWord  : raw.sessionWord,
+        principalWord: raw.principalWord,
+        status       : status
+    ))
 }
 
 
+/// Answers a caller.
+///
+/// `to` names which one, for a server holding more than one request at a time,
+/// and it is the `identity` the request arrived with. Left out, the answer goes
+/// to the newest caller, which is the only one a server that answers every
+/// request before taking the next one ever has.
+///
+/// A named caller that is not waiting on this process is refused with `noReply`
+/// rather than being quietly redirected to whoever is newest: delivering a reply
+/// to the wrong client is worse than not delivering it.
 @inline(__always)
 public func reply(
     message    : Message,
     grant      : UInt32?   = nil,
-    grantRights: CapRights = [.send]
+    grantRights: CapRights = [.send],
+    to identity: UInt32    = 0
 ) -> IPCStatus {
     
     let grantHandle = grant ?? UInt32.max
@@ -157,7 +200,7 @@ public func reply(
     return IPCStatus(
         rawValue: _syscall(
             .reply,
-            0,
+            UInt64(identity),
             message.tag.packed(),
             UInt64(message.words[0]),
             UInt64(message.words[1]),
@@ -195,9 +238,9 @@ public func replyRecv(
     w[3] = UInt32(truncatingIfNeeded: raw.word3)
 
     return ReceivedMessage(
-        message   : Message(tag: raw.tag.packed, words: w),
-        grantedCap: UInt32(truncatingIfNeeded: raw.grantedHandle),
-        badgeWord : raw.badgeWord
+        message      : Message(tag: raw.tag.packed, words: w),
+        sessionWord  : raw.sessionWord,
+        principalWord: raw.principalWord
     )
 }
 
@@ -251,9 +294,9 @@ public func tryReceive(handle: UInt32) -> ReceivedMessage? {
     w[3] = UInt32(truncatingIfNeeded: raw.word3)
 
     return ReceivedMessage(
-        message   : Message(tag: raw.tag.packed, words: w),
-        grantedCap: UInt32(truncatingIfNeeded: raw.grantedHandle),
-        badgeWord : raw.badgeWord
+        message      : Message(tag: raw.tag.packed, words: w),
+        sessionWord  : raw.sessionWord,
+        principalWord: raw.principalWord
     )
     
 }
@@ -271,23 +314,39 @@ public func spawnService() -> UInt32? {
 ///
 /// Only the session is caller-chosen, identity is stamped by the kernel from the
 /// sending process, so this cannot be used to speak as another principal.
+///
+/// Sixty-four bits of it, and the file system is why: a badge that says which
+/// object, which incarnation of it, and what its holder may do wants more than a
+/// word between the three. See `FSBadge`.
 /// Returns `nil` when the source lacks `.derive`.
 @inline(__always)
 public func derive(
     handle : UInt32,
-    session: UInt32,
+    session: UInt64,
     rights : CapRights
 ) -> UInt32? {
     
     let result = UInt32(truncatingIfNeeded: _syscall(
         .derive,
         UInt64(handle),
-        UInt64(session),
+        session,
         UInt64(rights.rawValue),
         0, 0, 0, 0
     ))
 
     return result == UInt32.max ? nil : result
+}
+
+
+/// How many pages the shared region `handle` names really holds.
+///
+/// `0` when the handle is not a shared region. A server maps a window a client
+/// granted and has, until it asks this, only the client's word for how far that
+/// window reaches - and a window described as bigger than it is, is a server
+/// writing off the end of it.
+@inline(__always)
+public func shmPages(handle: UInt32) -> UInt32 {
+    UInt32(truncatingIfNeeded: _syscall(.shmPages, UInt64(handle)))
 }
 
 
@@ -327,6 +386,27 @@ public func capDrop(_ handle: UInt32) -> Bool {
 
 // MARK: - Interrupts
 
+/// Asks for this interrupt set to knock on `endpoint` when a line fires.
+///
+/// After this, one `receive` on that endpoint answers a client or the device,
+/// whichever speaks first, and a driver no longer has to choose which of the two
+/// to wait for. A notification is recognised by `InterruptNotification.names`.
+///
+/// Nothing is queued: the event lives in the set exactly as it did before, so a
+/// line that fires while nobody is receiving is collected by the next `receive`
+/// without blocking. `irqAck` is unchanged and still required.
+///
+/// `false` when the handle names no interrupt set, or when the endpoint is not
+/// one this process may receive on - being woken somewhere you never wait is not
+/// a thing to allow by accident.
+@inline(__always)
+public func irqBind(
+    handle  : UInt32,
+    endpoint: UInt32
+
+) -> Bool { _syscall(.irqBind, UInt64(handle), UInt64(endpoint)) == 0 }
+
+
 /// Blocks until one of the lines `handle` names fires, and answers which.
 ///
 /// The answer is a bit per line, in the order the set was built, so a holder of
@@ -341,9 +421,20 @@ public func capDrop(_ handle: UInt32) -> Bool {
 ///
 /// `UInt64.max` means the handle is not an interrupt set, or somebody is
 /// already waiting on it.
-public func irqWait(handle: UInt32) -> UInt64 {
-    _syscall(.irqWait, UInt64(handle))
-}
+/// Waits for one of the lines `handle` names to fire.
+///
+/// `ticks` of zero waits for as long as it takes. Anything else is a deadline,
+/// and `0` comes back when it passes - which no real answer can be, because a
+/// wake with no line set does not happen.
+///
+/// A driver that waits without one is a driver that a wedged device parks for
+/// the rest of the boot, and everything above it with it.
+@inline(__always)
+public func irqWait(
+    handle: UInt32,
+    ticks : UInt64 = 0
+
+) -> UInt64 { _syscall(.irqWait, UInt64(handle), ticks) }
 
 
 /// Unmasks the lines named by `bits`, after their device has been serviced.
@@ -355,9 +446,7 @@ public func irqAck(
     handle: UInt32,
     bits  : UInt64
     
-) -> UInt64 {
-    _syscall(.irqAck, UInt64(handle), bits)
-}
+) -> UInt64 { _syscall(.irqAck, UInt64(handle), bits) }
 
 
 // MARK: - Device registers
@@ -372,33 +461,44 @@ public func irqAck(
 /// Answers the register zero-extended, or `UInt64.max` when the handle names no
 /// device, the capability does not carry `read`, or the offset falls outside.
 @inline(__always)
-public func deviceRead(handle: UInt32, offset: UInt64) -> UInt64 {
-    _syscall(.deviceRead, UInt64(handle), offset)
-}
+public func deviceRead(
+    handle: UInt32,
+    offset: UInt64
+
+) -> UInt64 { _syscall(.deviceRead, UInt64(handle), offset) }
 
 
 /// Writes one 32-bit register at `offset`. Answers `0`, or `UInt64.max` on the
 /// same refusals as `deviceRead` with `write` in place of `read`.
 @inline(__always)
-public func deviceWrite(handle: UInt32, offset: UInt64, value: UInt32) -> UInt64 {
-    _syscall(.deviceWrite, UInt64(handle), offset, UInt64(value))
-}
+public func deviceWrite(
+    handle: UInt32,
+    offset: UInt64,
+    value : UInt32
+
+) -> UInt64 { _syscall(.deviceWrite, UInt64(handle), offset, UInt64(value)) }
 
 
 // MARK: - Buses
 
-/// Carves the window `[offset, offset + size)` out of a bus and answers a
-/// device capability for it.
+/// Carves the `index`th transport's window out of a bus and answers a device
+/// capability for it.
 ///
-/// The window comes back exactly the size asked for, so a transport that is an
-/// eighth of a page stays an eighth of a page and is reached with `deviceRead`
-/// rather than mapped. Rights are whatever the bus carried, never more.
+/// An index, not an address: the window is the one the machine's own description
+/// declared, whole, so there is no way to ask for the space between two of them.
+/// A transport that is an eighth of a page stays an eighth of a page and is
+/// reached with `deviceRead` rather than mapped. Rights are whatever the bus
+/// carried, never more.
 ///
 /// `UInt32.max` when the handle names no bus, the bus does not carry `derive`,
-/// or the window falls outside it.
+/// or the bus has no such transport, which is how a walk learns where to stop.
 @inline(__always)
-public func busDeriveDevice(handle: UInt32, offset: UInt64, size: UInt64) -> UInt32 {
-    UInt32(truncatingIfNeeded: _syscall(.busDeriveDevice, UInt64(handle), offset, size))
+public func busDeriveDevice(
+    handle: UInt32,
+    index : UInt32
+
+) -> UInt32 {
+    UInt32(truncatingIfNeeded: _syscall(.busDeriveDevice, UInt64(handle), UInt64(index)))
 }
 
 
@@ -413,6 +513,10 @@ public func busDeriveDevice(handle: UInt32, offset: UInt64, size: UInt64) -> UIn
 /// `UInt32.max` when the bus has no such transport, or when somebody already
 /// holds that line: one line has one owner, and a bus is not an exception.
 @inline(__always)
-public func busDeriveInterrupt(handle: UInt32, index: UInt32) -> UInt32 {
+public func busDeriveInterrupt(
+    handle: UInt32,
+    index : UInt32
+
+) -> UInt32 {
     UInt32(truncatingIfNeeded: _syscall(.busDeriveInterrupt, UInt64(handle), UInt64(index)))
 }

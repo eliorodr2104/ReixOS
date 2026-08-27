@@ -59,6 +59,28 @@ enum InterruptClaims {
 
 
     /// Drops every claim `set` holds. Called when its last capability goes.
+    /// The set `process` is parked on, if it is parked on one.
+    ///
+    /// A scan of eight, and it lives here rather than as a field on `Process`
+    /// because a back pointer would cost every process on the machine eight
+    /// bytes to serve the one driver whose device has gone quiet. This runs on
+    /// that path and no other.
+    static func set(
+        waitedOnBy process: UnsafeMutablePointer<Process>
+    ) -> UnsafeMutablePointer<InterruptSet>? {
+
+        for index in 0..<capacity {
+            guard let owner = owners[index], owner.pointee.waiter == process else {
+                continue
+            }
+
+            return owner
+        }
+
+        return nil
+    }
+
+
     static func releaseAll(of set: UnsafeMutablePointer<InterruptSet>) {
         for index in 0..<capacity where owners[index] == set {
             owners[index] = nil

@@ -62,10 +62,12 @@ public protocol BlockDevice {
 
     /// What a completed write on this device has achieved.
     ///
-    /// Declared rather than assumed, and it has to be: the two answers need
+    /// Declared rather than assumed, and it has to be: the three answers need
     /// different things from the layer above. `onFlush` means an order is
     /// something to ask for; `onCompletion` means it is already there, and
-    /// asking costs a round trip that buys nothing.
+    /// asking costs a round trip that buys nothing; `unknown` means there is no
+    /// order to be had on this device at all, and the layer above has to refuse
+    /// rather than pick whichever of the other two suits it.
     var durability: BlockDurability { get }
 
     mutating func read(
@@ -120,8 +122,19 @@ public extension BlockDevice {
     ) -> BlockStatus { write(1, to: sector, from: source) }
 
     /// Total bytes on the device, which is the one arithmetic every caller was
-    /// about to write for itself.
-    var byteCount: UInt64 { sectorCount * sectorSize }
+    /// about to write for itself, or nil when the device claims more than
+    /// sixty-four bits of them.
+    ///
+    /// Optional rather than saturating. The two numbers come out of a message
+    /// from another process, so their product is not this process's arithmetic
+    /// to trust: Swift traps on the overflow, which turned a device claiming an
+    /// impossible size into a caller that dies asking how big it is. Answering
+    /// `UInt64.max` instead would be inventing a plausible size for a device
+    /// that named an impossible one.
+    var byteCount: UInt64? {
+        let (bytes, overflowed) = sectorCount.multipliedReportingOverflow(by: sectorSize)
+        return overflowed ? nil : bytes
+    }
 
     /// Whether `count` sectors starting at `sector` are on this device and
     /// within one call's reach.

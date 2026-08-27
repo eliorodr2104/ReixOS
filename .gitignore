@@ -42,6 +42,9 @@ playground.xcworkspace
 # reix plugin output (kernel.elf/kernel.bin/*.elf/initrd.tar)
 .reix/
 
+# Editor tooling cache, nothing the build reads.
+.pi/
+
 # iCloud conflict copies ("<name> 2.<ext>"), see the prune-dups note in Makefile.
 # One of these under Sources/ was once committed and broke the build.
 * [0-9].*

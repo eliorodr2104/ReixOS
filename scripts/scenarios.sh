@@ -32,6 +32,7 @@
 #   QEMU        QEMU binary           (passed through to the engine)
 #   QEMU_FLAGS  base machine flags every row appends to
 #   SWIFT       host toolchain used by the post-checks (default: swift)
+#   OBJDUMP     disassembler used by the post-checks (default: llvm-objdump)
 #
 # Exit codes: 0 every row behaved as declared, 1 a row failed or an xfail row
 # unexpectedly passed, 3 setup error (missing matrix or image, unreadable row).
@@ -41,6 +42,7 @@ set -u
 SCENARIOS="${SCENARIOS:-Tests/Scenarios/scenarios.tsv}"
 OUT="${OUT:-.reix}"
 SWIFT="${SWIFT:-swift}"
+OBJDUMP="${OBJDUMP:-llvm-objdump}"
 ENGINE="${ENGINE:-scripts/smoke.sh}"
 # Keep in sync with QEMU_FLAGS in the Makefile and in scripts/smoke.sh. `make
 # vm-test` passes the Makefile's copy in, so this default only ever serves a
@@ -97,9 +99,9 @@ xml_attr() {
 
 # Prints a `|`-separated marker list one marker per line.
 #
-# Globbing is off around the split on purpose: markers like `[ NCHIL ] SHM OK`
-# are valid glob patterns, and `[ NCHIL ]` would happily expand to a file named
-# `N` in the working directory.
+# Globbing is off around the split on purpose: markers like `[ SERVE ] running`
+# are valid glob patterns, and `[ SERVE ]` would happily expand to a file named
+# `S` in the working directory.
 split_markers() {
     sm_list=$1
     set -f
@@ -201,10 +203,84 @@ post_trace_boot() {
     return 0
 }
 
+# post=dma-barriers: the virtqueue's memory barriers, read out of the linked
+# image rather than out of the source.
+#
+# A barrier is the one thing in this system that cannot be unit tested: it has no
+# result to compare and its absence shows up as a race on hardware nobody here
+# runs. What can be checked is that the instructions are in the binary, that they
+# are the outer-shareable ones the device needs rather than the inner-shareable
+# one the console ring uses, and that the queue submission still calls them.
+#
+# So this is a regression net for deletion and for inlining, and it is honest
+# about being no more than that.
+post_dma_barriers() {
+    pd_out=$2
+    pd_elf=$OUT/BlockServer.elf
+
+    if [ ! -f "$pd_elf" ]; then
+        printf 'no %s to read the barriers out of' "$pd_elf"
+        return 1
+    fi
+
+    "$OBJDUMP" -d "$pd_elf" > "$pd_out" 2>&1 || {
+        printf 'could not disassemble %s' "$pd_elf"
+        return 1
+    }
+
+    # The two instructions themselves, and the domain they name. Inner shareable
+    # here would be a barrier that orders this core against other cores and not
+    # against the device, which is the mistake worth catching.
+    if ! grep -qE 'dmb[[:space:]]+oshst' "$pd_out"; then
+        printf 'no outer-shareable store barrier in the block driver'
+        return 1
+    fi
+
+    if ! grep -qE 'dmb[[:space:]]+oshld' "$pd_out"; then
+        printf 'no outer-shareable load barrier in the block driver'
+        return 1
+    fi
+
+    # And that the code that publishes and the code that reads a completion each
+    # reach them, counted *inside* the function and not merely somewhere after
+    # it. Publishing and collecting used to be one function; when the queue split
+    # them this check went on passing while counting barriers across the whole
+    # rest of the image, which is a check that had stopped saying anything.
+    pd_writes=$(dma_barriers_in "$pd_out" '5offer' 'dma_write_barrier')
+    pd_reads=$(dma_barriers_in "$pd_out" '7collect' 'dma_read_barrier')
+
+    # Two writes: the descriptors before the available index, and that index
+    # before the doorbell.
+    if [ "$pd_writes" -lt 2 ]; then
+        printf 'the queue publishes without both write barriers (%s found)' "$pd_writes"
+        return 1
+    fi
+
+    if [ "$pd_reads" -lt 1 ]; then
+        printf 'the queue reads a completion without a read barrier'
+        return 1
+    fi
+
+    return 0
+}
+
+# Counts calls to $3 inside the one function whose symbol line matches $2.
+#
+# A disassembly labels each function with a line ending in `<name>:` and runs to
+# the next such line, so the region is bounded rather than open ended.
+dma_barriers_in() {
+    awk -v want="$2" -v call="$3" '
+        /^[0-9a-f]+ <.*>:$/ { inside = index($0, want) > 0 }
+        inside && index($0, call) > 0 { n++ }
+        END { print n + 0 }
+    ' "$1"
+}
+
 run_post() {
     case $1 in
         -)          return 0 ;;
-        trace-boot) post_trace_boot "$2" "$3" ;;
+        trace-boot)   post_trace_boot "$2" "$3" ;;
+        dma-barriers) post_dma_barriers "$2" "$3" ;;
         *)          setup_error "unknown post-check '$1'" ;;
     esac
 }

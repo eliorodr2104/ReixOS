@@ -52,7 +52,7 @@ public struct RendezvousIPC: IPCInterface, Loggable {
         let endpointPtr = ep
         let grantWord   = frame.x6
         let grantHandle = UInt32(truncatingIfNeeded: grantWord)
-        let grantRights = CapRights(rawValue: UInt8(truncatingIfNeeded: grantWord >> 32))
+        let grantRights = CapRights(rawValue: UInt16(truncatingIfNeeded: grantWord >> 32))
 
         guard let currentProcess = Arch.CPU.getCurrentProcess() else {
             return .failure(.noReply)
@@ -81,16 +81,17 @@ public struct RendezvousIPC: IPCInterface, Loggable {
             }
 
             var grantRejected = false
+            var handed = IPCDelivery.noGrant
+
             switch transferResult {
                 case .success(let newGrantHandle):
-                    receiverContext.pointee.x7 = UInt64(newGrantHandle)
+                    handed = newGrantHandle
 
                 case .failure(_):
-                    receiverContext.pointee.x7 = UInt64(UInt32.max)
                     grantRejected = true
 
                 case nil:
-                    receiverContext.pointee.x7 = UInt64(UInt32.max)
+                    break
             }
 
 
@@ -106,9 +107,11 @@ public struct RendezvousIPC: IPCInterface, Loggable {
 
             traceTransfer(from: currentProcess, to: receiverProcess)
 
-            receiverContext.pointee.x6 = ipcTag(
+            deliver(
+                to     : receiverContext,
                 from   : currentProcess,
-                session: capability.badge
+                session: capability.badge,
+                grant  : handed
             )
 
             disarmDeadline(on: receiverProcess)
@@ -130,6 +133,14 @@ public struct RendezvousIPC: IPCInterface, Loggable {
             }
 
             return .success(.sended(grantRejected: grantRejected))
+        }
+
+        // Nobody is parked on the endpoint, so this send is about to wait for
+        // somebody to arrive. Whether anybody can is worth asking first: an
+        // endpoint with nobody left to receive on it is not busy, it is
+        // finished, and a sender queued on one waits for the rest of the boot.
+        guard canBeServed(currentProcess, on: endpointPtr) else {
+            return .failure(.peerDied)
         }
 
         guard blocking else { return .failure(.wouldBlock) }
@@ -178,6 +189,32 @@ public struct RendezvousIPC: IPCInterface, Loggable {
             return .failure(.noReply)
         }
 
+        // The device first, when it has already spoken. A line is masked from the
+        // moment it fires until its driver acks, so a device with something to
+        // say is a device that has stopped, and a queued request can wait a
+        // moment longer than stalled hardware.
+        //
+        // Checking here and parking below is one step, and it has to be: an
+        // interrupt landing between the two would set a bit nobody is going to
+        // look at again and park the driver for ever. What makes it one step is
+        // that an exception to EL1 masks IRQs and nothing in the syscall path
+        // unmasks them - so if that ever changes, this needs a guard of its own
+        // and the symptom will be a disk that stops answering once in a while.
+        //
+        // It cannot starve the clients either: an interrupt only arrives because
+        // a request was accepted and submitted, so every notification is
+        // downstream of a request that was already served.
+        if let set = endpointPtr.pointee.signals, set.pointee.pending != 0 {
+
+            // Into the live trap frame, not through `currentProcess.context`.
+            // For a process in the middle of a syscall the two are the same
+            // pointer, and writing an answer to a register through the field
+            // rather than the frame is the kind of "same thing today" a test
+            // cannot tell apart.
+            Self.deliverNotification(set, into: frame)
+            return .success(.sended(grantRejected: false))
+        }
+
         if endpointPtr.pointee.state == .sendBlocked {
 
             guard let senderProcess = endpointPtr.pointee.queue.popFront() else {
@@ -188,7 +225,7 @@ public struct RendezvousIPC: IPCInterface, Loggable {
             let pending = senderProcess.pointee.takePending()
 
             var transferResult: Result<UInt32, IPCError>? = nil
-            if let pending, let grant = pending.grant {
+            if let pending, let grant = pending.attachment {
                 transferResult = transferCapability(
                     from   : senderProcess,
                     handler: grant,
@@ -198,16 +235,17 @@ public struct RendezvousIPC: IPCInterface, Loggable {
             }
 
             var grantRejected = false
+            var handed = IPCDelivery.noGrant
+
             switch transferResult {
                 case .success(let newGrantHandle):
-                    frame.pointee.x7 = UInt64(newGrantHandle)
+                    handed = newGrantHandle
 
                 case .failure(_):
-                    frame.pointee.x7 = UInt64(UInt32.max)
-                    grantRejected    = true
+                    grantRejected = true
 
                 case nil:
-                    frame.pointee.x7 = UInt64(UInt32.max)
+                    break
             }
 
 
@@ -219,9 +257,11 @@ public struct RendezvousIPC: IPCInterface, Loggable {
 
             traceTransfer(from: senderProcess, to: currentProcess)
 
-            frame.pointee.x6 = ipcTag(
+            deliver(
+                to     : frame,
                 from   : senderProcess,
-                session: pending?.session ?? 0
+                session: pending?.session ?? 0,
+                grant  : handed
             )
 
             if grantRejected {
@@ -231,11 +271,9 @@ public struct RendezvousIPC: IPCInterface, Loggable {
 
             if pending?.expectsReply == true {
 
-                displaceReplyLink(of: currentProcess, for: senderProcess)
+                pushWaiter(senderProcess, on: currentProcess)
 
-                currentProcess.pointee.replyTo     = senderProcess
-                senderProcess.pointee.replyPartner = currentProcess
-                senderProcess.pointee.status       = .blockedOnReply
+                senderProcess.pointee.status = .blockedOnReply(currentProcess)
 
             } else { wake(senderProcess) }
 
@@ -302,21 +340,19 @@ public struct RendezvousIPC: IPCInterface, Loggable {
 
             traceTransfer(from: currentProcess, to: receiverProcess)
 
-            receiverContext.pointee.x6 = ipcTag(
+            // A call carries no capability, so the grant half says so rather than
+            // being left at whatever the frame held.
+            deliver(
+                to     : receiverContext,
                 from   : currentProcess,
                 session: capability.badge
             )
 
-            receiverContext.pointee.x7 = UInt64(UInt32.max)
-
             disarmDeadline(on: receiverProcess)
 
-            displaceReplyLink(of: receiverProcess, for: currentProcess)
+            pushWaiter(currentProcess, on: receiverProcess)
 
-            receiverProcess.pointee.replyTo     = currentProcess
-            currentProcess.pointee.replyPartner = receiverProcess
-
-            currentProcess.pointee.status = .blockedOnReply
+            currentProcess.pointee.status = .blockedOnReply(receiverProcess)
 
             traceBlock(TraceBlockReason.call, on: endpointPtr)
 
@@ -327,6 +363,14 @@ public struct RendezvousIPC: IPCInterface, Loggable {
         
         
         // Server not ready
+
+        // Not ready and never going to be are different answers, and this is
+        // where they part. A call to a server that died earlier used to be
+        // queued on an endpoint nobody can receive on, which is how one command
+        // after a file system crash wedged the shell for good.
+        guard canBeServed(currentProcess, on: endpointPtr) else {
+            return .failure(.peerDied)
+        }
 
         currentProcess.pointee.pending = PendingMessage(
             message     : Message(from: frame),
@@ -349,15 +393,23 @@ public struct RendezvousIPC: IPCInterface, Loggable {
     }
     
     
+    /// Answers a caller. `target` names which one, and nil means the newest.
+    ///
+    /// A server with one request in flight passes nil and never thinks about
+    /// this. One holding several says which, and the name it uses is the caller's
+    /// identity, which it already has: every request arrives carrying it, and
+    /// every server that keeps per-client state is already keyed on it.
     public mutating func reply(
-        frame: AArch64.TrapFrame
+        frame : AArch64.TrapFrame,
+        target: UnsafeMutablePointer<Process>? = nil
     ) -> Result<CommunicationMessageResult, IPCError> {
         let grantWord = frame.x6
         
         return replyInternal(
             frame      : frame,
             grantHandle: UInt32(truncatingIfNeeded: grantWord),
-            grantRights: CapRights(rawValue: UInt8(truncatingIfNeeded: grantWord >> 32))
+            grantRights: CapRights(rawValue: UInt16(truncatingIfNeeded: grantWord >> 32)),
+            target     : target
         )
     }
     
@@ -381,12 +433,19 @@ public struct RendezvousIPC: IPCInterface, Loggable {
     private mutating func replyInternal(
         frame      : AArch64.TrapFrame,
         grantHandle: UInt32,
-        grantRights: CapRights
+        grantRights: CapRights,
+        target     : UnsafeMutablePointer<Process>? = nil
     ) -> Result<CommunicationMessageResult, IPCError> {
         
-        guard let currentProcess = Arch.CPU.getCurrentProcess(),
-              let replyProcess = currentProcess.pointee.replyTo else {
+        guard let currentProcess = Arch.CPU.getCurrentProcess() else {
+            return .failure(.noReply)
+        }
 
+        // The named one, or the newest. A named one that is not waiting on this
+        // process was already refused by whoever resolved it, so reaching here
+        // with nil and no `replyTo` is a server answering a call it does not
+        // have.
+        guard let replyProcess = target ?? currentProcess.pointee.replyTo else {
             return .failure(.noReply)
         }
 
@@ -397,11 +456,6 @@ public struct RendezvousIPC: IPCInterface, Loggable {
         Message(from: frame).write(to: replyContext)
 
         traceTransfer(from: currentProcess, to: replyProcess)
-
-        replyContext.pointee.x6 = ipcTag(
-            from   : currentProcess,
-            session: 0
-        )
 
         var transferResult: Result<UInt32, IPCError>? = nil
         if grantHandle != UInt32.max {
@@ -414,21 +468,32 @@ public struct RendezvousIPC: IPCInterface, Loggable {
         }
 
         var grantRejected = false
+        var handed = IPCDelivery.noGrant
+
         switch transferResult {
             case .success(let newHandle):
-                replyContext.pointee.x7 = UInt64(newHandle)
+                handed = newHandle
 
             case .failure(_):
-                replyContext.pointee.x7 = UInt64(UInt32.max)
                 grantRejected = true
 
             case nil:
-                replyContext.pointee.x7 = UInt64(UInt32.max)
+                break
         }
 
+        // A reply belongs to no conversation of its own: the caller knows which
+        // question it asked. So the session is zero and the identity is the
+        // server's, which is the one thing a caller could not have known.
+        deliver(
+            to     : replyContext,
+            from   : currentProcess,
+            session: 0,
+            grant  : handed
+        )
+
         wake(replyProcess)
-        currentProcess.pointee.replyTo    = nil
-        replyProcess.pointee.replyPartner = nil
+
+        Self.unlinkWaiter(replyProcess, from: currentProcess)
 
         return .success(.sended(grantRejected: grantRejected))
     }
@@ -689,6 +754,7 @@ public struct RendezvousIPC: IPCInterface, Loggable {
             switch kind {
                 case .ipc  : expireIPCWait(process)
                 case .sleep: SleepSyscall.expire(process)
+                case .irq  : IrqWaitSyscall.expire(process)
                 case .none : break
             }
         }
@@ -705,7 +771,108 @@ public struct RendezvousIPC: IPCInterface, Loggable {
     /// a new wake site cannot quietly skip it.
     ///
     /// Not `mutating`: the scheduler is reached through a pointer, which is
-    /// what lets `displaceReplyLink` call this too.
+    /// what lets `parkReplyLink` call this too.
+    /// How many of `process`'s own capabilities could receive on `endpoint`.
+    ///
+    /// Needed because an endpoint's receiver count includes the sender itself
+    /// when the sender happens to hold one, and a process cannot answer its own
+    /// blocking send. Every spawn makes exactly that shape: the endpoint between
+    /// a parent and its child gives *both* sides `.receive`, so a bare count of
+    /// receivers says one is left when the only one left is the sender.
+    ///
+    /// A scan of thirty-two slots, on the one path that was about to go to
+    /// sleep for an unbounded time. It is not on the delivery path.
+    private func receiversOwned(
+        by process : UnsafeMutablePointer<Process>,
+        on endpoint: UnsafeMutablePointer<Endpoint>
+    ) -> UInt16 {
+
+        guard let metadata = process.pointee.metadata else { return 0 }
+
+        var mine: UInt16 = 0
+
+        for slot in 0..<metadata.pointee.capsTable.caps.count {
+            guard let cap = metadata.pointee.capsTable.caps[slot],
+                  case .endpoint(let held) = cap.target,
+                  held == endpoint,
+                  cap.rights.contains(.receive)
+            else { continue }
+
+            mine &+= 1
+        }
+
+        return mine
+    }
+
+
+    /// Whether anybody other than `process` could ever take a message off
+    /// `endpoint`.
+    ///
+    /// The question a blocking send has to have answered before it agrees to
+    /// wait. `false` does not mean the endpoint is busy; it means the other half
+    /// of the rendezvous does not exist, so waiting is waiting for nobody.
+    @inline(__always)
+    private func canBeServed(
+        _  process : UnsafeMutablePointer<Process>,
+        on endpoint: UnsafeMutablePointer<Endpoint>
+    ) -> Bool {
+        endpoint.pointee.receivers > receiversOwned(by: process, on: endpoint)
+    }
+
+
+    /// Lets go of everybody queued to send on `endpoint` who can no longer be
+    /// served.
+    ///
+    /// Run whenever a capability that could receive there goes away, which in
+    /// practice is when the process holding it died. A sender parked here agreed
+    /// to wait for somebody to arrive, and the answer to that has just become
+    /// no; the alternative is that it waits for the rest of the boot.
+    ///
+    /// Asked per sender rather than once for the endpoint, because "can be
+    /// served" depends on who is asking: on a parent-child endpoint both sides
+    /// hold `.receive`, so the same endpoint is still serviceable for one of
+    /// them and finished for the other.
+    ///
+    /// `.peerDied` and not `.noReply`. A server that drops one request is still
+    /// there and its client should keep talking to it; this is the other thing,
+    /// and it is the same word `severReplyLinks` gives a request that was
+    /// already in flight when its server died.
+    private mutating func abandonUnservable(_ endpoint: UnsafeMutablePointer<Endpoint>) {
+
+        guard endpoint.pointee.state == .sendBlocked else { return }
+
+        var current = endpoint.pointee.queue.getIterator()
+
+        while let waiting = current {
+            // Read before the node is unlinked, or the walk ends here.
+            current = waiting.pointee.next
+
+            // A corpse is out of this queue before its own capabilities are
+            // released, so this is belt and braces rather than a case anybody
+            // has seen.
+            if case .terminated = waiting.pointee.status { continue }
+
+            if canBeServed(waiting, on: endpoint) { continue }
+
+            endpoint.pointee.queue.remove(element: waiting)
+
+            // The message it never got to send. Nothing will read it now, and a
+            // pending message on a process queued nowhere is a lie about where
+            // that process is.
+            _ = waiting.pointee.takePending()
+
+            waiting.pointee.context?.pointee.x0 = IPCStatus.peerDied.rawValue
+
+            // `resume` would remove it from this queue too, and cannot: it is
+            // already unlinked, and `LinkedList.remove` refuses a node with no
+            // links and no claim on the head.
+            wake(waiting)
+        }
+
+        if endpoint.pointee.queue.isEmpty() { endpoint.pointee.state = .idle }
+    }
+
+
     @inline(__always)
     private func wake(_ process: UnsafeMutablePointer<Process>) {
         Trace.emit(
@@ -808,35 +975,286 @@ public struct RendezvousIPC: IPCInterface, Loggable {
     }
 
     @inline(__always)
-    private func ipcTag(
+    /// Lays the two delivery registers into a receiver's frame.
+    ///
+    /// The one place that does it, and every path comes here: immediate send,
+    /// queued send, receive, call, reply, and the two that carry no grant. Six
+    /// copies of two shifts is six chances to get one of them wrong and one of
+    /// them being the path nothing exercises.
+    private func deliver(
+        to context : UnsafeMutablePointer<Arch.TrapFrame>,
         from sender: UnsafeMutablePointer<Process>,
-        session    : Badge
-    ) -> UInt64 {
-        (UInt64(sender.pointee.identity) << 32) | UInt64(session)
+        session    : Badge,
+        grant      : UInt32 = IPCDelivery.noGrant
+    ) {
+        context.pointee.x6 = session
+        context.pointee.x7 = IPCDelivery.principal(
+            sender.pointee.identity,
+            grant: grant
+        )
     }
 
 
-    /// Break the reply link `server` still holds toward an earlier caller, now
-    /// that `newPeer` is taking its place.
+    /// How many callers one server may have parked besides the newest.
     ///
-    /// The abandoned caller is `.blockedOnReply` on a reply that can never
-    /// arrive, so it is resumed with `.noReply` rather than `.peerDied`: the
-    /// server and its endpoint are still alive and usable, it merely dropped
-    /// this call, and telling the client its peer died would make it tear down a
-    /// connection that still works.
+    /// Eight, like every other table here, and a bound rather than a capacity:
+    /// nothing is allocated per parked caller. The number only decides when a
+    /// server that keeps taking requests without answering them starts losing
+    /// the oldest instead of holding it for ever.
+    static let deferredReplyLimit: UInt8 = 8
+
+    /// Whether a server ever hit that bound, said once.
+    nonisolated(unsafe) static var saidRepliesOverflowed = false
+
+
+    /// Makes `caller` the newest of `server`'s waiting callers.
+    ///
+    /// The one that was newest is pushed down the list rather than broken. It
+    /// used to be broken: it was `.blockedOnReply` on a reply that could never
+    /// arrive, so it was resumed with `noReply`, and that single line is why
+    /// nothing in this system could have two requests in flight. A server that
+    /// took a second request before answering the first dropped the first.
+    ///
+    /// Past the bound the old behaviour comes back, on the oldest caller, with
+    /// the status it always used: a caller held for ever is worse than a caller
+    /// told its call was dropped. Said out loud, because a server that gets here
+    /// has a bug and would otherwise keep hitting it in silence.
     @inline(__always)
-    private func displaceReplyLink(
-        of  server : UnsafeMutablePointer<Process>,
-        for newPeer: UnsafeMutablePointer<Process>
+    private func pushWaiter(
+        _ caller : UnsafeMutablePointer<Process>,
+        on server: UnsafeMutablePointer<Process>
     ) {
-        guard let abandoned = server.pointee.replyTo,
-              abandoned != newPeer else { return }
+        guard server.pointee.replyTo != caller else { return }
 
-        abandoned.pointee.replyPartner        = nil
-        abandoned.pointee.context?.pointee.x0 = IPCStatus.noReply.rawValue
+        if server.pointee.deferredReplies >= Self.deferredReplyLimit {
+            dropOldestWaiter(of: server)
+        }
 
-        wake(abandoned)
-        server.pointee.replyTo = nil
+        caller.pointee.nextWaiter = server.pointee.replyTo
+
+        if server.pointee.replyTo != nil {
+            server.pointee.deferredReplies &+= 1
+        }
+
+        server.pointee.replyTo = caller
+    }
+
+
+    /// Lets go of the caller at the end of `server`'s list, telling it its call
+    /// was dropped.
+    ///
+    /// `noReply` and not `peerDied`: the server and its endpoint are alive and
+    /// usable, it merely dropped this call, and telling the client its peer died
+    /// would make it tear down a connection that still works.
+    @inline(__always)
+    private func dropOldestWaiter(of server: UnsafeMutablePointer<Process>) {
+
+        guard var previous = server.pointee.replyTo,
+              var oldest   = previous.pointee.nextWaiter
+        else { return }
+
+        while let next = oldest.pointee.nextWaiter {
+            previous = oldest
+            oldest   = next
+        }
+
+        if !Self.saidRepliesOverflowed {
+            Self.saidRepliesOverflowed = true
+            kprint("[ IPC   ] a server has too many unanswered calls, dropping the oldest")
+        }
+
+        previous.pointee.nextWaiter        = nil
+        oldest.pointee.nextWaiter          = nil
+        oldest.pointee.context?.pointee.x0 = IPCStatus.noReply.rawValue
+
+        // The link to this server goes with the status, which `wake` clears.
+        wake(oldest)
+
+        server.pointee.deferredReplies &-= 1
+    }
+
+
+    /// The caller with `identity` waiting on `server`, or nil.
+    ///
+    /// Walks `server`'s own list of callers and nothing else, so the cost is the
+    /// number of requests that server is holding and there is no dependence on
+    /// the process tree being built or on a waiter being reachable from init.
+    ///
+    /// A caller found this way is by construction waiting on this server, which
+    /// is the check that matters: without it a server could answer a call
+    /// somebody else is in the middle of, and that caller would take the wrong
+    /// process's words as its reply.
+    static func waiter(
+        identity : Badge,
+        on server: UnsafeMutablePointer<Process>
+    ) -> UnsafeMutablePointer<Process>? {
+
+        guard identity != 0 else { return nil }
+
+        var at = server.pointee.replyTo
+
+        while let candidate = at {
+            if candidate.pointee.identity == identity { return candidate }
+            at = candidate.pointee.nextWaiter
+        }
+
+        return nil
+    }
+
+
+    /// Takes `caller` out of `server`'s list of waiting callers.
+    ///
+    /// Used by every path that ends a wait: a reply, a caller dying, a server
+    /// dying. The list is the only record of who is waiting, so a caller left in
+    /// it after its wait ended is a pointer to a process that may be gone.
+    @inline(__always)
+    static func unlinkWaiter(
+        _ caller : UnsafeMutablePointer<Process>,
+        from server: UnsafeMutablePointer<Process>
+    ) {
+        if server.pointee.replyTo == caller {
+            server.pointee.replyTo = caller.pointee.nextWaiter
+
+        } else {
+            var at = server.pointee.replyTo
+
+            while let node = at {
+                if node.pointee.nextWaiter == caller {
+                    node.pointee.nextWaiter = caller.pointee.nextWaiter
+                    break
+                }
+                at = node.pointee.nextWaiter
+            }
+        }
+
+        if server.pointee.deferredReplies > 0 {
+            server.pointee.deferredReplies &-= 1
+        }
+
+        // Only the list link is cleared here. The other one, "who am I waiting
+        // on", lives in the caller's status and goes when that changes, which
+        // every path into here either has just done or is about to.
+        caller.pointee.nextWaiter = nil
+    }
+
+
+    /// Points `set` at `endpoint`, so a line firing wakes whoever is receiving
+    /// there.
+    ///
+    /// Both directions are written: the set names the endpoint so the interrupt
+    /// path knows where to knock, and the endpoint names the set so a `receive`
+    /// about to park can ask whether the device has already spoken without
+    /// walking a capability table.
+    ///
+    /// The reference goes one way, set to endpoint. Re-binding lets go of the
+    /// previous one first, so a driver that binds twice does not leak the
+    /// endpoint it stopped using.
+    mutating func bind(
+        interrupts set: UnsafeMutablePointer<InterruptSet>,
+        to  endpoint  : UnsafeMutablePointer<Endpoint>
+    ) {
+        guard set.pointee.notify != endpoint else { return }
+
+        unbind(interrupts: set)
+
+        rxRetain(endpoint)
+
+        set.pointee.notify        = endpoint
+        endpoint.pointee.signals  = set
+    }
+
+
+    /// Takes `set` off whatever endpoint it was bound to.
+    ///
+    /// Called when a set is rebound and when it is released. The endpoint's back
+    /// pointer has to be cleared here and nowhere else: it is the one link that
+    /// outlives its owner if forgotten, and reading it afterwards is reading a
+    /// set that has been freed.
+    mutating func unbind(interrupts set: UnsafeMutablePointer<InterruptSet>) {
+
+        guard let endpoint = set.pointee.notify else { return }
+
+        set.pointee.notify = nil
+
+        if endpoint.pointee.signals == set {
+            endpoint.pointee.signals = nil
+        }
+
+        guard rxRelease(endpoint) else { return }
+
+        for i in 0..<endpoints.count where endpoints[i] == endpoint {
+            endpoints[i] = nil
+            break
+        }
+
+        heap.pointee.kfree(endpoint)
+    }
+
+
+    /// Wakes a process receiving on `set`'s bound endpoint, if there is one, and
+    /// hands it the lines that fired.
+    ///
+    /// Answers whether it found somebody. When it did not, the bits stay in
+    /// `pending` and the next `receive` on that endpoint collects them without
+    /// parking - the same promise `irqWait` has always made, kept in the other
+    /// place a driver can be waiting.
+    @discardableResult
+    mutating func signal(_ set: UnsafeMutablePointer<InterruptSet>) -> Bool {
+
+        guard let endpoint = set.pointee.notify,
+              endpoint.pointee.state == .recvBlocked,
+              let receiver = endpoint.pointee.queue.popFront()
+        else { return false }
+
+        if endpoint.pointee.queue.isEmpty() {
+            endpoint.pointee.state = .idle
+        }
+
+        Self.deliverNotification(set, to: receiver)
+
+        wake(receiver)
+
+        return true
+    }
+
+
+    /// Writes an interrupt notification into a receiver's registers.
+    ///
+    /// Shaped exactly like a message so that one `receive` can answer either.
+    /// The sender identity is zero, which is the wire value for "no principal":
+    /// this did not come from a process, and a server that keys state on the
+    /// caller must not find a caller here.
+    static func deliverNotification(
+        _ set: UnsafeMutablePointer<InterruptSet>,
+        to receiver: UnsafeMutablePointer<Process>
+    ) {
+        guard let context = receiver.pointee.context else { return }
+        deliverNotification(set, into: context)
+    }
+
+    static func deliverNotification(
+        _ set: UnsafeMutablePointer<InterruptSet>,
+        into context: UnsafeMutablePointer<AArch64.TrapFrame>
+    ) {
+        // Collected here rather than left for the receiver to read, for the
+        // reason `irqWait` collects them here too: a second line firing between
+        // the wake and the return would otherwise overwrite the bits.
+        var words = InlineArray<4, UInt32>(repeating: 0)
+        words[0] = UInt32(set.pointee.pending)
+
+        Message(
+            tag  : MessageTag(packed: (UInt64(InterruptNotification.label) << 8) | 1),
+            words: words
+        ).write(to: context)
+
+        set.pointee.pending = 0
+
+        context.pointee.x0 = IPCStatus.ok.rawValue
+
+        // No session and no principal: this did not come from a process, so a
+        // server keying state on the caller must not find one here.
+        context.pointee.x6 = 0
+        context.pointee.x7 = IPCDelivery.principal(0)
     }
 
 
@@ -844,7 +1262,16 @@ public struct RendezvousIPC: IPCInterface, Loggable {
     mutating func retain(_ cap: Capability) {
 
         switch cap.target {
-            case .endpoint(let endpointPtr)    : rxRetain(endpointPtr)
+            case .endpoint(let endpointPtr):
+                rxRetain(endpointPtr)
+
+                // Counted apart from the references, because they answer
+                // different questions: how many capabilities keep this endpoint
+                // alive, and how many of them could ever take a message off it.
+                if cap.rights.contains(.receive) {
+                    endpointPtr.pointee.receivers &+= 1
+                }
+
             case .shared  (let sharedMemoryPtr): rxRetain(sharedMemoryPtr)
             case .dma     (let dmaRegionPtr)   : rxRetain(dmaRegionPtr)
             case .interrupt(let setPtr)        : rxRetain(setPtr)
@@ -859,6 +1286,14 @@ public struct RendezvousIPC: IPCInterface, Loggable {
 
         switch cap.target {
             case .endpoint(let endpointPtr):
+                // Before the reference count, because the endpoint may be about
+                // to be freed and whoever is queued on it has to be let go
+                // while it is still there to be queued on.
+                if cap.rights.contains(.receive), endpointPtr.pointee.receivers > 0 {
+                    endpointPtr.pointee.receivers &-= 1
+                    abandonUnservable(endpointPtr)
+                }
+
                 guard rxRelease(endpointPtr) else { return }
 
                 for i in 0..<endpoints.count where endpoints[i] == endpointPtr {
@@ -890,6 +1325,8 @@ public struct RendezvousIPC: IPCInterface, Loggable {
             case .bus(let busPtr):
                 guard rxRelease(busPtr) else { return }
 
+                // Nothing to give back: what was carved out of it holds its own
+                // references, and the bus itself never claimed a line.
                 heap.pointee.kfree(busPtr)
 
             case .interrupt(let setPtr):
@@ -898,6 +1335,11 @@ public struct RendezvousIPC: IPCInterface, Loggable {
                 for index in 0..<Int(setPtr.pointee.lineCount) {
                     Kernel.gic.pointee.disableInterrupt(id: setPtr.pointee.lines[index])
                 }
+
+                // Before the free, and it has to be: the endpoint holds a back
+                // pointer to this set, and an endpoint outliving the set it
+                // names would have a `receive` reading freed memory.
+                unbind(interrupts: setPtr)
 
                 InterruptClaims.releaseAll(of: setPtr)
                 heap.pointee.kfree(setPtr)
@@ -923,6 +1365,11 @@ public struct RendezvousIPC: IPCInterface, Loggable {
 
     public mutating func releaseCapabilities(of process: UnsafeMutablePointer<Process>) {
         disarmDeadline(on: process)
+
+        // And an interrupt deadline, which is the other kind this process could
+        // be holding. A deadline outliving the process it names is a pointer the
+        // scheduler will follow into freed memory.
+        IrqWaitSyscall.cancelDeadline(on: process)
 
         guard let metadata = process.pointee.metadata else { return }
         

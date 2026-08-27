@@ -17,10 +17,18 @@ import ReixABI
 /// it is 22 bytes in a 24 byte stride, which is what keeps `ProcessMetadata`
 /// inside the 512 byte slab bucket instead of the 1024 byte one.
 ///
-/// Ordering matters only in that the two byte-wide fields have to stay on the
-/// same side of `badge`: split across it, its 4 byte alignment reopens the hole
-/// and the stride goes back to 32. Whether it leads them or trails them moves
-/// the measured size, 22 against 24, and not the stride the table pays.
+/// Ordering matters only in that the narrow fields have to stay together on one
+/// side of the eight-byte ones: split across them, the alignment hole reopens and
+/// the stride goes back to 32.
+///
+/// The session went to sixty-four bits and the stride did not, which is the
+/// arithmetic worth writing down: eight for the address, eight for the session,
+/// four for the window's width, two for the rights and one for the kind is
+/// twenty-three in a twenty-four byte stride. Had the window kept its sixty-four
+/// bits the stride would be thirty-two, thirty-two slots per table would cost two
+/// hundred and fifty-six bytes more, and `ProcessMetadata` would cross out of the
+/// 1024 byte slab bucket into the 2048 one - on a machine targeting four
+/// megabytes.
 public struct Capability: Equatable {
 
     /// Which `CapTarget` case `word` and `extent` spell out.
@@ -32,27 +40,40 @@ public struct Capability: Equatable {
         case bus
         case interrupt
         case profileControl
+        case clock
+        case power
     }
 
     /// Address of the endpoint or shared region this names, or the base of the
     /// device window. Zero for `profileControl`, which has no backing object.
     private var word  : UInt64
 
-    /// Byte width of the device window, and zero for every other kind, so that
-    /// two capabilities compare equal exactly when their targets do.
-    private var extent: UInt64
-
     /// Session token.
     ///
     /// `transferCapability`/`injectCapability` copy this value unchanged, so it
     /// says *which conversation* a message belongs to and can say nothing about
     /// who sent it: the sender's principal is `Process.identity` and travels in
-    /// the other half of `x6`.
+    /// `x7`, in a register of its own.
     ///
     /// `0` means "no session", and is set-once-from-zero through `CapsTable.mint`:
     /// a cap already bound to a session can never be rebound, or its holder could
     /// recycle a stale session into a server's per-client state.
     public var badge : Badge
+
+    /// Byte width of the device window, and zero for every other kind, so that
+    /// two capabilities compare equal exactly when their targets do.
+    ///
+    /// Thirty-two bits, which is what pays for the session being sixty-four, and
+    /// declared *after* the wide fields rather than beside `word` for the reason
+    /// in the type's own note: the narrow fields have to sit together or the
+    /// alignment hole reopens and the stride goes back to 32.
+    ///
+    /// A window is a device's register block, and the widest this machine has is
+    /// a page. Four gigabytes is the bound, and `init` clips rather than wraps: a
+    /// window this cannot represent comes back *smaller* than it was asked for,
+    /// which refuses more than it should rather than allowing more.
+    private var extent: UInt32
+
     public var rights: CapRights
 
     private var kind : Kind
@@ -84,7 +105,9 @@ public struct Capability: Equatable {
 
             case .device(let region):
                 word   = region.address
-                extent = region.size
+                extent = region.size > UInt64(UInt32.max)
+                    ? UInt32.max
+                    : UInt32(region.size)
                 kind   = .device
 
             case .bus(let authority):
@@ -101,6 +124,16 @@ public struct Capability: Equatable {
                 word   = 0
                 extent = 0
                 kind   = .profileControl
+
+            case .clock:
+                word   = 0
+                extent = 0
+                kind   = .clock
+
+            case .power:
+                word   = 0
+                extent = 0
+                kind   = .power
         }
     }
 
@@ -129,7 +162,7 @@ public struct Capability: Equatable {
                 )
 
             case .device:
-                .device(DeviceRegion(address: word, size: extent))
+                .device(DeviceRegion(address: word, size: UInt64(extent)))
 
             case .bus:
                 .bus(
@@ -143,6 +176,12 @@ public struct Capability: Equatable {
 
             case .profileControl:
                 .profileControl
+
+            case .clock:
+                .clock
+
+            case .power:
+                .power
         }
     }
 }

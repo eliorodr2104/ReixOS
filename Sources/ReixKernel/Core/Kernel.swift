@@ -260,6 +260,18 @@ public struct Kernel: Loggable {
             throw .heapAllocationFailed
         }
 
+        guard installClockCap(
+            into: &firstProcess.pointee.metadata.pointee.capsTable
+        ) else {
+            throw .heapAllocationFailed
+        }
+
+        guard installPowerCap(
+            into: &firstProcess.pointee.metadata.pointee.capsTable
+        ) else {
+            throw .heapAllocationFailed
+        }
+
         if !InterruptBootAuthority.install(
             line: Kernel.platformInfo.uart.irq,
             into: &firstProcess.pointee.metadata.pointee.capsTable,
@@ -278,6 +290,14 @@ public struct Kernel: Loggable {
             heap: heap
         ) {
             ProcessManager.warning("no virtio bus authority minted, the device tree described none")
+        }
+
+        // A transport the blob described and the kernel would not delegate: two
+        // windows over the same registers, one line claimed twice, or more
+        // transports than there is room for. Said out loud, because a device
+        // that quietly went missing is the hardest kind to go looking for.
+        if Kernel.platformInfo.virtioBus.rejected != 0 {
+            ProcessManager.warning("the device tree described virtio transports this kernel refused")
         }
 
         ProcessManager.info("Handing control to user space.")
@@ -311,7 +331,44 @@ public struct Kernel: Loggable {
         )
     }
     
-    private static func installProfilerCap(into caps: inout CapsTable) -> Bool {
+    /// Installs the boot profiler authority, answering whether it went in.
+    ///
+    /// Not `private`: `ProfileCapabilityFlowTests` asserts both answers, that a
+    /// fresh table takes it with `grant` plus the whole profile share, and that
+    /// an occupied slot refuses it rather than displacing whatever was there.
+    /// The authority to set the clock, at its boot slot.
+    ///
+    /// Separate from the profiler's even though both are markers with no object
+    /// behind them, because they answer different questions and a process that
+    /// needs one has no business getting the other for free.
+    static func installClockCap(into caps: inout CapsTable) -> Bool {
+        let slot = BootCap.clock.rawValue
+        guard caps.resolve(slot) == nil else { return false }
+
+        let result = caps.install(
+            at: slot,
+            Capability(target: .clock, badge: 0, rights: [.grant, .write])
+        )
+
+        return result.installed && result.displaced == nil
+    }
+
+
+    /// The authority to stop the machine, at its boot slot.
+    static func installPowerCap(into caps: inout CapsTable) -> Bool {
+        let slot = BootCap.power.rawValue
+        guard caps.resolve(slot) == nil else { return false }
+
+        let result = caps.install(
+            at: slot,
+            Capability(target: .power, badge: 0, rights: [.grant, .write])
+        )
+
+        return result.installed && result.displaced == nil
+    }
+
+
+    static func installProfilerCap(into caps: inout CapsTable) -> Bool {
         let slot = BootCap.profiler.rawValue
         guard caps.resolve(slot) == nil else { return false }
 

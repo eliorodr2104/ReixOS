@@ -29,6 +29,7 @@ enum InterruptBootAuthority {
     @discardableResult
     static func install(
              line: UInt32,
+        at   slot: UInt32 = BootCap.interrupt.rawValue,
         into caps: inout CapsTable,
              heap: UnsafeMutablePointer<KernelHeap>,
              gic : UnsafeMutablePointer<GIC>
@@ -51,7 +52,7 @@ enum InterruptBootAuthority {
         }
 
         let installed = caps.install(
-            at: BootCap.interrupt.rawValue,
+            at: slot,
             Capability(
                 target: .interrupt(set),
                 badge : Badge(0),

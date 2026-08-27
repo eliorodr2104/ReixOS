@@ -71,14 +71,19 @@ _asm_recv:
 
     svc #0
 
-    // Return: x0 = status, x1 = tag, x2..x5=words, x6=identity:session
+    // Return then
+    //    x0     = status
+    //    x1     = tag
+    //    x2..x5 = words
+    //    x6     = session
+    // end
     str x1, [x9]        // buffer[0] = tag
     str x2, [x9, #8]    // buffer[1] = word0
     str x3, [x9, #16]   // buffer[2] = word1
     str x4, [x9, #24]   // buffer[3] = word2
     str x5, [x9, #32]   // buffer[4] = word3
-    str x6, [x9, #40]   // buffer[5] = identity:session
-    str x7, [x9, #48]   // buffer[6] = grantHandle
+    str x6, [x9, #40]   // buffer[5] = session
+    str x7, [x9, #48]   // buffer[6] = identity:grant
 
     ret // x0 state
 
@@ -105,14 +110,19 @@ _asm_call:
 
     svc #0
 
-    // Return: x0 = status, x1 = tag, x2..x5 = words, x6 = identity:session
+    // Return then
+    //    x0     = status
+    //    x1     = tag
+    //    x2..x5 = words
+    //    x6     = session
+    // end
     str x1, [x9]        // buffer[0] = tag
     str x2, [x9, #8]    // buffer[1] = word0
     str x3, [x9, #16]   // buffer[2] = word1
     str x4, [x9, #24]   // buffer[3] = word2
     str x5, [x9, #32]   // buffer[4] = word3
-    str x6, [x9, #40]   // buffer[5] = identity:session
-    str x7, [x9, #48]   // buffer[6] = grantHandle
+    str x6, [x9, #40]   // buffer[5] = session
+    str x7, [x9, #48]   // buffer[6] = identity:grant
 
     ret // x0 status
 
@@ -131,13 +141,19 @@ _asm_recv_timeout:
 
     svc #0
 
-    // Return: x0 = status, x1 = tag, x2..x5 = words, x6 = identity:session, x7 = grant
+    // Return then
+    //    x0     = status
+    //    x1     = tag
+    //    x2..x5 = words
+    //    x6     = session
+    //    x7     = identity:grant
+    // end
     str x1, [x9]        // buffer[0] = tag
     str x2, [x9, #8]    // buffer[1] = word0
     str x3, [x9, #16]   // buffer[2] = word1
     str x4, [x9, #24]   // buffer[3] = word2
     str x5, [x9, #32]   // buffer[4] = word3
-    str x6, [x9, #40]   // buffer[5] = identity:session
-    str x7, [x9, #48]   // buffer[6] = grantHandle
+    str x6, [x9, #40]   // buffer[5] = session
+    str x7, [x9, #48]   // buffer[6] = identity:grant
 
     ret // x0 status

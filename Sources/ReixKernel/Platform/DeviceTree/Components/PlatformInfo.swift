@@ -23,7 +23,12 @@ public struct PlatformInfo {
     public var uart      : UartInfo  = UartInfo()  // 24 byte
     public var gic       : GicInfo   = GicInfo()   // 16 byte
 
-    /// The virtio bus: where its transports are and which lines they raise.
-    /// What sits on them is not discovery's business.
-    public var virtioBus: VirtioBusInfo = VirtioBusInfo() // 24 byte
+    /// The virtio bus, one transport at a time: where each one is and which line
+    /// it raises. What sits on them is not discovery's business.
+    ///
+    /// Much the largest thing in here, and deliberately so: it used to be two
+    /// merged ranges, which is smaller and describes a bus that does not exist.
+    /// It is read through `transport(at:)` rather than copied, so its size is
+    /// paid once in the image and not on every kernel stack frame that touches it.
+    public var virtioBus: VirtioBusInfo = VirtioBusInfo() // 520 byte
 }

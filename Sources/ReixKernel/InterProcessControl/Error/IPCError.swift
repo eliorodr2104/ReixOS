@@ -17,6 +17,13 @@ public enum IPCError: Error {
     case invalidMessage
     case notFoundFreeEndpoint
     case outOfEndpoints
+
+    /// There is nobody left who can receive on that endpoint.
+    ///
+    /// Not `noReply`, which means a server dropped one request and is still
+    /// there. This one says the other half of the rendezvous is gone, so
+    /// waiting would be waiting for the rest of the boot.
+    case peerDied
     
     
     var status: IPCStatus {
@@ -28,6 +35,7 @@ public enum IPCError: Error {
             case .noReply                              : .noReply
             case .invalidMessage                       : .invalidMessage
             case .notFoundFreeEndpoint, .outOfEndpoints: .outOfEndpoints
+            case .peerDied                             : .peerDied
         }
     }
 }

@@ -43,6 +43,20 @@ public struct AArch64MMU {
     @_silgen_name("page_table_barrier")
     public static func pageTableBarrier()
 
+    /// Writes back and drops every cache line over `[base, base + size)`, then
+    /// waits for it to have happened.
+    ///
+    /// The one place the kernel does cache maintenance, and it is here because
+    /// this is the one place it writes bytes through its own cached mapping that
+    /// somebody else is about to read through a non-cacheable one. Everywhere
+    /// else the two ends of a shared region agree on cacheability and the caches
+    /// sort themselves out.
+    @_silgen_name("clean_dcache_range")
+    public static func cleanDataCacheRange(
+        _ base: UnsafeMutableRawPointer,
+        size  : UInt64
+    )
+
     /// Install `rootTable` in TTBR0_EL1 tagged with `asid`, without any TLB
     /// invalidation: the outgoing space's non-global entries stay cached and
     /// simply stop matching. `asid` 0 is reserved for the kernel identity root.

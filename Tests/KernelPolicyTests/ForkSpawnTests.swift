@@ -102,7 +102,7 @@ struct ForkSpawnTests {
     func freshIdentities() {
         withProcessManager(pages: 96) { _, _, manager in
             var pids   : [PID] = []
-            var badges : [Badge] = []
+            var badges : [Identity] = []
 
             for _ in 0..<4 {
                 guard let child = try? manager.pointee.spawnProcess() else {

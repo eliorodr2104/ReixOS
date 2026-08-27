@@ -888,7 +888,7 @@ extension TraceDecoder {
                 continue
             }
 
-            // `name` already carries its extension ("Child.elf"), matching
+            // `name` already carries its extension ("Top.elf"), matching
             // the unstripped ELF the build leaves at .reix/<name> (only the
             // initrd copies under .reix/stripped/ lose their symbols).
             let elf = root.appending(path: plugin.outputDir).appending(path: name)

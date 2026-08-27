@@ -387,7 +387,11 @@ func parsePlatformInfo(
                 let intBase = kind == 1 ? UInt32(16) : UInt32(32)
                 let number  = fdt32(fdt, intr + 4)
 
-                if base != 0, size != 0, number < FDT.reservedInterrupt - intBase {
+                // Only the bound that keeps the addition below honest is checked
+                // here. Everything else a node can get wrong is `include`'s to
+                // refuse, so there is one door and one place that counts what
+                // came through it.
+                if number < FDT.reservedInterrupt - intBase {
                     out.virtioBus.include(base: base, size: size, line: number + intBase)
                 }
 

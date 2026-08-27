@@ -9,6 +9,7 @@ import Testing
 @testable import Kernel
 import ReixABI
 import KernelTestSupport
+import KernelHostShims
 
 /// Who may allocate a buffer a device can transfer into, and who may learn
 /// where it physically is.
@@ -16,9 +17,13 @@ import KernelTestSupport
 /// Both questions are the whole point of the design. There is no IOMMU on this
 /// machine, so a physical address plus a device that transfers is authority over
 /// all of memory, and the only thing standing between a process and that
-/// authority is these two checks: a device capability to mint the buffer, and a
-/// DMA capability to ask for the address. A shared region that could answer the
-/// second question would be a second door to the same authority.
+/// authority is these two checks: a device capability **carrying `.dma`** to mint
+/// the buffer, and a DMA capability to ask for the address. A shared region that
+/// could answer the second question would be a second door to the same authority.
+///
+/// `.dma` is the newer half of the first check, and the one worth watching. Any
+/// device window used to do, with any rights on it, so the console's window over
+/// a UART opened the door as wide as the disk controller's did.
 @Suite("DMA authority", .serialized)
 struct DmaAuthorityTests {
 
@@ -68,12 +73,15 @@ struct DmaAuthorityTests {
     }
 
 
-    private func installDeviceCap(in process: UnsafeMutablePointer<Process>) -> UInt32? {
+    private func installDeviceCap(
+        in process: UnsafeMutablePointer<Process>,
+        rights    : CapRights = [.read, .write, .dma]
+    ) -> UInt32? {
         process.pointee.metadata?.pointee.capsTable.install(
             Capability(
                 target: .device(DeviceRegion(address: 0x0900_0000, size: 4096)),
                 badge : Badge(0),
-                rights: [.read, .write]
+                rights: rights
             )
         )
     }
@@ -127,6 +135,8 @@ struct DmaAuthorityTests {
                 return
             }
 
+            reset_dcache_clean_record()
+
             let pages   = UInt64(4)
             let request = frame(x0: pages, x1: UInt64(device))
             defer { request.deinitialize(count: 1); request.deallocate() }
@@ -147,7 +157,81 @@ struct DmaAuthorityTests {
             #expect(physical != UInt64.max)
             #expect(physical % 4096 == 0)
             #expect(physical >= ram.base)
-            #expect(physical + pages * 4096 <= ram.end)
+            #expect(physical <= ram.end - pages * 4096)
+
+            // Handed over zeroed, and pushed out of the cache the kernel zeroed
+            // it through. The mapping userland gets is non-cacheable, so a line
+            // left behind is either stale bytes the device reads instead of
+            // zeros, or a write-back that lands on top of what it wrote.
+            #expect(dcache_clean_calls() == 1)
+            #expect(dcache_cleaned_size() == pages * 4096)
+        }
+    }
+
+
+    /// The hole this closes. A device window is permission to drive one device;
+    /// a physical address, with nothing between a device and memory, is the whole
+    /// of RAM. Holding the first used to be enough to be handed the second.
+    @Test("a device window that does not say DMA mints no buffer")
+    func dmaRightIsRequired() {
+        withCaller { ram, caller, _, context in
+
+            let before = ram.ppm.pointee.allocatedPages
+
+            // Every shape of device window that is not allowed to transfer,
+            // including the one the console actually holds.
+            let refused: [CapRights] = [
+                [.read],
+                [.read, .write],
+                [.grant, .read, .write],
+                [.derive, .read, .write, .grant]
+            ]
+
+            for rights in refused {
+                guard let device = installDeviceCap(in: caller, rights: rights) else {
+                    Issue.record("could not install the device capability")
+                    return
+                }
+
+                let request = frame(x0: 4, x1: UInt64(device))
+                defer { request.deinitialize(count: 1); request.deallocate() }
+
+                DmaAlloc.handle(frame: request, context: context)
+
+                #expect(request.pointee.x0 == UInt64.max)
+                #expect(request.pointee.x1 == 0)
+            }
+
+            // Refused before anything was taken, every time.
+            #expect(ram.ppm.pointee.allocatedPages == before)
+        }
+    }
+
+
+    /// The buffer is cleaned over itself: the bytes the kernel zeroed and no
+    /// others. Cleaning less leaves part of it stale; the address has to be the
+    /// kernel's own mapping, because that is the alias the zeros went through.
+    @Test("the cache is cleaned over exactly the buffer that was zeroed")
+    func cleanCoversTheBuffer() {
+        withCaller { _, caller, _, context in
+            guard let device = installDeviceCap(in: caller) else {
+                Issue.record("could not install the device capability")
+                return
+            }
+
+            for pages in [UInt64(1), 4, 64] {
+                reset_dcache_clean_record()
+
+                let request = frame(x0: pages, x1: UInt64(device))
+                defer { request.deinitialize(count: 1); request.deallocate() }
+
+                DmaAlloc.handle(frame: request, context: context)
+                #expect(request.pointee.x0 != UInt64.max)
+
+                #expect(dcache_clean_calls()  == 1)
+                #expect(dcache_cleaned_size() == pages * 4096)
+                #expect(dcache_cleaned_base() != 0)
+            }
         }
     }
 
@@ -214,6 +298,7 @@ struct DmaAuthorityTests {
             }
 
             let before = ram.ppm.pointee.allocatedPages
+            reset_dcache_clean_record()
 
             for pages in [UInt64(0), 257, UInt64.max] {
                 let request = frame(x0: pages, x1: UInt64(device))
@@ -224,6 +309,9 @@ struct DmaAuthorityTests {
             }
 
             #expect(ram.ppm.pointee.allocatedPages == before)
+
+            // Nothing zeroed, so nothing to clean.
+            #expect(dcache_clean_calls() == 0)
         }
     }
 }

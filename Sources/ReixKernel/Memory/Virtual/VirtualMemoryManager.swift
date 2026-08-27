@@ -261,13 +261,29 @@ public struct VirtualMemoryManager: Loggable {
             type    : .device
         )
 
-        let bus = Kernel.platformInfo.virtioBus
-        if bus.isPresent, bus.base &+ bus.size <= Self.maxPhysicalAddress {
+        // The virtio bus, transport by transport and then page by page. Its
+        // transports are an eighth of a page each, so userland never maps one:
+        // every register it touches goes through `deviceRead`, which needs them
+        // addressable here.
+        //
+        // Mapping each transport rather than one span from the lowest to the
+        // highest is the point: a hole between two of them is not the bus, and
+        // whatever sits in it is not the bus process's to reach. Transports come
+        // sorted, so one page is mapped once even though eight share it.
+        var mapped: UInt64 = 0
 
-            var page = bus.base & ~(Self.pageSize - 1)
-            let end  = bus.base &+ bus.size
+        for index in 0..<Kernel.platformInfo.virtioBus.count {
+            guard let slot = Kernel.platformInfo.virtioBus.transport(at: index),
+                  slot.end <= Self.maxPhysicalAddress
+            else { continue }
 
-            while page < end {
+            var page = slot.base & ~(Self.pageSize - 1)
+
+            while page < slot.end {
+                defer { page &+= Self.pageSize }
+
+                guard mapped == 0 || page > mapped else { continue }
+
                 try map(table: identityRootTable, virtual: page, physical: page, type: .device)
                 try map(
                     table   : kernelRootTable,
@@ -276,7 +292,7 @@ public struct VirtualMemoryManager: Loggable {
                     type    : .device
                 )
 
-                page &+= Self.pageSize
+                mapped = page
             }
         }
         

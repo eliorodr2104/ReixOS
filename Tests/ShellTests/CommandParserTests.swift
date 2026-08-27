@@ -47,7 +47,7 @@ struct CommandParserTests {
 
     @Test("a quoted argument comes back without its quotes")
     func oneArgument() {
-        let line = "process.spawn(\"Hello.elf\")"
+        let line = "process.spawn(\"Top.elf\")"
 
         guard case .success(let command) = parse(line) else {
             Issue.record("a well-formed line was refused")
@@ -56,7 +56,7 @@ struct CommandParserTests {
 
         #expect(text(command.verb, of: line) == "spawn")
         #expect(command.argumentCount == 1)
-        #expect(text(command.arguments[0], of: line) == "Hello.elf")
+        #expect(text(command.arguments[0], of: line) == "Top.elf")
     }
 
 
@@ -190,7 +190,7 @@ extension CommandParserTests {
 
     @Test("a bare verb still takes arguments")
     func bareVerbWithArguments() {
-        let line = "spawn(\"Hello.elf\")"
+        let line = "spawn(\"Top.elf\")"
 
         guard case .success(let command) = parse(line) else {
             Issue.record("a bare verb with an argument was refused")
@@ -200,7 +200,7 @@ extension CommandParserTests {
         #expect(command.receiver.count == 0)
         #expect(text(command.verb, of: line) == "spawn")
         #expect(command.argumentCount == 1)
-        #expect(text(command.arguments[0], of: line) == "Hello.elf")
+        #expect(text(command.arguments[0], of: line) == "Top.elf")
     }
 
 

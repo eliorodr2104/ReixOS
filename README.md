@@ -96,7 +96,7 @@ Sources/ReixKernel/
 ├── Platform/ELFParser/  # ELF64 PT_LOAD loader
 └── Diagnostics/         # Subsystem-tagged kernel logging
 
-Sources/Userland/        # Init, Child, Name Server, Process Server (userland)
+Sources/Userland/        # Init, Name Server, Console Server, Terminal Server, Shell
 Sources/Reix/            # Userland SDK: syscall wrappers, user heap, service clients
 ```
 
@@ -141,7 +141,7 @@ The foundational subsystems are in place and working:
 **Userland Servers**
 * **Name Server** (userland) registers and looks up capabilities by name, so processes find each other without hardcoded handles.
 * **Process Server** (userland) spawns processes on behalf of others, gated by a `spawn` capability handed to it at boot by `Init`.
-* Thin client SDKs (`NameServerClient`, `ProcessServerClient`) wrap the raw IPC behind a typed, human-level API.
+* Thin client SDKs (`NameServerClient`) wrap the raw IPC behind a typed, human-level API.
 
 **Userland Heap**
 * A slab allocator over `sbrk`/`brk` (`Sources/Reix/Heap`) now backs `malloc`/`free`, replacing the old C stubs (currently being hardened).
@@ -208,10 +208,8 @@ On the serial console you'll see (trimmed):
 
 [ INIT  ] Hi, this is init process!
 [ INIT  ] Launching Name Server
-[ SERVE ] Hi, Process Server is running!
 [ NS    ] badge request: 1
-[ CHILD ] lookup OK, Have process server key
-[ CHILD ] Child Pid:  4
+[ SERVE ] Terminal Server running
 ```
 
 ---

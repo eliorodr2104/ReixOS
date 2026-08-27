@@ -15,7 +15,12 @@ public struct NameServerClient {
 
     /// Resolve a service to a capability, or nil if not registered.
     public func lookup(_ service: Services) -> UInt32? {
-        call(handle: endpoint, message: NameServerOperation.lookup.message(for: service)).grantedCap
+        guard case .success(let answer) = call(
+            handle : endpoint,
+            message: NameServerOperation.lookup.message(for: service)
+        ) else { return nil }
+
+        return answer.grantedCap
     }
 
     /// Register `cap` under `service` (one-way; the cap is granted to the NS).

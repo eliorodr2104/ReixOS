@@ -47,24 +47,24 @@
 # The configuration `make smoke` boots: machine default RAM, initrd from QEMU.
 # The required chain is one boot read end to end - the pre-Swift banner, the
 # subsystems in bring-up order, the handoff to EL0, init, and finally the
-# shared-memory round trip between the two children that says IPC works.
-default	-	qemu	-	verdict	30	[ reix ] ReixOS|[PPM ] Physical Page Manager ready.|[VMM ] Virtual Memory Manager ready.|[HEAP] Kernel heap ready.|[SCHD] Scheduler ready.|[SYS ] Syscall Handler ready.|[KERN] Kernel is running.|Handing control to user space.|[ INIT  ] Hi, this is init process!|[ NCHIL ] SHM OK	[ PANIC ]|REIX-PANIC|[ ERROR ]|SHM FAIL	-	pass
+# terminal server, which is the last thing init starts that announces itself.
+default	-	qemu	-	verdict	30	[ reix ] ReixOS|[PPM ] Physical Page Manager ready.|[VMM ] Virtual Memory Manager ready.|[HEAP] Kernel heap ready.|[SCHD] Scheduler ready.|[SYS ] Syscall Handler ready.|[KERN] Kernel is running.|Handing control to user space.|[ INIT  ] Hi, this is init process!|[ SERVE ] Terminal Server running	[ PANIC ]|REIX-PANIC|[ ERROR ]	-	pass
 
 # The 4 MiB floor the project targets, i.e. `make smoke-4m`. `embedded` is not a
 # preference here: see dtb-squeeze below. The reclaim line is required only on
 # this row, because at 4 MiB giving the device tree's megabyte back to the page
 # manager is what makes the machine fit rather than a nicety.
-mem-4m	4M	embedded	-	verdict	30	[ reix ] ReixOS|[PPM ] Physical Page Manager ready.|Device tree reclaimed: 1024 KiB.|[VMM ] Virtual Memory Manager ready.|[HEAP] Kernel heap ready.|[SCHD] Scheduler ready.|[SYS ] Syscall Handler ready.|[KERN] Kernel is running.|Handing control to user space.|[ INIT  ] Hi, this is init process!|[ NCHIL ] SHM OK	[ PANIC ]|REIX-PANIC|[ ERROR ]|SHM FAIL	-	pass
+mem-4m	4M	embedded	-	verdict	30	[ reix ] ReixOS|[PPM ] Physical Page Manager ready.|Device tree reclaimed: 1024 KiB.|[VMM ] Virtual Memory Manager ready.|[HEAP] Kernel heap ready.|[SCHD] Scheduler ready.|[SYS ] Syscall Handler ready.|[KERN] Kernel is running.|Handing control to user space.|[ INIT  ] Hi, this is init process!|[ SERVE ] Terminal Server running	[ PANIC ]|REIX-PANIC|[ ERROR ]	-	pass
 
 # The embedded initrd on its own, at default RAM: it isolates the `.initrd`
 # section path from the 4 MiB layout, so a break in one of the two says which.
-embedded-initrd	-	embedded	-	verdict	30	[ reix ] ReixOS|[PPM ] Physical Page Manager ready.|[VMM ] Virtual Memory Manager ready.|[HEAP] Kernel heap ready.|[SCHD] Scheduler ready.|[SYS ] Syscall Handler ready.|[KERN] Kernel is running.|Handing control to user space.|[ INIT  ] Hi, this is init process!|[ NCHIL ] SHM OK	[ PANIC ]|REIX-PANIC|[ ERROR ]|SHM FAIL	-	pass
+embedded-initrd	-	embedded	-	verdict	30	[ reix ] ReixOS|[PPM ] Physical Page Manager ready.|[VMM ] Virtual Memory Manager ready.|[HEAP] Kernel heap ready.|[SCHD] Scheduler ready.|[SYS ] Syscall Handler ready.|[KERN] Kernel is running.|Handing control to user space.|[ INIT  ] Hi, this is init process!|[ SERVE ] Terminal Server running	[ PANIC ]|REIX-PANIC|[ ERROR ]	-	pass
 
 # A machine with no PMUv3 block. The PMUVer gate is supposed to make profiling
 # optional, so the boot has to reach the same end state with the counters left
 # alone; the forbidden line is the one the PMU prints when it does come up, and
 # its absence is what says the gate closed instead of the boot getting lucky.
-no-pmu	-	qemu	-cpu cortex-a53,pmu=off	verdict	30	[ reix ] ReixOS|[PPM ] Physical Page Manager ready.|[VMM ] Virtual Memory Manager ready.|[HEAP] Kernel heap ready.|[SCHD] Scheduler ready.|[SYS ] Syscall Handler ready.|[KERN] Kernel is running.|Handing control to user space.|[ INIT  ] Hi, this is init process!|[ NCHIL ] SHM OK	[ PANIC ]|REIX-PANIC|[ ERROR ]|SHM FAIL|cycle counter on	-	pass
+no-pmu	-	qemu	-cpu cortex-a53,pmu=off	verdict	30	[ reix ] ReixOS|[PPM ] Physical Page Manager ready.|[VMM ] Virtual Memory Manager ready.|[HEAP] Kernel heap ready.|[SCHD] Scheduler ready.|[SYS ] Syscall Handler ready.|[KERN] Kernel is running.|Handing control to user space.|[ INIT  ] Hi, this is init process!|[ SERVE ] Terminal Server running	[ PANIC ]|REIX-PANIC|[ ERROR ]|cycle counter on	-	pass
 
 # The guard on smoke-4m's coupling: at 4 MiB, MEM and INITRD_MODE are one knob
 # and not two, because QEMU drops an -initrd halfway up RAM and then 2 MiB-aligns
@@ -76,11 +76,25 @@ no-pmu	-	qemu	-cpu cortex-a53,pmu=off	verdict	30	[ reix ] ReixOS|[PPM ] Physical
 # the guest booted all the way through on `qemu` at 4 MiB, INITRD_MODE=embedded
 # stopped being load-bearing, and the coupling can be relaxed - in `smoke-4m` and
 # `run-4m` in the Makefile, and in the mem-4m row above.
-dtb-squeeze	4M	qemu	-	verdict	15	Not enough space for DTB after kernel/initrd	[ NCHIL ] SHM OK	-	pass
+dtb-squeeze	4M	qemu	-	verdict	15	Not enough space for DTB after kernel/initrd	[ SERVE ] Terminal Server running	-	pass
 
 # The kernel's own account of the boot, cross-checked against the console's.
 # Init dumps the trace ring ~800 ms after the children are done, which is later
 # than the success marker, hence `window`; the post-check then decodes the same
 # log with `swift package reix trace --boot` and asserts all eleven boot phases
 # come out in TraceBootPhase order.
-trace-boot	-	qemu	-	window	12	[ reix ] ReixOS|[PPM ] Physical Page Manager ready.|[VMM ] Virtual Memory Manager ready.|[HEAP] Kernel heap ready.|[SCHD] Scheduler ready.|[SYS ] Syscall Handler ready.|[KERN] Kernel is running.|Handing control to user space.|[ INIT  ] Hi, this is init process!|[ NCHIL ] SHM OK|[TRACE] begin v=2|[TRACE] end	[ PANIC ]|REIX-PANIC|[ ERROR ]|SHM FAIL	trace-boot	skip-if:no-host-swift
+trace-boot	-	qemu	-	window	12	[ reix ] ReixOS|[PPM ] Physical Page Manager ready.|[VMM ] Virtual Memory Manager ready.|[HEAP] Kernel heap ready.|[SCHD] Scheduler ready.|[SYS ] Syscall Handler ready.|[KERN] Kernel is running.|Handing control to user space.|[ INIT  ] Hi, this is init process!|[TRACE] begin v=2|[TRACE] end|[ SERVE ] Terminal Server running	[ PANIC ]|REIX-PANIC|[ ERROR ]	trace-boot	skip-if:no-host-swift
+
+# The disk, from the bus to a driver that serves it. The walker reads a device id
+# off a transport, carves the window and the line for it, starts a driver, and
+# then checks the sectors while it is still the only process that can reach them.
+# Every line is printed by a different process, and the order they appear in is
+# the order the authority travelled.
+#
+# `window` and not `verdict` because all of it happens after the marker a verdict
+# row stops on. `post=dma-barriers` reads the virtqueue's barriers back out of the
+# linked image, which is the only check a barrier can be given.
+
+disk	-	qemu	-	window	20	[ BUS   ] slot 31 version 1  block|[ DISK  ] serving 32768 sectors of 512 bytes|[ BUS   ] disk ready, 32768 sectors|[ BUS   ] two sectors read, one past the end refused|[ BUS   ] read 8 sectors in one request|[ INIT  ] the disk is held	[ PANIC ]|REIX-PANIC|[ ERROR ]|no virtio bus on this machine|no block device|its line is taken|the device did not answer in time|the device asked to be reset|completed more than was asked of it|finished a chain that was never submitted|out of service|refused to come up|sector 0 unreadable|past the end of the disk was read|would not start|would not attach|came up without an endpoint	dma-barriers	pass
+
+disk-4m	4M	embedded	-	window	20	[ DISK  ] serving 32768 sectors of 512 bytes|[ INIT  ] the disk is held	[ PANIC ]|REIX-PANIC|[ ERROR ]|no virtio bus on this machine|no block device|its line is taken|the device did not answer in time|the device asked to be reset|completed more than was asked of it|finished a chain that was never submitted|out of service|refused to come up|sector 0 unreadable|past the end of the disk was read|would not start|would not attach|came up without an endpoint	-	pass

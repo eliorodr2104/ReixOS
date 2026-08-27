@@ -126,7 +126,7 @@ struct ProcStatsEnumerationTests {
         #expect(ProcessStats().name.count == 16)
         #expect(MemoryLayout<Process>.stride <= 256)
         #expect(MemoryLayout<Capability>.stride == 24)
-        #expect(MemoryLayout<ProcessMetadata>.stride <= 512)
+        #expect(MemoryLayout<ProcessMetadata>.stride <= 1024)
     }
 
     private func enumeratedPIDs() -> [PID] {

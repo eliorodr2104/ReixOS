@@ -122,27 +122,32 @@ struct BucketsHeapTests {
     }
 
 
-    @Test("a ProcessMetadata block lands in the 512-byte bucket")
+    @Test("a ProcessMetadata block lands in the 1024-byte bucket")
     func processMetadataBucket() {
         withHostHeap(pages: 32) { ram, heap in
-            // The one heap object allocated per process, and the reason the bucket
-            // exists: 392 bytes of caps table plus its cold fields.
+            // The one heap object allocated per process, and the reason the
+            // bucket exists: 768 bytes of caps table plus its cold fields.
+            //
+            // It used to fit in 512 with sixteen capability slots, and at 496
+            // of 512 it was one field from not fitting. Thirty-two slots put it
+            // in the next bucket up, which is the price of a system where a view
+            // of the disk is a capability like any other.
             let stride = MemoryLayout<ProcessMetadata>.stride
-            #expect(stride > 256)
-            #expect(stride <= 512)
+            #expect(stride > 512)
+            #expect(stride <= 1024)
 
             let first  = UnsafeMutableRawPointer(heap.kmalloc(ProcessMetadata.self))
             let second = UnsafeMutableRawPointer(heap.kmalloc(ProcessMetadata.self))
 
-            #expect(shift(of: first,  in: ram) == 9)
-            #expect(shift(of: second, in: ram) == 9)
+            #expect(shift(of: first,  in: ram) == 10)
+            #expect(shift(of: second, in: ram) == 10)
             #expect(page(of: second) == page(of: first))
 
-            // Eight blocks a page at this size, so two out leaves six free and the
-            // second one back leaves seven, with the page still the heap's.
-            #expect(frame(of: first, in: ram).heapFreeCount == 6)
+            // Four blocks a page at this size, so two out leaves two free and the
+            // second one back leaves three, with the page still the heap's.
+            #expect(frame(of: first, in: ram).heapFreeCount == 2)
             heap.kfree(second)
-            #expect(frame(of: first, in: ram).heapFreeCount == 7)
+            #expect(frame(of: first, in: ram).heapFreeCount == 3)
             #expect(frame(of: first, in: ram).refCount      == 1)
         }
     }

@@ -30,7 +30,7 @@ public struct IdentityAliveSyscall: SyscallProvider {
         frame  : UnsafeMutablePointer<Arch.TrapFrame>,
         context: SyscallContext
     ) {
-        let identity = Badge(truncatingIfNeeded: frame.pointee.x0)
+        let identity = Identity(truncatingIfNeeded: frame.pointee.x0)
 
         frame.pointee.x0 = context.processManager.pointee.isAlive(identity: identity) ? 1 : 0
     }

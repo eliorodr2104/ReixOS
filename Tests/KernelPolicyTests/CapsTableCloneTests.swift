@@ -202,7 +202,11 @@ struct CapsTableCloneTests {
         withForkFixture(endpoints: 1) { ipc, parent, child, endpoints in
             let endpoint = endpoints[0]
 
-            for badge in 0..<16 {
+            // However wide the table is. Writing the number here twice is how
+            // this test stopped being about a full table the day the table grew.
+            let slots = parent.pointee.capsTable.caps.count
+
+            for badge in 0..<slots {
                 let installed = parent.pointee.capsTable.install(
                     capability(to: endpoint, badge: UInt32(badge), rights: [.send])
                 )
@@ -213,10 +217,10 @@ struct CapsTableCloneTests {
             ipc.pointee.cloneCapsTable(from: parent, to: child)
 
             #expect(!child.pointee.capsTable.hasFreeSlot())
-            for slot in 0..<16 {
+            for slot in 0..<slots {
                 #expect(child.pointee.capsTable.resolve(UInt32(slot)) != nil)
             }
-            #expect(endpoint.pointee.references == 16)
+            #expect(endpoint.pointee.references == UInt32(slots))
         }
     }
 }

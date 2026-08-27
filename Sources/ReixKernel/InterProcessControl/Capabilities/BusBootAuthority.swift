@@ -11,12 +11,12 @@ import ReixABI
 ///
 /// One capability for the whole of it, because the kernel has no way to tell one
 /// transport from another and no business trying. What it knows is what the blob
-/// said: a span of registers and a block of lines.
+/// said: a list of windows, and the line each one raises.
 enum BusBootAuthority {
 
     @discardableResult
     static func install(
-        bus  : VirtioBusInfo,
+        bus  : borrowing VirtioBusInfo,
         into caps: inout CapsTable,
         heap : UnsafeMutablePointer<KernelHeap>
     ) -> Bool {
@@ -25,21 +25,19 @@ enum BusBootAuthority {
 
         guard let authority = heap.pointee.kmallocOrNil(BusAuthority.self) else { return false }
 
-        authority.initialize(
-            to: BusAuthority(
-                base     : bus.base,
-                size     : bus.size,
-                firstLine: bus.firstLine,
-                lineCount: bus.lineCount
-            )
-        )
+        authority.initialize(to: BusAuthority(bus: copy bus))
 
         let installed = caps.install(
             at: BootCap.virtioBus.rawValue,
             Capability(
                 target: .bus(authority),
                 badge : Badge(0),
-                rights: [.grant, .derive, .read, .write]
+
+                // `.dma` because a transport is a thing that transfers, and the
+                // bus is where that authority enters the system. Which of its
+                // windows keeps it is decided further down, by whoever hands one
+                // to a driver.
+                rights: [.grant, .derive, .read, .write, .dma]
             )
         )
 

@@ -86,12 +86,7 @@ public struct ConsoleClient {
         )
         
 
-        let response = call(
-            handle : endpoint,
-            message: ConsoleOperation.flush.message()
-        )
-        
-        guard Self.isRegistered(response) else { return nil }
+        guard flushed() else { return nil }
     }
 
     /// Stages `byte` instead of pushing it alone, and only touches the ring
@@ -168,12 +163,7 @@ public struct ConsoleClient {
 
                 for _ in 0..<Self.flushAttempts {
 
-                    let response = call(
-                        handle : endpoint,
-                        message: ConsoleOperation.flush.message()
-                    )
-
-                    guard Self.isRegistered(response) else {
+                    guard flushed() else {
                         Self.fallback(pending, from: offset, count: count)
                         return
                     }
@@ -205,14 +195,7 @@ public struct ConsoleClient {
 
         for _ in 0..<Self.flushAttempts {
 
-            let response = call(
-                handle : endpoint,
-                message: ConsoleOperation.flush.message()
-            )
-
-            guard Self.isRegistered(response) else {
-                return .unregistered
-            }
+            guard flushed() else { return .unregistered }
 
             if ring.push(byte) { return .accepted }
         }
@@ -220,8 +203,23 @@ public struct ConsoleClient {
         return .backpressure
     }
 
-    private static func isRegistered(_ response: ReceivedMessage) -> Bool {
-        ConsoleStatus(rawValue: response.message.words[0]) == .registered
+    /// Asks the server to drain, and answers whether it still holds a ring for
+    /// this client.
+    ///
+    /// A call that did not happen answers `false`, which is the safe direction
+    /// and the honest one: a server that cannot be reached is not draining, so
+    /// waiting for room in the ring would be waiting for nobody. The caller
+    /// falls back to printing through the kernel.
+    private func flushed() -> Bool {
+
+        guard case .success(let response) = call(
+            handle : endpoint,
+            message: ConsoleOperation.flush.message()
+        ) else { return false }
+
+        guard response.message.tag.length >= 1 else { return false }
+
+        return ConsoleStatus(rawValue: response.message.words[0]) == .registered
     }
 
     /// Emits `pending[from..<count]` one byte at a time through the raw

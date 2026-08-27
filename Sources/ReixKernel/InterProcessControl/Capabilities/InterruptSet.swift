@@ -55,6 +55,18 @@ public struct InterruptSet: RXObject {
     /// be racing for the same device registers anyway.
     public var waiter: UnsafeMutablePointer<Process>?
 
+    /// The endpoint to wake when a line fires, if the holder asked for one.
+    ///
+    /// The alternative to `irqWait`, and the reason a driver can now wait for a
+    /// request and for its device in the same place. Nothing is queued here: the
+    /// event stays in `pending`, exactly as before, and this only says where to
+    /// go looking for somebody to tell.
+    ///
+    /// The set holds a reference on it, one way round on purpose: a bound
+    /// endpoint cannot be freed while the set that names it is alive, so the
+    /// back pointer on the endpoint is only ever read while the set exists.
+    public var notify: UnsafeMutablePointer<Endpoint>?
+
     public var references: UInt32
 
 
@@ -64,6 +76,7 @@ public struct InterruptSet: RXObject {
         self.pending    = 0
         self.masked     = 0
         self.waiter     = nil
+        self.notify     = nil
         self.references = 0
     }
 

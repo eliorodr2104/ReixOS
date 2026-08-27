@@ -193,8 +193,7 @@ private func help() {
     print("")
     print("  There is no way to interrupt a running program yet, so a program")
     print("  that does not end on its own holds the prompt until it does.")
-    print("  Hello.elf and Top.elf end. Child.elf and Child2.elf do not: they")
-    print("  are two halves of one test and wait on each other.")
+    print("  Top.elf ends on its own.")
     print("")
 }
 

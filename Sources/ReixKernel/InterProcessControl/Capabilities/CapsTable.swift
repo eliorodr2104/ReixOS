@@ -11,9 +11,17 @@ import ReixABI
 @frozen
 public struct CapsTable {
     
-    private(set) var caps: InlineArray = InlineArray<16, Capability?>(
+    /// Thirty-two, not sixteen.
+    ///
+    /// Sixteen was enough while a capability was a rare thing a process was
+    /// given at birth. It stopped being enough when a view of the disk became a
+    /// capability too: init alone holds a console, a name server, a spawner, a
+    /// device, a registrar, a profiler, a terminal, a bus, a container and an
+    /// endpoint per child, and the sixteenth grant was silently refused. The
+    /// cost is 384 more bytes per process, which the 4 MiB machine still fits.
+    private(set) var caps: InlineArray = InlineArray<32, Capability?>(
         repeating: nil
-    ) // (16 * 24) 384 Byte
+    ) // (32 * 24) 768 Byte
 
     private var counterElements: UInt = 0 // 8 Byte
     

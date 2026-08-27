@@ -5,9 +5,14 @@
 
 public struct CapRights: OptionSet {
 
-    public let rawValue: UInt8
+    /// Sixteen bits, of which eight are spoken for. It was eight, all spoken
+    /// for, which is why three of them below are shared between a memory
+    /// meaning and a profiling one. Widening it costs nothing: the word already
+    /// travelled as a `UInt32` in `CapGrant` and as a register in every syscall
+    /// that carries rights, and it was only this type that was narrow.
+    public let rawValue: UInt16
 
-    public init(rawValue: UInt8) {
+    public init(rawValue: UInt16) {
         self.rawValue = rawValue
     }
 
@@ -38,4 +43,20 @@ public struct CapRights: OptionSet {
     /// Every profiling category at once, which is what the boot profiler
     /// capability holds and what a tool spawned off it must be attenuated from.
     public static let profile = CapRights(rawValue: (1 << 5) | (1 << 6) | (1 << 7))
+
+
+    /// May turn a device window into a physical address, by minting a DMA
+    /// buffer through it.
+    ///
+    /// Held apart from `write` because they are not the same authority, even
+    /// though one used to imply the other here. Writing a device's registers
+    /// drives that device; a physical address, on a machine with nothing between
+    /// a device and memory, is the whole of RAM. Most devices never transfer on
+    /// their own - a UART does not - and a driver for one has no business
+    /// holding the second authority just because it holds the first.
+    ///
+    /// Whoever cuts the capability decides. A bus carries this and passes it to
+    /// every window it carves, and the process that hands a window to a driver
+    /// says then and there whether the driver gets it.
+    public static let dma = CapRights(rawValue: 1 << 8)
 }

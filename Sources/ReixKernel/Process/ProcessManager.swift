@@ -40,7 +40,31 @@ public struct ProcessManager: RXAllocatable, Loggable {
     /// badge, from a message carrying no principal at all. Counting separately
     /// from the PID is what keeps identities from aliasing if PIDs are ever
     /// reused, see `Process.identity`.
-    private var identityCounter: Badge = 1
+    private var identityCounter: Identity = 1
+
+
+    /// The next pid and the next identity, or nothing when there are no more.
+    ///
+    /// One place, because there were two and both did `+= 1` on a counter with a
+    /// top. Monotonic and never reused is the contract - see
+    /// `ProcessManagerError.identitiesExhausted` - so running out is a refusal
+    /// this has to be able to say, and the alternative was arithmetic that traps
+    /// half way through building a process.
+    ///
+    /// Nothing is consumed unless both are available, so a refusal here leaves
+    /// the counters exactly where it found them.
+    private mutating func nextIdentifiers() -> (pid: PID, identity: Identity)? {
+
+        guard pidCounter < PID.max, identityCounter < Identity.max else { return nil }
+
+        let pid      = pidCounter
+        let identity = identityCounter
+
+        pidCounter      += 1
+        identityCounter += 1
+
+        return (pid, identity)
+    }
 
     /// Root of the process tree, published once by `Kernel.jumpUserLand`.
     ///
@@ -167,11 +191,14 @@ public struct ProcessManager: RXAllocatable, Loggable {
                     throw .heapAllocationFailed
                 }
 
-                let pid = self.pidCounter
-                self.pidCounter += 1
+                guard let numbered = self.nextIdentifiers() else {
+                    heap.pointee.kfree(trapFramePtr)
+                    destroyPartialAddressSpace(&addressSpace)
+                    throw .identitiesExhausted
+                }
 
-                let identity = self.identityCounter
-                self.identityCounter += 1
+                let pid      = numbered.pid
+                let identity = numbered.identity
 
                 let initialBreak = (elf.loadEnd + UserSpaceLayout.pageSize - 1) & ~(UserSpaceLayout.pageSize - 1)
 
@@ -238,11 +265,14 @@ public struct ProcessManager: RXAllocatable, Loggable {
             throw .heapAllocationFailed
         }
 
-        let pid = self.pidCounter
-        self.pidCounter += 1
+        guard let numbered = self.nextIdentifiers() else {
+            heap.pointee.kfree(trapFramePtr)
+            destroyPartialAddressSpace(&addressSpace)
+            throw .identitiesExhausted
+        }
 
-        let identity = self.identityCounter
-        self.identityCounter += 1
+        let pid      = numbered.pid
+        let identity = numbered.identity
 
         guard let metadataPtr = makeMetadata(
             inheritingNameFrom: Arch.CPU.getCurrentProcess()?.pointee.metadata
@@ -534,6 +564,37 @@ public struct ProcessManager: RXAllocatable, Loggable {
         }
     }
 
+
+    /// Whether the principal `identity` names is still running.
+    ///
+    /// The one question a server keying state on a badge could not ask. It is
+    /// answerable at all only because identities are never reused within a
+    /// boot: a badge naming nothing that runs names nothing for the rest of the
+    /// boot, so `false` cannot go stale in the caller's hand.
+    ///
+    /// A zombie is dead here. Its address space is down and its capabilities are
+    /// released before it reaches the `terminated` list, so a server still
+    /// holding a window on its behalf is holding it for nobody. A corpse already
+    /// reaped is out of the tree entirely, which is the same answer by a
+    /// different road: absence is death.
+    public func isAlive(identity: Identity) -> Bool {
+
+        // Zero is the wire value for "no principal", so nothing is alive under
+        // it and no table can be swept by asking about it.
+        guard identity != 0 else { return false }
+
+        var alive = false
+
+        forEachProcess { process in
+            guard process.pointee.identity == identity else { return }
+            if case .terminated = process.pointee.status { return }
+
+            alive = true
+        }
+
+        return alive
+    }
+
     @inline(__always)
     @discardableResult
     static func registerForProcStats(_ process: UnsafeMutablePointer<Process>) -> Bool {
@@ -576,28 +637,51 @@ public struct ProcessManager: RXAllocatable, Loggable {
     }
 
 
+    /// Wakes everybody a dying process owed an answer to, and unhooks it from
+    /// whoever owes it one.
+    ///
+    /// **Every** caller, not just the one in `replyTo`. A server may now hold
+    /// several requests at once, and the ones it is not currently pointing at
+    /// are reachable only through their own `replyPartner` - so this walks the
+    /// tree, which is the one enumeration that sees a process wherever it is
+    /// parked. Missing them would leave them `.blockedOnReply` on a process that
+    /// no longer exists, which is a hang that outlives the thing that caused it.
+    /// Wakes everybody a dying process owed an answer to, and unhooks it from
+    /// whoever owes it one.
+    ///
+    /// **Every** caller, not just one. A server may now hold several requests at
+    /// once, threaded through its callers' own `nextWaiter` links, and leaving
+    /// any of them behind would leave it `.blockedOnReply` on a process that no
+    /// longer exists - a hang outliving the thing that caused it.
+    ///
+    /// The list is walked and cleared as it goes, because each node's link is
+    /// read before that node is let go of.
     private func severReplyLinks(
         of process: UnsafeMutablePointer<Process>,
         _  context: SyscallContext
     ) {
 
-        if let waiter = process.pointee.replyTo {
-            process.pointee.replyTo = nil
+        var waiting = process.pointee.replyTo
 
-            if waiter.pointee.replyPartner == process {
-                waiter.pointee.replyPartner = nil
-            }
+        while let waiter = waiting {
+            waiting = waiter.pointee.nextWaiter
 
+            waiter.pointee.nextWaiter          = nil
             waiter.pointee.context?.pointee.x0 = IPCStatus.peerDied.rawValue
+
+            // `resume` leaves `.blockedOnReply`, which is where the link to this
+            // dying process lived, so waking it is what forgets it.
             context.scheduler.pointee.resume(waiter)
         }
 
-        if let server = process.pointee.replyPartner {
-            process.pointee.replyPartner = nil
+        process.pointee.replyTo         = nil
+        process.pointee.deferredReplies = 0
 
-            if server.pointee.replyTo == process {
-                server.pointee.replyTo = nil
-            }
+        // And the other direction: this process was itself waiting on somebody,
+        // so it has to come out of that server's list rather than be left in it
+        // as a pointer to memory about to be freed.
+        if let server = process.pointee.replyPartner {
+            RendezvousIPC.unlinkWaiter(process, from: server)
         }
     }
 
@@ -771,7 +855,7 @@ public struct ProcessManager: RXAllocatable, Loggable {
     @inline(never)
     private mutating func makeProcess(
         pid         : PID,
-        identity    : Badge,
+        identity    : Identity,
         addressSpace: AddressSpace,
         context     : UnsafeMutablePointer<Arch.TrapFrame>,
         metadata    : UnsafeMutablePointer<ProcessMetadata>

@@ -22,6 +22,21 @@ public enum ProcessManagerError: KernelDiagnostic {
     /// diagnosis. Spawning is the caller's request, so it fails alone.
     case heapAllocationFailed
 
+    /// Every pid or every identity this boot had to hand has been used.
+    ///
+    /// Neither counter is ever reused inside a boot, on purpose: an identity
+    /// handed out twice is two processes every server keying state on a badge
+    /// cannot tell apart, and a pid handed out twice is a `reapChild` that comes
+    /// back for the wrong corpse. So the two are monotonic, and monotonic means
+    /// finite - the end of them is a spawn that is refused, not a counter that
+    /// wraps round to numbers somebody is still holding.
+    ///
+    /// Four thousand million spawns for the identity, which is the narrower of
+    /// the two. Unreachable on this machine rather than merely unlikely, and
+    /// that is exactly why it is a named refusal: the alternative is arithmetic
+    /// that traps in the middle of building a process.
+    case identitiesExhausted
+
     public var description: StaticString {
         switch self {
             case .managerNotValid:
@@ -59,6 +74,9 @@ public enum ProcessManagerError: KernelDiagnostic {
 
             case .heapAllocationFailed:
                 "Process Manager Error: kernel heap exhausted while building the process."
+
+            case .identitiesExhausted:
+                "Process Manager Error: no process identity left to hand out this boot."
 
         }
     }

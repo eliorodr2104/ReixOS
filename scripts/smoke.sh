@@ -44,11 +44,12 @@ LOG="${LOG:-$OUT/smoke.log}"
 TIMEOUT="${TIMEOUT:-30}"
 POLL_INTERVAL=0.5
 
-# The lines a boot can end on. Child2 prints one of the first two once its
-# shared-memory IPC round-trip resolves; a panic always opens with the
-# banner below regardless of which trap fired, nested fault or not.
-SUCCESS_MARKER='[ NCHIL ] SHM OK'
-FAIL_REGEX='SHM FAIL|REIX-PANIC'
+# The lines a boot can end on. The terminal server prints the first once it holds
+# the serial window and its interrupt line, which is as far into userland as a
+# boot with nobody at the keyboard goes; a panic always opens with the banner
+# below regardless of which trap fired, nested fault or not.
+SUCCESS_MARKER='[ SERVE ] Terminal Server running'
+FAIL_REGEX='REIX-PANIC'
 
 qemu_pid=
 

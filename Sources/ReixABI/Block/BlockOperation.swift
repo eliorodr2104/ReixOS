@@ -78,10 +78,18 @@ public enum BlockOperation: UInt32, IPCLabel {
     
     
     private static let writingBit: UInt32 = 0x8000_0000
-    
-    /// Which bit of the sector-size word says a write is not on the medium until
-    /// a flush says so.
-    private static let needsFlushBit: UInt32 = 0x8000_0000
+
+    /// How much of the sector-size word is the sector size.
+    ///
+    /// The top two bits are what the device says a completed write has achieved.
+    /// One bit was enough while there were two answers, and one bit is exactly
+    /// what made the third answer unsayable: a device that had promised nothing
+    /// arrived here as the cheaper of the two promises, which is the strongest
+    /// claim on the list. Thirty bits still hold every sector size a disk has,
+    /// and the four words of a geometry answer were already spoken for.
+    private static let sectorSizeMask: UInt32 = 0x3FFF_FFFF
+
+    private static let durabilityShift: UInt32 = 30
     
     /// A request with nothing to say beyond which one it is.
     public var request: Message {
@@ -172,20 +180,25 @@ public enum BlockOperation: UInt32, IPCLabel {
     /// No run limit here. How many sectors fit in one call is a fact about the
     /// window the *client* attached, so the client already knows it and asking
     /// would be asking somebody else about your own page.
+    ///
+    /// No default for `durability`. Every caller of this says what a completed
+    /// write on its device has achieved, out loud, because the one thing a
+    /// default would have been is the answer for a device nobody asked.
     public static func geometry(
         sectorSize : UInt32,
         sectorCount: UInt64,
-        durability : BlockDurability = .onFlush
+        durability : BlockDurability
     ) -> Message {
 
         var words = InlineArray<4, UInt32>(repeating: 0)
         words[0] = BlockStatus.ok.rawValue
 
-        // The sector size and one fact about what a write means, in one word.
-        // A sector size is a power of two and a small one - four thousand and
-        // ninety-six is a large disk's answer - so the top bit was never going
-        // to be part of a size, and the four words were already spoken for.
-        words[1] = sectorSize | (durability == .onFlush ? Self.needsFlushBit : 0)
+        // A sector size that does not fit in thirty bits is sent as zero, which
+        // every reader of this answer already refuses. Masking it instead would
+        // hand back a size the device never said.
+        let size = sectorSize <= Self.sectorSizeMask ? sectorSize : 0
+
+        words[1] = size | (durability.rawValue << Self.durabilityShift)
 
         words[2] = UInt32(truncatingIfNeeded: sectorCount)
         words[3] = UInt32(truncatingIfNeeded: sectorCount >> 32)
@@ -200,9 +213,13 @@ public enum BlockOperation: UInt32, IPCLabel {
         durability : BlockDurability
     ) {
         (
-            UInt64(message.words[1] & ~Self.needsFlushBit),
+            UInt64(message.words[1] & Self.sectorSizeMask),
             UInt64(message.words[2]) | (UInt64(message.words[3]) << 32),
-            message.words[1] & Self.needsFlushBit != 0 ? .onFlush : .onCompletion
+            // Three of the four patterns are answers and the fourth is reserved.
+            // A reserved pattern is a claim written by a build this one cannot
+            // read, and the safe reading of a claim you cannot read is that
+            // there is none.
+            BlockDurability(rawValue: message.words[1] >> Self.durabilityShift) ?? .unknown
         )
     }
 
@@ -223,16 +240,16 @@ public enum BlockOperation: UInt32, IPCLabel {
 
         /// Unbadged: the disk. Its holder may claim the volume and, having
         /// claimed it, write it.
-        public static let disk: UInt32 = 0
+        public static let disk: UInt64 = 0
 
         /// May look, never touch, and only at a disk nobody is holding.
-        public static let readOnly: UInt32 = 1
+        public static let readOnly: UInt64 = 1
 
         /// May say that the holder of the volume is gone, and nothing else at
         /// all: a warden cannot read a byte, write one, or take the volume. It
         /// is the authority to end a claim, held apart from the disk on purpose,
         /// because the process that knows a mount has died is not the process
         /// that was doing the mounting.
-        public static let warden: UInt32 = 2
+        public static let warden: UInt64 = 2
     }
 }

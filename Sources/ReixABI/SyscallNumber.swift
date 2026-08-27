@@ -45,6 +45,13 @@ public enum SyscallNumber: UInt64 {
     // SMH
     case shmCreate
     case shmMap
+
+    /// How many pages a shared region really holds.
+    ///
+    /// A server maps a window a client granted it and has, until this, only the
+    /// client's word for how big it is. The kernel knows, because it made the
+    /// region, so the server can stop believing the message and ask.
+    case shmPages
     
     
     // Device
@@ -80,4 +87,25 @@ public enum SyscallNumber: UInt64 {
     // Buses: carving a window or a line out of one
     case busDeriveDevice
     case busDeriveInterrupt
+
+
+    // The clock: anybody may read it, only an authority may set it
+    case clockNow
+    case clockSet
+
+
+    // Waiting for a device and a request in the same place
+    case irqBind
+
+
+    // Stopping the machine
+    case powerOff
+
+
+    /// Whether a principal is still running.
+    ///
+    /// A server keeps per-client state keyed on the identity every message
+    /// carries, and nothing told it when to let that state go. This is the
+    /// question it could not ask.
+    case identityAlive
 }

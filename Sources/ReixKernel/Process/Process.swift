@@ -89,8 +89,47 @@ public struct Process: RXEntry {
     /// by `ProcessManager.spawnProcess`; any access before that point is a
     /// programming error and crashes deterministically.
     public var metadata    : UnsafeMutablePointer<ProcessMetadata>!   // 8 Byte
+    /// The newest caller waiting for this process to answer.
+    ///
+    /// One pointer, and it used to be the *only* record of a waiting caller: a
+    /// server that took a second request before answering the first broke the
+    /// first, which is why nothing in this system could ever have two requests
+    /// in flight. Now it is the newest of possibly several, and the others are
+    /// found the other way round, through their own `replyPartner`.
     public var replyTo     : UnsafeMutablePointer<Self>? = nil        // 8 Byte
-    public var replyPartner: UnsafeMutablePointer<Self>? = nil
+
+    /// The process this one is waiting on for an answer, read off its status.
+    ///
+    /// Derived rather than stored, and that is the point: a process is waiting on
+    /// somebody exactly when it is `.blockedOnReply`, so the two facts are one
+    /// word and cannot contradict each other. Waking a caller clears it by
+    /// clearing the status, which is what every wake already did.
+    public var replyPartner: UnsafeMutablePointer<Self>? {
+        if case .blockedOnReply(let server) = status { return server }
+        return nil
+    }
+
+    /// The next caller waiting on the same server as this one, older than this.
+    ///
+    /// The callers of one server are a list threaded through the callers
+    /// themselves: the server holds the newest in `replyTo` and each waiter
+    /// points at the one behind it. So a server that holds eight requests costs
+    /// nothing but the eight pointers its own callers were already carrying, and
+    /// no process pays for a table it never uses.
+    ///
+    /// The other shape considered was a walk of the process tree, looking for
+    /// whoever points here. It works, and it depends on the tree being built and
+    /// on every waiter being reachable from init - a dependency that has no place
+    /// in the path that wakes a caller whose server has died.
+    public var nextWaiter: UnsafeMutablePointer<Self>? = nil
+
+    /// How many callers are parked on this process besides `replyTo`.
+    ///
+    /// The length of that list, kept rather than counted because an unbounded
+    /// number of parked callers is a queue with no backpressure. A server that
+    /// takes requests and never answers them would hold callers for ever, and
+    /// this is what makes that a bounded, visible failure instead.
+    public var deferredReplies: UInt8 = 0
 
     @usableFromInline
     internal var procStatsParent: UnsafeMutablePointer<Self>? = nil
@@ -104,7 +143,7 @@ public struct Process: RXEntry {
     @usableFromInline
     internal var procStatsHeight: UInt8 = 1
 
-    public let identity      : Badge                                  // 4 Byte
+    public let identity      : Identity                               // 4 Byte
     public var depth         : UInt8                                  // 1 Byte
     public var type          : ProcessType                            // 1 Byte
 
@@ -125,7 +164,7 @@ public struct Process: RXEntry {
 
     init(
         pid           : PID,
-        identity      : Badge,
+        identity      : Identity,
         status        : ProcessStatus    = .new,
         addressSpace  : AddressSpace,
         

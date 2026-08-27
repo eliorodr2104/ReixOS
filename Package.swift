@@ -48,16 +48,14 @@ let package = Package(
         .library(name: "Reix",    type: .static, targets: ["Reix"]),
         .library(name: "Kernel",  type: .static, targets: ["Kernel"]),
         .library(name: "Init",          type: .static, targets: ["Init"]),
-        .library(name: "Child",         type: .static, targets: ["Child"]),
-        .library(name: "Child2",        type: .static, targets: ["Child2"]),
         .library(name: "NameServer",    type: .static, targets: ["NameServer"]),
-        .library(name: "ProcessServer", type: .static, targets: ["ProcessServer"]),
         .library(name: "ConsoleServer", type: .static, targets: ["ConsoleServer"]),
         .library(name: "Top",           type: .static, targets: ["Top"]),
         .library(name: "Shell",         type: .static, targets: ["Shell"]),
-        .library(name: "Hello",         type: .static, targets: ["Hello"]),
         .library(name: "ShellLanguage", type: .static, targets: ["ShellLanguage"]),
         .library(name: "TerminalServer", type: .static, targets: ["TerminalServer"]),
+        .library(name: "VirtioBus",     type: .static, targets: ["VirtioBus"]),
+        .library(name: "BlockServer",   type: .static, targets: ["BlockServer"]),
     ],
     targets: [
         // Shared ABI: IPC types + syscall numbers. No dependencies.
@@ -76,10 +74,13 @@ let package = Package(
         ),
 
         // Userland apps: one ELF each, depend only on Reix.
-        app("Init", bareMetal), app("Child", bareMetal), app("Child2", bareMetal),
-        app("NameServer", bareMetal), app("ProcessServer", bareMetal), app("ConsoleServer", bareMetal),
-        app("Top", bareMetal), app("Hello", bareMetal), app("TerminalServer", bareMetal),
+        app("Init", bareMetal),
+        app("NameServer", bareMetal), app("ConsoleServer", bareMetal),
+        app("Top", bareMetal), app("TerminalServer", bareMetal),
 
+        // The two processes the disk needs: the walker that reads device ids
+        // off the bus, and the driver it starts for what it found.
+        app("VirtioBus", bareMetal), app("BlockServer", bareMetal),
         // The command language, with no dependency on the SDK on purpose: it is
         // a parser over bytes, and keeping it free of the bare-metal runtime is
         // what lets a host suite exercise it.
@@ -88,6 +89,7 @@ let package = Package(
             path: "Sources/ShellLanguage",
             swiftSettings: bareMetal
         ),
+
         .target(
             name: "Shell",
             dependencies: ["Reix", "ShellLanguage"],

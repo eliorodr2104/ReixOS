@@ -61,4 +61,32 @@ public enum BlockStatus: UInt32 {
     /// refused this way needs is a different handle, not a different moment and
     /// not a narrower request.
     case notAuthorised
+
+    /// The device cannot say what a completed write has achieved, so this
+    /// request is one nothing on it can be built on.
+    ///
+    /// The answer to a `flush` on a device that never negotiated a way to empty
+    /// a cache. It used to be `ok`, and that was the whole bug: a barrier that
+    /// answers `ok` because there is nothing to ask is indistinguishable from a
+    /// barrier that answers `ok` because nobody knows what to ask, and the
+    /// second one is a file system's ordering rule turned into a wish.
+    ///
+    /// Not a refusal that waiting or a narrower request changes. It is a fact
+    /// about the device, so it is the same answer every time until the device is
+    /// a different device.
+    case durabilityUnknown
+
+    /// A request under a name that already has an answer coming.
+    ///
+    /// A tag is how a client names a transfer it will collect later, and the
+    /// server holds one cell per name for the answer to go in. A second request
+    /// under the same name has nowhere for its answer to be filed, so it is
+    /// refused before the device is told anything.
+    ///
+    /// This is also the whole of the local throttle. A client that stops
+    /// collecting fills its own names and then meets this on everything it asks
+    /// for, which costs the disk nothing and costs every other client nothing.
+    /// Distinct from `queueFull`, which is the shared queue being busy and is
+    /// answered by asking again: this one is answered by collecting.
+    case duplicateTag
 }

@@ -47,6 +47,18 @@ OUT         := .reix
 QEMU        ?= qemu-system-aarch64
 QEMU_FLAGS  := -machine virt,gic-version=2 -cpu cortex-a53,pmu=on -nographic
 
+# The disk. `virtio-blk-device` binds to one of the machine's virtio-mmio slots,
+# which is the transport the block driver discovers by probing; without it the
+# thirty-two slots are all empty and the kernel simply finds no block device.
+#
+# Created when missing and never migrated. The image survives across runs, so a
+# volume formatted by one boot is mounted by the next; `make clean-image` takes
+# it with $(OUT), which is how a run starts from a blank disk on purpose.
+DISK        := $(OUT)/disk.img
+DISK_SIZE   := 16M
+QEMU_DISK    = -drive file=$(DISK),if=none,format=raw,id=reixdisk \
+               -device virtio-blk-device,drive=reixdisk
+
 # Guest RAM. Empty means the machine default, which is what every invocation
 # here used before this knob existed; `make run MEM=8M` overrides it.
 MEM         ?=
@@ -73,7 +85,7 @@ QEMU_INITRD  = $(if $(filter embedded,$(INITRD_MODE)),,-initrd $(OUT)/initrd.tar
 # instead and get working code intelligence.
 export FREESTANDING := 1
 
-.PHONY: all build image release run run-release run-4m smoke smoke-4m test host-test vm-test prune-dups clean-image clean
+.PHONY: all build image release run run-release run-4m smoke smoke-4m test host-test vm-test disk prune-dups clean-image clean
 
 all: image
 
@@ -90,9 +102,10 @@ build: image
 # stale copy is indistinguishable from a real one when reading the output
 # directory by hand, and one of them was read as current during an audit.
 #
-# The pattern requires a space before the digit on purpose: `Child2.elf` and
-# `Child2.build` are real targets and a broader glob would delete them. `find`
-# rather than a shell glob because a non-matching glob aborts the recipe.
+# The pattern requires a space before the digit on purpose: a name that ends in a
+# digit, like `Top2.elf` would, is a real target and a broader glob would delete
+# it. `find` rather than a shell glob because a non-matching glob aborts the
+# recipe.
 #
 # Two shapes, and both are needed. Files may or may not have an extension
 # (`debug 2.yaml`, but also `plugins 2`), so the name pattern cannot require a
@@ -115,17 +128,23 @@ release: prune-dups
 	$(SWIFT) package $(PLUGIN) --release
 
 # Boot in QEMU (Ctrl-A X to quit). qemu runs here, not inside the plugin sandbox.
-run: image
-	$(QEMU) $(QEMU_FLAGS) $(QEMU_MEM) -kernel $(OUT)/kernel.bin $(QEMU_INITRD)
+run: image disk
+	$(QEMU) $(QEMU_FLAGS) $(QEMU_MEM) $(QEMU_DISK) -kernel $(OUT)/kernel.bin $(QEMU_INITRD)
 
-run-release: release
-	$(QEMU) $(QEMU_FLAGS) $(QEMU_MEM) -kernel $(OUT)/kernel.bin $(QEMU_INITRD)
+run-release: release disk
+	$(QEMU) $(QEMU_FLAGS) $(QEMU_MEM) $(QEMU_DISK) -kernel $(OUT)/kernel.bin $(QEMU_INITRD)
 
 # Headless boot smoke test: no human at the serial port, script watches the
 # log for the SHM-OK line (success) or a panic/SHM-FAIL (failure) instead.
-smoke: image
-	QEMU=$(QEMU) QEMU_FLAGS='$(QEMU_FLAGS)' MEM='$(MEM)' \
+smoke: image disk
+	QEMU=$(QEMU) QEMU_FLAGS='$(QEMU_FLAGS) $(QEMU_DISK)' MEM='$(MEM)' \
 	    INITRD_MODE='$(INITRD_MODE)' OUT=$(OUT) scripts/smoke.sh
+
+disk: $(DISK)
+
+$(DISK):
+	@mkdir -p $(OUT)
+	qemu-img create -f raw $(DISK) $(DISK_SIZE) >/dev/null
 
 # The 4 MiB floor the project targets, as a target rather than a hand-typed
 # invocation. Both variables are load-bearing; see INITRD_MODE above.
@@ -191,8 +210,8 @@ host-test: prune-dups
 # and a target-specific variable applies to a target's prerequisites too, so
 # clearing it would break the cross build. The one post-check that needs a host
 # toolchain clears it around its own `swift` call instead.
-vm-test: image
-	QEMU=$(QEMU) QEMU_FLAGS='$(QEMU_FLAGS)' SWIFT=$(SWIFT) OUT=$(OUT) \
+vm-test: image disk
+	QEMU=$(QEMU) QEMU_FLAGS='$(QEMU_FLAGS) $(QEMU_DISK)' SWIFT=$(SWIFT) OUT=$(OUT) \
 	    scripts/scenarios.sh
 
 clean-image:

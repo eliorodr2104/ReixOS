@@ -60,12 +60,22 @@ public struct InterruptDispatcher {
         set.pointee.masked  |= bit
         set.pointee.pending |= bit
 
+        // A driver waiting on an endpoint rather than on the line. Tried first
+        // because a driver that bound its set did so precisely so it could be in
+        // one place for both its clients and its device, and it will not be in
+        // `irqWait` at all.
+        if Kernel.ipc.pointee.signal(set) { return true }
+
         guard let waiter = set.pointee.waiter else { return true }
 
         // The value the parked `irqWait` returns, written where every blocked
         // syscall's answer is written. Collected here rather than left for the
         // waiter to read, so the bits cannot be overwritten by a second line
         // firing between the wake and the return.
+        // The deadline goes with the wake. One left armed would fire later, on a
+        // process that is by then doing something else entirely.
+        IrqWaitSyscall.cancelDeadline(on: waiter)
+
         waiter.pointee.context?.pointee.x0 = UInt64(set.pointee.pending)
 
         set.pointee.pending = 0
