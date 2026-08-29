@@ -30,9 +30,21 @@ struct ReixPlugin: CommandPlugin {
 
     let triple = "aarch64-none-none-elf"
     let outputDir = ".reix"
-    let apps = ["Init", "NameServer", "ConsoleServer", "TerminalServer", "Top",
-                "Shell", "VirtioBus", "BlockServer", "FileSystemServer", "StorageCheck"]
-    
+    let apps = [
+        "Init",
+        "NameServer",
+        "ConsoleServer",
+        "SerialServer",
+        "InputServer",
+        "VTAdapter",
+        "Top",
+        "Shell",
+        "VirtioBus",
+        "BlockServer",
+        "FileSystemServer",
+        "StorageCheck"
+    ]
+
     let kernelNative = [
         "Sources/ReixKernel/Arch/aarch64/Boot/boot.S",
         "Sources/ReixKernel/Arch/aarch64/ContextSwitch/ContextSwitch.S",
@@ -235,7 +247,7 @@ struct ReixPlugin: CommandPlugin {
         try p.run()
         if !inheritIO { captured = pipe.fileHandleForReading.readDataToEndOfFile() }
         p.waitUntilExit()
-        
+
         if p.terminationStatus != 0 {
             let out = String(data: captured, encoding: .utf8) ?? ""
             throw ReixError.tool("\((tool as NSString).lastPathComponent) exit=\(p.terminationStatus)\n\(out)")

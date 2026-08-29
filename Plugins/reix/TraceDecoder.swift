@@ -172,12 +172,31 @@ enum TraceDecoder {
             return "\(fmt(micros(b.ts - a.ts, freq: block.freq)))us"
         }
         for group in groups {
-            let uart  = !group.duplicates.contains(7) ? group.points[7] : nil
-            let bytes = uart.map { String($0.b) } ?? "unavailable"
+            let consoleAcknowledgement = !group.duplicates.contains(7) ? group.points[7] : nil
+            let renderedBytes = consoleAcknowledgement.map { String($0.b) } ?? "unavailable"
             let wire: String
-            if let uart { wire = "\(fmt(Double(uart.b) * 10_000_000.0 / 115_200.0))us" } else { wire = "unavailable" }
-            let provenance = uart == nil ? "unavailable" : "derived"
-            print("interaction correlation=\(group.correlation) serial_to_decoded=\(duration(group, 1, 2)) decoded_to_shell=\(duration(group, 2, 3)) shell_to_editor=\(duration(group, 3, 4)) editor_to_parser=\(duration(group, 4, 5)) editor_to_presentation=\(duration(group, 4, 6)) presentation_to_uart=\(duration(group, 6, 7)) total=\(duration(group, 1, 7)) uart_bytes=\(bytes) wire_time=\(wire) wire_provenance=\(provenance) duplicate=\(group.duplicates.count)")
+            if let consoleAcknowledgement {
+                wire = "\(fmt(Double(consoleAcknowledgement.b) * 10_000_000.0 / 115_200.0))us"
+            } else {
+                wire = "unavailable"
+            }
+            let provenance = consoleAcknowledgement == nil
+                ? "unavailable"
+                : "estimated-115200-8n1"
+            print(
+                "interaction correlation=\(group.correlation) " +
+                "serial_delivery_to_decoded=\(duration(group, 1, 2)) " +
+                "decoded_to_shell=\(duration(group, 2, 3)) " +
+                "shell_to_editor=\(duration(group, 3, 4)) " +
+                "editor_to_parser=\(duration(group, 4, 5)) " +
+                "editor_to_presentation=\(duration(group, 4, 6)) " +
+                "presentation_to_console_ack=\(duration(group, 6, 7)) " +
+                "total=\(duration(group, 1, 7)) " +
+                "rendered_bytes=\(renderedBytes) " +
+                "wire_time_estimate=\(wire) " +
+                "wire_provenance=\(provenance) " +
+                "duplicate=\(group.duplicates.count)"
+            )
         }
     }
 }
@@ -813,7 +832,15 @@ extension TraceDecoder {
             case 0x0802:
                 return "pid=\(event.a)"
             case 0x0900:
-                let points: [UInt16: String] = [1: "serialFirstByte", 2: "inputDecoded", 3: "shellConsumed", 4: "editorCompleted", 5: "parserCompleted", 6: "presentationRequested", 7: "uartAccepted"]
+                let points: [UInt16: String] = [
+                    1: "serialDelivered",
+                    2: "inputDecoded",
+                    3: "shellConsumed",
+                    4: "editorCompleted",
+                    5: "parserCompleted",
+                    6: "presentationRequested",
+                    7: "consoleAcknowledged",
+                ]
                 guard let point = points[event.info], event.a <= UInt64(UInt32.max), event.b <= 0x00FF_FFFF else {
                     return "invalid rawPoint=\(event.info) correlation=\(event.a) value=\(event.b)"
                 }

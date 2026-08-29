@@ -73,8 +73,9 @@ let package = Package(
         .library(name: "Shell",         type: .static, targets: ["Shell"]),
         .library(name: "ShellLanguage", type: .static, targets: ["ShellLanguage"]),
         .library(name: "ReixFS",        type: .static, targets: ["ReixFS"]),
-        .library(name: "TerminalServer", type: .static, targets: ["TerminalServer"]),
+        .library(name: "VTAdapter",     type: .static, targets: ["VTAdapter"]),
         .library(name: "InputServer",   type: .static, targets: ["InputServer"]),
+        .library(name: "SerialServer",  type: .static, targets: ["SerialServer"]),
         .library(name: "VirtioBus",     type: .static, targets: ["VirtioBus"]),
         .library(name: "BlockServer",   type: .static, targets: ["BlockServer"]),
         .library(name: "FileSystemServer", type: .static, targets: ["FileSystemServer"]),
@@ -101,8 +102,9 @@ let package = Package(
         app("NameServer", bareMetal),
         app("ConsoleServer", bareMetal),
         app("Top", bareMetal),
-        app("TerminalServer", terminalProfile),
         app("InputServer", bareMetal),
+        app("VTAdapter", terminalProfile),
+        app("SerialServer", bareMetal),
 
         // The two processes the disk needs: the walker that reads device ids
         // off the bus, and the driver it starts for what it found.
@@ -172,6 +174,16 @@ let package = Package(
             name: "InputRouterHarness",
             dependencies: ["Reix", "ReixABI", "KernelHostShims"],
             path: "Tests/InputRouterHarness"
+        ),
+        .executableTarget(
+            name: "SerialRingHarness",
+            dependencies: ["Reix", "ReixABI", "KernelHostShims"],
+            path: "Tests/SerialRingHarness"
+        ),
+        .executableTarget(
+            name: "VTDecoderHarness",
+            dependencies: ["Reix", "ReixABI", "ShellLanguage", "KernelHostShims"],
+            path: "Tests/VTDecoderHarness"
         ),
 
         // Fixtures shared by the host suites. Its own target because SwiftPM

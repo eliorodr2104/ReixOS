@@ -13,8 +13,7 @@ public enum BootCap: UInt32 {
     case profiler            = 6
     case interrupt           = 7
 
-    /// The terminal service endpoint: where a process asks for a line of input.
-    /// Not the hardware, which belongs to the terminal server alone.
+    /// The terminal TextSurface endpoint, not a hardware authority.
     case terminal            = 8
 
     /// The virtio bus, from which a bus process carves the window and the line
@@ -54,4 +53,17 @@ public enum BootCap: UInt32 {
 
     /// A separate, non-delegable authority for interaction profile marks.
     case profileMarker       = 15
+
+    /// The badged InputServer source capability held by a producer.
+    case inputSource         = 16
+
+    /// The badged InputServer consumer capability held by a presentation client.
+    case inputConsumer       = 17
+
+    /// The badged InputServer focus capability held only by the session manager.
+    case inputFocus          = 18
+
+    /// Role-badged SerialServer endpoints, never raw UART authority.
+    case serialReader        = 19
+    case serialWriter        = 20
 }

@@ -104,7 +104,15 @@ struct ProfileCapabilityFlowTests {
 
     @Test("interaction trace packing fails closed")
     func interactionTraceMarkPacking() {
-        for point in [InteractionTracePoint.serialFirstByte, .inputDecoded, .shellConsumed, .editorCompleted, .parserCompleted, .presentationRequested, .uartAccepted] {
+        for point in [
+            InteractionTracePoint.serialDelivered,
+            .inputDecoded,
+            .shellConsumed,
+            .editorCompleted,
+            .parserCompleted,
+            .presentationRequested,
+            .consoleAcknowledged,
+        ] {
             let mark = InteractionTraceMark(point: point, correlation: 1, value: InteractionTraceMark.maxValue)!
             #expect(InteractionTraceMark(packed: mark.packed) == mark)
         }
@@ -128,12 +136,36 @@ struct ProfileCapabilityFlowTests {
         #expect(reset.lowerBound < interactionOnly.lowerBound)
         #expect(!normalBranch.contains("profileControl(.reset"))
         #expect(source.components(separatedBy: "capacity: {").count == 3)
-        for expected in ["\n            3\n", "\n            4\n", "\n            8\n", "\n            9\n"] { #expect(source.contains(expected)) }
+        for expected in ["ShellGrantCapacity.normal", "ShellGrantCapacity.terminalProfile"] {
+            #expect(source.contains(expected))
+        }
         let terminal = try #require(source.components(separatedBy: "let terminal =").dropFirst().first?.components(separatedBy: "guard let terminalEndpoint").first)
         #expect(terminal.contains("ProfileAuthorityGrant.marker(source: profiler, console: false)"))
         #expect(!terminal.contains("console: true"))
         #expect(source.contains("ProfileAuthorityGrant.marker(source: profiler, console: true)"))
         #expect(source.components(separatedBy: "ProfileAuthorityGrant.marker(").count == 3)
+    }
+
+    @Test("Init reserves every possible Shell capability grant")
+    func initShellGrantCapacityPolicy() throws {
+        let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let source = try String(contentsOf: root.appending(path: "Sources/Userland/Init/Init.swift"), encoding: .utf8)
+        let capacitySource = try String(
+            contentsOf: root.appending(path: "Sources/Userland/Init/ShellGrantCapacity.swift"),
+            encoding: .utf8
+        )
+        #expect(capacitySource.contains("static let normal          = 9"))
+        #expect(capacitySource.contains("static let terminalProfile = 10"))
+        #expect(source.contains("source: inputConsumer"))
+        #expect(source.contains("precondition(count < grants.count)"))
+        let syscall = try String(
+            contentsOf: root.appending(
+                path: "Sources/ReixKernel/Arch/aarch64/Exceptions/Providers/RXTask/SpawnProcessSyscall.swift"
+            ),
+            encoding: .utf8
+        )
+        #expect(syscall.contains("InlineArray<10, CapGrant>"))
+        #expect(syscall.contains("frame.pointee.x3 <= 10"))
     }
 
 }

@@ -135,6 +135,16 @@ check_required() {
     cr_prev=0
     split_markers "$2" > "$work/req.txt"
     while IFS= read -r cr_marker <&4; do
+        # BlockServer and its caller write through separate ConsoleServer rings.
+        # This rejection is required, but its line cannot order the caller's line.
+        if [ "$cr_marker" = \
+             '[ DISK  ] a client sent a message dressed as the device, ignored' ]; then
+            if ! grep -qF -- "$cr_marker" "$cr_log" 2>/dev/null; then
+                printf '%s' "$cr_marker"
+                return 1
+            fi
+            continue
+        fi
         cr_line=$(grep -nF -- "$cr_marker" "$cr_log" 2>/dev/null \
                   | awk -F: -v min="$cr_prev" '$1 > min { print $1; exit }')
         if [ -z "$cr_line" ]; then

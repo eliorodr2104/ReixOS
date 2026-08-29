@@ -25,7 +25,7 @@
 #   INITRD_MODE qemu | embedded             (default: qemu)
 #   LOG         serial capture file         (default: $OUT/smoke.log)
 #   TIMEOUT     seconds to wait for a verdict (default: 30)
-#   SUCCESS_MARKER  the line that ends the run (default: the terminal server's).
+#   SUCCESS_MARKER  the line that ends the run (default: the VT adapter's).
 #               Override it to watch for something printed later than that.
 #   INPUT       bytes to type at the guest's serial port, expanded by
 #               `printf %b` so `\n` is a newline (default: empty, nothing typed)
@@ -49,11 +49,9 @@ TIMEOUT="${TIMEOUT:-30}"
 INPUT="${INPUT:-}"
 POLL_INTERVAL=0.5
 
-# The lines a boot can end on. The terminal server prints the first once it
-# holds the serial window and its interrupt line, which is as far into userland
-# as a boot with nobody at the keyboard goes; a panic always opens with the
-# banner below regardless of which trap fired, nested fault or not.
-SUCCESS_MARKER="${SUCCESS_MARKER:-[ SERVE ] Terminal Server running}"
+# The lines a boot can end on. The VT adapter prints the first after the input
+# and presentation path is live. A panic always opens with the banner below.
+SUCCESS_MARKER="${SUCCESS_MARKER:-[ SERVE ] VT Adapter running}"
 FAIL_REGEX='REIX-PANIC'
 
 qemu_pid=
@@ -104,9 +102,8 @@ mkdir -p "$(dirname "$LOG")"
 
 # Synthetic serial input: `-nographic` puts the guest's UART on our stdin, so a
 # file there is a typist. Nothing has to be timed, because QEMU pushes only what
-# the receive FIFO will take and holds the rest, and the terminal server drains
-# that FIFO before it waits on the interrupt: bytes that arrived before the guest
-# was ready to read are still read.
+# the receive FIFO will take and holds the rest. SerialServer drains that FIFO
+# before waiting on the interrupt, preserving bytes received during boot.
 #
 # Which is only true while the UART is on stdio. A run that redirects it (the
 # matrix's `window` mode does, with `-serial file:`) would swallow the input

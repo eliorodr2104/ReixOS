@@ -5,28 +5,25 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 27/08/2026.
 //
 
-public enum InteractionTracePoint: UInt16, Equatable {
-    case serialFirstByte = 1
-    case inputDecoded = 2
-    case shellConsumed = 3
-    case editorCompleted = 4
-    case parserCompleted = 5
-    case presentationRequested = 6
-    case uartAccepted = 7
-}
-
 public struct InteractionTraceMark: Equatable {
+
     public static let maxValue: UInt32 = 0x00FF_FFFF
 
-    public let point: InteractionTracePoint
+    public let point      : InteractionTracePoint
     public let correlation: UInt32
-    public let value: UInt32
+    public let value      : UInt32
 
-    public init?(point: InteractionTracePoint, correlation: UInt32, value: UInt32) {
+    public init?(
+        point      : InteractionTracePoint,
+        correlation: UInt32,
+        value      : UInt32
+    ) {
+
         guard correlation != 0, value <= Self.maxValue else { return nil }
-        self.point = point
+
+        self.point       = point
         self.correlation = correlation
-        self.value = value
+        self.value       = value
     }
 
     public var packed: UInt64 {
@@ -36,10 +33,13 @@ public struct InteractionTraceMark: Equatable {
     }
 
     public init?(packed: UInt64) {
+
         let correlation = UInt32(truncatingIfNeeded: packed)
         let pointRaw    = UInt16((packed >> 32) & 0xFF)
         let value       = UInt32((packed >> 40) & UInt64(Self.maxValue))
+
         guard let point = InteractionTracePoint(rawValue: pointRaw) else { return nil }
+
         self.init(point: point, correlation: correlation, value: value)
     }
 }

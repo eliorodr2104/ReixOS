@@ -32,9 +32,46 @@ public func main() {
     #else
     profileControl(.enable, authority: profiler, arg: 0xFF)
     #endif
+
     profileControl(.setSampleDivider, authority: profiler, arg: 1)
 
-    guard let device = deviceCap() else { return }
+    guard let device = deviceCap() else {
+        return
+    }
+
+    let serial = withUnsafeTemporaryAllocation(
+        of      : CapGrant.self,
+        capacity: 2
+
+    ) { buffer in
+
+        buffer[0] = CapGrant(
+            source: device,
+            slot  : BootCap.device.rawValue,
+            rights: [.read, .write]
+        )
+
+        buffer[1] = CapGrant(
+            source: BootCap.interrupt.rawValue,
+            slot  : BootCap.interrupt.rawValue,
+            rights: []
+        )
+
+        return spawnProcess(
+            path: "SerialServer.elf",
+            grants: buffer.baseAddress!,
+            count: 2
+        )
+    }
+    guard let serialEndpoint = receive(handle: serial.handle).grantedCap,
+          let readerAccess = ReixSerialAccess(role: .reader, channel: 1),
+          let writerAccess = ReixSerialAccess(role: .writer, channel: 1),
+          let serialReader = derive(handle: serialEndpoint, session: readerAccess.rawValue, rights: [.send, .grant]),
+          let serialWriter = derive(handle: serialEndpoint, session: writerAccess.rawValue, rights: [.send, .grant])
+    else { return }
+
+    _ = capDrop(device)
+    _ = capDrop(BootCap.interrupt.rawValue)
 
     let console = withUnsafeTemporaryAllocation(
         of      : CapGrant.self,
@@ -42,9 +79,9 @@ public func main() {
     ) { buffer in
 
         buffer[0] = CapGrant(
-            source: device,
-            slot  : BootCap.device.rawValue,
-            rights: [.grant, .read, .write]
+            source: serialWriter,
+            slot  : BootCap.serialWriter.rawValue,
+            rights: [.send]
         )
 
         return spawnProcess(
@@ -77,9 +114,10 @@ public func main() {
     guard let spawnCap = spawnService() else { return }
 
     let environment = Environment(
-        console   : consoleEndpoint,
-        nameServer: nameServerEndpoint,
-        spawn     : spawnCap
+        console     : consoleEndpoint,
+        nameServer  : nameServerEndpoint,
+        spawn       : spawnCap,
+        serialReader: serialReader
     )
 
     // TODO: - the Process Server was launched here, with a registrar capability
@@ -111,10 +149,48 @@ public func main() {
     profileControl(.enable, authority: profiler, arg: 0x3F)
     #endif
 
-    // The terminal server: it holds the serial window and the interrupt line
-    // that goes with it, and it is the only process that does. Assembled here
-    // rather than through `launch` because neither is ambient: every process
-    // inherits the console, exactly one owns the keyboard.
+    let inputServer = withUnsafeTemporaryAllocation(
+        of      : CapGrant.self,
+        capacity: 1
+    ) { grants in
+
+        grants[0] = CapGrant(
+            source: consoleEndpoint,
+            slot  : BootCap.console.rawValue,
+            rights: [.send]
+        )
+
+        return spawnProcess(
+            path  : "InputServer.elf",
+            grants: grants.baseAddress!,
+            count : 1
+        )
+    }
+
+    guard let inputEndpoint = receive(handle: inputServer.handle).grantedCap,
+          let sourceAccess = ReixInputAccess(role: .source, session: 1),
+          let consumerAccess = ReixInputAccess(role: .consumer, session: 1),
+          let focusAccess = ReixInputAccess(role: .focusController, session: 1),
+          let inputSource = derive(handle: inputEndpoint, session: sourceAccess.rawValue, rights: [.send, .grant]),
+          let inputConsumer = derive(handle: inputEndpoint, session: consumerAccess.rawValue, rights: [.send, .grant]),
+          let inputFocus = derive(handle: inputEndpoint, session: focusAccess.rawValue, rights: [.send])
+    else { return }
+
+    let focusWords = InlineArray<4, UInt32>(repeating: 0)
+    guard case .success(let focusReply) = call(
+        handle : inputFocus,
+        message: Message(
+            tag: MessageTag(
+                ReixInputServerOperation.focus,
+                length: 0
+            ),
+            words: focusWords
+        )
+
+    ), focusReply.message.words[0] == ReixInputServerStatus.pending.rawValue
+    else { return }
+
+    // VTAdapter receives only the semantic input and presentation channels.
     let terminal = withUnsafeTemporaryAllocation(
         of      : CapGrant.self,
         capacity: {
@@ -129,17 +205,19 @@ public func main() {
         grants[0] = CapGrant(
             source: consoleEndpoint,
             slot  : BootCap.console.rawValue,
-            rights: [.send, .grant]
+            rights: [.send]
         )
+
         grants[1] = CapGrant(
-            source: device,
-            slot  : BootCap.device.rawValue,
-            rights: [.grant, .read, .write]
+            source: inputSource,
+            slot  : BootCap.inputSource.rawValue,
+            rights: [.send]
         )
+
         grants[2] = CapGrant(
-            source: BootCap.interrupt.rawValue,
-            slot  : BootCap.interrupt.rawValue,
-            rights: [.grant]
+            source: serialReader,
+            slot: BootCap.serialReader.rawValue,
+            rights: [.send]
         )
         #if REIX_TERMINAL_PROFILE
         // Marker-only: no console dump and no delegation authority.
@@ -147,7 +225,7 @@ public func main() {
         #endif
 
         return spawnProcess(
-            path  : "TerminalServer.elf",
+            path  : "VTAdapter.elf",
             grants: grants.baseAddress!,
             count : {
                 #if REIX_TERMINAL_PROFILE
@@ -314,9 +392,9 @@ public func main() {
         of      : CapGrant.self,
         capacity: {
             #if REIX_TERMINAL_PROFILE
-            9
+            ShellGrantCapacity.terminalProfile
             #else
-            8
+            ShellGrantCapacity.normal
             #endif
         }()
     ) { grants in
@@ -324,6 +402,7 @@ public func main() {
         var count = 0
 
         func give(_ grant: CapGrant) {
+            precondition(count < grants.count)
             grants[count] = grant
             count += 1
         }
@@ -333,6 +412,7 @@ public func main() {
             slot  : BootCap.console.rawValue,
             rights: [.send, .grant]
         ))
+
         // Lookup only. The shell can find the services that have names; it
         // cannot publish one, which is what would let it answer as one. The
         // disk is not among them any more.
@@ -349,7 +429,12 @@ public func main() {
         give(CapGrant(
             source: terminalEndpoint,
             slot  : BootCap.terminal.rawValue,
-            rights: [.send, .grant]
+            rights: [.send]
+        ))
+        give(CapGrant(
+            source: inputConsumer,
+            slot  : BootCap.inputConsumer.rawValue,
+            rights: [.send]
         ))
         // `launcher` and not `tool`: the shell has to be able to pass a
         // reader's share to the commands it runs, and what it passes drops the

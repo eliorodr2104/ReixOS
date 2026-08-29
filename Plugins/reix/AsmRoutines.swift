@@ -106,7 +106,7 @@ private func mmuHandlers() -> [AsmRoutine] {
             isb()
             ret()
         },
-        
+
         fn("flush_tlb_page") {
             dsb("ishst")
             raw("    lsr x0, x0, #12")
@@ -115,19 +115,19 @@ private func mmuHandlers() -> [AsmRoutine] {
             isb()
             ret()
         },
-        
+
         fn("flush_tlb_page_nosync") {
             raw("    lsr x0, x0, #12")
             raw("    tlbi vaae1is, x0")
             ret()
         },
-        
+
         fn("flush_tlb_sync") {
             dsb("ish")
             isb()
             ret()
         },
-        
+
         fn("page_table_barrier") {
             dsb("ishst")
             ret()
@@ -169,7 +169,7 @@ private func mmuHandlers() -> [AsmRoutine] {
             dsb("sy")
             ret()
         },
-        
+
         fn("switch_user_address_space") {
             raw("    bfi x0, x1, #48, #16")
             msr("ttbr0_el1", "x0")
@@ -412,6 +412,19 @@ private func reixRoutines() -> [AsmRoutine] {
             ret()
         },
 
+        // One nonblocking transmit attempt. FR.TXFF is bit 5 and a false answer
+        // keeps ownership with the caller without a volatile Swift load.
+        fn("pl011_try_write_byte") {
+            raw("    ldr  w2, [x0, #0x18]")
+            raw("    tbnz w2, #5, .L_pl011_tx_full")
+            raw("    strb w1, [x0]")
+            raw("    mov  w0, #1")
+            ret()
+            label(".L_pl011_tx_full")
+            raw("    mov  w0, #0")
+            ret()
+        },
+
         // Arm the receive interrupts in the device itself: IMSC (0x38) bit 4 is
         // a full FIFO, bit 6 a partial one that stopped filling, and a terminal
         // needs the second or a lone keystroke would wait for a full buffer.
@@ -433,6 +446,28 @@ private func reixRoutines() -> [AsmRoutine] {
         // the same condition.
         fn("pl011_clear_receive") {
             raw("    mov  w1, #0x50")
+            raw("    str  w1, [x0, #0x44]")
+            ret()
+        },
+
+        // TX is independent from RX: a full transmit FIFO must not disable
+        // receive delivery while the server waits for room.
+        fn("pl011_enable_transmit_interrupt") {
+            raw("    ldr  w1, [x0, #0x38]")
+            raw("    orr  w1, w1, #0x20")
+            raw("    str  w1, [x0, #0x38]")
+            ret()
+        },
+
+        fn("pl011_disable_transmit_interrupt") {
+            raw("    ldr  w1, [x0, #0x38]")
+            raw("    bic  w1, w1, #0x20")
+            raw("    str  w1, [x0, #0x38]")
+            ret()
+        },
+
+        fn("pl011_clear_transmit_interrupt") {
+            raw("    mov  w1, #0x20")
             raw("    str  w1, [x0, #0x44]")
             ret()
         },

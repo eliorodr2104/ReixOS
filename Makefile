@@ -206,6 +206,9 @@ host-test: prune-dups
 	@mkdir -p $(OUT)
 	$(SWIFT) test --no-parallel --xunit-output $(OUT)/test-results.xml
 	$(SWIFT) run TerminalRingHarness
+	$(SWIFT) run InputRouterHarness
+	$(SWIFT) run SerialRingHarness
+	$(SWIFT) run VTDecoderHarness
 	SWIFT=$(SWIFT) sh scripts/test-trace-interaction.sh
 
 # The QEMU scenario matrix: every row in Tests/Scenarios/scenarios.tsv, booted
@@ -225,7 +228,7 @@ terminal-baseline-4m: export TERMINAL_PROFILE := 1
 terminal-baseline-4m: BUILD_PATH := .build-terminal-profile
 # Terminal-focused: storage-4m remains the separate proof for the full storage
 # stack. At 4 MiB the instrumented image completes storage with a disk but does
-# not start Shell; without a disk this measures kernel -> TerminalServer -> Shell
+# not start Shell; without a disk this measures kernel -> VTAdapter -> Shell
 # without conflating terminal capacity with the file system's footprint.
 terminal-baseline-4m: image
 	QEMU=$(QEMU) QEMU_FLAGS='$(QEMU_FLAGS)' SWIFT=$(SWIFT) OUT=$(OUT) \

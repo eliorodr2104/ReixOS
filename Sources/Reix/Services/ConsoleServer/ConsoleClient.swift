@@ -63,13 +63,13 @@ public struct ConsoleClient {
     }
 
     public init?(console endpoint: UInt32) {
-       
+
         let shm = shmCreate(pageCount: UInt64(Self.ringPages))
-        
+
         guard shm.isValid, let base = UnsafeMutableRawPointer(
             bitPattern: UInt(shm.address)
         ) else { return nil }
-        
+
 
         self.endpoint = endpoint
         self.ring     = Ring(
@@ -77,14 +77,14 @@ public struct ConsoleClient {
             regionSize: Self.pageSize
         )
         self.ring.reset()
-        
+
         send(
             handle     : endpoint,
             message    : ConsoleOperation.register.message(word0: Self.ringPages),
             grant      : shm.handle,
             grantRights: [.send, .read, .write]
         )
-        
+
 
         guard flushed() else { return nil }
     }
@@ -101,7 +101,7 @@ public struct ConsoleClient {
 
         if byte == Self.newLine || Stage.isFull {
             flushStage()
-            
+
         } else {
             Stage.append(byte)
             return .accepted
@@ -128,17 +128,21 @@ public struct ConsoleClient {
     /// For the one writer that has to be seen before its line ends: a terminal
     /// echoing keystrokes. Everything else is better off staged, which is why
     /// this is a call and not the default.
-    public func flushNow() {
+    @discardableResult
+    public func flushNow() -> Bool {
         flushStage()
 
         // `drainPartial` and not `kick`: the console emits whole lines, and a
         // prompt or an echoed character is not one. Without this the bytes sit
         // in the ring until something closes the line, which for a terminal
         // waiting at a prompt is never.
-        _ = send(
+        guard send(
             handle : endpoint,
             message: ConsoleOperation.drainPartial.message()
-        )
+
+        ).isDelivered else { return false }
+
+        return flushed()
     }
 
 
@@ -232,12 +236,12 @@ public struct ConsoleClient {
     }
 }
 
-/// Makes everything written so far visible, for a caller that cannot wait for
-/// the end of its line. Nothing to do when this process talks to the kernel
-/// console directly: that path never stages.
+/// Makes everything written so far visible and confirms ConsoleServer retained
+/// the caller ring. A direct kernel-console path cannot provide that receipt.
 @inline(__always)
-public func consoleFlush() {
-    Console.client?.flushNow()
+@discardableResult
+public func consoleFlush() -> Bool {
+    Console.client?.flushNow() ?? false
 }
 
 

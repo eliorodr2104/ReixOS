@@ -55,11 +55,26 @@ public func dmaReadBarrier()
 @_silgen_name("pl011_try_read_byte")
 public func pl011TryReadByte(_ base: UnsafeMutableRawPointer) -> UInt32
 
+@_silgen_name("pl011_try_write_byte")
+public func pl011TryWriteByte(
+    _ base: UnsafeMutableRawPointer,
+    _ byte: UInt8
+) -> Bool
+
 @_silgen_name("pl011_enable_receive")
 public func pl011EnableReceive(_ base: UnsafeMutableRawPointer)
 
 @_silgen_name("pl011_clear_receive")
 public func pl011ClearReceive(_ base: UnsafeMutableRawPointer)
+
+@_silgen_name("pl011_enable_transmit_interrupt")
+public func pl011EnableTransmitInterrupt(_ base: UnsafeMutableRawPointer)
+
+@_silgen_name("pl011_disable_transmit_interrupt")
+public func pl011DisableTransmitInterrupt(_ base: UnsafeMutableRawPointer)
+
+@_silgen_name("pl011_clear_transmit_interrupt")
+public func pl011ClearTransmitInterrupt(_ base: UnsafeMutableRawPointer)
 
 @_silgen_name("pl011_write_span")
 public func pl011WriteSpan(

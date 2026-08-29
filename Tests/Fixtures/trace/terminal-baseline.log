@@ -1,6 +1,9 @@
 [ TERMINAL BASELINE ] system status=measured total_pages=1024 free_pages=512 counter_freq=1000000 trace_lost=0 kernel_stack_peak_bytes=1024 exception_stack_peak_bytes=0
-[ TERMINAL BASELINE ] process status=measured pid=7 name=TerminalServer.e resident_pages=12 stack_pages=3
-[ TERMINAL BASELINE ] process status=measured pid=8 name=Shell.elf resident_pages=16 stack_pages=4
+[ TERMINAL BASELINE ] process status=measured pid=2 name=SerialServer.elf resident_pages=9 stack_pages=1
+[ TERMINAL BASELINE ] process status=measured pid=3 name=ConsoleServer.elf resident_pages=16 stack_pages=1
+[ TERMINAL BASELINE ] process status=measured pid=5 name=InputServer.elf resident_pages=12 stack_pages=2
+[ TERMINAL BASELINE ] process status=measured pid=6 name=VTAdapter.elf resident_pages=19 stack_pages=3
+[ TERMINAL BASELINE ] process status=measured pid=8 name=Shell.elf resident_pages=173 stack_pages=134
 [TRACE] begin v=2 freq=1000000 lost=0 stack=1024 exstack=0
 [TRACE] t=100 ev=interactionMark pid=8 info=1 a=1 b=1
 [TRACE] t=110 ev=interactionMark pid=8 info=2 a=1 b=1

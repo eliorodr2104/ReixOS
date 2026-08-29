@@ -204,7 +204,15 @@ extension TraceDecoder {
         }
 
         mutating func interaction(_ event: TraceEvent) {
-            let points: [UInt16: String] = [1: "serialFirstByte", 2: "inputDecoded", 3: "shellConsumed", 4: "editorCompleted", 5: "parserCompleted", 6: "presentationRequested", 7: "uartAccepted"]
+            let points: [UInt16: String] = [
+                1: "serialDelivered",
+                2: "inputDecoded",
+                3: "shellConsumed",
+                4: "editorCompleted",
+                5: "parserCompleted",
+                6: "presentationRequested",
+                7: "consoleAcknowledged",
+            ]
             let valid = event.a <= UInt64(UInt32.max) && event.b <= 0x00FF_FFFF && points[event.info] != nil
             let name  = valid ? points[event.info]! : "interactionInvalid"
             events.append("""

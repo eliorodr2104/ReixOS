@@ -19,12 +19,12 @@ US_PER_SECOND = 1_000_000.0
 UART_BAUD = 115_200.0
 PAGE_BYTES = 4_096
 LATENCIES = (
-    "serial_to_decoded",
+    "serial_delivery_to_decoded",
     "decoded_to_shell",
     "shell_to_editor",
     "editor_to_parser",
     "editor_to_presentation",
-    "presentation_to_uart",
+    "presentation_to_console_ack",
     "total",
 )
 
@@ -91,7 +91,13 @@ def parse_system(lines):
 
 def parse_processes(lines):
     prefix = "[ TERMINAL BASELINE ] process "
-    wanted = {"Shell": None, "TerminalServer": None}
+    wanted = {
+        "SerialServer": None,
+        "ConsoleServer": None,
+        "InputServer": None,
+        "VTAdapter": None,
+        "Shell": None,
+    }
     for line in lines:
         if not line.startswith(prefix):
             continue
@@ -117,7 +123,7 @@ def parse_processes(lines):
 def canonical_process_name(name):
     if not name:
         return None
-    for canonical in ("TerminalServer", "Shell"):
+    for canonical in ("SerialServer", "ConsoleServer", "InputServer", "VTAdapter", "Shell"):
         if not name.startswith(canonical):
             continue
         suffix = name[len(canonical):]
@@ -160,7 +166,7 @@ def parse_interactions(lines, frequency):
         fail("interaction group count does not match rows")
 
     latency_values = {name: [] for name in LATENCIES}
-    uart_bytes = []
+    rendered_bytes = []
     seen = set()
     for row in rows:
         correlation = parse_uint(row.get("correlation", ""), "interaction correlation")
@@ -173,14 +179,14 @@ def parse_interactions(lines, frequency):
             value = parse_duration(row.get(name, ""), frequency, f"interaction {name}")
             if value is not None:
                 latency_values[name].append(value)
-        bytes_text = row.get("uart_bytes", "")
+        bytes_text = row.get("rendered_bytes", "")
         if bytes_text != "unavailable":
-            uart_bytes.append(parse_uint(bytes_text, "uart_bytes"))
+            rendered_bytes.append(parse_uint(bytes_text, "rendered_bytes"))
     if not any(latency_values.values()):
         fail("no latency metric is available")
     if not latency_values["total"]:
         fail("no total interaction samples are available")
-    return groups, invalid, latency_values, uart_bytes
+    return groups, invalid, latency_values, rendered_bytes
 
 
 def nearest_rank(samples, percentile):
@@ -229,17 +235,17 @@ def main(arguments):
         if system["trace_lost"] != 0:
             fail("terminal workload lost trace events")
         processes = parse_processes(serial_lines)
-        groups, invalid, latency_values, uart_bytes = parse_interactions(interaction_lines, frequency)
+        groups, invalid, latency_values, rendered_bytes = parse_interactions(interaction_lines, frequency)
         revision, dirty = git_provenance()
 
         latencies = {name: latency_metric(latency_values[name]) for name in LATENCIES}
-        uart = latency_metric([float(value) for value in uart_bytes], unit="bytes")
-        if uart["status"] == "measured":
-            uart["provenance"] = "uart-accepted-mark"
-        wire = latency_metric([value * 10.0 * US_PER_SECOND / UART_BAUD for value in uart_bytes])
+        rendered = latency_metric([float(value) for value in rendered_bytes], unit="bytes")
+        if rendered["status"] == "measured":
+            rendered["provenance"] = "console-acknowledged-rendered-byte-count"
+        wire = latency_metric([value * 10.0 * US_PER_SECOND / UART_BAUD for value in rendered_bytes])
         if wire["status"] == "measured":
             wire["status"] = "derived"
-            wire["provenance"] = "baud-115200-8n1"
+            wire["provenance"] = "estimated-115200-8n1-frame-time"
 
         document = {
             "build_mode": "REIX_TERMINAL_PROFILE",
@@ -250,10 +256,14 @@ def main(arguments):
                 "groups": groups,
                 "invalid": invalid,
                 "latencies": latencies,
-                "uart_bytes": uart,
+                "rendered_bytes": rendered,
                 "wire_time_us": wire,
             },
-            "note": "latencies include interaction-mark syscall overhead",
+            "note": (
+                "latencies include interaction-mark syscall overhead; "
+                "serial_delivery_to_decoded starts at VTAdapter delivery, and "
+                "wire_time_us is an estimated 115200 8N1 frame time"
+            ),
             "processes": {
                 name: {
                     "resident_pages": {"status": "measured", "value": values["resident_pages"], "provenance": "serial"},

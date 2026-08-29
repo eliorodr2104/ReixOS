@@ -15,11 +15,11 @@ public struct ConsoleServer: Service {
 
     private static let ringPages: UInt32 = 1
 
-    private let endpoint   : UInt32
-    private let uartBase   : UnsafeMutableRawPointer
-    private var clients    : InlineArray<32, UInt32?> = InlineArray(repeating: nil)
-    private var rings      : InlineArray<32, Ring?>   = InlineArray(repeating: nil)
-    
+    private let endpoint    : UInt32
+    private var serialWriter: SerialWriterSession
+    private var clients     : InlineArray<32, UInt32?> = InlineArray(repeating: nil)
+    private var rings       : InlineArray<32, Ring?>   = InlineArray(repeating: nil)
+
     private var grantedCaps: InlineArray<32, UInt32?> = InlineArray(repeating: nil)
     private var indexClient: Int = 0
 
@@ -31,20 +31,11 @@ public struct ConsoleServer: Service {
     ) {
         self.endpoint = endpoint
 
-        guard let deviceCap = environment.device else {
-            print("[ SERVE ] Console Server has no device cap")
-            exit(code: 1)
-        }
+        guard let serial = environment.serialWriter,
+              let writer = SerialWriterSession(endpoint: serial)
+        else { exit(code: 1) }
 
-        guard let uartBase = UnsafeMutableRawPointer(
-            bitPattern: UInt(mapDevice(handle: deviceCap))
-
-        ) else {
-            print("[ SERVE ] Console Server cannot map the UART")
-            exit(code: 1)
-        }
-
-        self.uartBase = uartBase
+        self.serialWriter = writer
 
         print("[ SERVE ] Console Server running")
     }
@@ -53,6 +44,7 @@ public struct ConsoleServer: Service {
         _ operation: ConsoleOperation,
           request  : inout ReceivedMessage
     ) {
+
         switch operation {
             case .register:
                 register(&request)
@@ -75,7 +67,8 @@ public struct ConsoleServer: Service {
 
                 if let slot = slot(for: request.identity), let ring = rings[slot] {
                     drain(ring)
-                    status = .registered
+                    let flushed = serialWriter.flush()
+                    status = ConsoleStatus.afterSerialFlush(hasRing: true, flush: flushed)
                 }
 
                 _ = reply(message: ConsoleOperation.flush.message(word0: status.rawValue))
@@ -130,34 +123,34 @@ public struct ConsoleServer: Service {
         grantedCaps[slot] = request.takeGrant()
     }
 
-    /// Hand every complete line in `ring` to the UART, then the whole ring if it
-    /// is full and holds no line at all.
-    ///
-    /// The byte loop and its FIFO-full wait live in `pl011WriteSpan`, in
-    /// assembly. The same loop spelled in Swift lost its wait: `uartBase + 0x18`
-    /// is not a volatile read, so LLVM hoisted the load out of the loop and then
-    /// dropped it, and the shipped code stored into a FIFO it never checked.
-    /// Writes out what a ring holds.
-    ///
-    /// Whole lines only, unless the caller asks otherwise or the ring is full.
-    /// A ring that has filled without closing a line has to be emptied whatever
-    /// it holds, or its writer is wedged behind bytes nobody will ever take.
-    private func drain(
+    /// Moves complete lines without freeing bytes the serial writer rejected.
+    /// Partial lines drain only on request or when the producer fills the ring.
+    private mutating func drain(
         _                    ring   : Ring,
         includingPartialLine partial: Bool = false
     ) {
 
-        func writeSpan(
-            _ bytes: UnsafeRawPointer,
-              count: Int
-        ) {
-            pl011WriteSpan(uartBase, bytes, count)
+        @inline(__always)
+        func stageLine(
+            _ first      : UnsafeRawPointer,
+            _ firstCount : Int,
+            _ second     : UnsafeRawPointer?,
+            _ secondCount: Int
+        ) -> Bool {
+            serialWriter.stage(
+                first      : first.assumingMemoryBound(to: UInt8.self),
+                firstCount : firstCount,
+                second     : second?.assumingMemoryBound(to: UInt8.self),
+                secondCount: secondCount
+            ) == .ok
         }
 
-        while ring.consumeLine(writeSpan) { }
+        while ring.consumeLineChecked(stageLine) { }
 
-        guard partial || ring.isFull else { return }
-        _ = ring.consumeAll(writeSpan)
+        if partial || ring.isFull {
+            _ = ring.consumeAllChecked(stageLine)
+        }
+        _ = serialWriter.flush()
     }
 
     private mutating func release(slot: Int) {

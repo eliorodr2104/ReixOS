@@ -8,13 +8,14 @@
 import ReixABI
 
 public struct SpawnProcessSyscall: SyscallProvider {
+
     public static let number: SyscallNumber = .spawnProcess
-    
+
     public static func handle(
         frame  : UnsafeMutablePointer<Arch.TrapFrame>,
         context: SyscallContext
     ) {
-                
+
         guard let currentProcess = Arch.CPU.getCurrentProcess(),
               let _ = currentProcess.pointee.metadata.pointee.capsTable.findFirst(for: .spawn) else {
             frame.pointee.x0 = UInt64.max
@@ -36,10 +37,12 @@ public struct SpawnProcessSyscall: SyscallProvider {
 
         let length = Int(frame.pointee.x1)
 
-        var grants      = InlineArray<8, CapGrant>(repeating: CapGrant())
+        // Init may hand Shell nine capabilities normally and ten when terminal
+        // profiling is enabled, so this syscall must retain both complete lists.
+        var grants      = InlineArray<10, CapGrant>(repeating: CapGrant())
         var grantsCount = 0
-        
-        guard frame.pointee.x3 <= 8 else {
+
+        guard frame.pointee.x3 <= 10 else {
             frame.pointee.x0 = UInt64.max
             frame.pointee.x1 = UInt64(UInt32.max)
             return
@@ -73,30 +76,30 @@ public struct SpawnProcessSyscall: SyscallProvider {
                 alignment: MemoryLayout<CChar>.alignment
             ) { buffer in
                 let base = buffer.baseAddress!
-                
+
                 guard UserMemory.copyFromUser(
                     kernelDest: base,
                     userSrc   : frame.pointee.x0,
                     count     : length
                 ) else { frame.pointee.x0 = UInt64.max; return }
-                
+
                 base.storeBytes(of: 0, toByteOffset: length, as: CChar.self)
                 let cPath = base.assumingMemoryBound(to: CChar.self)
 
                 childProcess = try? context.processManager.pointee.spawnProcess(path: cPath)
             }
-            
+
         }
-        
+
         if let childProcess = childProcess {
             childProcess.pointee.family.parent = currentProcess
             currentProcess.pointee.family.pushChild(childProcess)
-            
+
             let handleIPC = context.ipc.pointee.spawnEndpoint(
                 for: currentProcess,
                 and: childProcess
             )
-            
+
             // Set on reg 1 the handle endpoint
             switch handleIPC {
                 case .success(let success):

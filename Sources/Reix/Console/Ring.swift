@@ -217,6 +217,32 @@ public struct Ring {
         return true
     }
 
+    /// Publishes the consumed head only after every span is accepted by `sink`.
+    public func consumeLineChecked(
+        _ sink: (
+            UnsafeRawPointer,
+            Int,
+            UnsafeRawPointer?,
+            Int)
+        -> Bool
+    ) -> Bool {
+
+        let currentHead = head & mask
+        let currentTail = tail & mask
+
+        guard currentHead != currentTail else { return false }
+
+        dmbISH()
+
+        let available = Int((currentTail &- currentHead) & mask)
+        guard let length = lineLength(
+            from     : Int(currentHead),
+            available: available
+        ) else { return false }
+
+        return emitChecked(from: currentHead, length: length, to: sink)
+    }
+
     /// Hands every queued byte to `sink`, newline or not, and frees the slots.
     ///
     /// The escape hatch for a producer that filled the ring without ever writing
@@ -241,13 +267,34 @@ public struct Ring {
         return available
     }
 
+    /// Publishes the consumed head only after every queued span is accepted.
+    public func consumeAllChecked(
+        _ sink: (
+            UnsafeRawPointer,
+            Int,
+            UnsafeRawPointer?,
+            Int
+        ) -> Bool
+    ) -> Int {
+
+        let currentHead = head & mask
+        let currentTail = tail & mask
+
+        guard currentHead != currentTail else { return 0 }
+
+        dmbISH()
+
+        let available = Int((currentTail &- currentHead) & mask)
+        return emitChecked(from: currentHead, length: available, to: sink) ? available : 0
+    }
+
     /// Length of the first line inside the `available` bytes that start at
     /// `start`, newline included, or `nil` when none of them is a `\n` yet.
     ///
     /// Caller must already have issued the acquire barrier: this reads the data.
     private func lineLength(
-        from      start: Int,
-        available      : Int
+        from start    : Int,
+             available: Int
     ) -> Int? {
 
         let data      = base + Self.dataOffset
@@ -291,6 +338,30 @@ public struct Ring {
         // Release
         dmbISH()
         head = (start &+ UInt32(length)) & mask
+    }
+
+    private func emitChecked(
+        from start : UInt32,
+             length: Int,
+        to   sink  : (UnsafeRawPointer, Int, UnsafeRawPointer?, Int) -> Bool
+    ) -> Bool {
+
+        let data        = base + Self.dataOffset
+        let firstSpan   = min(length, cap - Int(start))
+        let secondCount = length - firstSpan
+        let second      = secondCount > 0 ? UnsafeRawPointer(data) : nil
+
+        guard sink(
+            UnsafeRawPointer(data + Int(start)),
+            firstSpan,
+            second,
+            secondCount
+        ) else { return false }
+
+        dmbISH()
+
+        head = (start &+ UInt32(length)) & mask
+        return true
     }
 
     public func nextLineLength() -> Int? {
