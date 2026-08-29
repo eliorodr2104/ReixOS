@@ -57,110 +57,6 @@ struct ShellProtocolTests {
         }
     }
 
-    @Test("terminal events distinguish line eof and exact acknowledgements")
-    func terminalEvents() {
-        var storage = [UInt8](repeating: 0, count: 128)
-        let written = storage.withUnsafeMutableBufferPointer { bytes in
-            TerminalEvent.line(sequence: 12, bytes: UnsafePointer(bytes.baseAddress!), count: 3)
-                .encode(into: bytes.baseAddress!, capacity: bytes.count)
-        }
-
-        storage.withUnsafeBufferPointer { bytes in
-            let event = TerminalEvent.decode(bytes.baseAddress!, length: written)
-            #expect(event?.kind == .line)
-            #expect(event?.sequence == 12)
-            #expect(event?.count == 3)
-            #expect(TerminalAcknowledgement(sequence: 12, count: 3, status: .ok).accepts(event!))
-            #expect(!TerminalAcknowledgement(sequence: 11, count: 3, status: .ok).accepts(event!))
-            #expect(!TerminalAcknowledgement(sequence: 12, count: 2, status: .ok).accepts(event!))
-            #expect(TerminalEvent.eof(sequence: 13).flags.contains(.end))
-        }
-
-        let longest    = [UInt8](repeating: UInt8(ascii: "x"), count: TerminalEvent.maximumPayload)
-        var encoded    = [UInt8](repeating: 0, count: TerminalEvent.headerBytes + TerminalEvent.maximumPayload)
-        let fullLength = longest.withUnsafeBufferPointer { source in
-            encoded.withUnsafeMutableBufferPointer { destination in
-                TerminalEvent.line(sequence: 14, bytes: source.baseAddress!, count: source.count)
-                    .encode(into: destination.baseAddress!, capacity: destination.count)
-            }
-        }
-        #expect(fullLength == TerminalEvent.headerBytes + TerminalEvent.maximumPayload)
-        encoded.withUnsafeBufferPointer { bytes in
-            #expect(TerminalEvent.decode(bytes.baseAddress!, length: fullLength)?.count == TerminalEvent.maximumPayload)
-            #expect(TerminalEvent.decode(bytes.baseAddress!, length: fullLength - 1) == nil)
-        }
-        let tooLong = [UInt8](repeating: UInt8(ascii: "x"), count: TerminalEvent.maximumPayload + 1)
-        tooLong.withUnsafeBufferPointer { bytes in
-            #expect(TerminalEvent.line(sequence: 15, bytes: bytes.baseAddress!, count: bytes.count).status == .malformed)
-        }
-    }
-
-    @Test("terminal events accept empty lines and reject incoherent variants")
-    func terminalEventCoherence() {
-        func raw(
-            kind  : TerminalEventKind,
-            status: TerminalEventStatus,
-            flags : UInt32,
-            count : UInt16
-        ) -> [UInt8] {
-            var bytes = [UInt8](repeating: 0, count: TerminalEvent.headerBytes + Int(count))
-            bytes[0] = UInt8(ShellProtocol.version)
-            bytes[2] = UInt8(kind.rawValue)
-            bytes[8] = UInt8(truncatingIfNeeded: flags)
-            bytes[9] = UInt8(truncatingIfNeeded: flags >> 8)
-            bytes[10] = UInt8(truncatingIfNeeded: flags >> 16)
-            bytes[11] = UInt8(truncatingIfNeeded: flags >> 24)
-            bytes[12] = UInt8(truncatingIfNeeded: count)
-            bytes[13] = UInt8(truncatingIfNeeded: count >> 8)
-            bytes[14] = UInt8(status.rawValue)
-            return bytes
-        }
-
-        var empty  = [UInt8](repeating: 0, count: TerminalEvent.headerBytes)
-        let length = empty.withUnsafeMutableBufferPointer { bytes in
-            TerminalEvent.line(sequence: 31, bytes: bytes.baseAddress!, count: 0)
-                .encode(into: bytes.baseAddress!, capacity: bytes.count)
-        }
-        empty.withUnsafeBufferPointer { bytes in
-            #expect(TerminalEvent.decode(bytes.baseAddress!, length: length)?.count == 0)
-        }
-
-        let invalid: [[UInt8]] = [
-            raw(kind: .line, status: .ok, flags: TerminalEventFlags.end.rawValue, count: 0),
-            raw(kind: .eof, status: .ok, flags: 0, count: 0),
-            raw(kind: .line, status: .malformed, flags: 0, count: 0),
-            raw(kind: .line, status: .malformed, flags: TerminalEventFlags.cancelled.rawValue, count: 0),
-            raw(kind: .resize, status: .ok, flags: 0, count: 0),
-            raw(kind: .interrupt, status: .ok, flags: 0, count: 0),
-        ]
-        for candidate in invalid {
-            candidate.withUnsafeBufferPointer { bytes in
-                #expect(TerminalEvent.decode(bytes.baseAddress!, length: bytes.count) == nil)
-            }
-        }
-
-        let error = raw(
-            kind  : .line,
-            status: .malformed,
-            flags : TerminalEventFlags.error.rawValue,
-            count : 0
-        )
-        error.withUnsafeBufferPointer { bytes in
-            #expect(TerminalEvent.decode(bytes.baseAddress!, length: bytes.count)?.status == .malformed)
-        }
-
-        let interrupted       = TerminalEvent.interrupted(sequence: 32)
-        let interruptedLength = empty.withUnsafeMutableBufferPointer { bytes in
-            interrupted.encode(into: bytes.baseAddress!, capacity: bytes.count)
-        }
-        empty.withUnsafeBufferPointer { bytes in
-            let decoded = TerminalEvent.decode(bytes.baseAddress!, length: interruptedLength)
-            #expect(decoded?.kind == .interrupt)
-            #expect(decoded?.status == .cancelled)
-            #expect(decoded?.flags == [.cancelled])
-        }
-    }
-
     @Test("only the shell renderer turns typed records into presentation bytes")
     func renderer() {
         var storage = [UInt8](repeating: 0, count: 64)
@@ -297,7 +193,7 @@ struct ShellProtocolTests {
     @Test("a failed terminal presentation keeps only the unsent shell bytes")
     func outputFailureKeepsUnsentBytes() {
         var output = ShellOutputBuffer()
-        for value in 0..<130 { output.append(UInt8(value)) }
+        for value in 0..<300 { output.append(UInt8(value & 0x7F)) }
 
         var calls = 0
         var first : [UInt8] = []
@@ -310,14 +206,37 @@ struct ShellProtocolTests {
             return false
         }
         #expect(!sent)
-        #expect(first == Array(0..<128).map(UInt8.init))
+        #expect(first == Array(0..<256).map { UInt8($0 & 0x7F) })
 
         var remaining: [UInt8] = []
         #expect(output.flush { bytes, count in
             for index in 0..<count { remaining.append(bytes[index]) }
             return true
         })
-        #expect(remaining == [128, 129])
+        #expect(remaining == Array(256..<300).map { UInt8($0 & 0x7F) })
+    }
+
+    @Test("UTF-8 output chunks preserve scalar boundaries and malformed data")
+    func outputUTF8Boundaries() {
+        var output = ShellOutputBuffer()
+        for _ in 0..<254 { _ = output.append(UInt8(ascii: "x")) }
+        for byte in [UInt8(0xF0), 0x9F, 0x98, 0x80, UInt8(ascii: "y")] { _ = output.append(byte) }
+        var chunks: [[UInt8]] = []
+        #expect(output.flush { bytes, count in
+            chunks.append(Array(UnsafeBufferPointer(start: bytes, count: count)))
+            return true
+        })
+        #expect(chunks.map { $0.count } == [254, 5])
+        #expect(chunks.flatMap { $0 } == Array(repeating: UInt8(ascii: "x"), count: 254) + [0xF0, 0x9F, 0x98, 0x80, UInt8(ascii: "y")])
+        var malformed = ShellOutputBuffer()
+        _ = malformed.append(0xF0)
+        _ = malformed.append(0x80)
+        var calls = 0
+        #expect(!malformed.flush { bytes, count in
+            calls += 1
+            return ReixTextSurfaceCommand(kind: .insert, sequence: 1, bytes: bytes, count: count) != nil
+        })
+        #expect(calls == 1)
     }
 
     @Test("shell output has an exact limit and fails closed after overflow")

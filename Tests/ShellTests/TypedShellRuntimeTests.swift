@@ -92,28 +92,28 @@ struct TypedShellRuntimeTests {
     func editor() {
         var editor   = ShellLineEditor()
         var sequence : UInt32 = 1
-        func insertion(_ text: [UInt8]) -> TerminalInputEvent {
+        func insertion(_ text: [UInt8]) -> ReixInputRecord {
             defer { sequence += 1 }
-            return text.withUnsafeBufferPointer { TerminalInputEvent(sequence: sequence, bytes: $0.baseAddress!, count: $0.count) }
+            return text.withUnsafeBufferPointer { ReixInputRecord(kind: .insert, sequence: sequence, bytes: $0.baseAddress!, count: $0.count)! }
         }
         for byte in Array("list.filter {".utf8) { _ = editor.apply(insertion([byte])) }
-        let newline = editor.apply(TerminalInputEvent(kind: .enter, sequence: sequence))
+        let newline = editor.apply(ReixInputRecord(kind: .enter, sequence: sequence)!)
         #expect(newline.action == .editing)
         #expect(editor.count > "list.filter {".utf8.count)
         for byte in Array("$0.isFolder }".utf8) { _ = editor.apply(insertion([byte])) }
-        let submitted = editor.apply(TerminalInputEvent(kind: .enter, sequence: sequence + 1))
+        let submitted = editor.apply(ReixInputRecord(kind: .enter, sequence: sequence + 1)!)
         guard case .submitted(let count) = submitted.action else { Issue.record("complete multiline input did not submit"); return }
         #expect(count == editor.count)
         editor.reset()
 
         _ = editor.apply(insertion([0xC3, 0xA8]))
         #expect(editor.cursor == 2)
-        _ = editor.apply(TerminalInputEvent(kind: .left, sequence: sequence + 2))
+        _ = editor.apply(ReixInputRecord(kind: .left, sequence: sequence + 2)!)
         #expect(editor.cursor == 0)
-        _ = editor.apply(TerminalInputEvent(kind: .right, sequence: sequence + 3))
+        _ = editor.apply(ReixInputRecord(kind: .right, sequence: sequence + 3)!)
         #expect(editor.cursor == 2)
 
-        let middle = editor.apply(TerminalInputEvent(kind: .left, sequence: sequence + 4))
+        let middle = editor.apply(ReixInputRecord(kind: .left, sequence: sequence + 4)!)
         guard let patch = middle.patch else { Issue.record("cursor update did not produce a patch"); return }
         #expect(patch.kind == .replaceBuffer)
         let replacement = editor.apply(insertion([UInt8(ascii: "x")]))
@@ -128,21 +128,21 @@ struct TypedShellRuntimeTests {
         var editor      = ShellLineEditor()
         let insertBytes = [UInt8(ascii: "x")]
         let insert      = insertBytes.withUnsafeBufferPointer {
-            editor.apply(TerminalInputEvent(sequence: 7, bytes: $0.baseAddress!, count: $0.count))
+            editor.apply(ReixInputRecord(kind: .insert, sequence: 7, bytes: $0.baseAddress!, count: $0.count)!)
         }
         #expect(insert.patch?.sequence == 7)
 
-        let refusedEvent = TerminalInputEvent(kind: .right, sequence: 4_096)
+        let refusedEvent = ReixInputRecord(kind: .right, sequence: 4_096)!
         let refused      = editor.apply(refusedEvent)
         #expect(refused.action == .refused)
         #expect(refused.patch?.sequence == refusedEvent.sequence)
 
-        let newlineEvent = TerminalInputEvent(kind: .enter, sequence: 19)
+        let newlineEvent = ReixInputRecord(kind: .enter, sequence: 19)!
         let newline      = editor.apply(newlineEvent)
         #expect(newline.patch?.kind == .newline)
         #expect(newline.patch?.sequence == newlineEvent.sequence)
 
-        let replacementEvent = TerminalInputEvent(kind: .left, sequence: 900_001)
+        let replacementEvent = ReixInputRecord(kind: .left, sequence: 900_001)!
         let replacement      = editor.apply(replacementEvent)
         #expect(replacement.patch?.kind == .replaceBuffer)
         #expect(replacement.patch?.sequence == replacementEvent.sequence)
@@ -153,33 +153,33 @@ struct TypedShellRuntimeTests {
         var editor = ShellLineEditor()
         let source = Array("ab\n12345\nèx".utf8)
         _ = source.withUnsafeBufferPointer {
-            editor.apply(TerminalInputEvent(sequence: 1, bytes: $0.baseAddress!, count: $0.count))
+            editor.apply(ReixInputRecord(kind: .insert, sequence: 1, bytes: $0.baseAddress!, count: $0.count)!)
         }
         #expect(editor.cursor == source.count)
-        _ = editor.apply(TerminalInputEvent(kind: .up, sequence: 2))
+        _ = editor.apply(ReixInputRecord(kind: .up, sequence: 2)!)
         #expect(editor.cursor == 5)
-        _ = editor.apply(TerminalInputEvent(kind: .up, sequence: 3))
+        _ = editor.apply(ReixInputRecord(kind: .up, sequence: 3)!)
         #expect(editor.cursor == 2)
-        _ = editor.apply(TerminalInputEvent(kind: .down, sequence: 4))
+        _ = editor.apply(ReixInputRecord(kind: .down, sequence: 4)!)
         #expect(editor.cursor == 5)
-        _ = editor.apply(TerminalInputEvent(kind: .home, sequence: 5))
+        _ = editor.apply(ReixInputRecord(kind: .home, sequence: 5)!)
         #expect(editor.cursor == 3)
-        _ = editor.apply(TerminalInputEvent(kind: .end, sequence: 6))
+        _ = editor.apply(ReixInputRecord(kind: .end, sequence: 6)!)
         #expect(editor.cursor == 8)
-        let replacement = editor.apply(TerminalInputEvent(kind: .delete, sequence: 7))
+        let replacement = editor.apply(ReixInputRecord(kind: .delete, sequence: 7)!)
         #expect(replacement.patch?.kind == .replaceBuffer)
         #expect(replacement.patch?.previousRows == 3)
 
         editor.reset()
         let help = Array("help".utf8)
         _ = help.withUnsafeBufferPointer {
-            editor.apply(TerminalInputEvent(sequence: 8, bytes: $0.baseAddress!, count: $0.count))
+            editor.apply(ReixInputRecord(kind: .insert, sequence: 8, bytes: $0.baseAddress!, count: $0.count)!)
         }
-        _ = editor.apply(TerminalInputEvent(kind: .enter, sequence: 9))
+        _ = editor.apply(ReixInputRecord(kind: .enter, sequence: 9)!)
         editor.reset()
-        _ = editor.apply(TerminalInputEvent(kind: .up, sequence: 10))
+        _ = editor.apply(ReixInputRecord(kind: .up, sequence: 10)!)
         #expect(editor.count == 4)
-        _ = editor.apply(TerminalInputEvent(kind: .down, sequence: 11))
+        _ = editor.apply(ReixInputRecord(kind: .down, sequence: 11)!)
         #expect(editor.count == 0)
     }
 }

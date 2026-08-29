@@ -8,8 +8,7 @@
 /// What a client asks the terminal for.
 public enum TerminalOperation: UInt32, IPCLabel {
 
-    /// Hand over the page used for terminal events and render patches. One
-    /// page, granted with the request.
+    /// Hand over the two pages used by the InputServer and TextSurface rings.
     case register
 
     /// Ask whether this caller is registered.
@@ -19,12 +18,10 @@ public enum TerminalOperation: UInt32, IPCLabel {
     /// console client's, which confirms with a flush.
     case status
 
-    /// Block for one protocol-owned input event. A zero payload length selects
-    /// this event form; the legacy prompt/complete-line form remains accepted
-    /// for older userland clients during the protocol transition.
-    case readLine
+    /// Block for one protocol-owned input record.
+    case awaitInput
 
-    /// Apply one structured render patch or present one shell text frame.
+    /// Apply exactly one structured TextSurface command.
     case present
 
     public func message(

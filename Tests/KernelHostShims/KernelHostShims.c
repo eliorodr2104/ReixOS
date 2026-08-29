@@ -113,3 +113,16 @@ void set_current_process(uint64_t process) { current_process = process; }
 void switch_user_address_space(uint64_t rootTable, uint16_t asid) { (void)rootTable; (void)asid; }
 void trigger_trap(void) {}
 void wait_for_interrupt(void) {}
+
+// Host stand-ins for the Reix userland syscall and ordering shims. The terminal
+// transport tests exercise only shared-page state, but linking `Reix` brings its
+// public syscall wrappers in as one module.
+void dmb_ish(void) { barrier_count += 1; }
+uint64_t reix_pmu_cycles(void) { return 0; }
+uint64_t reix_pmu_event0(void) { return 0; }
+uint64_t _asm_syscall(uint64_t number, ...) { (void)number; return 0; }
+uint64_t _asm_call(uint64_t handle, ...) { (void)handle; return 0; }
+uint64_t _asm_recv(uint64_t handle, ...) { (void)handle; return 0; }
+uint64_t _asm_recv_timeout(uint64_t handle, ...) { (void)handle; return 0; }
+uint64_t _asm_spawn(uint64_t first, ...) { (void)first; return 0; }
+void kernel_host_shims_link_anchor(void) {}

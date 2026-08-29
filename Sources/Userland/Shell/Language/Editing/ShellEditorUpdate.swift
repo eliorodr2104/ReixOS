@@ -9,5 +9,5 @@ import ReixABI
 
 public struct ShellEditorUpdate {
     public let action: ShellEditorAction
-    public let patch : TerminalRenderPatch?
+    public let patch : ReixTextSurfaceCommand?
 }

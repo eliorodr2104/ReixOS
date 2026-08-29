@@ -18,19 +18,27 @@ public struct BenchmarkConfiguration: Equatable, Sendable {
     public var json = false
     public var raw  = false
     public init() {}
-    public static let usage = "usage: ShellBench [--iterations N] [--batches N>=10] [--warmup N] [--json] [--raw]"
+    public static let usage = "usage: ShellBench [--iterations N|--samples N] [--batches N>=10] [--warmup N] [--json|--format json] [--raw]"
     public static func parse(_ arguments: [String]) -> Result<BenchmarkConfiguration, BenchmarkConfigurationError> {
         var value = BenchmarkConfiguration()
         var index = 0
         while index < arguments.count {
             switch arguments[index] {
+                case "--":
+                    index += 1
+                    continue
                 case "--json": value.json = true
                 case "--raw": value.raw = true
-                case "--iterations", "--batches", "--warmup":
+                case "--iterations", "--samples", "--batches", "--warmup":
                     guard index + 1 < arguments.count, let count = Int(arguments[index + 1]), count > 0 else { return .failure(.usage) }
-                    if arguments[index] == "--iterations" { value.iterations = count }
+                    if arguments[index] == "--iterations" || arguments[index] == "--samples" { value.iterations = count }
                     if arguments[index] == "--batches" { value.batches = count }
                     if arguments[index] == "--warmup" { value.warmup = count }
+                    index += 1
+                case "--format":
+                    guard index + 1 < arguments.count else { return .failure(.usage) }
+                    if arguments[index + 1] == "json" { value.json = true }
+                    else if arguments[index + 1] != "text" { return .failure(.usage) }
                     index += 1
                 default: return .failure(.usage)
             }

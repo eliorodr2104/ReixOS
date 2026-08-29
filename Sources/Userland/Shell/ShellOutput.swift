@@ -6,10 +6,15 @@
 //
 
 import Reix
+import ReixABI
 import ShellLanguage
 
 enum ShellOutput {
     private static var buffer = ShellOutputBuffer()
+    // Asynchronous shell output has no one-to-one input correlation. Reserve
+    // the high-bit sequence namespace so TerminalServer can leave it out of
+    // key-to-screen interaction traces instead of creating duplicate points.
+    private static var presentationSequence: UInt32 = ReixTerminalTransport.asynchronousSequenceBit
 
     static func begin() { buffer.reset() }
 
@@ -57,11 +62,14 @@ enum ShellOutput {
 
     static func flush(to terminal: inout Terminal) -> Bool {
         flush { source, amount in
-            terminal.present { destination, capacity in
-                guard capacity >= amount else { return -1 }
-                for index in 0..<amount { destination[index] = source[index] }
-                return amount
-            }
+            presentationSequence = ReixTerminalTransport.nextAsynchronousSequence(after: presentationSequence)
+            guard let command = ReixTextSurfaceCommand(
+                kind: .insert,
+                sequence: presentationSequence,
+                bytes: source,
+                count: amount
+            ) else { return false }
+            return terminal.present(command)
         }
     }
 }

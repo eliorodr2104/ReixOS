@@ -38,7 +38,7 @@ public struct ShellOutputBuffer {
         guard !overflowed, !failed else { return false }
         var offset = 0
         while offset < count {
-            let amount    = min(TerminalEvent.maximumPayload, count - offset)
+            guard let amount = chunkLength(at: offset) else { return false }
             let delivered = bytes.span.withUnsafeBufferPointer { source in
                 send(source.baseAddress! + offset, amount)
             }
@@ -52,5 +52,20 @@ public struct ShellOutputBuffer {
         }
         count = 0
         return true
+    }
+
+    /// Chooses one TextSurface-sized UTF-8 boundary without allocation. A
+    /// malformed sequence remains buffered when the receiver refuses it.
+    private func chunkLength(at offset: Int) -> Int? {
+        let remaining = count - offset
+        guard remaining > 0 else { return nil }
+        var amount = min(ReixTextSurfaceProtocol.maximumPayload, remaining)
+        if amount < remaining {
+            while amount > 0, (bytes[offset + amount] & 0xC0) == 0x80 {
+                amount -= 1
+            }
+        }
+        guard amount > 0 else { return nil }
+        return amount
     }
 }

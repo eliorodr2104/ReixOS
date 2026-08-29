@@ -19,7 +19,7 @@ private func parse64() -> Int {
     }
 }
 
-private let editorSeedChunk = [UInt8](repeating: UInt8(ascii: "x"), count: TerminalInputEvent.maximumText)
+private let editorSeedChunk = [UInt8](repeating: UInt8(ascii: "x"), count: ReixInputProtocol.maximumPayload)
 private func seedEditor(
     _ editor: inout ShellLineEditor,
       count : Int = 100
@@ -29,7 +29,7 @@ private func seedEditor(
     while written < count {
         let amount = min(editorSeedChunk.count, count - written)
         let update = editorSeedChunk.withUnsafeBufferPointer {
-            editor.apply(TerminalInputEvent(sequence: sequence, bytes: $0.baseAddress!, count: amount))
+            editor.apply(ReixInputRecord(kind: .insert, sequence: sequence, bytes: $0.baseAddress!, count: amount)!)
         }
         guard update.patch != nil else { return nil }
         written += amount
@@ -128,16 +128,16 @@ private func editor(
     var value = ShellLineEditor()
     guard var sequence = seedEditor(&value) else { return 0 }
     for _ in 0..<(100 - position) {
-        _ = value.apply(TerminalInputEvent(kind: .left, sequence: sequence))
+        _ = value.apply(ReixInputRecord(kind: .left, sequence: sequence)!)
         sequence += 1
     }
     if deleting {
-        let update = value.apply(TerminalInputEvent(kind: .delete, sequence: sequence))
+        let update = value.apply(ReixInputRecord(kind: .delete, sequence: sequence)!)
         return update.patch != nil && value.count == 99 ? value.count : 0
     }
     var byte = UInt8(ascii: "z")
     return withUnsafePointer(to: &byte) { pointer in
-        let update = value.apply(TerminalInputEvent(sequence: sequence, bytes: pointer, count: 1))
+        let update = value.apply(ReixInputRecord(kind: .insert, sequence: sequence, bytes: pointer, count: 1)!)
         return update.patch != nil && value.count == 101 ? value.count : 0
     }
 }
@@ -195,37 +195,37 @@ add("resolver/evaluator", "legacy resolver/evaluator") {
 
 var protocolEditor       = ShellLineEditor()
 let protocolPayload      = [UInt8(ascii: "x")]
-var protocolEventStorage = [UInt8](repeating: 0, count: 64)
-var protocolPatchStorage = [UInt8](repeating: 0, count: 300)
+var protocolEventStorage = [UInt8](repeating: 0, count: ReixInputProtocol.recordBytes)
+var protocolPatchStorage = [UInt8](repeating: 0, count: ReixTextSurfaceProtocol.recordBytes)
 add("protocol/editor", "legacy protocol/editor") {
-    let eventLength = protocolPayload.withUnsafeBufferPointer { payload in
+    let encodedEvent = protocolPayload.withUnsafeBufferPointer { payload in
         protocolEventStorage.withUnsafeMutableBufferPointer {
-            TerminalInputEvent(sequence: 77, bytes: payload.baseAddress!, count: payload.count).encode(into: $0.baseAddress!, capacity: $0.count)
+            ReixInputRecord(kind: .insert, sequence: 77, bytes: payload.baseAddress!, count: payload.count)!.encode(into: $0.baseAddress!, capacity: $0.count)
         }
     }
-    guard eventLength > 0 else { return 0 }
-    let event = protocolEventStorage.withUnsafeBufferPointer { TerminalInputEvent.decode($0.baseAddress!, length: eventLength) }
+    guard encodedEvent else { return 0 }
+    let event = protocolEventStorage.withUnsafeBufferPointer { ReixInputRecord.decode($0.baseAddress!, length: ReixInputProtocol.recordBytes) }
     guard let event else { return 0 }
     protocolEditor.reset()
     guard let patch = protocolEditor.apply(event).patch else { return 0 }
-    let patchLength = protocolPatchStorage.withUnsafeMutableBufferPointer { patch.encode(into: $0.baseAddress!, capacity: $0.count) }
-    guard patchLength > 0 else { return 0 }
-    let decodedPatch = protocolPatchStorage.withUnsafeBufferPointer { TerminalRenderPatch.decode($0.baseAddress!, length: patchLength) }
+    let encodedPatch = protocolPatchStorage.withUnsafeMutableBufferPointer { patch.encode(into: $0.baseAddress!, capacity: $0.count) }
+    guard encodedPatch else { return 0 }
+    let decodedPatch = protocolPatchStorage.withUnsafeBufferPointer { ReixTextSurfaceCommand.decode($0.baseAddress!, length: ReixTextSurfaceProtocol.recordBytes) }
     guard decodedPatch?.sequence == event.sequence else { return 0 }
-    return eventLength + patchLength + Int(decodedPatch!.sequence)
+    return ReixInputProtocol.recordBytes + ReixTextSurfaceProtocol.recordBytes + Int(decodedPatch!.sequence)
 }
 for entry in [("editor/insert-start", 0), ("editor/insert-center", 50), ("editor/insert-end", 100)] { add(entry.0, "editor seed, position and insert") { editor(entry.1, deleting: false) } }
 for entry in [("editor/delete-start", 0), ("editor/delete-center", 50), ("editor/delete-end", 99)] { add(entry.0, "editor seed, position and delete") { editor(entry.1, deleting: true) } }
 var pasteEditor  = ShellLineEditor()
-var pasteStorage = [UInt8](repeating: 0, count: 64)
+var pasteStorage = [UInt8](repeating: 0, count: ReixInputProtocol.recordBytes)
 add("paste/1", "one-byte input encode and apply") {
     pasteEditor.reset()
-    let length = protocolPayload.withUnsafeBufferPointer { payload in
+    let encoded = protocolPayload.withUnsafeBufferPointer { payload in
         pasteStorage.withUnsafeMutableBufferPointer {
-            TerminalInputEvent(sequence: 91, bytes: payload.baseAddress!, count: payload.count).encode(into: $0.baseAddress!, capacity: $0.count)
+            ReixInputRecord(kind: .insert, sequence: 91, bytes: payload.baseAddress!, count: payload.count)!.encode(into: $0.baseAddress!, capacity: $0.count)
         }
     }
-    guard let event = pasteStorage.withUnsafeBufferPointer({ TerminalInputEvent.decode($0.baseAddress!, length: length) }) else { return 0 }
+    guard encoded, let event = pasteStorage.withUnsafeBufferPointer({ ReixInputRecord.decode($0.baseAddress!, length: ReixInputProtocol.recordBytes) }) else { return 0 }
     let update = pasteEditor.apply(event)
     return update.patch != nil && pasteEditor.count == 1 ? Int(event.sequence) + pasteEditor.count : 0
 }

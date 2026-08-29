@@ -7,3 +7,4 @@ uint64_t dcache_clean_calls(void);
 uint64_t dcache_cleaned_base(void);
 uint64_t dcache_cleaned_size(void);
 void reset_dcache_clean_record(void);
+void kernel_host_shims_link_anchor(void);

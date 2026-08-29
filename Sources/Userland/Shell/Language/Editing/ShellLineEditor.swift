@@ -34,7 +34,7 @@ public struct ShellLineEditor {
 
     public init() {}
 
-    public mutating func apply(_ event: TerminalInputEvent) -> ShellEditorUpdate {
+    public mutating func apply(_ event: ReixInputRecord) -> ShellEditorUpdate {
         patchSequence = event.sequence
         let previousCursor = cursor
         let previousCount  = count
@@ -125,20 +125,23 @@ public struct ShellLineEditor {
                 }
                 guard completeness == .complete else { return refused() }
                 remember()
-                return ShellEditorUpdate(action: .submitted(count), patch: TerminalRenderPatch(kind: .newline, sequence: patchSequence))
+                return ShellEditorUpdate(action: .submitted(count), patch: ReixTextSurfaceCommand(kind: .newline, sequence: patchSequence))
 
             case .cancel:
                 clear()
-                return ShellEditorUpdate(action: .cancelled, patch: TerminalRenderPatch(kind: .newline, sequence: patchSequence))
+                return ShellEditorUpdate(action: .cancelled, patch: ReixTextSurfaceCommand(kind: .newline, sequence: patchSequence))
 
             case .eof:
                 guard count == 0 else { return refused() }
-                return ShellEditorUpdate(action: .eof, patch: TerminalRenderPatch(kind: .newline, sequence: patchSequence))
+                return ShellEditorUpdate(action: .eof, patch: ReixTextSurfaceCommand(kind: .newline, sequence: patchSequence))
 
             case .resize:
                 return ShellEditorUpdate(action: .resized(event.width, event.height), patch: nil)
 
             case .ignored:
+                return refused()
+
+            case .pasteBegin, .pasteEnd:
                 return refused()
         }
     }
@@ -242,7 +245,7 @@ public struct ShellLineEditor {
         let update        = row.span.withUnsafeBufferPointer {
             ShellEditorUpdate(
                 action: .editing,
-                patch: TerminalRenderPatch(
+                patch: ReixTextSurfaceCommand(
                     kind: .replaceBuffer,
                     sequence: patchSequence,
                     bytes: $0.baseAddress!,
@@ -260,7 +263,7 @@ public struct ShellLineEditor {
     }
 
     private func refused() -> ShellEditorUpdate {
-        ShellEditorUpdate(action: .refused, patch: TerminalRenderPatch(kind: .bell, sequence: patchSequence))
+        ShellEditorUpdate(action: .refused, patch: ReixTextSurfaceCommand(kind: .bell, sequence: patchSequence))
     }
 
     private func rowStart(containing position: Int) -> Int {

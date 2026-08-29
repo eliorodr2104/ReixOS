@@ -20,6 +20,16 @@ import ReixABI
 @Suite("ABI layout")
 struct ABILayoutTests {
 
+    @Test("the terminal transport occupies exactly two typed pages")
+    func terminalTransportLayout() {
+        #expect(ReixTerminalTransport.pages == 2)
+        #expect(ReixTerminalTransport.headerBytes == 64)
+        #expect(ReixInputProtocol.recordBytes == 32)
+        #expect(ReixTextSurfaceProtocol.recordBytes == 288)
+        #expect(ReixTerminalTransport.headerBytes + ReixTerminalTransport.inputCapacity * ReixInputProtocol.recordBytes == ReixTerminalTransport.pageBytes)
+        #expect(ReixTerminalTransport.headerBytes + ReixTerminalTransport.surfaceCapacity * ReixTextSurfaceProtocol.recordBytes == ReixTerminalTransport.pageBytes)
+    }
+
     @Test("the per-frame record stays eight bytes and starts life all zero")
     func frameInfoLayout() {
         // 8 bytes is one word per frame. At 9 the stride becomes 12 and a third of

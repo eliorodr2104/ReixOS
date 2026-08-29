@@ -159,6 +159,11 @@ let package = Package(
             path             : "Tests/KernelHostShims",
             publicHeadersPath: "include"
         ),
+        .executableTarget(
+            name: "TerminalRingHarness",
+            dependencies: ["Reix", "ReixABI", "KernelHostShims"],
+            path: "Tests/TerminalRingHarness"
+        ),
 
         // Fixtures shared by the host suites. Its own target because SwiftPM
         // forbids a target reaching for sources outside its own directory.

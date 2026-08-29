@@ -10,7 +10,7 @@
 #   make            build the bootable image (debug)
 #   make build      alias for the above (Xcode's legacy target passes $(ACTION))
 #   make test       run the host unit tests, then the QEMU scenario matrix
-#   make host-test  only the host unit tests (no QEMU, no bare-metal build)
+#   make host-test  host unit tests plus the terminal transport harness
 #   make vm-test    only the QEMU scenario matrix
 #   make terminal-baseline-4m  run the instrumented terminal baseline at 4 MiB
 #   make run        build + boot in QEMU
@@ -205,6 +205,7 @@ host-test: FREESTANDING :=
 host-test: prune-dups
 	@mkdir -p $(OUT)
 	$(SWIFT) test --no-parallel --xunit-output $(OUT)/test-results.xml
+	$(SWIFT) run TerminalRingHarness
 	SWIFT=$(SWIFT) sh scripts/test-trace-interaction.sh
 
 # The QEMU scenario matrix: every row in Tests/Scenarios/scenarios.tsv, booted
