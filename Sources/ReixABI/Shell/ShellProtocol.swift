@@ -6,9 +6,9 @@
 //
 
 public enum ShellProtocol {
-    public static let version: UInt16 = 1
-    public static let headerBytes = 16
-    public static let recordBytes = 8
+    public static let version       : UInt16 = 1
+    public static let headerBytes            = 16
+    public static let recordBytes            = 8
     public static let maximumRecords: UInt16 = 32
-    public static let maximumPayload = 1024
+    public static let maximumPayload         = 1024
 }

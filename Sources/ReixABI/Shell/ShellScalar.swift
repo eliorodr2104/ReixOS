@@ -6,7 +6,7 @@
 //
 
 public struct ShellScalar: Equatable {
-    public let kind: ShellRecordKind
+    public let kind : ShellRecordKind
     public let field: ShellField
     public let value: UInt32
 }

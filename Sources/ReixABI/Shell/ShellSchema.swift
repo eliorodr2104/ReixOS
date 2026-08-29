@@ -6,7 +6,7 @@
 //
 
 public enum ShellSchema: UInt16, Equatable {
-    case commandResult = 1
+    case commandResult      = 1
     case fileSystemFindings = 2
-    case presentation = 3
+    case presentation       = 3
 }

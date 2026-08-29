@@ -6,8 +6,8 @@
 //
 
 public enum ShellRecordKind: UInt16, Equatable {
-    case status = 1
-    case scalar = 2
-    case text = 3
+    case status    = 1
+    case scalar    = 2
+    case text      = 3
     case blobChunk = 4
 }
