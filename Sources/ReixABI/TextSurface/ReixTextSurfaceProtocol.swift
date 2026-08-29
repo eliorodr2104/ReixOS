@@ -8,7 +8,7 @@
 /// The semantic screen command contract. VT bytes are an implementation detail
 /// of VTAdapter and never occur in this protocol.
 public enum ReixTextSurfaceProtocol {
-    public static let version: UInt16 = 1
+    public static let version: UInt16 = 2
     public static let recordBytes = 288
     public static let headerBytes = 32
     public static let maximumPayload = 256
@@ -24,8 +24,7 @@ public enum ReixTextSurfaceKind: UInt16, Equatable {
     case bell = 7
 }
 
-/// A fixed 288-byte TextSurface command. Unused payload and header tail are
-/// zero, which turns stale shared-page contents into a decoding failure.
+/// Internal producer input kept while the shell migrates to native v2 frames.
 public struct ReixTextSurfaceCommand: Equatable {
     public let kind: ReixTextSurfaceKind
     public let sequence: UInt32
@@ -70,53 +69,6 @@ public struct ReixTextSurfaceCommand: Equatable {
         self.init(kind: kind, sequence: sequence, amount: amount, bytes: nil, count: 0)
     }
 
-    public func encode(into bytes: UnsafeMutablePointer<UInt8>, capacity: Int) -> Bool {
-        guard capacity >= ReixTextSurfaceProtocol.recordBytes, validMetadata() else { return false }
-        for index in 0..<ReixTextSurfaceProtocol.recordBytes { bytes[index] = 0 }
-        write16(bytes, 0, ReixTextSurfaceProtocol.version)
-        write16(bytes, 2, kind.rawValue)
-        write16(bytes, 4, 0)
-        write16(bytes, 6, UInt16(count))
-        write32(bytes, 8, sequence)
-        write16(bytes, 12, amount)
-        write16(bytes, 14, previousRows)
-        write16(bytes, 16, previousCursorRow)
-        write16(bytes, 18, cursorRow)
-        write16(bytes, 20, cursorColumn)
-        for index in 0..<count { bytes[ReixTextSurfaceProtocol.headerBytes + index] = text[index] }
-        return true
-    }
-
-    public static func decode(_ bytes: UnsafePointer<UInt8>, length: Int) -> ReixTextSurfaceCommand? {
-        guard length == ReixTextSurfaceProtocol.recordBytes,
-              read16(bytes, 0) == ReixTextSurfaceProtocol.version,
-              let kind = ReixTextSurfaceKind(rawValue: read16(bytes, 2)),
-              read16(bytes, 4) == 0,
-              read16(bytes, 22) == 0,
-              read32(bytes, 24) == 0,
-              read32(bytes, 28) == 0
-        else { return nil }
-        let count = Int(read16(bytes, 6))
-        guard count <= ReixTextSurfaceProtocol.maximumPayload,
-              zero(
-                  bytes,
-                  from: ReixTextSurfaceProtocol.headerBytes + count,
-                  through: ReixTextSurfaceProtocol.recordBytes
-              )
-        else { return nil }
-        return ReixTextSurfaceCommand(
-            kind: kind,
-            sequence: read32(bytes, 8),
-            amount: read16(bytes, 12),
-            bytes: count == 0 ? nil : bytes + ReixTextSurfaceProtocol.headerBytes,
-            count: count,
-            previousRows: read16(bytes, 14),
-            previousCursorRow: read16(bytes, 16),
-            cursorRow: read16(bytes, 18),
-            cursorColumn: read16(bytes, 20)
-        )
-    }
-
     private func validMetadata() -> Bool {
         switch kind {
             case .insert:
@@ -147,11 +99,6 @@ public struct ReixTextSurfaceCommand: Equatable {
                 return amount == 0 && count == 0 && previousRows == 0
                     && previousCursorRow == 0 && cursorRow == 0 && cursorColumn == 0
         }
-    }
-
-    private static func zero(_ bytes: UnsafePointer<UInt8>, from: Int, through: Int) -> Bool {
-        for index in from..<through where bytes[index] != 0 { return false }
-        return true
     }
 
     /// TextSurface carries printable Unicode text plus LF, never VT bytes.

@@ -30,6 +30,7 @@ public struct VTAdapter: Service {
     private var pendingChunk: ReixSerialChunk?
     private var pendingOffset = 0
     private var surface = ShmAttachment.Slot()
+    private var screen = TextSurfaceScreenModel()
 
     private static let pageSize: UInt64 = 4096
     private static let surfacePages = UInt32(ReixTextSurfaceTransport.pages)
@@ -232,6 +233,7 @@ public struct VTAdapter: Service {
         if let displaced = surface.install(attachment) {
             surrender(displaced)
         }
+        screen = TextSurfaceScreenModel()
     }
 
     private func status(_ request: inout ReceivedMessage) {
@@ -251,38 +253,111 @@ public struct VTAdapter: Service {
     private mutating func present(_ request: inout ReceivedMessage) {
         guard let held = validated(request),
               let page = UnsafeMutableRawPointer(bitPattern: UInt(held.address))?.assumingMemoryBound(to: UInt8.self),
-              let ring = ReixTextSurfaceRing(page: page, token: held.token, epoch: held.epoch),
-              let command = ring.pop(sequence: request.message.words[0])
+              let ring = ReixTextSurfaceRing(page: page, token: held.token, epoch: held.epoch)
         else {
             replyOperation(.present, status: .refused, sequence: request.message.words[0], token: 0, epoch: 0)
             return
         }
+        let transaction = request.message.words[0]
         #if REIX_TERMINAL_PROFILE
-        if ReixInteractionSequence.isCorrelated(command.sequence) {
-            mark(
-                .presentationRequested,
-                correlation: command.sequence,
-                value: UInt32(ReixTextSurfaceProtocol.recordBytes)
-            )
+        var correlation: UInt32 = 0
+        var emittedBytes: UInt32 = 0
+        #endif
+
+        var response = ReixTextSurfaceStatus.refused
+        var ackStatus = ReixTextSurfaceAckStatus.malformed
+        var ackRevision = screen.revision
+        var ackBaseRevision = screen.revision
+        let result = ring.popFrame(transaction: transaction) { frame in
+            #if REIX_TERMINAL_PROFILE
+            correlation = frame.descriptor.correlation
+            if ReixInteractionSequence.isCorrelated(correlation) {
+                mark(
+                    .presentationRequested,
+                    correlation: correlation,
+                    value: UInt32(frame.descriptor.payloadBytes)
+                )
+            }
+            #endif
+            ackRevision = frame.descriptor.revision
+            ackBaseRevision = frame.descriptor.baseRevision
+            switch screen.prepare(frame) {
+                case .duplicate:
+                    response = .ok
+                    ackStatus = .committed
+                    return .commit
+                case .resynchronizationRequired:
+                    response = .snapshotRequired
+                    ackStatus = .snapshotRequired
+                    return .commit
+                case .ready:
+                    let metrics = TextSurfaceVTRenderer.metrics(screen: screen, frame: frame)
+                    let rendered = TextSurfaceVTRenderer.render(
+                        screen: screen,
+                        frame: frame,
+                        useDiff: metrics.usesDiff
+                    ) { putchar(ch: $0) }
+                    #if REIX_TERMINAL_PROFILE
+                    if ReixInteractionSequence.isCorrelated(correlation) {
+                        mark(.presentationFullBytes, correlation: correlation, value: metrics.fullBytes)
+                        mark(.presentationDiffBytes, correlation: correlation, value: metrics.diffBytes)
+                        mark(.presentationPlan, correlation: correlation, value: metrics.usesDiff ? 1 : 0)
+                    }
+                    #endif
+                    guard consoleFlush() else {
+                        screen.requireSnapshot()
+                        response = .hardwareFailure
+                        ackStatus = .hardwareFailure
+                        return .commit
+                    }
+                    guard screen.commit(frame) else {
+                        screen.requireSnapshot()
+                        response = .snapshotRequired
+                        ackStatus = .snapshotRequired
+                        return .commit
+                    }
+                    #if REIX_TERMINAL_PROFILE
+                    emittedBytes = rendered
+                    #endif
+                    response = .ok
+                    ackStatus = .committed
+                    return .commit
+            }
+        }
+
+        switch result {
+            case .malformed, .incomplete:
+                _ = ring.recoverMalformed()
+                response = .malformed
+                ackStatus = .malformed
+                screen.requireSnapshot()
+            case .stale:
+                response = .refused
+                ackStatus = .stale
+            case .empty:
+                response = .snapshotRequired
+                ackStatus = .snapshotRequired
+            case .retry:
+                break
+            case .committed:
+                break
+        }
+        if let acknowledgement = ReixTextSurfaceAcknowledgement(
+            status: ackStatus,
+            transaction: transaction,
+            revision: ackRevision,
+            baseRevision: ackBaseRevision,
+            token: held.token,
+            epoch: held.epoch
+        ) {
+            _ = ring.publish(acknowledgement)
+        }
+        #if REIX_TERMINAL_PROFILE
+        if response == .ok && ReixInteractionSequence.isCorrelated(correlation) {
+            mark(.consoleAcknowledged, correlation: correlation, value: emittedBytes)
         }
         #endif
-        let emittedBytes = render(command)
-        guard consoleFlush() else {
-            replyOperation(
-                .present,
-                status: .refused,
-                sequence: command.sequence,
-                token: held.token,
-                epoch: held.epoch
-            )
-            return
-        }
-        #if REIX_TERMINAL_PROFILE
-        if ReixInteractionSequence.isCorrelated(command.sequence) {
-            mark(.consoleAcknowledged, correlation: command.sequence, value: emittedBytes)
-        }
-        #endif
-        replyOperation(.present, status: .ok, sequence: command.sequence, token: held.token, epoch: held.epoch)
+        replyOperation(.present, status: response, sequence: transaction, token: held.token, epoch: held.epoch)
     }
 
     private func validated(_ request: ReceivedMessage) -> ShmAttachment? {
@@ -335,108 +410,10 @@ public struct VTAdapter: Service {
         return consoleFlush()
     }
 
-    private func render(_ command: ReixTextSurfaceCommand) -> UInt32 {
-        var count: UInt32 = 0
-        switch command.kind {
-            case .insert:
-                for index in 0..<command.count {
-                    emitted(command.text[index], count: &count)
-                }
-            case .eraseBackward:
-                for _ in 0..<command.amount {
-                    emitted(Self.backspace, count: &count)
-                    emitted(0x20, count: &count)
-                    emitted(Self.backspace, count: &count)
-                }
-            case .moveLeft:
-                cursor(amount: command.amount, direction: Self.cursorLeft, count: &count)
-            case .moveRight:
-                cursor(amount: command.amount, direction: Self.cursorRight, count: &count)
-            case .newline:
-                emitted(Self.lineFeed, count: &count)
-            case .replaceBuffer:
-                renderReplacement(command, count: &count)
-            case .bell:
-                emitted(Self.bell, count: &count)
-        }
-        return count
-    }
-
-    private func renderReplacement(_ command: ReixTextSurfaceCommand, count: inout UInt32) {
-        emitted(Self.carriageReturn, count: &count)
-        cursor(amount: command.previousCursorRow, direction: Self.cursorUp, count: &count)
-        var oldRow: UInt16 = 0
-        while oldRow < command.previousRows {
-            clearLine(count: &count)
-            oldRow += 1
-            if oldRow < command.previousRows {
-                cursor(amount: 1, direction: Self.cursorDown, count: &count)
-                emitted(Self.carriageReturn, count: &count)
-            }
-        }
-        if command.previousRows > 1 {
-            cursor(amount: command.previousRows - 1, direction: Self.cursorUp, count: &count)
-            emitted(Self.carriageReturn, count: &count)
-        }
-        var finalRow: UInt16 = 0
-        for index in 0..<command.count {
-            let byte = command.text[index]
-            emitted(byte, count: &count)
-            if byte == Self.lineFeed {
-                emitted(Self.carriageReturn, count: &count)
-                finalRow += 1
-            }
-        }
-        if finalRow > command.cursorRow {
-            cursor(amount: finalRow - command.cursorRow, direction: Self.cursorUp, count: &count)
-        }
-        emitted(Self.carriageReturn, count: &count)
-        cursor(amount: command.cursorColumn, direction: Self.cursorRight, count: &count)
-    }
-
-    private func emitted(_ byte: UInt8, count: inout UInt32) {
-        emit(byte)
-        if count < Self.maximumTraceValue {
-            count += 1
-        }
-    }
-
     private func emit(_ byte: UInt8) {
         putchar(ch: byte)
     }
 
-    private func cursor(amount: UInt16, direction: UInt8, count: inout UInt32) {
-        guard amount > 0 else {
-            return
-        }
-        emitted(Self.escape, count: &count)
-        emitted(Self.openBracket, count: &count)
-        var divisor: UInt64 = 1
-        while UInt64(amount) / divisor >= 10 {
-            divisor *= 10
-        }
-        while divisor > 0 {
-            emitted(UInt8((UInt64(amount) / divisor) % 10) + 0x30, count: &count)
-            divisor /= 10
-        }
-        emitted(direction, count: &count)
-    }
-
-    private func clearLine(count: inout UInt32) {
-        emitted(Self.escape, count: &count)
-        emitted(Self.openBracket, count: &count)
-        emitted(UInt8(ascii: "2"), count: &count)
-        emitted(UInt8(ascii: "K"), count: &count)
-    }
-
-    private static let carriageReturn: UInt8 = 0x0D
-    private static let lineFeed: UInt8 = 0x0A
-    private static let backspace: UInt8 = 0x08
     private static let escape: UInt8 = 0x1B
     private static let openBracket: UInt8 = 0x5B
-    private static let bell: UInt8 = 0x07
-    private static let cursorLeft: UInt8 = 0x44
-    private static let cursorRight: UInt8 = 0x43
-    private static let cursorUp: UInt8 = 0x41
-    private static let cursorDown: UInt8 = 0x42
 }

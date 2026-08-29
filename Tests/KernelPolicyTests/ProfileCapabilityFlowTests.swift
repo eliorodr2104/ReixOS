@@ -112,6 +112,9 @@ struct ProfileCapabilityFlowTests {
             .parserCompleted,
             .presentationRequested,
             .consoleAcknowledged,
+            .presentationFullBytes,
+            .presentationDiffBytes,
+            .presentationPlan,
         ] {
             let mark = InteractionTraceMark(point: point, correlation: 1, value: InteractionTraceMark.maxValue)!
             #expect(InteractionTraceMark(packed: mark.packed) == mark)
@@ -119,7 +122,7 @@ struct ProfileCapabilityFlowTests {
         #expect(InteractionTraceMark(point: .inputDecoded, correlation: 0, value: 0) == nil)
         #expect(InteractionTraceMark(point: .inputDecoded, correlation: 1, value: InteractionTraceMark.maxValue + 1) == nil)
         #expect(InteractionTraceMark(packed: 0) == nil)
-        #expect(InteractionTraceMark(packed: UInt64(8) << 32 | 1) == nil)
+        #expect(InteractionTraceMark(packed: UInt64(11) << 32 | 1) == nil)
     }
 
     @Test("Init keeps profile interaction authority inside its compile-time branch")

@@ -197,22 +197,61 @@ var protocolEditor       = ShellLineEditor()
 let protocolPayload      = [UInt8(ascii: "x")]
 var protocolEventStorage = [UInt8](repeating: 0, count: ReixInputProtocol.recordBytes)
 var protocolPatchStorage = [UInt8](repeating: 0, count: ReixTextSurfaceProtocol.recordBytes)
-add("protocol/editor", "legacy protocol/editor") {
+var protocolMetadata     = [UInt8](repeating: 0, count: ReixTextSurfaceFrameDescriptor.wireBytes)
+add("protocol/editor", "typed frame protocol/editor") {
     let encodedEvent = protocolPayload.withUnsafeBufferPointer { payload in
         protocolEventStorage.withUnsafeMutableBufferPointer {
-            ReixInputRecord(kind: .insert, sequence: 77, bytes: payload.baseAddress!, count: payload.count)!.encode(into: $0.baseAddress!, capacity: $0.count)
+            ReixInputRecord(
+                kind    : .insert,
+                sequence: 77,
+                bytes   : payload.baseAddress!,
+                count   : payload.count
+            )!.encode(into: $0.baseAddress!, capacity: $0.count)
         }
     }
     guard encodedEvent else { return 0 }
-    let event = protocolEventStorage.withUnsafeBufferPointer { ReixInputRecord.decode($0.baseAddress!, length: ReixInputProtocol.recordBytes) }
+    let event = protocolEventStorage.withUnsafeBufferPointer {
+        ReixInputRecord.decode($0.baseAddress!, length: ReixInputProtocol.recordBytes)
+    }
     guard let event else { return 0 }
     protocolEditor.reset()
     guard let patch = protocolEditor.apply(event).patch else { return 0 }
-    let encodedPatch = protocolPatchStorage.withUnsafeMutableBufferPointer { patch.encode(into: $0.baseAddress!, capacity: $0.count) }
+    guard let descriptor = ReixTextSurfaceFrameDescriptor(
+        kind: .snapshot,
+        correlation: patch.sequence,
+        revision: 1,
+        baseRevision: 0,
+        textLength: UInt32(patch.count),
+        columns: 80,
+        rows: 24,
+        cursorRow: patch.cursorRow,
+        cursorColumn: patch.cursorColumn,
+        viewportRows: 6
+    ) else { return 0 }
+    let encodedMetadata = protocolMetadata.withUnsafeMutableBufferPointer {
+        descriptor.encode(into: $0.baseAddress!, capacity: $0.count)
+    }
+    guard encodedMetadata else { return 0 }
+    let record = protocolMetadata.withUnsafeBufferPointer {
+        ReixTextSurfaceFrameRecord(
+            kind: .begin,
+            transaction: 1,
+            chunk: 0,
+            chunks: 3,
+            checksum: 1,
+            bytes: $0.baseAddress!,
+            count: $0.count
+        )!
+    }
+    let encodedPatch = protocolPatchStorage.withUnsafeMutableBufferPointer {
+        record.encode(into: $0.baseAddress!, capacity: $0.count)
+    }
     guard encodedPatch else { return 0 }
-    let decodedPatch = protocolPatchStorage.withUnsafeBufferPointer { ReixTextSurfaceCommand.decode($0.baseAddress!, length: ReixTextSurfaceProtocol.recordBytes) }
-    guard decodedPatch?.sequence == event.sequence else { return 0 }
-    return ReixInputProtocol.recordBytes + ReixTextSurfaceProtocol.recordBytes + Int(decodedPatch!.sequence)
+    let decodedPatch = protocolPatchStorage.withUnsafeBufferPointer {
+        ReixTextSurfaceFrameRecord.decode($0.baseAddress!, length: ReixTextSurfaceProtocol.recordBytes)
+    }
+    guard decodedPatch?.transaction == 1 else { return 0 }
+    return ReixInputProtocol.recordBytes + ReixTextSurfaceProtocol.recordBytes + Int(descriptor.correlation)
 }
 for entry in [("editor/insert-start", 0), ("editor/insert-center", 50), ("editor/insert-end", 100)] { add(entry.0, "editor seed, position and insert") { editor(entry.1, deleting: false) } }
 for entry in [("editor/delete-start", 0), ("editor/delete-center", 50), ("editor/delete-end", 99)] { add(entry.0, "editor seed, position and delete") { editor(entry.1, deleting: true) } }

@@ -8,6 +8,7 @@
 import KernelHostShims
 import Reix
 import ReixABI
+import TerminalTestSupport
 
 private var checks = 0
 private var failures = 0
@@ -24,58 +25,464 @@ private func cursor(_ page: UnsafeMutablePointer<UInt8>, _ offset: Int) -> Unsaf
     UnsafeMutableRawPointer(page.advanced(by: offset)).assumingMemoryBound(to: UInt32.self)
 }
 
-kernel_host_shims_link_anchor()
-let page = UnsafeMutablePointer<UInt8>.allocate(capacity: ReixTextSurfaceTransport.pageBytes)
-defer { page.deallocate() }
+private func feed(_ bytes: [UInt8], into screen: inout TerminalScreenModel) -> Bool {
+    do {
+        try screen.feed(bytes)
+        try screen.finish()
+        return true
+    } catch {
+        return false
+    }
+}
 
+private func descriptor(
+    kind: ReixTextSurfaceFrameKind = .snapshot,
+    correlation: UInt32 = 1,
+    revision: UInt32 = 1,
+    baseRevision: UInt32 = 0,
+    patchOffset: UInt32 = 0,
+    replacedLength: UInt32 = 0,
+    textLength: Int,
+    overlayLength: Int = 0,
+    styles: Int = 0,
+    overlayStyles: Int = 0,
+    columns: UInt16 = 80,
+    rows: UInt16 = 24,
+    cursorRow: UInt16 = 0,
+    cursorColumn: UInt16 = 0,
+    viewportRow: UInt16 = 0,
+    viewportRows: UInt16 = 6,
+    overlayRows: UInt16 = 0,
+    overlayColumns: UInt16 = 0
+) -> ReixTextSurfaceFrameDescriptor {
+    ReixTextSurfaceFrameDescriptor(
+        kind: kind,
+        correlation: correlation,
+        revision: revision,
+        baseRevision: baseRevision,
+        patchOffset: patchOffset,
+        replacedLength: replacedLength,
+        textLength: UInt32(textLength),
+        overlayLength: UInt16(overlayLength),
+        styleSpanCount: UInt16(styles),
+        overlayStyleSpanCount: UInt16(overlayStyles),
+        columns: columns,
+        rows: rows,
+        cursorRow: cursorRow,
+        cursorColumn: cursorColumn,
+        viewportRow: viewportRow,
+        viewportRows: viewportRows,
+        overlayRows: UInt16(overlayRows),
+        overlayColumns: UInt16(overlayColumns)
+    )!
+}
+
+private func push(
+    _ ring: ReixTextSurfaceRing,
+    transaction: UInt32,
+    descriptor: ReixTextSurfaceFrameDescriptor,
+    text: [UInt8],
+    styles: [ReixTextSurfaceStyleSpan] = [],
+    overlay: [UInt8] = [],
+    overlayStyles: [ReixTextSurfaceStyleSpan] = []
+) -> Bool {
+    text.withUnsafeBufferPointer { textBytes in
+        styles.withUnsafeBufferPointer { styleBytes in
+            overlay.withUnsafeBufferPointer { overlayBytes in
+                overlayStyles.withUnsafeBufferPointer { overlayStyleBytes in
+                    guard let frame = ReixTextSurfaceFrameSource(
+                        descriptor: descriptor,
+                        text: text.isEmpty ? nil : textBytes.baseAddress!,
+                        styles: styles.isEmpty ? nil : styleBytes.baseAddress!,
+                        overlay: overlay.isEmpty ? nil : overlayBytes.baseAddress!,
+                        overlayStyles: overlayStyles.isEmpty ? nil : overlayStyleBytes.baseAddress!
+                    ) else { return false }
+                    return ring.push(transaction: transaction, frame: frame)
+                }
+            }
+        }
+    }
+}
+
+kernel_host_shims_link_anchor()
+let page = UnsafeMutablePointer<UInt8>.allocate(capacity: ReixTextSurfaceTransport.regionBytes)
+defer { page.deallocate() }
+for index in 0..<ReixTextSurfaceTransport.regionBytes { page[index] = 0xA5 }
+
+check(ReixTextSurfaceTransport.pages == 3, "minimum three-page region")
+check(
+    ReixTextSurfaceTransport.capacity
+        == (ReixTextSurfaceTransport.regionBytes - ReixTextSurfaceTransport.headerBytes)
+            / ReixTextSurfaceProtocol.recordBytes,
+    "capacity derives from the region"
+)
+check(
+    ReixTextSurfaceTransport.maximumFrameRecords <= ReixTextSurfaceTransport.capacity,
+    "largest snapshot is atomic"
+)
+check(
+    ReixTextSurfaceTransport.maximumFrameRecords
+        > (2 * ReixTextSurfaceTransport.pageBytes - ReixTextSurfaceTransport.headerBytes)
+            / ReixTextSurfaceProtocol.recordBytes,
+    "two pages cannot hold the largest snapshot"
+)
 check(ReixTextSurfaceRing.initialize(page: page, token: 7), "proposal")
+check(page[ReixTextSurfaceTransport.regionBytes - 1] == 0, "initialization clears every page")
 check(ReixTextSurfaceRing.accept(page: page, token: 7, epoch: 9), "accept")
 var producer = ReixTextSurfaceRing(page: page, token: 7, epoch: 9)!
 var consumer = ReixTextSurfaceRing(page: page, token: 7, epoch: 9)!
-check(consumer.pop(sequence: 1) == nil, "empty")
-for sequence in 1...ReixTextSurfaceTransport.capacity {
-    check(producer.push(ReixTextSurfaceCommand(kind: .newline, sequence: UInt32(sequence))!), "fill")
+check(consumer.popFrame(transaction: 1) { _ in .commit } == .empty, "empty typed result")
+
+let greeting = Array("reix❯ vault".utf8)
+let greetingDescriptor = descriptor(
+    textLength: greeting.count,
+    cursorColumn: UInt16(greeting.count)
+)
+check(push(producer, transaction: 1, descriptor: greetingDescriptor, text: greeting), "snapshot push")
+var decodedGreeting = [UInt8]()
+check(
+    consumer.popFrame(transaction: 1) { frame in
+        for index in 0..<Int(frame.descriptor.textLength) { decodedGreeting.append(frame.textByte(at: index)!) }
+        return .commit
+    } == .committed,
+    "snapshot pop"
+)
+check(decodedGreeting == greeting, "snapshot roundtrip")
+
+let maximumText = [UInt8](repeating: UInt8(ascii: "x"), count: 8192)
+let maximumStyles = (0..<32).map {
+    ReixTextSurfaceStyleSpan(offset: UInt32($0), length: 1, role: .input)!
 }
-check(!producer.push(ReixTextSurfaceCommand(kind: .newline, sequence: 99)!), "full does not overwrite")
-for sequence in 1...ReixTextSurfaceTransport.capacity {
-    check(consumer.pop(sequence: UInt32(sequence))?.sequence == UInt32(sequence), "drain FIFO")
+let maximumOverlay = [UInt8](repeating: UInt8(ascii: "o"), count: 1024)
+let maximumOverlayStyles = (0..<16).map {
+    ReixTextSurfaceStyleSpan(offset: UInt32($0), length: 1, role: .overlay)!
 }
-check(producer.push(ReixTextSurfaceCommand(kind: .newline, sequence: 100)!), "reuse")
-check(consumer.pop(sequence: 100)?.sequence == 100, "reuse FIFO")
+let maximumDescriptor = descriptor(
+    correlation: 2,
+    revision: 2,
+    textLength: maximumText.count,
+    overlayLength: maximumOverlay.count,
+    styles: maximumStyles.count,
+    overlayStyles: maximumOverlayStyles.count,
+    columns: 240,
+    rows: 120,
+    cursorRow: 34,
+    cursorColumn: 32,
+    viewportRow: 20,
+    viewportRows: 15,
+    overlayRows: 15,
+    overlayColumns: 240
+)
+check(
+    push(
+        producer,
+        transaction: 2,
+        descriptor: maximumDescriptor,
+        text: maximumText,
+        styles: maximumStyles,
+        overlay: maximumOverlay,
+        overlayStyles: maximumOverlayStyles
+    ),
+    "maximum snapshot push"
+)
+check(
+    !push(producer, transaction: 3, descriptor: greetingDescriptor, text: greeting),
+    "backpressure preserves unread transaction"
+)
+check(
+    consumer.popFrame(transaction: 2) { frame in
+        check(frame.textByte(at: 8191) == UInt8(ascii: "x"), "maximum text boundary")
+        check(frame.overlayByte(at: 1023) == UInt8(ascii: "o"), "maximum overlay boundary")
+        check(frame.styleSpan(at: 31)?.role == .input, "maximum style boundary")
+        return .commit
+    } == .committed,
+    "maximum snapshot pop"
+)
+
+let savedProducer = cursor(page, 28).pointee
+check(push(producer, transaction: 4, descriptor: greetingDescriptor, text: greeting), "partial setup")
+cursor(page, 28).pointee = savedProducer + 1
+check(consumer.popFrame(transaction: 4) { _ in .commit } == .incomplete, "partial batch is distinct")
+cursor(page, 28).pointee = savedProducer + UInt32(
+    2 + (greeting.count + ReixTextSurfaceFrameRecord.payloadBytes - 1)
+        / ReixTextSurfaceFrameRecord.payloadBytes
+)
+check(consumer.popFrame(transaction: 5) { _ in .commit } == .stale, "stale transaction is distinct")
+check(consumer.popFrame(transaction: 4) { _ in .retry } == .retry, "retry does not consume")
+check(consumer.popFrame(transaction: 4) { _ in .commit } == .committed, "retry can commit later")
+
+check(push(producer, transaction: 5, descriptor: greetingDescriptor, text: greeting), "corruption setup")
+let consumerCursor = cursor(page, 32).pointee
+let chunkSlot = Int((consumerCursor + 1) % UInt32(ReixTextSurfaceTransport.capacity))
+let payloadAddress = ReixTextSurfaceTransport.headerBytes
+    + chunkSlot * ReixTextSurfaceProtocol.recordBytes
+    + ReixTextSurfaceProtocol.headerBytes
+page[payloadAddress] ^= 0x01
+check(consumer.popFrame(transaction: 5) { _ in .commit } == .malformed, "checksum corruption")
+check(cursor(page, 32).pointee == consumerCursor, "malformed batch remains until recovery")
+check(consumer.recoverMalformed(), "explicit recovery")
+check(cursor(page, 32).pointee == cursor(page, 28).pointee, "recovery resynchronizes cursors")
+
+let escape = [UInt8](arrayLiteral: 0x1B, UInt8(ascii: "["), UInt8(ascii: "J"))
+let escapeDescriptor = descriptor(correlation: 6, revision: 3, textLength: escape.count, cursorColumn: 3)
+check(push(producer, transaction: 6, descriptor: escapeDescriptor, text: escape), "escape setup")
+check(consumer.popFrame(transaction: 6) { _ in .commit } == .malformed, "escape is inert protocol data")
+check(consumer.recoverMalformed(), "escape recovery")
+
+let unicode = Array("reix λ vault".utf8)
+let unicodeDescriptor = descriptor(
+    correlation: 7,
+    revision: 3,
+    textLength: unicode.count,
+    cursorColumn: 12
+)
+check(push(producer, transaction: 7, descriptor: unicodeDescriptor, text: unicode), "unicode setup")
+check(consumer.popFrame(transaction: 7) { _ in .commit } == .committed, "unicode is one semantic stream")
+
 cursor(page, 28).pointee = UInt32.max - 1
 cursor(page, 32).pointee = UInt32.max - 1
 producer = ReixTextSurfaceRing(page: page, token: 7, epoch: 9)!
 consumer = ReixTextSurfaceRing(page: page, token: 7, epoch: 9)!
-check(producer.push(ReixTextSurfaceCommand(kind: .newline, sequence: 101)!), "wrap first push")
-check(consumer.pop(sequence: 101)?.sequence == 101, "wrap first pop")
-check(producer.push(ReixTextSurfaceCommand(kind: .newline, sequence: 102)!), "wrap zero push")
-check(consumer.pop(sequence: 102)?.sequence == 102, "wrap zero pop")
-check(cursor(page, 28).pointee == 0 && cursor(page, 32).pointee == 0, "wrap crossed zero")
+check(push(producer, transaction: 8, descriptor: greetingDescriptor, text: greeting), "cursor wrap push")
+check(consumer.popFrame(transaction: 8) { _ in .commit } == .committed, "cursor wrap pop")
+check(cursor(page, 28).pointee == cursor(page, 32).pointee, "cursor wrap remains coherent")
 
-let corruptions = [0, 4, 6, 8, 10, 12, 16, 24, 36, 40]
-for offset in corruptions {
-    let saved = page[offset]
-    page[offset] ^= 0xFF
-    check(ReixTextSurfaceRing(page: page, token: 7, epoch: 9) == nil, "header corruption")
-    page[offset] = saved
+let acknowledgement = ReixTextSurfaceAcknowledgement(
+    status: .committed,
+    transaction: 8,
+    revision: 1,
+    baseRevision: 0,
+    token: 7,
+    epoch: 9
+)!
+check(producer.publish(acknowledgement), "ack publication")
+check(producer.acknowledgement(transaction: 8) == acknowledgement, "ack binds every revision domain")
+check(producer.acknowledgement(transaction: 9) == nil, "stale ack refused")
+let preRevisionFailure = ReixTextSurfaceAcknowledgement(
+    status: .malformed,
+    transaction: 9,
+    revision: 0,
+    baseRevision: 0,
+    token: 7,
+    epoch: 9
+)!
+check(producer.publish(preRevisionFailure), "pre-revision failure ack publication")
+check(producer.acknowledgement(transaction: 9) == preRevisionFailure, "zero revision failure ack is exact")
+
+check(ReixTextSurfaceRing.initialize(page: page, token: 21), "screen model proposal")
+check(ReixTextSurfaceRing.accept(page: page, token: 21, epoch: 22), "screen model accept")
+producer = ReixTextSurfaceRing(page: page, token: 21, epoch: 22)!
+consumer = ReixTextSurfaceRing(page: page, token: 21, epoch: 22)!
+var model = TextSurfaceScreenModel()
+let abc = Array("abc".utf8)
+let abcDescriptor = descriptor(revision: 1, textLength: abc.count, cursorColumn: 3)
+check(push(producer, transaction: 1, descriptor: abcDescriptor, text: abc), "model snapshot setup")
+check(
+    consumer.popFrame(transaction: 1) { frame in
+        check(model.prepare(frame) == .ready, "model snapshot ready")
+        check(model.commit(frame), "model snapshot commit")
+        return .commit
+    } == .committed,
+    "model snapshot consumed"
+)
+check(model.textLength == 3 && model.textByte(at: 1) == UInt8(ascii: "b"), "model stores UTF-8 bytes")
+
+check(push(producer, transaction: 2, descriptor: abcDescriptor, text: abc), "duplicate setup")
+check(
+    consumer.popFrame(transaction: 2) { frame in
+        check(model.prepare(frame) == .duplicate, "identical revision is idempotent")
+        return .commit
+    } == .committed,
+    "duplicate consumed"
+)
+let abd = Array("abd".utf8)
+check(push(producer, transaction: 3, descriptor: abcDescriptor, text: abd), "conflicting duplicate setup")
+check(
+    consumer.popFrame(transaction: 3) { frame in
+        check(
+            model.prepare(frame) == .resynchronizationRequired,
+            "conflicting duplicate requires snapshot"
+        )
+        return .commit
+    } == .committed,
+    "conflicting duplicate consumed"
+)
+
+let recoveryDescriptor = descriptor(correlation: 4, revision: 2, textLength: abc.count, cursorColumn: 3)
+check(push(producer, transaction: 4, descriptor: recoveryDescriptor, text: abc), "recovery snapshot setup")
+check(
+    consumer.popFrame(transaction: 4) { frame in
+        check(model.prepare(frame) == .ready, "snapshot recovers staged state")
+        check(model.commit(frame), "snapshot recovery commit")
+        return .commit
+    } == .committed,
+    "recovery snapshot consumed"
+)
+
+let lambda = Array("λ".utf8)
+let lambdaStyle = [ReixTextSurfaceStyleSpan(offset: 1, length: 2, role: .input)!]
+let patchDescriptor = descriptor(
+    kind: .patch,
+    correlation: 5,
+    revision: 3,
+    baseRevision: 2,
+    patchOffset: 1,
+    replacedLength: 1,
+    textLength: lambda.count,
+    styles: 1,
+    cursorColumn: 3
+)
+check(
+    push(producer, transaction: 5, descriptor: patchDescriptor, text: lambda, styles: lambdaStyle),
+    "UTF-8 patch setup"
+)
+check(
+    consumer.popFrame(transaction: 5) { frame in
+        check(model.prepare(frame) == .ready, "UTF-8 patch ready")
+        check(model.commit(frame), "UTF-8 patch commit")
+        return .commit
+    } == .committed,
+    "UTF-8 patch consumed"
+)
+check(model.textLength == 4, "UTF-8 continuation bytes are not cells")
+check(model.styleSpan(at: 0) == lambdaStyle[0], "semantic style span retained")
+
+let futureDescriptor = descriptor(
+    kind: .patch,
+    correlation: 6,
+    revision: 5,
+    baseRevision: 3,
+    patchOffset: 4,
+    textLength: 0,
+    cursorColumn: 3
+)
+check(push(producer, transaction: 6, descriptor: futureDescriptor, text: []), "future revision setup")
+check(
+    consumer.popFrame(transaction: 6) { frame in
+        check(model.prepare(frame) == .resynchronizationRequired, "future revision refused")
+        return .commit
+    } == .committed,
+    "future revision consumed"
+)
+
+let resized = Array("ready".utf8)
+let resizedDescriptor = descriptor(
+    correlation: 7,
+    revision: 4,
+    textLength: resized.count,
+    columns: 40,
+    rows: 12,
+    cursorColumn: 5,
+    viewportRows: 3
+)
+check(push(producer, transaction: 7, descriptor: resizedDescriptor, text: resized), "geometry snapshot setup")
+check(
+    consumer.popFrame(transaction: 7) { frame in
+        check(model.prepare(frame) == .ready, "geometry changes require a snapshot")
+        check(model.commit(frame), "geometry snapshot commit")
+        return .commit
+    } == .committed,
+    "geometry snapshot consumed"
+)
+check(model.interactiveRows == 3, "quarter viewport at 40 by 12")
+check(ReixTextSurfaceFrameDescriptor.interactiveRows(for: 24) == 6, "quarter viewport at 80 by 24")
+check(ReixTextSurfaceFrameDescriptor.interactiveRows(for: 60) == 15, "quarter viewport cap at 240 by 60")
+check(ReixTextSurfaceFrameDescriptor.interactiveRows(for: 3) == 1, "short terminal keeps one row")
+
+for geometry: (columns: UInt16, rows: UInt16) in [(40, 12), (80, 24), (240, 60), (10, 3)] {
+    check(ReixTextSurfaceRing.initialize(page: page, token: 31), "renderer proposal")
+    check(ReixTextSurfaceRing.accept(page: page, token: 31, epoch: 32), "renderer accept")
+    producer = ReixTextSurfaceRing(page: page, token: 31, epoch: 32)!
+    consumer = ReixTextSurfaceRing(page: page, token: 31, epoch: 32)!
+    var rendererModel = TextSurfaceScreenModel()
+    var terminal = TerminalScreenModel(columns: Int(geometry.columns), rows: Int(geometry.rows))
+    let initial = Array("reix one\nnext".utf8)
+    let visibleRows = ReixTextSurfaceFrameDescriptor.interactiveRows(for: geometry.rows)
+    let viewportRow: UInt16 = visibleRows > 1 ? 0 : 1
+    let initialDescriptor = descriptor(
+        revision: 1,
+        textLength: initial.count,
+        columns: geometry.columns,
+        rows: geometry.rows,
+        cursorRow: 1,
+        cursorColumn: 4,
+        viewportRow: viewportRow,
+        viewportRows: visibleRows
+    )
+    check(push(producer, transaction: 1, descriptor: initialDescriptor, text: initial), "renderer snapshot")
+    check(
+        consumer.popFrame(transaction: 1) { frame in
+            var bytes: [UInt8] = []
+            let metrics = TextSurfaceVTRenderer.metrics(screen: rendererModel, frame: frame)
+            let rendered = TextSurfaceVTRenderer.render(
+                screen: rendererModel,
+                frame: frame,
+                useDiff: metrics.usesDiff
+            ) { bytes.append($0) }
+            check(!metrics.usesDiff, "snapshot selects full redraw")
+            check(rendered == UInt32(bytes.count), "snapshot byte metric is exact")
+            check(feed(bytes, into: &terminal), "snapshot VT is accepted")
+            check(rendererModel.commit(frame), "renderer snapshot commit")
+            return .commit
+        } == .committed,
+        "renderer snapshot consumed"
+    )
+
+    let suffix = Array("!".utf8)
+    let patch = descriptor(
+        kind: .patch,
+        correlation: 2,
+        revision: 2,
+        baseRevision: 1,
+        patchOffset: UInt32(initial.count),
+        textLength: suffix.count,
+        columns: geometry.columns,
+        rows: geometry.rows,
+        cursorRow: 1,
+        cursorColumn: 5,
+        viewportRow: viewportRow,
+        viewportRows: visibleRows
+    )
+    check(push(producer, transaction: 2, descriptor: patch, text: suffix), "renderer patch")
+    check(
+        consumer.popFrame(transaction: 2) { frame in
+            var diffBytes: [UInt8] = []
+            var fullBytes: [UInt8] = []
+            let metrics = TextSurfaceVTRenderer.metrics(screen: rendererModel, frame: frame)
+            let diffCount = TextSurfaceVTRenderer.render(
+                screen: rendererModel,
+                frame: frame,
+                useDiff: true
+            ) { diffBytes.append($0) }
+            let fullCount = TextSurfaceVTRenderer.render(
+                screen: rendererModel,
+                frame: frame,
+                useDiff: false
+            ) { fullBytes.append($0) }
+            var diffTerminal = terminal
+            var fullTerminal = terminal
+            check(diffCount == metrics.diffBytes, "diff byte metric is exact")
+            check(fullCount == metrics.fullBytes, "full byte metric is exact")
+            check(feed(diffBytes, into: &diffTerminal), "diff VT is accepted")
+            check(feed(fullBytes, into: &fullTerminal), "full VT is accepted")
+            check(diffTerminal.cells == fullTerminal.cells, "diff and full cells are equivalent")
+            check(diffTerminal.cursorRow == fullTerminal.cursorRow, "diff and full cursor rows agree")
+            check(diffTerminal.cursorColumn == fullTerminal.cursorColumn, "diff and full cursor columns agree")
+            check(rendererModel.commit(frame), "renderer patch commit")
+            return .commit
+        } == .committed,
+        "renderer patch consumed"
+    )
 }
-check(ReixTextSurfaceRing(page: page, token: 8, epoch: 9) == nil, "stale token")
-check(ReixTextSurfaceRing(page: page, token: 7, epoch: 10) == nil, "stale epoch")
-cursor(page, 28).pointee = UInt32(ReixTextSurfaceTransport.capacity + 1)
-cursor(page, 32).pointee = 0
-check(ReixTextSurfaceRing(page: page, token: 7, epoch: 9) == nil, "cursor distance corruption")
-cursor(page, 28).pointee = 0
-cursor(page, 32).pointee = 0
-check(producer.push(ReixTextSurfaceCommand(kind: .newline, sequence: 2000)!), "mismatch setup")
-check(consumer.pop(sequence: 2001) == nil && cursor(page, 32).pointee == 0, "mismatch keeps consumer")
-page[ReixTextSurfaceTransport.headerBytes] = 0
-check(consumer.pop(sequence: 2000) == nil && cursor(page, 32).pointee == 0, "corrupt slot keeps consumer")
 
-let proposalPage = UnsafeMutablePointer<UInt8>.allocate(capacity: ReixTextSurfaceTransport.pageBytes)
+let proposalPage = UnsafeMutablePointer<UInt8>.allocate(capacity: ReixTextSurfaceTransport.regionBytes)
 defer { proposalPage.deallocate() }
 check(ReixTextSurfaceRing.initialize(page: proposalPage, token: 11), "proposal setup")
-cursor(proposalPage, 28).pointee = 1
-check(!ReixTextSurfaceRing.accept(page: proposalPage, token: 11, epoch: 1), "nonempty proposal refused")
+proposalPage[12] ^= 0x01
+check(!ReixTextSurfaceRing.accept(page: proposalPage, token: 11, epoch: 1), "unknown features refused")
+proposalPage[12] ^= 0x01
+proposalPage[4] = 1
+check(!ReixTextSurfaceRing.accept(page: proposalPage, token: 11, epoch: 1), "old version refused")
 
 if failures == 0 {
     print("TextSurfaceRingHarness passed \(checks) checks")

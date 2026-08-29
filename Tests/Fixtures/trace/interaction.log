@@ -6,6 +6,9 @@
 [TRACE] t=140 ev=interactionMark pid=1 info=5 a=1 b=0
 [TRACE] t=150 ev=interactionMark pid=1 info=6 a=1 b=0
 [TRACE] t=160 ev=interactionMark pid=1 info=7 a=1 b=12
+[TRACE] t=151 ev=interactionMark pid=1 info=8 a=1 b=100
+[TRACE] t=152 ev=interactionMark pid=1 info=9 a=1 b=20
+[TRACE] t=153 ev=interactionMark pid=1 info=10 a=1 b=1
 [TRACE] t=200 ev=interactionMark pid=1 info=1 a=2 b=0
 [TRACE] t=210 ev=interactionMark pid=1 info=2 a=2 b=0
 [TRACE] t=300 ev=interactionMark pid=1 info=1 a=3 b=0
@@ -13,7 +16,7 @@
 [TRACE] t=400 ev=interactionMark pid=1 info=1 a=4 b=0
 [TRACE] t=410 ev=interactionMark pid=1 info=2 a=4 b=0
 [TRACE] t=420 ev=interactionMark pid=1 info=2 a=4 b=0
-[TRACE] t=500 ev=interactionMark pid=1 info=8 a=5 b=0
+[TRACE] t=500 ev=interactionMark pid=1 info=11 a=5 b=0
 [TRACE] t=510 ev=interactionMark pid=1 info=1 a=4294967296 b=0
 [TRACE] t=520 ev=interactionMark pid=1 info=1 a=6 b=16777216
-[TRACE] end count=17
+[TRACE] end count=20

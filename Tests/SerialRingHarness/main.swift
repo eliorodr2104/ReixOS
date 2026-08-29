@@ -182,7 +182,9 @@ private func consoleWrap() {
 
 private func consoleFlushOwnership() {
     let status = ConsoleStatus.afterSerialFlush(hasRing: true, flush: .pending)
-    require(status == .registered, "pending serial flush keeps console ownership")
+    require(status == .pending, "pending serial flush stays distinguishable")
+    require(ConsoleStatus.afterSerialFlush(hasRing: true, flush: .ok) == .registered, "serial flush ack")
+    require(ConsoleStatus.afterSerialFlush(hasRing: true, flush: .timedOut) == .failed, "serial flush failure")
     let missing = ConsoleStatus.afterSerialFlush(hasRing: false, flush: .timedOut)
     require(missing == .unregistered, "missing console ring")
 }

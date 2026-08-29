@@ -167,7 +167,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "TerminalRingHarness",
-            dependencies: ["Reix", "ReixABI", "KernelHostShims"],
+            dependencies: ["Reix", "ReixABI", "KernelHostShims", "TerminalTestSupport"],
             path: "Tests/TerminalRingHarness"
         ),
         .executableTarget(

@@ -1,0 +1,337 @@
+//
+//  TextSurfaceVTRenderer.swift
+//  ReixOS
+//
+//  Created by Eliomar Alejandro Rodriguez Ferrer on 28/08/2026.
+//
+
+import ReixABI
+
+/// Deterministic local conversion from semantic screen frames to bounded VT output.
+public enum TextSurfaceVTRenderer {
+    public struct Metrics: Equatable {
+        public let fullBytes: UInt32
+        public let diffBytes: UInt32
+        public let usesDiff: Bool
+    }
+
+    public static func metrics(
+        screen: TextSurfaceScreenModel,
+        frame: ReixTextSurfaceFrameView
+    ) -> Metrics {
+        let full = renderPlan(screen: screen, frame: frame, useDiff: false) { _ in }
+        guard diffEligible(screen: screen, frame: frame) else {
+            return Metrics(fullBytes: full, diffBytes: full, usesDiff: false)
+        }
+        let diff = renderPlan(screen: screen, frame: frame, useDiff: true) { _ in }
+        return Metrics(fullBytes: full, diffBytes: diff, usesDiff: diff < full)
+    }
+
+    public static func render(
+        screen: TextSurfaceScreenModel,
+        frame: ReixTextSurfaceFrameView,
+        useDiff: Bool,
+        emit: (UInt8) -> Void
+    ) -> UInt32 {
+        let selectedDiff = useDiff && diffEligible(screen: screen, frame: frame)
+        return renderPlan(screen: screen, frame: frame, useDiff: selectedDiff, emit: emit)
+    }
+
+    private static func renderPlan(
+        screen: TextSurfaceScreenModel,
+        frame: ReixTextSurfaceFrameView,
+        useDiff: Bool,
+        emit: (UInt8) -> Void
+    ) -> UInt32 {
+        var count: UInt32 = 0
+        let descriptor = frame.descriptor
+        let baseRow = descriptor.rows - descriptor.viewportRows + 1
+        let start = useDiff ? Int(descriptor.patchOffset) : 0
+        var startRow = descriptor.viewportRow
+        var startColumn: UInt16 = 0
+
+        if useDiff, let position = position(of: start, in: screen),
+           position.row >= descriptor.viewportRow,
+           position.row < descriptor.viewportRow + descriptor.viewportRows {
+            startRow = position.row
+            startColumn = position.column
+            cup(
+                row: baseRow + position.row - descriptor.viewportRow,
+                column: position.column + 1,
+                count: &count,
+                emit: emit
+            )
+            clearToViewportEnd(
+                from: position.row - descriptor.viewportRow,
+                rows: descriptor.viewportRows,
+                baseRow: baseRow,
+                count: &count,
+                emit: emit
+            )
+        } else {
+            clearViewport(baseRow: baseRow, rows: descriptor.viewportRows, count: &count, emit: emit)
+        }
+
+        if useDiff, descriptor.textLength == 0, descriptor.replacedLength == 0 {
+            style(.plain, count: &count, emit: emit)
+            cup(
+                row: baseRow + descriptor.cursorRow - descriptor.viewportRow,
+                column: descriptor.cursorColumn + 1,
+                count: &count,
+                emit: emit
+            )
+            return count
+        }
+        cup(
+            row: baseRow + startRow - descriptor.viewportRow,
+            column: startColumn + 1,
+            count: &count,
+            emit: emit
+        )
+        renderText(screen: screen, frame: frame, from: start, count: &count, emit: emit)
+        renderOverlay(frame, baseRow: baseRow, count: &count, emit: emit)
+        style(.plain, count: &count, emit: emit)
+        cup(
+            row: baseRow + descriptor.cursorRow - descriptor.viewportRow,
+            column: descriptor.cursorColumn + 1,
+            count: &count,
+            emit: emit
+        )
+        return count
+    }
+
+    private static func diffEligible(
+        screen: TextSurfaceScreenModel,
+        frame: ReixTextSurfaceFrameView
+    ) -> Bool {
+        let descriptor = frame.descriptor
+        guard descriptor.kind == .patch,
+              descriptor.styleSpanCount == 0,
+              descriptor.overlayLength == 0,
+              screen.styleSpanCount == 0,
+              screen.overlayLength == 0,
+              descriptor.viewportRow == screen.viewportRow,
+              descriptor.viewportRows == screen.viewportRows,
+              let position = position(of: Int(descriptor.patchOffset), in: screen),
+              position.row >= descriptor.viewportRow
+        else { return false }
+        return true
+    }
+
+    private static func position(
+        of offset: Int,
+        in model: TextSurfaceScreenModel
+    ) -> (row: UInt16, column: UInt16)? {
+        guard offset >= 0, offset <= model.textLength else { return nil }
+        var row: UInt16 = 0
+        var column: UInt16 = 0
+        for index in 0..<offset {
+            guard let byte = model.textByte(at: index) else { return nil }
+            if byte == lineFeed {
+                row &+= 1
+                column = 0
+            } else if byte & 0xC0 != 0x80 {
+                column &+= 1
+                if column == model.columns { row &+= 1; column = 0 }
+            }
+        }
+        return (row, column)
+    }
+
+    private static func clearViewport(
+        baseRow: UInt16,
+        rows: UInt16,
+        count: inout UInt32,
+        emit: (UInt8) -> Void
+    ) {
+        for row in 0..<rows {
+            cup(row: baseRow + row, column: 1, count: &count, emit: emit)
+            clearLine(count: &count, emit: emit)
+        }
+    }
+
+    private static func clearToViewportEnd(
+        from row: UInt16,
+        rows: UInt16,
+        baseRow: UInt16,
+        count: inout UInt32,
+        emit: (UInt8) -> Void
+    ) {
+        clearToLineEnd(count: &count, emit: emit)
+        guard row + 1 < rows else { return }
+        for next in (row + 1)..<rows {
+            cup(row: baseRow + next, column: 1, count: &count, emit: emit)
+            clearLine(count: &count, emit: emit)
+        }
+    }
+
+    private static func renderText(
+        screen: TextSurfaceScreenModel,
+        frame: ReixTextSurfaceFrameView,
+        from start: Int,
+        count: inout UInt32,
+        emit: (UInt8) -> Void
+    ) {
+        let descriptor = frame.descriptor
+        var row: UInt16 = 0
+        var column: UInt16 = 0
+        var activeRole = ReixTextSurfaceStyleRole.plain
+        let length = screen.desiredTextLength(for: frame)
+        for index in 0..<length {
+            guard let byte = screen.desiredTextByte(at: index, for: frame) else { return }
+            let visible = index >= start
+                && row >= descriptor.viewportRow
+                && row < descriptor.viewportRow + descriptor.viewportRows
+            if visible {
+                let role = styleRole(at: index, frame: frame)
+                if role != activeRole { style(role, count: &count, emit: emit); activeRole = role }
+                if byte == lineFeed {
+                    emitted(carriageReturn, count: &count, emit: emit)
+                    emitted(lineFeed, count: &count, emit: emit)
+                } else {
+                    emitted(byte, count: &count, emit: emit)
+                }
+            }
+            if byte == lineFeed {
+                row &+= 1
+                column = 0
+            } else if byte & 0xC0 != 0x80 {
+                column &+= 1
+                if column == descriptor.columns { row &+= 1; column = 0 }
+            }
+        }
+        if activeRole != .plain { style(.plain, count: &count, emit: emit) }
+    }
+
+    private static func renderOverlay(
+        _ frame: ReixTextSurfaceFrameView,
+        baseRow: UInt16,
+        count: inout UInt32,
+        emit: (UInt8) -> Void
+    ) {
+        let descriptor = frame.descriptor
+        guard descriptor.overlayLength > 0 else { return }
+        cup(
+            row: baseRow + descriptor.overlayRow,
+            column: descriptor.overlayColumn + 1,
+            count: &count,
+            emit: emit
+        )
+        var role = ReixTextSurfaceStyleRole.plain
+        for index in 0..<Int(descriptor.overlayLength) {
+            let next = overlayStyleRole(at: index, frame: frame)
+            if next != role { style(next, count: &count, emit: emit); role = next }
+            guard let byte = frame.overlayByte(at: index) else { return }
+            if byte == lineFeed {
+                emitted(carriageReturn, count: &count, emit: emit)
+                emitted(lineFeed, count: &count, emit: emit)
+            } else {
+                emitted(byte, count: &count, emit: emit)
+            }
+        }
+        if role != .plain { style(.plain, count: &count, emit: emit) }
+    }
+
+    private static func styleRole(
+        at offset: Int,
+        frame: ReixTextSurfaceFrameView
+    ) -> ReixTextSurfaceStyleRole {
+        for index in 0..<Int(frame.descriptor.styleSpanCount) {
+            guard let span = frame.styleSpan(at: index) else { return .plain }
+            if offset >= Int(span.offset), offset < Int(span.offset) + Int(span.length) { return span.role }
+        }
+        return .plain
+    }
+
+    private static func overlayStyleRole(
+        at offset: Int,
+        frame: ReixTextSurfaceFrameView
+    ) -> ReixTextSurfaceStyleRole {
+        for index in 0..<Int(frame.descriptor.overlayStyleSpanCount) {
+            guard let span = frame.overlayStyleSpan(at: index) else { return .plain }
+            if offset >= Int(span.offset), offset < Int(span.offset) + Int(span.length) { return span.role }
+        }
+        return .overlay
+    }
+
+    private static func style(
+        _ role: ReixTextSurfaceStyleRole,
+        count: inout UInt32,
+        emit: (UInt8) -> Void
+    ) {
+        emitted(escape, count: &count, emit: emit)
+        emitted(openBracket, count: &count, emit: emit)
+        switch role {
+            case .plain, .input:
+                emitted(UInt8(ascii: "0"), count: &count, emit: emit)
+            case .prompt:
+                emitted(UInt8(ascii: "1"), count: &count, emit: emit)
+                emitted(UInt8(ascii: ";"), count: &count, emit: emit)
+                emitted(UInt8(ascii: "3"), count: &count, emit: emit)
+                emitted(UInt8(ascii: "6"), count: &count, emit: emit)
+            case .selection:
+                emitted(UInt8(ascii: "7"), count: &count, emit: emit)
+            case .diagnostic:
+                emitted(UInt8(ascii: "3"), count: &count, emit: emit)
+                emitted(UInt8(ascii: "1"), count: &count, emit: emit)
+            case .overlay:
+                emitted(UInt8(ascii: "3"), count: &count, emit: emit)
+                emitted(UInt8(ascii: "5"), count: &count, emit: emit)
+        }
+        emitted(UInt8(ascii: "m"), count: &count, emit: emit)
+    }
+
+    private static func cup(
+        row: UInt16,
+        column: UInt16,
+        count: inout UInt32,
+        emit: (UInt8) -> Void
+    ) {
+        emitted(escape, count: &count, emit: emit)
+        emitted(openBracket, count: &count, emit: emit)
+        decimal(row, count: &count, emit: emit)
+        emitted(UInt8(ascii: ";"), count: &count, emit: emit)
+        decimal(column, count: &count, emit: emit)
+        emitted(UInt8(ascii: "H"), count: &count, emit: emit)
+    }
+
+    private static func decimal(
+        _ value: UInt16,
+        count: inout UInt32,
+        emit: (UInt8) -> Void
+    ) {
+        var divisor: UInt16 = 1
+        while value / divisor >= 10 { divisor *= 10 }
+        while divisor > 0 {
+            emitted(UInt8(value / divisor % 10) + 0x30, count: &count, emit: emit)
+            divisor /= 10
+        }
+    }
+
+    private static func clearToLineEnd(count: inout UInt32, emit: (UInt8) -> Void) {
+        emitted(escape, count: &count, emit: emit)
+        emitted(openBracket, count: &count, emit: emit)
+        emitted(UInt8(ascii: "K"), count: &count, emit: emit)
+    }
+
+    private static func clearLine(count: inout UInt32, emit: (UInt8) -> Void) {
+        emitted(escape, count: &count, emit: emit)
+        emitted(openBracket, count: &count, emit: emit)
+        emitted(UInt8(ascii: "2"), count: &count, emit: emit)
+        emitted(UInt8(ascii: "K"), count: &count, emit: emit)
+    }
+
+    private static func emitted(
+        _ byte: UInt8,
+        count: inout UInt32,
+        emit: (UInt8) -> Void
+    ) {
+        emit(byte)
+        if count < UInt32.max { count += 1 }
+    }
+
+    private static let carriageReturn: UInt8 = 0x0D
+    private static let lineFeed: UInt8 = 0x0A
+    private static let escape: UInt8 = 0x1B
+    private static let openBracket: UInt8 = 0x5B
+}

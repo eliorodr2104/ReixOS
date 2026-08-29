@@ -20,12 +20,16 @@ import ReixABI
 @Suite("ABI layout")
 struct ABILayoutTests {
 
-    @Test("the TextSurface transport occupies exactly one typed page")
+    @Test("the TextSurface transport holds one maximum snapshot atomically")
     func textSurfaceTransportLayout() {
-        #expect(ReixTextSurfaceTransport.pages == 1)
+        #expect(ReixTextSurfaceTransport.pages == 3)
         #expect(ReixTextSurfaceTransport.headerBytes == 64)
         #expect(ReixTextSurfaceProtocol.recordBytes == 288)
-        #expect(ReixTextSurfaceTransport.headerBytes + ReixTextSurfaceTransport.capacity * ReixTextSurfaceProtocol.recordBytes == ReixTextSurfaceTransport.pageBytes)
+        let used = ReixTextSurfaceTransport.headerBytes
+            + ReixTextSurfaceTransport.capacity * ReixTextSurfaceProtocol.recordBytes
+        #expect(used <= ReixTextSurfaceTransport.regionBytes)
+        #expect(ReixTextSurfaceTransport.regionBytes - used < ReixTextSurfaceProtocol.recordBytes)
+        #expect(ReixTextSurfaceTransport.maximumFrameRecords <= ReixTextSurfaceTransport.capacity)
     }
 
     @Test("the per-frame record stays eight bytes and starts life all zero")

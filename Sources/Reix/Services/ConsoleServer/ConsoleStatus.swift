@@ -16,6 +16,8 @@ import ReixABI
 public enum ConsoleStatus: UInt32 {
     case unregistered = 0
     case registered   = 1
+    case pending      = 2
+    case failed       = 3
 
     /// Pending serial work still owns the bytes and keeps the ring registered.
     public static func afterSerialFlush(
@@ -24,8 +26,10 @@ public enum ConsoleStatus: UInt32 {
     ) -> ConsoleStatus {
 
         guard hasRing else { return .unregistered }
-
-        _ = flush
-        return .registered
+        switch flush {
+            case .ok: return .registered
+            case .pending: return .pending
+            default: return .failed
+        }
     }
 }

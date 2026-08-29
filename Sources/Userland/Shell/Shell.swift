@@ -82,7 +82,16 @@ public func main() {
                !terminal.present(patch) { break input }
 
             switch update.action {
-                case .editing, .resized, .refused: continue
+                case .editing, .refused:
+                    continue
+
+                case .resized(let width, let height):
+                    guard terminal.resize(
+                        width      : width,
+                        height     : height,
+                        correlation: event.sequence
+                    ) else { break input }
+                    continue
 
                 case .submitted(let length):
 

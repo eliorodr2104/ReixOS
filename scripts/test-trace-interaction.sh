@@ -19,7 +19,9 @@ expected_interaction='interaction correlation=1 serial_delivery_to_decoded=10.00
 expected_interaction="${expected_interaction}"'decoded_to_shell=10.00us shell_to_editor=10.00us '
 expected_interaction="${expected_interaction}"'editor_to_parser=10.00us editor_to_presentation=20.00us '
 expected_interaction="${expected_interaction}"'presentation_to_console_ack=10.00us total=60.00us '
-expected_interaction="${expected_interaction}"'rendered_bytes=12 wire_time_estimate=1041.67us '
+expected_interaction="${expected_interaction}"'rendered_bytes=12 full_estimate_bytes=100 '
+expected_interaction="${expected_interaction}"'diff_estimate_bytes=20 render_plan=diff '
+expected_interaction="${expected_interaction}"'wire_time_estimate=1041.67us '
 expected_interaction="${expected_interaction}"'wire_provenance=estimated-115200-8n1 duplicate=0'
 grep -Fx "$expected_interaction" "$interaction"
 grep -F 'interaction correlation=2 serial_delivery_to_decoded=10.00us decoded_to_shell=unavailable' "$interaction"

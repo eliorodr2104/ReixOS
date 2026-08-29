@@ -130,102 +130,50 @@ struct TerminalStructuredProtocolTests {
         }
     }
 
-    @Test("TextSurface commands use the exact two-hundred-eighty-eight byte record")
-    func surfaceCommands() {
+    @Test("TextSurface v2 has one exact frame envelope")
+    func surfaceFrames() {
         var storage = [UInt8](repeating: 0, count: ReixTextSurfaceProtocol.recordBytes)
-        let text = Array("hello".utf8)
-        let command = text.withUnsafeBufferPointer {
-            ReixTextSurfaceCommand(
-                kind: .replaceBuffer,
-                sequence: 7,
+        let descriptor = ReixTextSurfaceFrameDescriptor(
+            kind: .snapshot,
+            correlation: 7,
+            revision: 1,
+            baseRevision: 0,
+            textLength: 5,
+            columns: 80,
+            rows: 24,
+            cursorRow: 0,
+            cursorColumn: 5,
+            viewportRows: 6
+        )!
+        var metadata = [UInt8](repeating: 0, count: ReixTextSurfaceFrameDescriptor.wireBytes)
+        #expect(metadata.withUnsafeMutableBufferPointer {
+            descriptor.encode(into: $0.baseAddress!, capacity: $0.count)
+        })
+        let record = metadata.withUnsafeBufferPointer {
+            ReixTextSurfaceFrameRecord(
+                kind: .begin,
+                transaction: 11,
+                chunk: 0,
+                chunks: 3,
+                checksum: 42,
                 bytes: $0.baseAddress!,
-                count: $0.count,
-                previousRows: 2,
-                previousCursorRow: 1,
-                cursorRow: 0,
-                cursorColumn: 3
+                count: $0.count
             )!
         }
-        #expect(storage.withUnsafeMutableBufferPointer { command.encode(into: $0.baseAddress!, capacity: $0.count) })
+        #expect(storage.withUnsafeMutableBufferPointer { record.encode(into: $0.baseAddress!, capacity: $0.count) })
         #expect(
             storage.withUnsafeBufferPointer {
-                ReixTextSurfaceCommand.decode(
-                    $0.baseAddress!,
-                    length: $0.count
-                )
-            } == command
+                ReixTextSurfaceFrameRecord.decode($0.baseAddress!, length: $0.count)
+            } == record
         )
-        storage[24] = 1
+        storage[20] = 1
         #expect(
             storage.withUnsafeBufferPointer {
-                ReixTextSurfaceCommand.decode(
-                    $0.baseAddress!,
-                    length: $0.count
-                )
+                ReixTextSurfaceFrameRecord.decode($0.baseAddress!, length: $0.count)
             } == nil
         )
-    }
-
-    @Test("TextSurface presentation consumes only a matching typed command")
-    func textSurfacePresentationSequenceFencePolicy() throws {
-        let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let source = try String(
-            contentsOf: root.appending(
-                path: "Sources/Reix/TextSurface/TextSurfaceSession.swift"
-            ),
-            encoding: .utf8
-        )
-        let method = try #require(
-            source.components(
-                separatedBy: "public mutating func present"
-            ).dropFirst().first
-        )
-        #expect(method.contains("ring.push(command)"))
-        #expect(method.contains("usable = false"))
-        let server = try String(
-            contentsOf: root.appending(
-                path: "Sources/Userland/VTAdapter/VTAdapter.swift"
-            ),
-            encoding: .utf8
-        )
-        #expect(server.contains("ReixInteractionSequence.isCorrelated(command.sequence)"))
-    }
-
-    @Test("presentation waits for a bounded ConsoleServer acknowledgement")
-    func consoleAcknowledgementPolicy() throws {
-        let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let client = try String(
-            contentsOf: root.appending(path: "Sources/Reix/Services/ConsoleServer/ConsoleClient.swift"),
-            encoding: .utf8
-        )
-        let adapter = try String(
-            contentsOf: root.appending(path: "Sources/Userland/VTAdapter/VTAdapter.swift"),
-            encoding: .utf8
-        )
-        #expect(client.contains("public func flushNow() -> Bool"))
-        #expect(client.contains("ConsoleOperation.drainPartial.message()"))
-        #expect(client.contains("return flushed()"))
-        #expect(client.contains("public func consoleFlush() -> Bool"))
-        let present = try #require(
-            adapter
-                .components(separatedBy: "private mutating func present")
-                .dropFirst()
-                .first
-        )
-        let requested = try #require(
-            present.range(of: ".presentationRequested")
-        )
-        let rendered = try #require(
-            present.range(of: "let emittedBytes = render(command)")
-        )
-        let flushed = try #require(
-            present.range(of: "guard consoleFlush() else")
-        )
-        let acknowledged = try #require(
-            present.range(of: ".consoleAcknowledged")
-        )
-        #expect(requested.lowerBound < rendered.lowerBound)
-        #expect(flushed.lowerBound < acknowledged.lowerBound)
+        #expect(ReixTextSurfaceTransport.pages == 3)
+        #expect(ReixTextSurfaceTransport.maximumFrameRecords <= ReixTextSurfaceTransport.capacity)
     }
 
     @Test("serial hardware authority stays inside SerialServer")

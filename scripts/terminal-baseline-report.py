@@ -5,7 +5,7 @@
 #
 # Turns one profiled 4 MiB terminal run into a baseline document. It accepts
 # only the fixed records printed by Shell and the host trace decoder: unknown,
-# duplicate, partial, and non-numeric records are evidence gaps, never zeros.
+# conflicting, partial, and non-numeric records are evidence gaps, never zeros.
 
 import json
 import math
@@ -108,12 +108,13 @@ def parse_processes(lines):
         canonical = canonical_process_name(name)
         if canonical not in wanted:
             continue
-        if wanted[canonical] is not None:
-            fail(f"duplicate process baseline for {canonical}")
-        wanted[canonical] = {
+        measurement = {
             "resident_pages": parse_uint(fields.get("resident_pages", ""), f"{canonical} resident_pages"),
             "stack_pages": parse_uint(fields.get("stack_pages", ""), f"{canonical} stack_pages"),
         }
+        if wanted[canonical] is not None and wanted[canonical] != measurement:
+            fail(f"conflicting process baseline for {canonical}")
+        wanted[canonical] = measurement
     missing = [name for name, values in wanted.items() if values is None]
     if missing:
         fail(f"missing measured processes: {', '.join(missing)}")
@@ -167,6 +168,9 @@ def parse_interactions(lines, frequency):
 
     latency_values = {name: [] for name in LATENCIES}
     rendered_bytes = []
+    full_estimate_bytes = []
+    diff_estimate_bytes = []
+    render_plans = {"full": 0, "diff": 0}
     seen = set()
     for row in rows:
         correlation = parse_uint(row.get("correlation", ""), "interaction correlation")
@@ -182,11 +186,30 @@ def parse_interactions(lines, frequency):
         bytes_text = row.get("rendered_bytes", "")
         if bytes_text != "unavailable":
             rendered_bytes.append(parse_uint(bytes_text, "rendered_bytes"))
+        full_text = row.get("full_estimate_bytes", "")
+        if full_text != "unavailable":
+            full_estimate_bytes.append(parse_uint(full_text, "full_estimate_bytes"))
+        diff_text = row.get("diff_estimate_bytes", "")
+        if diff_text != "unavailable":
+            diff_estimate_bytes.append(parse_uint(diff_text, "diff_estimate_bytes"))
+        plan = row.get("render_plan", "")
+        if plan in render_plans:
+            render_plans[plan] += 1
+        elif plan != "unavailable":
+            fail("unknown render plan")
     if not any(latency_values.values()):
         fail("no latency metric is available")
     if not latency_values["total"]:
         fail("no total interaction samples are available")
-    return groups, invalid, latency_values, rendered_bytes
+    return (
+        groups,
+        invalid,
+        latency_values,
+        rendered_bytes,
+        full_estimate_bytes,
+        diff_estimate_bytes,
+        render_plans,
+    )
 
 
 def nearest_rank(samples, percentile):
@@ -235,7 +258,15 @@ def main(arguments):
         if system["trace_lost"] != 0:
             fail("terminal workload lost trace events")
         processes = parse_processes(serial_lines)
-        groups, invalid, latency_values, rendered_bytes = parse_interactions(interaction_lines, frequency)
+        (
+            groups,
+            invalid,
+            latency_values,
+            rendered_bytes,
+            full_estimate_bytes,
+            diff_estimate_bytes,
+            render_plans,
+        ) = parse_interactions(interaction_lines, frequency)
         revision, dirty = git_provenance()
 
         latencies = {name: latency_metric(latency_values[name]) for name in LATENCIES}
@@ -246,6 +277,11 @@ def main(arguments):
         if wire["status"] == "measured":
             wire["status"] = "derived"
             wire["provenance"] = "estimated-115200-8n1-frame-time"
+        full_estimate = latency_metric([float(value) for value in full_estimate_bytes], unit="bytes")
+        diff_estimate = latency_metric([float(value) for value in diff_estimate_bytes], unit="bytes")
+        for metric in [full_estimate, diff_estimate]:
+            if metric["status"] == "measured":
+                metric["provenance"] = "vt-deterministic-encoded-byte-count"
 
         document = {
             "build_mode": "REIX_TERMINAL_PROFILE",
@@ -257,6 +293,12 @@ def main(arguments):
                 "invalid": invalid,
                 "latencies": latencies,
                 "rendered_bytes": rendered,
+                "render_plan": {
+                    "full_count": render_plans["full"],
+                    "diff_count": render_plans["diff"],
+                    "full_estimate_bytes": full_estimate,
+                    "diff_estimate_bytes": diff_estimate,
+                },
                 "wire_time_us": wire,
             },
             "note": (

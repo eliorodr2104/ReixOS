@@ -100,7 +100,7 @@ enum TraceDecoder {
             return
         }
 
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let lines = text.components(separatedBy: .newlines)
 
         let extraction: Extraction
         do {
@@ -154,7 +154,10 @@ enum TraceDecoder {
         var groups: [Group] = []
         var invalid = 0
         for event in block.events where event.code == 0x0900 {
-            guard (1...7).contains(event.info), event.a <= UInt64(UInt32.max), event.b <= 0x00FF_FFFF else { invalid += 1; continue }
+            guard (1...10).contains(event.info), event.a <= UInt64(UInt32.max), event.b <= 0x00FF_FFFF else {
+                invalid += 1
+                continue
+            }
             let correlation = UInt32(event.a)
             let index       = groups.firstIndex { $0.correlation == correlation }
             if let index {
@@ -183,6 +186,9 @@ enum TraceDecoder {
             let provenance = consoleAcknowledgement == nil
                 ? "unavailable"
                 : "estimated-115200-8n1"
+            let fullBytes = group.points[8].map { String($0.b) } ?? "unavailable"
+            let diffBytes = group.points[9].map { String($0.b) } ?? "unavailable"
+            let plan = group.points[10].map { $0.b == 1 ? "diff" : "full" } ?? "unavailable"
             print(
                 "interaction correlation=\(group.correlation) " +
                 "serial_delivery_to_decoded=\(duration(group, 1, 2)) " +
@@ -193,6 +199,9 @@ enum TraceDecoder {
                 "presentation_to_console_ack=\(duration(group, 6, 7)) " +
                 "total=\(duration(group, 1, 7)) " +
                 "rendered_bytes=\(renderedBytes) " +
+                "full_estimate_bytes=\(fullBytes) " +
+                "diff_estimate_bytes=\(diffBytes) " +
+                "render_plan=\(plan) " +
                 "wire_time_estimate=\(wire) " +
                 "wire_provenance=\(provenance) " +
                 "duplicate=\(group.duplicates.count)"
@@ -249,8 +258,7 @@ extension TraceDecoder {
         }
     }
 
-    /// The fixed prefix every trace line carries; anything else is ordinary
-    /// log output and is never touched by the parser or the malformed count.
+    /// The fixed prefix every trace line carries after optional local VT state.
     private static let tracePrefix = "[TRACE] "
 
     /// Scans every line once, tracking the currently open begin/end block. A
@@ -272,13 +280,12 @@ extension TraceDecoder {
 
         for (index, line) in lines.enumerated() {
             let lineNumber = index + 1
-            guard line.hasPrefix(tracePrefix) else { continue } // ordinary log output: not ours
+            guard let payload = tracePayload(line) else { continue }
 
             // Splitting without collapsing empty runs makes a double space
             // (or a missing field) misalign the tokens, so it fails the
             // per-line grammar below exactly like the "single spaces" rule asks.
-            let tokens = line.dropFirst(tracePrefix.count)
-                .split(separator: " ", omittingEmptySubsequences: false)
+            let tokens = payload.split(separator: " ", omittingEmptySubsequences: false)
             guard let first = tokens.first else { malformed += 1; continue }
 
             if first == "begin" {
@@ -320,6 +327,32 @@ extension TraceDecoder {
         }
 
         return Extraction(block: last, malformedCount: malformed, danglingWarning: warning)
+    }
+
+    /// A screen redraw may leave local CSI state before an otherwise exact trace record.
+    private static func tracePayload(_ line: String) -> Substring? {
+        var remaining = line[...]
+        while remaining.hasPrefix("\u{001B}[") {
+            var index = remaining.index(remaining.startIndex, offsetBy: 2)
+            var foundFinal = false
+            while index < remaining.endIndex {
+                let character = remaining[index]
+                guard character.unicodeScalars.count == 1,
+                      let scalar = character.unicodeScalars.first
+                else { return nil }
+                let value = scalar.value
+                index = remaining.index(after: index)
+                if value >= 0x40 && value <= 0x7E {
+                    remaining = remaining[index...]
+                    foundFinal = true
+                    break
+                }
+                guard value >= 0x20 && value <= 0x3F else { return nil }
+            }
+            guard foundFinal else { return nil }
+        }
+        guard remaining.hasPrefix(tracePrefix) else { return nil }
+        return remaining.dropFirst(tracePrefix.count)
     }
 
     /// `begin v=2 freq=DEC lost=DEC stack=DEC exstack=DEC`: exactly six

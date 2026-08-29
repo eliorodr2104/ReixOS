@@ -142,7 +142,7 @@ public struct ConsoleClient {
 
         ).isDelivered else { return false }
 
-        return flushed()
+        return synchronized()
     }
 
 
@@ -216,14 +216,25 @@ public struct ConsoleClient {
     /// falls back to printing through the kernel.
     private func flushed() -> Bool {
 
+        guard let status = flushStatus() else { return false }
+        return status == .registered || status == .pending
+    }
+
+    /// A terminal revision is durable only after SerialServer reports no pending work.
+    private func synchronized() -> Bool {
+        flushStatus() == .registered
+    }
+
+    private func flushStatus() -> ConsoleStatus? {
+
         guard case .success(let response) = call(
             handle : endpoint,
             message: ConsoleOperation.flush.message()
-        ) else { return false }
+        ) else { return nil }
 
-        guard response.message.tag.length >= 1 else { return false }
+        guard response.message.tag.length >= 1 else { return nil }
 
-        return ConsoleStatus(rawValue: response.message.words[0]) == .registered
+        return ConsoleStatus(rawValue: response.message.words[0])
     }
 
     /// Emits `pending[from..<count]` one byte at a time through the raw

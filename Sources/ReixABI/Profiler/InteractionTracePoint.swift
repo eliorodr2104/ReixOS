@@ -14,4 +14,7 @@ public enum InteractionTracePoint: UInt16, Equatable {
     case parserCompleted       = 5
     case presentationRequested = 6
     case consoleAcknowledged   = 7
+    case presentationFullBytes = 8
+    case presentationDiffBytes = 9
+    case presentationPlan      = 10
 }

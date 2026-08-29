@@ -34,4 +34,8 @@ public struct InteractionSession: ~Copyable {
     public mutating func present(_ command: ReixTextSurfaceCommand) -> Bool {
         textSurface.present(command)
     }
+
+    public mutating func resize(width: UInt16, height: UInt16, correlation: UInt32) -> Bool {
+        textSurface.resize(width: width, height: height, correlation: correlation)
+    }
 }
