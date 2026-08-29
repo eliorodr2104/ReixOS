@@ -38,6 +38,7 @@ playground.xcworkspace
 # .swiftpm
 
 .build/
+.build-terminal-profile/
 
 # reix plugin output (kernel.elf/kernel.bin/*.elf/initrd.tar)
 .reix/

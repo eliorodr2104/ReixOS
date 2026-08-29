@@ -123,6 +123,31 @@ struct TypedShellRuntimeTests {
         #expect(row.count == 9)
     }
 
+    @Test("editor patches retain the terminal event correlation")
+    func editorPatchSequenceFollowsInput() {
+        var editor      = ShellLineEditor()
+        let insertBytes = [UInt8(ascii: "x")]
+        let insert      = insertBytes.withUnsafeBufferPointer {
+            editor.apply(TerminalInputEvent(sequence: 7, bytes: $0.baseAddress!, count: $0.count))
+        }
+        #expect(insert.patch?.sequence == 7)
+
+        let refusedEvent = TerminalInputEvent(kind: .right, sequence: 4_096)
+        let refused      = editor.apply(refusedEvent)
+        #expect(refused.action == .refused)
+        #expect(refused.patch?.sequence == refusedEvent.sequence)
+
+        let newlineEvent = TerminalInputEvent(kind: .enter, sequence: 19)
+        let newline      = editor.apply(newlineEvent)
+        #expect(newline.patch?.kind == .newline)
+        #expect(newline.patch?.sequence == newlineEvent.sequence)
+
+        let replacementEvent = TerminalInputEvent(kind: .left, sequence: 900_001)
+        let replacement      = editor.apply(replacementEvent)
+        #expect(replacement.patch?.kind == .replaceBuffer)
+        #expect(replacement.patch?.sequence == replacementEvent.sequence)
+    }
+
     @Test("multiline movement follows logical rows and history only at boundaries")
     func multilineMovement() {
         var editor = ShellLineEditor()

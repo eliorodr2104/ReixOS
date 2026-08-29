@@ -15,11 +15,12 @@ public struct Environment {
     }
 
     public init(
-        console   : UInt32?,
-        nameServer: UInt32?,
-        spawn     : UInt32?,
-        device    : UInt32? = nil,
-        profiler  : UInt32? = nil
+        console      : UInt32?,
+        nameServer   : UInt32?,
+        spawn        : UInt32?,
+        device       : UInt32? = nil,
+        profiler     : UInt32? = nil,
+        profileMarker: UInt32? = nil
     ) {
         
         var slots = InlineArray<16, UInt32?>(repeating: nil)
@@ -29,6 +30,7 @@ public struct Environment {
         slots[Int(BootCap.spawn.rawValue)]      = spawn
         slots[Int(BootCap.device.rawValue)]     = device
         slots[Int(BootCap.profiler.rawValue)]   = profiler
+        slots[Int(BootCap.profileMarker.rawValue)] = profileMarker
         
         self.slots = slots
     }
@@ -55,6 +57,7 @@ public struct Environment {
     public var spawn         : UInt32? { handle(.spawn) }
     public var device        : UInt32? { handle(.device) }
     public var profiler      : UInt32? { handle(.profiler) }
+    public var profileMarker: UInt32? { handle(.profileMarker) }
 
     /// The interrupt lines this process may wait on, if its spawner granted
     /// any. One handle names a whole set: see `irqWait`.

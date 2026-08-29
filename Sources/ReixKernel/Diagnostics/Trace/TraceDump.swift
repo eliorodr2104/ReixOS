@@ -231,6 +231,7 @@ enum TraceDump {
             case TraceCode.procSpawn  : "procSpawn"
             case TraceCode.procName   : "procName"
             case TraceCode.procExit   : "procExit"
+            case TraceCode.interactionMark: "interactionMark"
             default                   : nil
         }
         

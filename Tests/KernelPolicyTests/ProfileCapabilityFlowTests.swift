@@ -6,6 +6,7 @@
 
 
 import Testing
+import Foundation
 @testable import Kernel
 import ReixABI
 
@@ -67,13 +68,13 @@ struct ProfileCapabilityFlowTests {
         #expect(caps.resolve(BootCap.profiler.rawValue) == original)
     }
 
-    @Test("Init owns grant plus profile while Top receives only profileStats")
+    @Test("Init owns profile authorities while Top receives only profileStats")
     func bootAndToolRights() {
         var caps = CapsTable()
         #expect(Kernel.installProfilerCap(into: &caps))
 
         let initial = caps.resolve(BootCap.profiler.rawValue)!
-        #expect(initial.rights == [.grant, .profile])
+        #expect(initial.rights == [.grant, .profile, .profileMark])
 
         let tool = ProfileAuthorityGrant.tool(source: BootCap.profiler.rawValue)
         #expect(tool.targetSlot == 6)
@@ -82,4 +83,57 @@ struct ProfileCapabilityFlowTests {
         // not the console dump or the PMU counters (see its doc comment).
         #expect(tool.rights == UInt32(CapRights.profileStats.rawValue))
     }
+
+    @Test("interaction marks have their own authority bit and boot slot")
+    func interactionMarkLayout() {
+        #expect(CapRights.profileMark.rawValue == 1 << 9)
+        #expect(CapRights.profileMark.rawValue != CapRights.profile.rawValue)
+        #expect(BootCap.profileMarker.rawValue == 15)
+        #expect(BootCap.profileMarker.rawValue != BootCap.profiler.rawValue)
+    }
+
+    @Test("interaction mark grants are exact and non-delegable")
+    func interactionMarkGrant() {
+        let plain = ProfileAuthorityGrant.marker(source: 12, console: false)
+        #expect(plain.targetSlot == BootCap.profileMarker.rawValue)
+        #expect(plain.rights == UInt32(CapRights.profileMark.rawValue))
+        let console = ProfileAuthorityGrant.marker(source: 12, console: true)
+        #expect(console.rights == UInt32(CapRights([.profileMark, .profileConsole]).rawValue))
+        #expect(console.rights & UInt32(CapRights.grant.rawValue) == 0)
+    }
+
+    @Test("interaction trace packing fails closed")
+    func interactionTraceMarkPacking() {
+        for point in [InteractionTracePoint.serialFirstByte, .inputDecoded, .shellConsumed, .editorCompleted, .parserCompleted, .presentationRequested, .uartAccepted] {
+            let mark = InteractionTraceMark(point: point, correlation: 1, value: InteractionTraceMark.maxValue)!
+            #expect(InteractionTraceMark(packed: mark.packed) == mark)
+        }
+        #expect(InteractionTraceMark(point: .inputDecoded, correlation: 0, value: 0) == nil)
+        #expect(InteractionTraceMark(point: .inputDecoded, correlation: 1, value: InteractionTraceMark.maxValue + 1) == nil)
+        #expect(InteractionTraceMark(packed: 0) == nil)
+        #expect(InteractionTraceMark(packed: UInt64(8) << 32 | 1) == nil)
+    }
+
+    @Test("Init keeps profile interaction authority inside its compile-time branch")
+    func initProfileInteractionGrantPolicy() throws {
+        let root   = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let source = try String(contentsOf: root.appending(path: "Sources/Userland/Init/Init.swift"))
+        for expected in ["arg: 0xFF", "arg: 0x1FF", "arg: 0x3F", "arg: 0x100"] { #expect(source.contains(expected)) }
+        #expect(!source.contains("arg: 0x13F"))
+        let afterDump       = try #require(source.components(separatedBy: "profileDump(authority: profiler)").dropFirst().first)
+        let profileBranch   = try #require(afterDump.components(separatedBy: "#if REIX_TERMINAL_PROFILE").dropFirst().first?.components(separatedBy: "#else").first)
+        let normalBranch    = try #require(afterDump.components(separatedBy: "#else").dropFirst().first?.components(separatedBy: "#endif").first)
+        let reset           = try #require(profileBranch.range(of: "profileControl(.reset, authority: profiler)"))
+        let interactionOnly = try #require(profileBranch.range(of: "profileControl(.enable, authority: profiler, arg: 0x100)"))
+        #expect(reset.lowerBound < interactionOnly.lowerBound)
+        #expect(!normalBranch.contains("profileControl(.reset"))
+        #expect(source.components(separatedBy: "capacity: {").count == 3)
+        for expected in ["\n            3\n", "\n            4\n", "\n            8\n", "\n            9\n"] { #expect(source.contains(expected)) }
+        let terminal = try #require(source.components(separatedBy: "let terminal =").dropFirst().first?.components(separatedBy: "guard let terminalEndpoint").first)
+        #expect(terminal.contains("ProfileAuthorityGrant.marker(source: profiler, console: false)"))
+        #expect(!terminal.contains("console: true"))
+        #expect(source.contains("ProfileAuthorityGrant.marker(source: profiler, console: true)"))
+        #expect(source.components(separatedBy: "ProfileAuthorityGrant.marker(").count == 3)
+    }
+
 }

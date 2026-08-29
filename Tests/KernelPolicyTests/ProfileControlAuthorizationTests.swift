@@ -30,6 +30,7 @@ struct ProfileControlAuthorizationTests {
         }
         #expect(ProfileABI.category(of: .dumpConsole) == .profileConsole)
         #expect(ProfileABI.category(of: .attachExport) == .profileStats)
+        #expect(ProfileABI.category(of: .interactionMark) == .profileMark)
     }
 
     @Test("missing handle is denied")
@@ -62,7 +63,7 @@ struct ProfileControlAuthorizationTests {
 
     @Test("profile target authorizes only the category its rights carry")
     func validAuthority() {
-        let categories: [CapRights] = [.profileStats, .profileConsole, .profileCounters]
+        let categories: [CapRights] = [.profileStats, .profileConsole, .profileCounters, .profileMark]
 
         for category in categories {
             var caps = CapsTable()
@@ -77,5 +78,14 @@ struct ProfileControlAuthorizationTests {
                 #expect(!ProfileAuthorization.allows(caps, handle: handle, category: other))
             }
         }
+    }
+
+    @Test("interaction tracing stays compiled out in normal host builds")
+    func interactionTraceLayout() {
+        #expect(TraceInteraction.bit == 1 << 8)
+        #expect(!TraceInteraction.isEnabled)
+        #expect(MemoryLayout<TraceEvent>.size == 32)
+        #expect(MemoryLayout<TraceEvent>.stride == 32)
+        #expect(TraceRing.capacity == 256)
     }
 }

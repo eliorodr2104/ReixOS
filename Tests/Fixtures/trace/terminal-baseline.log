@@ -1,0 +1,25 @@
+[ TERMINAL BASELINE ] system status=measured total_pages=1024 free_pages=512 counter_freq=1000000 trace_lost=0 kernel_stack_peak_bytes=1024 exception_stack_peak_bytes=0
+[ TERMINAL BASELINE ] process status=measured pid=7 name=TerminalServer.e resident_pages=12 stack_pages=3
+[ TERMINAL BASELINE ] process status=measured pid=8 name=Shell.elf resident_pages=16 stack_pages=4
+[TRACE] begin v=2 freq=1000000 lost=0 stack=1024 exstack=0
+[TRACE] t=100 ev=interactionMark pid=8 info=1 a=1 b=1
+[TRACE] t=110 ev=interactionMark pid=8 info=2 a=1 b=1
+[TRACE] t=120 ev=interactionMark pid=8 info=3 a=1 b=1
+[TRACE] t=130 ev=interactionMark pid=8 info=4 a=1 b=0
+[TRACE] t=140 ev=interactionMark pid=8 info=5 a=1 b=12
+[TRACE] t=150 ev=interactionMark pid=8 info=6 a=1 b=12
+[TRACE] t=160 ev=interactionMark pid=8 info=7 a=1 b=12
+[TRACE] t=200 ev=interactionMark pid=8 info=1 a=2 b=1
+[TRACE] t=210 ev=interactionMark pid=8 info=2 a=2 b=1
+[TRACE] t=220 ev=interactionMark pid=8 info=3 a=2 b=1
+[TRACE] t=230 ev=interactionMark pid=8 info=4 a=2 b=0
+[TRACE] t=240 ev=interactionMark pid=8 info=6 a=2 b=12
+[TRACE] t=270 ev=interactionMark pid=8 info=7 a=2 b=16
+[TRACE] t=300 ev=interactionMark pid=8 info=1 a=3 b=1
+[TRACE] t=315 ev=interactionMark pid=8 info=2 a=3 b=1
+[TRACE] t=330 ev=interactionMark pid=8 info=3 a=3 b=1
+[TRACE] t=345 ev=interactionMark pid=8 info=4 a=3 b=0
+[TRACE] t=360 ev=interactionMark pid=8 info=5 a=3 b=12
+[TRACE] t=380 ev=interactionMark pid=8 info=6 a=3 b=12
+[TRACE] t=400 ev=interactionMark pid=8 info=7 a=3 b=20
+[TRACE] end count=20

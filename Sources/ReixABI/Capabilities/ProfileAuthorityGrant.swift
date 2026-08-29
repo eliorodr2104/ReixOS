@@ -32,4 +32,14 @@ public enum ProfileAuthorityGrant {
             rights: [.profileStats, .grant]
         )
     }
+
+    /// A one-way interaction marker. It never carries delegation authority.
+    public static func marker(
+        source : UInt32,
+        console: Bool
+    ) -> CapGrant {
+        var rights: CapRights = [.profileMark]
+        if console { rights.insert(.profileConsole) }
+        return CapGrant(source: source, slot: BootCap.profileMarker.rawValue, rights: rights)
+    }
 }

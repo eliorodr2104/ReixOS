@@ -29,6 +29,9 @@ public struct TerminalServer: Service {
     private let endpoint : UInt32
     private let uartBase : UnsafeMutableRawPointer
     private let interrupt: UInt32
+    #if REIX_TERMINAL_PROFILE
+    private let profileMarker: UInt32
+    #endif
 
     /// The one registered reader.
     ///
@@ -45,12 +48,25 @@ public struct TerminalServer: Service {
     /// How many pages a reader may grant. Exactly one: protocol events and
     /// render patches are bounded to a fraction of a page.
     private static let readerPages: UInt32 = 1
+    private static let maximumTraceValue: UInt32 = 0x00FF_FFFF
 
     /// Lines the kernel delivered and masked, owed back after the device is
     /// serviced.
     private var delivered: UInt64 = 0
 
     public var serviceEndpoint: UInt32 { endpoint }
+
+    #if REIX_TERMINAL_PROFILE
+    @inline(__always)
+    private func mark(
+        _ point    : InteractionTracePoint,
+        correlation: UInt32,
+        value      : UInt32
+    ) {
+        guard let mark = InteractionTraceMark(point: point, correlation: correlation, value: value) else { return }
+        profileInteractionMark(mark, authority: profileMarker)
+    }
+    #endif
 
 
     public init(
@@ -63,6 +79,13 @@ public struct TerminalServer: Service {
             print("[ SERVE ] Terminal Server has no terminal capabilities")
             exit(code: 1)
         }
+        #if REIX_TERMINAL_PROFILE
+        guard let profileMarker = environment.profileMarker else {
+            print("[ SERVE ] Terminal Server has no profile marker")
+            exit(code: 1)
+        }
+        self.profileMarker = profileMarker
+        #endif
 
         guard let mapped = UnsafeMutableRawPointer(
             bitPattern: UInt(mapDevice(handle: device))
@@ -288,8 +311,14 @@ public struct TerminalServer: Service {
            length <= Int(held.extent),
            let patch = TerminalRenderPatch.decode(page.assumingMemoryBound(to: UInt8.self), length: length),
            patch.sequence == sequence {
-            render(patch)
+            #if REIX_TERMINAL_PROFILE
+            mark(.presentationRequested, correlation: sequence, value: UInt32(clamping: min(length, Int(Self.maximumTraceValue))))
+            #endif
+            let emittedBytes = render(patch)
             consoleFlush()
+            #if REIX_TERMINAL_PROFILE
+            mark(.uartAccepted, correlation: sequence, value: emittedBytes)
+            #endif
             replyPresented(status: .ok, sequence: sequence, length: UInt32(length), token: request.message.words[2])
             return
         }
@@ -311,93 +340,120 @@ public struct TerminalServer: Service {
         replyPresented(status: .ok, sequence: sequence, length: UInt32(length), token: request.message.words[2])
     }
 
-    private func render(_ patch: TerminalRenderPatch) {
+    private func render(_ patch: TerminalRenderPatch) -> UInt32 {
+        var count: UInt32 = 0
         switch patch.kind {
             case .insert:
-                for index in 0..<patch.count { putchar(ch: patch.text[index]) }
+                for index in 0..<patch.count { emitted(patch.text[index], count: &count) }
             case .eraseBackward:
-                for _ in 0..<patch.amount { erase() }
+                for _ in 0..<patch.amount {
+                    erase()
+                    addEmitted(3, to: &count)
+                }
             case .moveLeft:
-                cursor(amount: patch.amount, direction: Self.cursorLeft)
+                cursor(amount: patch.amount, direction: Self.cursorLeft, count: &count)
             case .moveRight:
-                cursor(amount: patch.amount, direction: Self.cursorRight)
+                cursor(amount: patch.amount, direction: Self.cursorRight, count: &count)
             case .newline:
-                putchar(ch: Self.lineFeed)
+                emitted(Self.lineFeed, count: &count)
             case .replaceBuffer:
-                putchar(ch: Self.carriageReturn)
-                cursor(amount: patch.previousCursorRow, direction: Self.cursorUp)
+                emitted(Self.carriageReturn, count: &count)
+                cursor(amount: patch.previousCursorRow, direction: Self.cursorUp, count: &count)
                 var oldRow: UInt16 = 0
                 while oldRow < patch.previousRows {
-                    clearLine()
+                    clearLine(count: &count)
                     oldRow += 1
                     if oldRow < patch.previousRows {
-                        cursor(amount: 1, direction: Self.cursorDown)
-                        putchar(ch: Self.carriageReturn)
+                        cursor(amount: 1, direction: Self.cursorDown, count: &count)
+                        emitted(Self.carriageReturn, count: &count)
                     }
                 }
                 if patch.previousRows > 1 {
-                    cursor(amount: patch.previousRows - 1, direction: Self.cursorUp)
-                    putchar(ch: Self.carriageReturn)
+                    cursor(amount: patch.previousRows - 1, direction: Self.cursorUp, count: &count)
+                    emitted(Self.carriageReturn, count: &count)
                 }
                 var finalRow: UInt16 = 0
                 for index in 0..<patch.count {
                     let byte = patch.text[index]
-                    putchar(ch: byte)
-                    if byte == Self.lineFeed { putchar(ch: Self.carriageReturn); finalRow += 1 }
+                    emitted(byte, count: &count)
+                    if byte == Self.lineFeed { emitted(Self.carriageReturn, count: &count); finalRow += 1 }
                 }
                 if finalRow > patch.cursorRow {
-                    cursor(amount: finalRow - patch.cursorRow, direction: Self.cursorUp)
+                    cursor(amount: finalRow - patch.cursorRow, direction: Self.cursorUp, count: &count)
                 }
-                putchar(ch: Self.carriageReturn)
-                cursor(amount: patch.cursorColumn, direction: Self.cursorRight)
+                emitted(Self.carriageReturn, count: &count)
+                cursor(amount: patch.cursorColumn, direction: Self.cursorRight, count: &count)
             case .bell:
-                putchar(ch: Self.bell)
+                emitted(Self.bell, count: &count)
         }
+        return count
     }
 
-    private func cursor(amount: UInt16, direction: UInt8) {
+    private func emitted(
+        _ byte: UInt8,
+        count : inout UInt32
+    ) {
+        putchar(ch: byte)
+        if count < Self.maximumTraceValue { count += 1 }
+    }
+
+    private func addEmitted(
+        _ amount: UInt32,
+        to count: inout UInt32
+    ) {
+        count = min(Self.maximumTraceValue, count.addingReportingOverflow(amount).overflow ? UInt32.max : count + amount)
+    }
+
+    private func cursor(
+        amount   : UInt16,
+        direction: UInt8,
+        count    : inout UInt32
+    ) {
         guard amount > 0 else { return }
-        putchar(ch: Self.escape)
-        putchar(ch: Self.openBracket)
+        emitted(Self.escape, count: &count)
+        emitted(Self.openBracket, count: &count)
         let value = UInt64(amount)
         var divisor: UInt64 = 1
         while value / divisor >= 10 { divisor *= 10 }
         while divisor > 0 {
-            putchar(ch: UInt8((value / divisor) % 10) + 0x30)
+            emitted(UInt8((value / divisor) % 10) + 0x30, count: &count)
             divisor /= 10
         }
-        putchar(ch: direction)
+        emitted(direction, count: &count)
     }
 
-    private func clearLine() {
-        putchar(ch: Self.escape)
-        putchar(ch: Self.openBracket)
-        putchar(ch: UInt8(ascii: "2"))
-        putchar(ch: UInt8(ascii: "K"))
+    private func clearLine(count: inout UInt32) {
+        emitted(Self.escape, count: &count)
+        emitted(Self.openBracket, count: &count)
+        emitted(UInt8(ascii: "2"), count: &count)
+        emitted(UInt8(ascii: "K"), count: &count)
     }
 
     private mutating func input(sequence: UInt32) -> TerminalInputEvent? {
         guard let byte = nextByte() else { return nil }
+        #if REIX_TERMINAL_PROFILE
+        mark(.serialFirstByte, correlation: sequence, value: 1)
+        #endif
         switch byte {
-            case Self.interrupt: return TerminalInputEvent(kind: .cancel, sequence: sequence)
-            case Self.eof: return TerminalInputEvent(kind: .eof, sequence: sequence)
-            case Self.carriageReturn, Self.lineFeed: return TerminalInputEvent(kind: .enter, sequence: sequence)
-            case Self.backspace, Self.delete: return TerminalInputEvent(kind: .backspace, sequence: sequence)
+            case Self.interrupt: return decoded(TerminalInputEvent(kind: .cancel, sequence: sequence))
+            case Self.eof: return decoded(TerminalInputEvent(kind: .eof, sequence: sequence))
+            case Self.carriageReturn, Self.lineFeed: return decoded(TerminalInputEvent(kind: .enter, sequence: sequence))
+            case Self.backspace, Self.delete: return decoded(TerminalInputEvent(kind: .backspace, sequence: sequence))
             case Self.escape:
                 guard let bracket = nextByte(), bracket == Self.openBracket, let code = nextByte() else {
-                    return TerminalInputEvent(kind: .ignored, sequence: sequence)
+                    return decoded(TerminalInputEvent(kind: .ignored, sequence: sequence))
                 }
                 switch code {
-                    case UInt8(ascii: "A"): return TerminalInputEvent(kind: .up, sequence: sequence)
-                    case UInt8(ascii: "B"): return TerminalInputEvent(kind: .down, sequence: sequence)
-                    case UInt8(ascii: "C"): return TerminalInputEvent(kind: .right, sequence: sequence)
-                    case UInt8(ascii: "D"): return TerminalInputEvent(kind: .left, sequence: sequence)
-                    case UInt8(ascii: "H"): return TerminalInputEvent(kind: .home, sequence: sequence)
-                    case UInt8(ascii: "F"): return TerminalInputEvent(kind: .end, sequence: sequence)
+                    case UInt8(ascii: "A"): return decoded(TerminalInputEvent(kind: .up, sequence: sequence))
+                    case UInt8(ascii: "B"): return decoded(TerminalInputEvent(kind: .down, sequence: sequence))
+                    case UInt8(ascii: "C"): return decoded(TerminalInputEvent(kind: .right, sequence: sequence))
+                    case UInt8(ascii: "D"): return decoded(TerminalInputEvent(kind: .left, sequence: sequence))
+                    case UInt8(ascii: "H"): return decoded(TerminalInputEvent(kind: .home, sequence: sequence))
+                    case UInt8(ascii: "F"): return decoded(TerminalInputEvent(kind: .end, sequence: sequence))
                     case UInt8(ascii: "3"):
-                        guard nextByte() == Self.tilde else { return TerminalInputEvent(kind: .ignored, sequence: sequence) }
-                        return TerminalInputEvent(kind: .delete, sequence: sequence)
-                    default: return TerminalInputEvent(kind: .ignored, sequence: sequence)
+                        guard nextByte() == Self.tilde else { return decoded(TerminalInputEvent(kind: .ignored, sequence: sequence)) }
+                        return decoded(TerminalInputEvent(kind: .delete, sequence: sequence))
+                    default: return decoded(TerminalInputEvent(kind: .ignored, sequence: sequence))
                 }
             case let printable where printable >= 0x20:
                 var encoded = InlineArray<4, UInt8>(repeating: 0)
@@ -408,7 +464,7 @@ public struct TerminalServer: Service {
                     case 0xC2...0xDF: expected = 2
                     case 0xE0...0xEF: expected = 3
                     case 0xF0...0xF4: expected = 4
-                    default: return TerminalInputEvent(kind: .ignored, sequence: sequence)
+                    default: return decoded(TerminalInputEvent(kind: .ignored, sequence: sequence))
                 }
                 if expected > 1 {
                     for index in 1..<expected {
@@ -418,10 +474,17 @@ public struct TerminalServer: Service {
                 }
                 return encoded.span.withUnsafeBufferPointer {
                     let event = TerminalInputEvent(sequence: sequence, bytes: $0.baseAddress!, count: expected)
-                    return event.count == expected ? event : TerminalInputEvent(kind: .ignored, sequence: sequence)
+                    return decoded(event.count == expected ? event : TerminalInputEvent(kind: .ignored, sequence: sequence))
                 }
-            default: return TerminalInputEvent(kind: .ignored, sequence: sequence)
+            default: return decoded(TerminalInputEvent(kind: .ignored, sequence: sequence))
         }
+    }
+
+    private func decoded(_ event: TerminalInputEvent) -> TerminalInputEvent {
+        #if REIX_TERMINAL_PROFILE
+        mark(.inputDecoded, correlation: event.sequence, value: UInt32(event.count))
+        #endif
+        return event
     }
 
     private mutating func nextByte() -> UInt8? {

@@ -58,12 +58,13 @@ struct ReixPlugin: CommandPlugin {
             return
         }
 
-        let root = context.package.directoryURL
-        let work = context.pluginWorkDirectoryURL
-        let release = arguments.contains("--release")
-        let doRun = arguments.contains("run")
-        let config = release ? "release" : "debug"
-        let buildDir = root.appending(path: ".build/\(triple)/\(config)")
+        let root      = context.package.directoryURL
+        let work      = context.pluginWorkDirectoryURL
+        let release   = arguments.contains("--release")
+        let doRun     = arguments.contains("run")
+        let config    = release ? "release" : "debug"
+        let buildRoot = ProcessInfo.processInfo.environment["REIX_BUILD_PATH"] ?? ".build"
+        let buildDir  = root.appending(path: "\(buildRoot)/\(triple)/\(config)")
 
         let out = root.appending(path: outputDir)
         try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)

@@ -40,8 +40,9 @@ public struct CapRights: OptionSet {
     /// counters rather than with the readers: they arm the sampler.
     public static let profileCounters = CapRights(rawValue: 1 << 7)
 
-    /// Every profiling category at once, which is what the boot profiler
-    /// capability holds and what a tool spawned off it must be attenuated from.
+    /// The legacy profiling authorities together: statistics, console and
+    /// counters. This intentionally excludes `.profileMark`; the root receives
+    /// it separately and attenuates interaction marking as its own authority.
     public static let profile = CapRights(rawValue: (1 << 5) | (1 << 6) | (1 << 7))
 
 
@@ -59,4 +60,8 @@ public struct CapRights: OptionSet {
     /// every window it carves, and the process that hands a window to a driver
     /// says then and there whether the driver gets it.
     public static let dma = CapRights(rawValue: 1 << 8)
+
+    /// File one interaction mark only. This does not authorize profile
+    /// control, trace dumping, or process and counter statistics.
+    public static let profileMark = CapRights(rawValue: 1 << 9)
 }

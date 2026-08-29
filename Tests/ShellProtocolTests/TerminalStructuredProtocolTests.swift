@@ -6,10 +6,21 @@
 //
 
 import Testing
+import Foundation
 import ReixABI
 
 @Suite("Structured terminal input and patches")
 struct TerminalStructuredProtocolTests {
+    @Test("terminal input accepts only the matching request sequence")
+    func terminalReadInputSequenceFencePolicy() throws {
+        let root   = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let source = try String(contentsOf: root.appending(path: "Sources/Reix/Console/Terminal.swift"), encoding: .utf8)
+        let method = try #require(source.components(separatedBy: "public mutating func readInput() -> TerminalInputEvent? {").dropFirst().first?.components(separatedBy: "    /// Writes `prompt`").first)
+        #expect(method.contains("guard let event = TerminalInputEvent.decode"))
+        #expect(method.contains("current != 0, event.sequence == current"))
+        #expect(method.contains("return event"))
+    }
+
     @Test("every semantic input kind round trips and malformed records fail closed")
     func inputEvents() {
         let kinds: [TerminalInputKind] = [

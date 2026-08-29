@@ -35,8 +35,7 @@ public struct ShellLineEditor {
     public init() {}
 
     public mutating func apply(_ event: TerminalInputEvent) -> ShellEditorUpdate {
-        patchSequence &+= 1
-        if patchSequence == 0 { patchSequence = 1 }
+        patchSequence = event.sequence
         let previousCursor = cursor
         let previousCount  = count
         switch event.kind {

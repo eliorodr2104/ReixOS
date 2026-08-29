@@ -49,6 +49,20 @@ public struct ProfileControlSyscall: SyscallProvider {
 
         switch operation {
 
+            case .interactionMark:
+                guard let mark = InteractionTraceMark(packed: argument) else {
+                    frame.pointee.x0 = 1
+                    return
+                }
+                Trace.emit(
+                    TraceInteraction.self,
+                    code: TraceCode.interactionMark,
+                    info: mark.point.rawValue,
+                    a: UInt64(mark.correlation),
+                    b: UInt64(mark.value)
+                )
+                frame.pointee.x0 = 0
+
             case .disable:
                 Trace.runtimeMask = 0
                 frame.pointee.x0  = 0

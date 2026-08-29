@@ -72,4 +72,7 @@ enum TraceCode {
 
     /// `info` = the exit reason, `a` = the pid that died.
     static let procExit: UInt16 = 0x0802
+
+    /// `info` = interaction point, `a` = correlation, `b` = point value.
+    static let interactionMark: UInt16 = 0x0900
 }

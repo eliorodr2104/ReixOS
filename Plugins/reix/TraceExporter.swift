@@ -51,6 +51,7 @@ extension TraceDecoder {
                 case 0x0700: out.bootPhase(event)
                 case 0x0800: out.instant(event, name: "spawn",     lane: Writer.Lane.process)
                 case 0x0802: out.instant(event, name: "exit",      lane: Writer.Lane.process)
+                case 0x0900: out.interaction(event)
 
                 // Names are metadata, and samples belong to a flame graph.
                 case 0x0500, 0x0501: samples += 1
@@ -199,6 +200,15 @@ extension TraceDecoder {
             {"ph":"i","name":"\(Self.escaped(name))","cat":"event","s":"t",\
             "ts":\(at(event.ts)),"pid":\(target),"tid":\(target),\
             "args":{"a":\(event.a),"b":\(event.b),"info":\(event.info)}}
+            """)
+        }
+
+        mutating func interaction(_ event: TraceEvent) {
+            let points: [UInt16: String] = [1: "serialFirstByte", 2: "inputDecoded", 3: "shellConsumed", 4: "editorCompleted", 5: "parserCompleted", 6: "presentationRequested", 7: "uartAccepted"]
+            let valid = event.a <= UInt64(UInt32.max) && event.b <= 0x00FF_FFFF && points[event.info] != nil
+            let name  = valid ? points[event.info]! : "interactionInvalid"
+            events.append("""
+            {"ph":"i","name":"\(Self.escaped(name))","cat":"terminal","s":"t","ts":\(at(event.ts)),"pid":\(event.pid),"tid":\(event.pid),"args":{"correlation":\(event.a),"value":\(event.b),"valid":\(valid)}}
             """)
         }
 

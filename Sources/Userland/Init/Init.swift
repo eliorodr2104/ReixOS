@@ -27,7 +27,11 @@ public func main() {
     // init runs, which is why it can be named rather than looked up.
     let profiler = BootCap.profiler.rawValue
 
+    #if REIX_TERMINAL_PROFILE
+    profileControl(.enable, authority: profiler, arg: 0x1FF)
+    #else
     profileControl(.enable, authority: profiler, arg: 0xFF)
+    #endif
     profileControl(.setSampleDivider, authority: profiler, arg: 1)
 
     guard let device = deviceCap() else { return }
@@ -95,7 +99,17 @@ public func main() {
 
     profileDump(authority: profiler)
 
+    #if REIX_TERMINAL_PROFILE
+    // Start the terminal workload with an empty ring so traceLost belongs to
+    // this run, rather than to boot activity retained for the normal image.
+    profileControl(.reset, authority: profiler)
+    // Keep only interaction marks while Shell scans process statistics: IPC and
+    // context events would otherwise displace the bounded 256-entry correlation
+    // trace. The normal 0x3F suite already covers those general categories.
+    profileControl(.enable, authority: profiler, arg: 0x100)
+    #else
     profileControl(.enable, authority: profiler, arg: 0x3F)
+    #endif
 
     // The terminal server: it holds the serial window and the interrupt line
     // that goes with it, and it is the only process that does. Assembled here
@@ -103,7 +117,13 @@ public func main() {
     // inherits the console, exactly one owns the keyboard.
     let terminal = withUnsafeTemporaryAllocation(
         of      : CapGrant.self,
-        capacity: 3
+        capacity: {
+            #if REIX_TERMINAL_PROFILE
+            4
+            #else
+            3
+            #endif
+        }()
     ) { grants in
 
         grants[0] = CapGrant(
@@ -121,11 +141,21 @@ public func main() {
             slot  : BootCap.interrupt.rawValue,
             rights: [.grant]
         )
+        #if REIX_TERMINAL_PROFILE
+        // Marker-only: no console dump and no delegation authority.
+        grants[3] = ProfileAuthorityGrant.marker(source: profiler, console: false)
+        #endif
 
         return spawnProcess(
             path  : "TerminalServer.elf",
             grants: grants.baseAddress!,
-            count : 3
+            count : {
+                #if REIX_TERMINAL_PROFILE
+                4
+                #else
+                3
+                #endif
+            }()
         )
     }
 
@@ -282,7 +312,13 @@ public func main() {
     // worked out wrong.
     _ = withUnsafeTemporaryAllocation(
         of      : CapGrant.self,
-        capacity: 8
+        capacity: {
+            #if REIX_TERMINAL_PROFILE
+            9
+            #else
+            8
+            #endif
+        }()
     ) { grants in
 
         var count = 0
@@ -319,6 +355,10 @@ public func main() {
         // reader's share to the commands it runs, and what it passes drops the
         // right to pass it further.
         give(ProfileAuthorityGrant.launcher(source: profiler))
+        #if REIX_TERMINAL_PROFILE
+        // Separate from the delegable launcher: this can mark and dump only.
+        give(ProfileAuthorityGrant.marker(source: profiler, console: true))
+        #endif
 
         // The whole machine, because the person at the keyboard is meant to see
         // the whole disk. Not a privilege the shell has: a capability it was

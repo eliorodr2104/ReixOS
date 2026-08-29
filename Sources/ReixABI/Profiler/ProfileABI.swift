@@ -18,6 +18,7 @@ public enum ProfileABI {
         switch operation {
             case .attachExport: .profileStats
             case .dumpConsole : .profileConsole
+            case .interactionMark: .profileMark
 
             case .enable,
                  .disable,

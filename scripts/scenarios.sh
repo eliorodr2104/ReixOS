@@ -33,6 +33,7 @@
 #   QEMU_FLAGS  base machine flags every row appends to
 #   SWIFT       host toolchain used by the post-checks (default: swift)
 #   OBJDUMP     disassembler used by the post-checks (default: llvm-objdump)
+#   TERMINAL_PROFILE  profile-only terminal scenarios require the value `1`
 #
 # Exit codes: 0 every row behaved as declared, 1 a row failed or an xfail row
 # unexpectedly passed, 3 setup error (missing matrix or image, unreadable row).
@@ -43,6 +44,7 @@ SCENARIOS="${SCENARIOS:-Tests/Scenarios/scenarios.tsv}"
 OUT="${OUT:-.reix}"
 SWIFT="${SWIFT:-swift}"
 OBJDUMP="${OBJDUMP:-llvm-objdump}"
+QEMU="${QEMU:-qemu-system-aarch64}"
 ENGINE="${ENGINE:-scripts/smoke.sh}"
 # Keep in sync with QEMU_FLAGS in the Makefile and in scripts/smoke.sh. `make
 # vm-test` passes the Makefile's copy in, so this default only ever serves a
@@ -384,6 +386,37 @@ post_shell_closed() {
     return 0
 }
 
+# post=terminal-baseline: decode the final interaction trace and bind it to the
+# baseline lines Shell wrote before dumping. The report is host-only; clearing
+# FREESTANDING keeps it out of the bare-metal package graph.
+post_terminal_baseline() {
+    ptb_log=$1
+    ptb_out=$2
+    ptb_json="${ptb_out%.txt}.json"
+
+    if ! FREESTANDING= "$SWIFT" package --allow-writing-to-package-directory \
+            reix trace "$ptb_log" --interaction > "$ptb_out" 2>&1; then
+        printf 'the terminal interaction decoder failed, see %s' "$ptb_out"
+        return 1
+    fi
+
+    ptb_qemu_version=$("$QEMU" --version 2>/dev/null | awk 'NR == 1 { print; exit }')
+    [ -n "$ptb_qemu_version" ] || ptb_qemu_version=unavailable
+
+    if ! QEMU_VERSION="$ptb_qemu_version" python3 scripts/terminal-baseline-report.py \
+            "$ptb_log" "$ptb_out" "$ptb_json"; then
+        printf 'the terminal baseline reporter failed'
+        return 1
+    fi
+
+    if ! python3 -m json.tool "$ptb_json" > /dev/null; then
+        printf 'the terminal baseline JSON is invalid: %s' "$ptb_json"
+        return 1
+    fi
+
+    return 0
+}
+
 # Runs every post-check named in $1, which is `-`, one name, or several separated
 # by commas. Each writes its own artifact so a later failure does not overwrite
 # what an earlier check read.
@@ -404,6 +437,7 @@ run_post() {
             dma-barriers) post_dma_barriers "$2" "$rp_out" || return 1 ;;
             queue-depth)  post_queue_depth "$2" "$rp_out" || return 1 ;;
             shell-closed) post_shell_closed "$2" "$rp_out" || return 1 ;;
+            terminal-baseline) post_terminal_baseline "$2" "$rp_out" || return 1 ;;
             *)            setup_error "unknown post-check '$rp_name'" ;;
         esac
     done
@@ -427,6 +461,11 @@ skip_condition() {
         no-objdump)
             command -v "$OBJDUMP" >/dev/null 2>&1 && return 1
             skip_reason="no disassembler ('$OBJDUMP') for the post-check"
+            return 0
+            ;;
+        no-terminal-profile)
+            [ "${TERMINAL_PROFILE:-}" = 1 ] && return 1
+            skip_reason="terminal profiling requires TERMINAL_PROFILE=1"
             return 0
             ;;
         *)

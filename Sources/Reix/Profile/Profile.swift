@@ -18,6 +18,15 @@ public func profileControl(
     _syscall(.profileControl, op.rawValue, arg, UInt64(authority)) == 0
 }
 
+@inline(__always)
+@discardableResult
+public func profileInteractionMark(
+    _ mark   : InteractionTraceMark,
+    authority: UInt32
+) -> Bool {
+    profileControl(.interactionMark, authority: authority, arg: mark.packed)
+}
+
 
 /// Asks the kernel to dump the current profiler samples to the console.
 @inline(__always)

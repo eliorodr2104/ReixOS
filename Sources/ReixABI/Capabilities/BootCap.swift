@@ -51,4 +51,7 @@ public enum BootCap: UInt32 {
     /// it; anything else that gets it gets a read-only view, which is a
     /// different capability rather than the same one used politely.
     case block               = 14
+
+    /// A separate, non-delegable authority for interaction profile marks.
+    case profileMarker       = 15
 }

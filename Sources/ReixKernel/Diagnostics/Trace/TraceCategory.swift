@@ -86,3 +86,13 @@ enum TracePMU: TraceCategory {
     static let isEnabled: Bool   = true
     static let bit      : UInt32 = 1 << 7
 }
+
+/// Explicit terminal interaction profiling, compiled out of normal boots.
+enum TraceInteraction: TraceCategory {
+    #if REIX_TERMINAL_PROFILE
+    static let isEnabled: Bool = true
+    #else
+    static let isEnabled: Bool = false
+    #endif
+    static let bit: UInt32 = 1 << 8
+}

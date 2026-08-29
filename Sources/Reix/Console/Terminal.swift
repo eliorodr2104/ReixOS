@@ -119,7 +119,10 @@ public struct Terminal: ~Copyable {
         else { return nil }
         let length = Int(answer.message.words[2])
         guard length >= TerminalInputEvent.headerBytes, length <= Int(extent) else { return nil }
-        return TerminalInputEvent.decode(UnsafePointer(bytes), length: length)
+        guard let event = TerminalInputEvent.decode(UnsafePointer(bytes), length: length),
+              current != 0, event.sequence == current
+        else { return nil }
+        return event
     }
 
     public mutating func present(_ patch: TerminalRenderPatch) -> Bool {

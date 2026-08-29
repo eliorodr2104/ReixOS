@@ -40,17 +40,20 @@ import Foundation
 ///   0x08 procSpawn (0x0800, a=new pid, b=parent pid), procName (0x0801,
 ///        pid=named process, info=name length, a/b=name bytes 0-15 little-endian),
 ///        procExit (0x0802, a=pid)
+///   0x09 interactionMark (0x0900, info=InteractionTracePoint, a=correlation,
+///        b=value)
 enum TraceDecoder {
 
     // MARK: - Entry point
 
     /// `arguments[0]` is the subcommand name ("trace"); the rest is the
-    /// logfile path plus an optional `--boot`/`--raw`/`--profile` flag.
+    /// logfile path plus an optional `--boot`/`--raw`/`--profile`/`--interaction` flag.
     /// `root` is the package directory, needed by `--profile` to find
     /// `.reix/kernel.elf` and the per-process `.reix/<Name>` ELFs.
     static func run(arguments: [String], root: URL) throws {
         let rest = Array(arguments.dropFirst())
         let mode: Mode = rest.contains("--export") ? .export
+            : rest.contains("--interaction") ? .interaction
             : rest.contains("--boot") ? .boot
             : rest.contains("--raw") ? .raw
             : rest.contains("--profile") ? .profile
@@ -81,7 +84,7 @@ enum TraceDecoder {
 
         guard let logPath else {
             Diagnostics.error("""
-            Usage: swift package reix trace <logfile> [--boot|--raw|--profile]
+            Usage: swift package reix trace <logfile> [--boot|--raw|--profile|--interaction]
                        [--export <out.json>]   writes a Chrome Trace Event file,
                                                which ui.perfetto.dev opens
                        [--symbolizer <path>]   (only consulted by --profile)
@@ -127,6 +130,7 @@ enum TraceDecoder {
             case .boot   : printBoot(block)
             case .raw    : printRaw(block)
             case .profile: printProfile(block, root: root, arguments: arguments)
+            case .interaction: printInteraction(block)
 
             case .export:
                 guard let exportPath else {
@@ -138,7 +142,44 @@ enum TraceDecoder {
         }
     }
 
-    private enum Mode { case summary, boot, raw, profile, export }
+    private enum Mode { case summary, boot, raw, profile, interaction, export }
+
+    private static func printInteraction(_ block: TraceBlock) {
+        struct Group {
+            let correlation: UInt32
+            let firstTimestamp: UInt64
+            var points: [UInt16: TraceEvent] = [:]
+            var duplicates: Set<UInt16> = []
+        }
+        var groups: [Group] = []
+        var invalid = 0
+        for event in block.events where event.code == 0x0900 {
+            guard (1...7).contains(event.info), event.a <= UInt64(UInt32.max), event.b <= 0x00FF_FFFF else { invalid += 1; continue }
+            let correlation = UInt32(event.a)
+            let index       = groups.firstIndex { $0.correlation == correlation }
+            if let index {
+                if groups[index].points[event.info] != nil { groups[index].duplicates.insert(event.info) }
+                else { groups[index].points[event.info] = event }
+            } else { groups.append(Group(correlation: correlation, firstTimestamp: event.ts, points: [event.info: event])) }
+        }
+        print("interaction groups=\(groups.count) invalid=\(invalid)")
+        func duration(
+            _ group: Group,
+            _ start: UInt16,
+            _ end  : UInt16
+        ) -> String {
+            guard !group.duplicates.contains(start), !group.duplicates.contains(end), let a = group.points[start], let b = group.points[end], b.ts >= a.ts else { return "unavailable" }
+            return "\(fmt(micros(b.ts - a.ts, freq: block.freq)))us"
+        }
+        for group in groups {
+            let uart  = !group.duplicates.contains(7) ? group.points[7] : nil
+            let bytes = uart.map { String($0.b) } ?? "unavailable"
+            let wire: String
+            if let uart { wire = "\(fmt(Double(uart.b) * 10_000_000.0 / 115_200.0))us" } else { wire = "unavailable" }
+            let provenance = uart == nil ? "unavailable" : "derived"
+            print("interaction correlation=\(group.correlation) serial_to_decoded=\(duration(group, 1, 2)) decoded_to_shell=\(duration(group, 2, 3)) shell_to_editor=\(duration(group, 3, 4)) editor_to_parser=\(duration(group, 4, 5)) editor_to_presentation=\(duration(group, 4, 6)) presentation_to_uart=\(duration(group, 6, 7)) total=\(duration(group, 1, 7)) uart_bytes=\(bytes) wire_time=\(wire) wire_provenance=\(provenance) duplicate=\(group.duplicates.count)")
+        }
+    }
 }
 
 
@@ -178,13 +219,13 @@ extension TraceDecoder {
 
         var description: String {
             switch self {
-            case .noBlock:
-                return "No trace block ([TRACE] begin ... / [TRACE] end ...) found in the log."
-            case .truncated(let line):
-                return """
-                Truncated trace block: 'begin' at line \(line) has no matching 'end'. \
-                The capture likely cut off mid-dump.
-                """
+                case .noBlock:
+                    return "No trace block ([TRACE] begin ... / [TRACE] end ...) found in the log."
+                case .truncated(let line):
+                    return """
+                    Truncated trace block: 'begin' at line \(line) has no matching 'end'. \
+                    The capture likely cut off mid-dump.
+                    """
             }
         }
     }
@@ -308,7 +349,7 @@ extension TraceDecoder {
         "syscallExit": 0x0100, "ctxSwitch": 0x0200, "idleEnter": 0x0201, "idleExit": 0x0202,
         "ipcBlock": 0x0300, "ipcWake": 0x0301, "ipcTransfer": 0x0302, "preemptSpan": 0x0400,
         "sample": 0x0500, "sampleFrame": 0x0501, "pmuSection": 0x0600, "pmuEvents": 0x0601,
-        "bootPhase": 0x0700, "procSpawn": 0x0800, "procName": 0x0801, "procExit": 0x0802,
+        "bootPhase": 0x0700, "procSpawn": 0x0800, "procName": 0x0801, "procExit": 0x0802, "interactionMark": 0x0900,
     ]
 
     private static func eventCode(for name: Substring) -> UInt16? {
@@ -391,29 +432,30 @@ extension TraceDecoder {
     /// added after this table ships still print instead of vanishing.
     static func opName(_ code: UInt16) -> String {
         switch code {
-        case 0x0100: return "syscallExit"
-        case 0x0200: return "ctxSwitch"
-        case 0x0201: return "idleEnter"
-        case 0x0202: return "idleExit"
-        case 0x0300: return "ipcBlock"
-        case 0x0301: return "ipcWake"
-        case 0x0302: return "ipcTransfer"
-        case 0x0400: return "preemptSpan"
-        case 0x0500: return "sample"
-        case 0x0501: return "sampleFrame"
-        case 0x0600: return "pmuSection"
-        case 0x0601: return "pmuEvents"
-        case 0x0700: return "bootPhase"
-        case 0x0800: return "procSpawn"
-        case 0x0801: return "procName"
-        case 0x0802: return "procExit"
-        default:      return "unknown(0x" + String(code, radix: 16) + ")"
+            case 0x0100: return "syscallExit"
+            case 0x0200: return "ctxSwitch"
+            case 0x0201: return "idleEnter"
+            case 0x0202: return "idleExit"
+            case 0x0300: return "ipcBlock"
+            case 0x0301: return "ipcWake"
+            case 0x0302: return "ipcTransfer"
+            case 0x0400: return "preemptSpan"
+            case 0x0500: return "sample"
+            case 0x0501: return "sampleFrame"
+            case 0x0600: return "pmuSection"
+            case 0x0601: return "pmuEvents"
+            case 0x0700: return "bootPhase"
+            case 0x0800: return "procSpawn"
+            case 0x0801: return "procName"
+            case 0x0802: return "procExit"
+            case 0x0900: return "interactionMark"
+            default:      return "unknown(0x" + String(code, radix: 16) + ")"
         }
     }
 
     private static let knownCodes: Set<UInt16> = [
         0x0100, 0x0200, 0x0201, 0x0202, 0x0300, 0x0301, 0x0302, 0x0400,
-        0x0500, 0x0501, 0x0600, 0x0601, 0x0700, 0x0800, 0x0801, 0x0802,
+        0x0500, 0x0501, 0x0600, 0x0601, 0x0700, 0x0800, 0x0801, 0x0802, 0x0900,
     ]
 
     /// `1 = ipcTransfer`, the only section id in use today. Others print as
@@ -550,18 +592,18 @@ extension TraceDecoder {
 
         for event in block.events {
             switch event.code {
-            case 0x0302: transfers += 1
-            case 0x0301: wakes += 1
-            case 0x0300:
-                let reason: String
-                switch event.info {
-                case 0: reason = "sendQueue"
-                case 1: reason = "recvWait"
-                case 2: reason = "call"
-                default: reason = "unknown(\(event.info))"
-                }
-                blocksByReason[reason, default: 0] += 1
-            default: break
+                case 0x0302: transfers += 1
+                case 0x0301: wakes += 1
+                case 0x0300:
+                    let reason: String
+                    switch event.info {
+                        case 0: reason = "sendQueue"
+                        case 1: reason = "recvWait"
+                        case 2: reason = "call"
+                        default: reason = "unknown(\(event.info))"
+                    }
+                    blocksByReason[reason, default: 0] += 1
+                default: break
             }
         }
 
@@ -611,12 +653,12 @@ extension TraceDecoder {
 
         for event in block.events {
             switch event.code {
-            case 0x0200:
-                total += 1
-                activations[UInt32(truncatingIfNeeded: event.b), default: 0] += 1
-            case 0x0201: idleEnters += 1
-            case 0x0202: idleExits += 1
-            default: break
+                case 0x0200:
+                    total += 1
+                    activations[UInt32(truncatingIfNeeded: event.b), default: 0] += 1
+                case 0x0201: idleEnters += 1
+                case 0x0202: idleExits += 1
+                default: break
             }
         }
 
@@ -729,49 +771,55 @@ extension TraceDecoder {
     /// falls back to the raw info/pid/a/b so an unknown code still prints.
     private static func describeFields(_ event: TraceEvent, freq: UInt64) -> String {
         switch event.code {
-        case 0x0100:
-            let dur = fmt(micros(event.a, freq: freq))
-            return "syscall=\(syscallName(event.info)) pid=\(event.pid) dur=\(dur)us ret=0x\(String(event.b, radix: 16))"
-        case 0x0200:
-            return "prev=\(event.a) next=\(event.b)"
-        case 0x0201, 0x0202:
-            return "pid=\(event.pid)"
-        case 0x0300:
-            let reason: String
-            switch event.info {
-            case 0: reason = "sendQueue"
-            case 1: reason = "recvWait"
-            case 2: reason = "call"
-            default: reason = "unknown(\(event.info))"
-            }
-            return "reason=\(reason) endpoint=\(event.a) pid=\(event.pid)"
-        case 0x0301:
-            return "woken=\(event.a) pid=\(event.pid)"
-        case 0x0302:
-            return "sender=\(event.a) receiver=\(event.b)"
-        case 0x0400:
-            let stretch = fmt(micros(event.a, freq: freq))
-            return "region=\(regionName(event.info)) maxStretch=\(stretch)us checkpoints=\(event.b)"
-        case 0x0500:
-            let el = event.info & 1 != 0 ? "EL1" : "EL0"
-            return "elr=0x\(String(event.a, radix: 16)) x30=0x\(String(event.b, radix: 16)) mode=\(el) pid=\(event.pid)"
-        case 0x0501:
-            return "depth=\(event.info) returnAddr=0x\(String(event.a, radix: 16))"
-        case 0x0600:
-            return "section=\(pmuSectionName(event.info)) cycles=\(event.a) instructions=\(event.b) (TCG: approximate)"
-        case 0x0601:
-            return "eventA=\(event.a) eventB=\(event.b) (raw, rare)"
-        case 0x0700:
-            return "phase=\(phaseNames[event.info] ?? "phase#\(event.info)")"
-        case 0x0800:
-            return "newPid=\(event.a) parentPid=\(event.b)"
-        case 0x0801:
-            let name = decodeProcName(a: event.a, b: event.b, length: event.info)
-            return "name=\(name) len=\(event.info) pid=\(event.pid)"
-        case 0x0802:
-            return "pid=\(event.a)"
-        default:
-            return "info=0x\(String(event.info, radix: 16)) pid=\(event.pid) a=0x\(String(event.a, radix: 16)) b=0x\(String(event.b, radix: 16))"
+            case 0x0100:
+                let dur = fmt(micros(event.a, freq: freq))
+                return "syscall=\(syscallName(event.info)) pid=\(event.pid) dur=\(dur)us ret=0x\(String(event.b, radix: 16))"
+            case 0x0200:
+                return "prev=\(event.a) next=\(event.b)"
+            case 0x0201, 0x0202:
+                return "pid=\(event.pid)"
+            case 0x0300:
+                let reason: String
+                switch event.info {
+                    case 0: reason = "sendQueue"
+                    case 1: reason = "recvWait"
+                    case 2: reason = "call"
+                    default: reason = "unknown(\(event.info))"
+                }
+                return "reason=\(reason) endpoint=\(event.a) pid=\(event.pid)"
+            case 0x0301:
+                return "woken=\(event.a) pid=\(event.pid)"
+            case 0x0302:
+                return "sender=\(event.a) receiver=\(event.b)"
+            case 0x0400:
+                let stretch = fmt(micros(event.a, freq: freq))
+                return "region=\(regionName(event.info)) maxStretch=\(stretch)us checkpoints=\(event.b)"
+            case 0x0500:
+                let el = event.info & 1 != 0 ? "EL1" : "EL0"
+                return "elr=0x\(String(event.a, radix: 16)) x30=0x\(String(event.b, radix: 16)) mode=\(el) pid=\(event.pid)"
+            case 0x0501:
+                return "depth=\(event.info) returnAddr=0x\(String(event.a, radix: 16))"
+            case 0x0600:
+                return "section=\(pmuSectionName(event.info)) cycles=\(event.a) instructions=\(event.b) (TCG: approximate)"
+            case 0x0601:
+                return "eventA=\(event.a) eventB=\(event.b) (raw, rare)"
+            case 0x0700:
+                return "phase=\(phaseNames[event.info] ?? "phase#\(event.info)")"
+            case 0x0800:
+                return "newPid=\(event.a) parentPid=\(event.b)"
+            case 0x0801:
+                let name = decodeProcName(a: event.a, b: event.b, length: event.info)
+                return "name=\(name) len=\(event.info) pid=\(event.pid)"
+            case 0x0802:
+                return "pid=\(event.a)"
+            case 0x0900:
+                let points: [UInt16: String] = [1: "serialFirstByte", 2: "inputDecoded", 3: "shellConsumed", 4: "editorCompleted", 5: "parserCompleted", 6: "presentationRequested", 7: "uartAccepted"]
+                guard let point = points[event.info], event.a <= UInt64(UInt32.max), event.b <= 0x00FF_FFFF else {
+                    return "invalid rawPoint=\(event.info) correlation=\(event.a) value=\(event.b)"
+                }
+                return "point=\(point) correlation=\(event.a) value=\(event.b)"
+            default:
+                return "info=0x\(String(event.info, radix: 16)) pid=\(event.pid) a=0x\(String(event.a, radix: 16)) b=0x\(String(event.b, radix: 16))"
         }
     }
 }
@@ -846,16 +894,16 @@ extension TraceDecoder {
 
         for event in block.events {
             switch event.code {
-            case 0x0500:
-                if event.info & 1 != 0 {
-                    hits.append((event, []))
-                    openIndex = hits.count - 1
-                } else {
-                    openIndex = nil
-                }
-            case 0x0501:
-                if let i = openIndex { hits[i].frames.append(event) }
-            default: break
+                case 0x0500:
+                    if event.info & 1 != 0 {
+                        hits.append((event, []))
+                        openIndex = hits.count - 1
+                    } else {
+                        openIndex = nil
+                    }
+                case 0x0501:
+                    if let i = openIndex { hits[i].frames.append(event) }
+                default: break
             }
         }
         return hits

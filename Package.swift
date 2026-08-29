@@ -10,7 +10,8 @@ import PackageDescription
 /// the host (arm64-apple-macosx), those flags are dropped so the editor can load
 /// the macOS standard library and provide code intelligence.
 /// (0xKSor, thanks)
-let isFreestanding = ProcessInfo.processInfo.environment["FREESTANDING"] == "1"
+let isFreestanding    = ProcessInfo.processInfo.environment["FREESTANDING"] == "1"
+let isTerminalProfile = ProcessInfo.processInfo.environment["TERMINAL_PROFILE"] == "1"
 
 // @_extern stays on in both modes so the editor resolves the @_extern(c) shims.
 var bareMetal: [SwiftSetting] = [
@@ -33,6 +34,11 @@ if isFreestanding {
             "-Xcc", "-ffunction-sections", "-Xcc", "-fdata-sections",
         ]),
     ]
+}
+
+var terminalProfile = bareMetal
+if isFreestanding && isTerminalProfile {
+    terminalProfile.append(.define("REIX_TERMINAL_PROFILE"))
 }
 
 /// Non-Swift files that live under `Sources/ReixKernel` but are not part of the
@@ -78,7 +84,7 @@ let package = Package(
         .target(name: "ReixABI", path: "Sources/ReixABI", swiftSettings: bareMetal),
 
         // Userland SDK: syscall wrappers + service clients. Re-exports ReixABI.
-        .target(name: "Reix", dependencies: ["ReixABI"], path: "Sources/Reix", swiftSettings: bareMetal),
+        .target(name: "Reix", dependencies: ["ReixABI"], path: "Sources/Reix", swiftSettings: terminalProfile),
 
         // Kernel: everything else. Imports the header-only CElf module via -I.
         .target(
@@ -86,13 +92,13 @@ let package = Package(
             dependencies : ["ReixABI"],
             path         : "Sources/ReixKernel",
             exclude      : kernelNativeExclude,
-            swiftSettings: bareMetal
+            swiftSettings: terminalProfile
         ),
 
         // Userland apps: one ELF each, depend only on Reix.
-        app("Init", bareMetal),
+        app("Init", terminalProfile),
         app("NameServer", bareMetal), app("ConsoleServer", bareMetal),
-        app("Top", bareMetal), app("TerminalServer", bareMetal),
+        app("Top", bareMetal), app("TerminalServer", terminalProfile),
 
         // The two processes the disk needs: the walker that reads device ids
         // off the bus, and the driver it starts for what it found.
@@ -133,14 +139,19 @@ let package = Package(
             dependencies : ["Reix", "ShellLanguage"],
             path         : "Sources/Userland/Shell",
             exclude      : ["Language"],
-            swiftSettings: bareMetal
+            swiftSettings: terminalProfile
         ),
 
     ] + (isFreestanding ? [] : [
         .executableTarget(
             name        : "ShellBench",
-            dependencies: ["ShellLanguage", "ReixABI"],
+            dependencies: ["ShellLanguage", "ReixABI", "TerminalTestSupport", "ShellBenchmarkSupport"],
             path        : "Tests/ShellBench"
+        ),
+
+        .target(
+            name: "ShellBenchmarkSupport",
+            path: "Tests/ShellBenchmarkSupport"
         ),
 
         .target(
@@ -159,6 +170,14 @@ let package = Package(
             path: "Tests/Support"
         ),
 
+        // Deterministic host-only peripherals and terminal model shared by
+        // protocol tests. It deliberately has no dependency on the kernel or
+        // a host terminal.
+        .target(
+            name: "TerminalTestSupport",
+            path: "Tests/TerminalTestSupport"
+        ),
+
         .testTarget(
             name        : "KernelPolicyTests",
             dependencies: ["Kernel", "ReixABI", "KernelHostShims", "KernelTestSupport"],
@@ -171,6 +190,12 @@ let package = Package(
             name        : "ShellTests",
             dependencies: ["ShellLanguage"],
             path        : "Tests/ShellTests"
+        ),
+
+        .testTarget(
+            name        : "ShellBenchmarkTests",
+            dependencies: ["ShellBenchmarkSupport"],
+            path        : "Tests/ShellBenchmarkTests"
         ),
 
         // The file system over a slab of host memory: format, allocate, name,
@@ -194,7 +219,7 @@ let package = Package(
         // machine at either end of it.
         .testTarget(
             name        : "ShellProtocolTests",
-            dependencies: ["ReixABI", "ShellLanguage"],
+            dependencies: ["ReixABI", "ShellLanguage", "TerminalTestSupport"],
             path        : "Tests/ShellProtocolTests"
         ),
 

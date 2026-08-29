@@ -180,3 +180,10 @@ storage-4m	4M	embedded	-	window	16	[ DISK  ] serving 32768 sectors of 512 bytes|
 # post-check's half: nothing at all, and in particular no further prompt, which a
 # forbidden marker could not say because the prompt before the exit is legitimate.
 shell-exit	-	qemu	-	typed:shell.exit()\nzzz.qqq()\n	25	[ SERVE ] Terminal Server running|ReixOS shell. Type shell.help() to see what this understands.|reix>|[ SHELL ] this shell is done	[ PANIC ]|REIX-PANIC|[ ERROR ]|the terminal refused to register this reader|zzz.qqq|no such receiver	shell-closed	pass
+
+# Instrumented only: the interaction marks add profile syscalls, so decoded
+# latencies include that measurement overhead. This terminal-focused row keeps
+# the 4 MiB floor and embedded initrd coupling but does not attach a disk:
+# storage-4m remains the full storage-stack proof, while the instrumented image
+# starts Shell without conflating terminal capacity with the file system footprint.
+terminal-profile-4m	4M	embedded	-	typed:shell.exit()\n	30	[ SERVE ] Terminal Server running|ReixOS shell. Type shell.help() to see what this understands.|reix>|[ TERMINAL BASELINE ] system status=measured|[TRACE] begin v=2|[TRACE] end|[ SHELL ] this shell is done	[ PANIC ]|REIX-PANIC|[ ERROR ]|the terminal refused to register this reader	terminal-baseline	skip-if:no-terminal-profile

@@ -12,6 +12,7 @@
 #   make test       run the host unit tests, then the QEMU scenario matrix
 #   make host-test  only the host unit tests (no QEMU, no bare-metal build)
 #   make vm-test    only the QEMU scenario matrix
+#   make terminal-baseline-4m  run the instrumented terminal baseline at 4 MiB
 #   make run        build + boot in QEMU
 #   make release    build + boot the optimized image
 #   make smoke      build + boot headless, pass/fail on the serial log
@@ -35,6 +36,10 @@ PLUGIN      := --allow-writing-to-package-directory reix
 # Output directory used by the plugin. Keep in sync with `outputDir` in
 # Plugins/reix/plugin.swift and with the QEMU arguments in the Xcode scheme.
 OUT         := .reix
+# SwiftPM build tree. The profiling image needs its own graph because Package.swift
+# derives compile defines from TERMINAL_PROFILE and SwiftPM does not key its
+# manifest cache on arbitrary environment variables.
+BUILD_PATH  ?= .build
 # QEMU: resolved from PATH by default (Homebrew on macOS, distro package on Linux).
 #
 # `pmu=on` gives the guest a PMUv3 block, which the kernel enables at boot and
@@ -85,7 +90,7 @@ QEMU_INITRD  = $(if $(filter embedded,$(INITRD_MODE)),,-initrd $(OUT)/initrd.tar
 # instead and get working code intelligence.
 export FREESTANDING := 1
 
-.PHONY: all build image release run run-release run-4m smoke smoke-4m test host-test vm-test disk prune-dups clean-image clean
+.PHONY: all build image release run run-release run-4m smoke smoke-4m test host-test vm-test terminal-baseline-4m disk prune-dups clean-image clean
 
 all: image
 
@@ -114,18 +119,18 @@ build: image
 # (`checkouts 2`, `ReixKernel 2.build`). `-prune` stops the walk from descending
 # into a tree that is about to go away.
 prune-dups:
-	@find $(OUT) .build -depth -name "* [0-9]" -o -name "* [0-9].*" 2>/dev/null \
+	@find $(OUT) $(BUILD_PATH) -depth -name "* [0-9]" -o -name "* [0-9].*" 2>/dev/null \
 	    | while IFS= read -r dup; do rm -rf "$$dup"; done || true
 	@sh scripts/prune-stale.sh
 
 # Build all modules, then link the image via the plugin.
 image: prune-dups
-	$(SWIFT) build --triple $(TRIPLE)
-	$(SWIFT) package $(PLUGIN)
+	$(SWIFT) build --triple $(TRIPLE) --scratch-path $(BUILD_PATH)
+	REIX_BUILD_PATH=$(BUILD_PATH) $(SWIFT) package $(PLUGIN)
 
 release: prune-dups
-	$(SWIFT) build --triple $(TRIPLE) -c release
-	$(SWIFT) package $(PLUGIN) --release
+	$(SWIFT) build --triple $(TRIPLE) -c release --scratch-path $(BUILD_PATH)
+	REIX_BUILD_PATH=$(BUILD_PATH) $(SWIFT) package $(PLUGIN) --release
 
 # Boot in QEMU (Ctrl-A X to quit). qemu runs here, not inside the plugin sandbox.
 run: image disk
@@ -200,6 +205,7 @@ host-test: FREESTANDING :=
 host-test: prune-dups
 	@mkdir -p $(OUT)
 	$(SWIFT) test --no-parallel --xunit-output $(OUT)/test-results.xml
+	SWIFT=$(SWIFT) sh scripts/test-trace-interaction.sh
 
 # The QEMU scenario matrix: every row in Tests/Scenarios/scenarios.tsv, booted
 # one at a time by scripts/scenarios.sh over the same scripts/smoke.sh that
@@ -214,8 +220,18 @@ vm-test: image disk
 	QEMU=$(QEMU) QEMU_FLAGS='$(QEMU_FLAGS) $(QEMU_DISK)' SWIFT=$(SWIFT) OUT=$(OUT) \
 	    scripts/scenarios.sh
 
+terminal-baseline-4m: export TERMINAL_PROFILE := 1
+terminal-baseline-4m: BUILD_PATH := .build-terminal-profile
+# Terminal-focused: storage-4m remains the separate proof for the full storage
+# stack. At 4 MiB the instrumented image completes storage with a disk but does
+# not start Shell; without a disk this measures kernel -> TerminalServer -> Shell
+# without conflating terminal capacity with the file system's footprint.
+terminal-baseline-4m: image
+	QEMU=$(QEMU) QEMU_FLAGS='$(QEMU_FLAGS)' SWIFT=$(SWIFT) OUT=$(OUT) \
+	    scripts/scenarios.sh terminal-profile-4m
+
 clean-image:
 	rm -rf $(OUT)
 
 clean: clean-image
-	rm -rf .build
+	rm -rf .build .build-terminal-profile

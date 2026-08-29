@@ -376,8 +376,8 @@ public struct Kernel: Loggable {
             at: slot,
             Capability(
                 target: .profileControl,
-                badge: 0,
-                rights: [.grant, .profile]
+                badge : 0,
+                rights: [.grant, .profile, .profileMark]
             )
         )
         return result.installed && result.displaced == nil

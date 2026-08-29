@@ -12,4 +12,5 @@ public enum ProfileOperation: UInt64 {
     case setSampleDivider = 4
     case attachExport     = 5
     case pmuProbe         = 6
+    case interactionMark  = 7
 }
