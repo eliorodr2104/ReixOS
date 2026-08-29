@@ -139,11 +139,8 @@ struct ShellEngineTests {
 
     /// A line of tabs is refused for wanting a name, not passed over as blank.
     ///
-    /// `skipSpaces` knows one byte, 0x20. Written down rather than fixed here
-    /// because the editor in the terminal server accepts only 0x20 through 0x7E:
-    /// a tab never reaches this parser from a keyboard, and widening the grammar
-    /// for a byte nothing can type is a change to the language rather than a
-    /// closing of the loop.
+    /// `skipSpaces` knows one byte, 0x20. The typed input boundary reports Tab
+    /// as a key action, while paste sanitation expands it before parsing.
     ///
     /// If that editor ever passes control bytes through, this is the test that
     /// says the parser has to be taught about them first.

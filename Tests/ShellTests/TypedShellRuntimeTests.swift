@@ -36,7 +36,10 @@ struct TypedShellRuntimeTests {
 
             let source = Array("fileSystem.changeDir(at: \"archive\")".utf8)
             source.withUnsafeBufferPointer { bytes in
-                guard case .success(let program) = TypedShellParser.parse(bytes.baseAddress!, count: bytes.count) else { return }
+                guard case .success(let program) = TypedShellParser.parse(
+                    bytes.baseAddress!,
+                    count: bytes.count
+                ) else { return }
                 var runtime = TypedShellRuntime()
                 var arena   = TypedShellSequenceArena()
                 let result  = signatures.span.withUnsafeBufferPointer { table in
@@ -74,7 +77,8 @@ struct TypedShellRuntimeTests {
             "fileSystem.createDirectory(at: docs)",
             "fileSystem.createFile(at: draft)",
             "fileSystem.write(at: draft, text: \"hello\")",
-            "let folders = list.filter { $0.isFolder }, folders.filter { !$0.name.contains(\"1\") }.sorted { $0.name < $1.name }",
+            "let folders = list.filter { $0.isFolder }, "
+                + "folders.filter { !$0.name.contains(\"1\") }.sorted { $0.name < $1.name }",
             "list.map { $0.name }.compactMap { $0 }.flatMap { list }",
         ]
         for source in examples {
@@ -94,7 +98,14 @@ struct TypedShellRuntimeTests {
         var sequence : UInt32 = 1
         func insertion(_ text: [UInt8]) -> ReixInputRecord {
             defer { sequence += 1 }
-            return text.withUnsafeBufferPointer { ReixInputRecord(kind: .insert, sequence: sequence, bytes: $0.baseAddress!, count: $0.count)! }
+            return text.withUnsafeBufferPointer {
+                ReixInputRecord(
+                    kind: .insert,
+                    sequence: sequence,
+                    bytes: $0.baseAddress!,
+                    count: $0.count
+                )!
+            }
         }
         for byte in Array("list.filter {".utf8) { _ = editor.apply(insertion([byte])) }
         let newline = editor.apply(ReixInputRecord(kind: .enter, sequence: sequence)!)
@@ -102,7 +113,10 @@ struct TypedShellRuntimeTests {
         #expect(editor.count > "list.filter {".utf8.count)
         for byte in Array("$0.isFolder }".utf8) { _ = editor.apply(insertion([byte])) }
         let submitted = editor.apply(ReixInputRecord(kind: .enter, sequence: sequence + 1)!)
-        guard case .submitted(let count) = submitted.action else { Issue.record("complete multiline input did not submit"); return }
+        guard case .submitted(let count) = submitted.action else {
+            Issue.record("complete multiline input did not submit")
+            return
+        }
         #expect(count == editor.count)
         editor.reset()
 
@@ -120,7 +134,7 @@ struct TypedShellRuntimeTests {
         guard let row = replacement.patch else { Issue.record("middle insertion did not redraw"); return }
         #expect(row.kind == .replaceBuffer)
         #expect(row.cursorColumn == 7)
-        #expect(row.count == 9)
+        #expect(row.count == 11)
     }
 
     @Test("editor patches retain the terminal event correlation")
@@ -152,21 +166,36 @@ struct TypedShellRuntimeTests {
     func multilineMovement() {
         var editor = ShellLineEditor()
         let source = Array("ab\n12345\nèx".utf8)
+        _ = editor.apply(
+            ReixInputRecord(kind: .pasteBegin, sequence: 1)!
+        )
         _ = source.withUnsafeBufferPointer {
-            editor.apply(ReixInputRecord(kind: .insert, sequence: 1, bytes: $0.baseAddress!, count: $0.count)!)
+            editor.apply(
+                ReixInputRecord(
+                    kind: .pasteChunk,
+                    sequence: 2,
+                    bytes: $0.baseAddress!,
+                    count: $0.count
+                )!
+            )
         }
+        _ = editor.apply(
+            ReixInputRecord(kind: .pasteEnd, sequence: 3)!
+        )
         #expect(editor.cursor == source.count)
-        _ = editor.apply(ReixInputRecord(kind: .up, sequence: 2)!)
+        _ = editor.apply(ReixInputRecord(kind: .up, sequence: 4)!)
         #expect(editor.cursor == 5)
-        _ = editor.apply(ReixInputRecord(kind: .up, sequence: 3)!)
+        _ = editor.apply(ReixInputRecord(kind: .up, sequence: 5)!)
         #expect(editor.cursor == 2)
-        _ = editor.apply(ReixInputRecord(kind: .down, sequence: 4)!)
+        _ = editor.apply(ReixInputRecord(kind: .down, sequence: 6)!)
         #expect(editor.cursor == 5)
-        _ = editor.apply(ReixInputRecord(kind: .home, sequence: 5)!)
+        _ = editor.apply(ReixInputRecord(kind: .home, sequence: 7)!)
         #expect(editor.cursor == 3)
-        _ = editor.apply(ReixInputRecord(kind: .end, sequence: 6)!)
+        _ = editor.apply(ReixInputRecord(kind: .end, sequence: 8)!)
         #expect(editor.cursor == 8)
-        let replacement = editor.apply(ReixInputRecord(kind: .delete, sequence: 7)!)
+        let replacement = editor.apply(
+            ReixInputRecord(kind: .delete, sequence: 9)!
+        )
         #expect(replacement.patch?.kind == .replaceBuffer)
         #expect(replacement.patch?.previousRows == 3)
 

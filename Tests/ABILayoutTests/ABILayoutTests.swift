@@ -20,14 +20,12 @@ import ReixABI
 @Suite("ABI layout")
 struct ABILayoutTests {
 
-    @Test("the terminal transport occupies exactly two typed pages")
-    func terminalTransportLayout() {
-        #expect(ReixTerminalTransport.pages == 2)
-        #expect(ReixTerminalTransport.headerBytes == 64)
-        #expect(ReixInputProtocol.recordBytes == 32)
+    @Test("the TextSurface transport occupies exactly one typed page")
+    func textSurfaceTransportLayout() {
+        #expect(ReixTextSurfaceTransport.pages == 1)
+        #expect(ReixTextSurfaceTransport.headerBytes == 64)
         #expect(ReixTextSurfaceProtocol.recordBytes == 288)
-        #expect(ReixTerminalTransport.headerBytes + ReixTerminalTransport.inputCapacity * ReixInputProtocol.recordBytes == ReixTerminalTransport.pageBytes)
-        #expect(ReixTerminalTransport.headerBytes + ReixTerminalTransport.surfaceCapacity * ReixTextSurfaceProtocol.recordBytes == ReixTerminalTransport.pageBytes)
+        #expect(ReixTextSurfaceTransport.headerBytes + ReixTextSurfaceTransport.capacity * ReixTextSurfaceProtocol.recordBytes == ReixTextSurfaceTransport.pageBytes)
     }
 
     @Test("the per-frame record stays eight bytes and starts life all zero")

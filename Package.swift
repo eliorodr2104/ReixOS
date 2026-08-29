@@ -74,6 +74,7 @@ let package = Package(
         .library(name: "ShellLanguage", type: .static, targets: ["ShellLanguage"]),
         .library(name: "ReixFS",        type: .static, targets: ["ReixFS"]),
         .library(name: "TerminalServer", type: .static, targets: ["TerminalServer"]),
+        .library(name: "InputServer",   type: .static, targets: ["InputServer"]),
         .library(name: "VirtioBus",     type: .static, targets: ["VirtioBus"]),
         .library(name: "BlockServer",   type: .static, targets: ["BlockServer"]),
         .library(name: "FileSystemServer", type: .static, targets: ["FileSystemServer"]),
@@ -97,8 +98,11 @@ let package = Package(
 
         // Userland apps: one ELF each, depend only on Reix.
         app("Init", terminalProfile),
-        app("NameServer", bareMetal), app("ConsoleServer", bareMetal),
-        app("Top", bareMetal), app("TerminalServer", terminalProfile),
+        app("NameServer", bareMetal),
+        app("ConsoleServer", bareMetal),
+        app("Top", bareMetal),
+        app("TerminalServer", terminalProfile),
+        app("InputServer", bareMetal),
 
         // The two processes the disk needs: the walker that reads device ids
         // off the bus, and the driver it starts for what it found.
@@ -163,6 +167,11 @@ let package = Package(
             name: "TerminalRingHarness",
             dependencies: ["Reix", "ReixABI", "KernelHostShims"],
             path: "Tests/TerminalRingHarness"
+        ),
+        .executableTarget(
+            name: "InputRouterHarness",
+            dependencies: ["Reix", "ReixABI", "KernelHostShims"],
+            path: "Tests/InputRouterHarness"
         ),
 
         // Fixtures shared by the host suites. Its own target because SwiftPM

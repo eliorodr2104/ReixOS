@@ -6,7 +6,7 @@
 //
 
 /// The semantic screen command contract. VT bytes are an implementation detail
-/// of TerminalServer and never occur in this protocol.
+/// of VTAdapter and never occur in this protocol.
 public enum ReixTextSurfaceProtocol {
     public static let version: UInt16 = 1
     public static let recordBytes = 288
@@ -98,7 +98,11 @@ public struct ReixTextSurfaceCommand: Equatable {
         else { return nil }
         let count = Int(read16(bytes, 6))
         guard count <= ReixTextSurfaceProtocol.maximumPayload,
-              zero(bytes, from: ReixTextSurfaceProtocol.headerBytes + count, through: ReixTextSurfaceProtocol.recordBytes)
+              zero(
+                  bytes,
+                  from: ReixTextSurfaceProtocol.headerBytes + count,
+                  through: ReixTextSurfaceProtocol.recordBytes
+              )
         else { return nil }
         return ReixTextSurfaceCommand(
             kind: kind,
@@ -116,7 +120,8 @@ public struct ReixTextSurfaceCommand: Equatable {
     private func validMetadata() -> Bool {
         switch kind {
             case .insert:
-                return count > 0 && amount == 0 && previousRows == 0 && previousCursorRow == 0 && cursorRow == 0 && cursorColumn == 0
+                return count > 0 && amount == 0 && previousRows == 0
+                    && previousCursorRow == 0 && cursorRow == 0 && cursorColumn == 0
             case .replaceBuffer:
                 guard count > 0, amount == 0, previousRows > 0, previousCursorRow < previousRows else { return false }
                 var rows = 1
@@ -136,9 +141,11 @@ public struct ReixTextSurfaceCommand: Equatable {
                 if row == Int(cursorRow) { selected = column }
                 return Int(cursorRow) < rows && selected >= 0 && Int(cursorColumn) <= selected
             case .eraseBackward, .moveLeft, .moveRight:
-                return amount > 0 && count == 0 && previousRows == 0 && previousCursorRow == 0 && cursorRow == 0 && cursorColumn == 0
+                return amount > 0 && count == 0 && previousRows == 0
+                    && previousCursorRow == 0 && cursorRow == 0 && cursorColumn == 0
             case .newline, .bell:
-                return amount == 0 && count == 0 && previousRows == 0 && previousCursorRow == 0 && cursorRow == 0 && cursorColumn == 0
+                return amount == 0 && count == 0 && previousRows == 0
+                    && previousCursorRow == 0 && cursorRow == 0 && cursorColumn == 0
         }
     }
 
@@ -147,23 +154,10 @@ public struct ReixTextSurfaceCommand: Equatable {
         return true
     }
 
-    /// TextSurface carries printable Unicode text plus LF. It is never a VT
-    /// pass-through: C0 controls, DEL and C1 controls are rejected before the
-    /// UART adapter sees them.
+    /// TextSurface carries printable Unicode text plus LF, never VT bytes.
+    /// C0 controls, DEL and C1 controls are rejected before the adapter.
     private static func validText(_ bytes: UnsafePointer<UInt8>, count: Int) -> Bool {
-        guard ReixInputRecord.validUTF8(bytes, count: count) else { return false }
-        var index = 0
-        while index < count {
-            let byte = bytes[index]
-            if byte < 0x20 && byte != 0x0A { return false }
-            if byte == 0x7F { return false }
-            if byte == 0xC2, index + 1 < count, (0x80...0x9F).contains(bytes[index + 1]) { return false }
-            if byte < 0x80 { index += 1; continue }
-            if byte < 0xE0 { index += 2 }
-            else if byte < 0xF0 { index += 3 }
-            else { index += 4 }
-        }
-        return true
+        ReixInputRecord.validText(bytes, count: count, allowsLF: true)
     }
 
     public static func == (lhs: ReixTextSurfaceCommand, rhs: ReixTextSurfaceCommand) -> Bool {
