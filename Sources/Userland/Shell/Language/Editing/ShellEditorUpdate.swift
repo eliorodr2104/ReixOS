@@ -5,9 +5,12 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 26/08/2026.
 //
 
-import ReixABI
-
 public struct ShellEditorUpdate {
     public let action: ShellEditorAction
-    public let patch : ReixTextSurfaceCommand?
+    public let requiresPresentation: Bool
+
+    public init(action: ShellEditorAction, requiresPresentation: Bool) {
+        self.action = action
+        self.requiresPresentation = requiresPresentation
+    }
 }

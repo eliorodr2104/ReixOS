@@ -21,7 +21,7 @@ public struct VTDecoder {
         let queueCount: Int
         let sequence: UInt32
         let escapeState: EscapeState
-        let csi: InlineArray<5, UInt8>
+        let csi: InlineArray<12, UInt8>
         let csiCount: Int
         let pasteActive: Bool
         let pasteCandidate: InlineArray<6, UInt8>
@@ -37,7 +37,7 @@ public struct VTDecoder {
     private var queueCount = 0
     private var sequence: UInt32 = 1
     private var escapeState: EscapeState = .idle
-    private var csi = InlineArray<5, UInt8>(repeating: 0)
+    private var csi = InlineArray<12, UInt8>(repeating: 0)
     private var csiCount = 0
     private var pasteActive = false
     private var pasteCandidate = InlineArray<6, UInt8>(repeating: 0)
@@ -185,7 +185,7 @@ public struct VTDecoder {
             guard emit(kind: .pasteBegin) else { return false }
             pasteActive = true
         } else if let key {
-            guard emitKey(key) else { return false }
+            guard emitKey(key.key, modifiers: key.modifiers) else { return false }
         } else {
             guard emitKey(.escape) else { return false }
         }
@@ -194,19 +194,80 @@ public struct VTDecoder {
         return true
     }
 
-    private func csiKey() -> ReixInputKey? {
-        if csiCount == 1, csi[0] == 0x41 { return .up }
-        if csiCount == 1, csi[0] == 0x42 { return .down }
-        if csiCount == 1, csi[0] == 0x43 { return .right }
-        if csiCount == 1, csi[0] == 0x44 { return .left }
-        if csiCount == 1, csi[0] == 0x48 { return .home }
-        if csiCount == 2, csi[0] == 0x31, csi[1] == 0x7E { return .home }
-        if csiCount == 1, csi[0] == 0x46 { return .end }
-        if csiCount == 2, csi[0] == 0x34, csi[1] == 0x7E { return .end }
-        if csiCount == 2, csi[0] == 0x33, csi[1] == 0x7E { return .delete }
-        if csiCount == 2, csi[0] == 0x35, csi[1] == 0x7E { return .pageUp }
-        if csiCount == 2, csi[0] == 0x36, csi[1] == 0x7E { return .pageDown }
+    private func csiKey() -> (key: ReixInputKey, modifiers: ReixInputModifiers)? {
+        guard csiCount > 0 else { return nil }
+        let final = csi[csiCount - 1]
+        let separator = separatorIndex()
+        let modifiers: ReixInputModifiers
+        if let separator {
+            guard let code = number(from: separator + 1, to: csiCount - 1),
+                  let decoded = modifier(code: code)
+            else { return nil }
+            modifiers = decoded
+        } else {
+            modifiers = []
+        }
+        if final == 0x75, let separator {
+            let codepoint = number(from: 0, to: separator)
+            if codepoint == 13 { return (.enter, modifiers) }
+            if codepoint == 122 && modifiers.contains(.control) {
+                return modifiers.contains(.shift) ? (.redo, modifiers) : (.undo, modifiers)
+            }
+            if codepoint == 121 && modifiers.contains(.control) { return (.redo, modifiers) }
+            return nil
+        }
+        if final == 0x41 || final == 0x42 || final == 0x43 || final == 0x44
+            || final == 0x48 || final == 0x46 {
+            let parameterEnd = separator ?? csiCount - 1
+            let parameter = parameterEnd == 0 ? 1 : number(from: 0, to: parameterEnd)
+            guard parameter == 1 else { return nil }
+            if final == 0x41 { return (.up, modifiers) }
+            if final == 0x42 { return (.down, modifiers) }
+            if final == 0x43 { return (.right, modifiers) }
+            if final == 0x44 { return (.left, modifiers) }
+            if final == 0x48 { return (.home, modifiers) }
+            return (.end, modifiers)
+        }
+        guard final == 0x7E else { return nil }
+        let parameterEnd = separator ?? csiCount - 1
+        switch number(from: 0, to: parameterEnd) {
+            case 1: return (.home, modifiers)
+            case 3: return (.delete, modifiers)
+            case 4: return (.end, modifiers)
+            case 5: return (.pageUp, modifiers)
+            case 6: return (.pageDown, modifiers)
+            default: return nil
+        }
+    }
+
+    private func separatorIndex() -> Int? {
+        guard csiCount > 1 else { return nil }
+        for index in 0..<(csiCount - 1) where csi[index] == 0x3B { return index }
         return nil
+    }
+
+    private func number(from start: Int, to end: Int) -> Int? {
+        guard start >= 0, start < end, end <= csiCount - 1 else { return nil }
+        var result = 0
+        for index in start..<end {
+            guard csi[index] >= 0x30, csi[index] <= 0x39 else { return nil }
+            result = result * 10 + Int(csi[index] - 0x30)
+        }
+        return result
+    }
+
+    private func modifier(code: Int) -> ReixInputModifiers? {
+        switch code {
+            case 1: return []
+            case 2: return [.shift]
+            case 3: return [.alt]
+            case 4: return [.shift, .alt]
+            case 5: return [.control]
+            case 6: return [.shift, .control]
+            case 7: return [.alt, .control]
+            case 8: return [.shift, .alt, .control]
+            default: return nil
+        }
     }
 
     private mutating func processPaste(_ byte: UInt8) -> Bool {
@@ -259,6 +320,8 @@ public struct VTDecoder {
         if pasteActive { return processPasteText(byte) }
         if !pasteActive {
             if byte == 0x03 { return emit(kind: .cancel) }
+            if byte == 0x1A { return emitKey(.undo, modifiers: [.control]) }
+            if byte == 0x19 { return emitKey(.redo, modifiers: [.control]) }
             if byte == 0x04 { return emit(kind: .eof) }
             if byte == 0x08 || byte == 0x7F { return emitKey(.backspace) }
         }
@@ -390,9 +453,13 @@ public struct VTDecoder {
         )
     }
 
-    private mutating func emitKey(_ key: ReixInputKey) -> Bool {
+    private mutating func emitKey(
+        _ key: ReixInputKey,
+        modifiers: ReixInputModifiers = []
+    ) -> Bool {
         guard let record = ReixInputRecord(
             kind: .key,
+            modifiers: modifiers,
             sequence: sequence,
             logicalKey: key,
             physicalKey: syntheticPhysicalKey(for: key)

@@ -362,33 +362,7 @@ public struct ReixTextSurfaceRing {
     }
 
     private func validUTF8(count: Int, byte: (Int) -> UInt8?) -> Bool {
-        var index = 0
-        while index < count {
-            guard let first = byte(index) else { return false }
-            if first == 0x0A || first >= 0x20 && first <= 0x7E { index += 1; continue }
-            let length: Int
-            let minimum: UInt32
-            var scalar: UInt32
-            if first >= 0xC2 && first <= 0xDF {
-                length = 2; minimum = 0x80; scalar = UInt32(first & 0x1F)
-            } else if first >= 0xE0 && first <= 0xEF {
-                length = 3; minimum = 0x800; scalar = UInt32(first & 0x0F)
-            } else if first >= 0xF0 && first <= 0xF4 {
-                length = 4; minimum = 0x10000; scalar = UInt32(first & 0x07)
-            } else { return false }
-            guard index + length <= count else { return false }
-            for continuation in 1..<length {
-                guard let next = byte(index + continuation), next & 0xC0 == 0x80 else { return false }
-                scalar = scalar << 6 | UInt32(next & 0x3F)
-            }
-            guard scalar >= minimum,
-                  scalar <= 0x10_FFFF,
-                  scalar < 0xD800 || scalar > 0xDFFF,
-                  scalar < 0x80 || scalar > 0x9F
-            else { return false }
-            index += length
-        }
-        return true
+        ReixTextLayout.validUTF8(count: count, byte: byte)
     }
 
     private func write(

@@ -128,13 +128,21 @@ struct TypedShellRuntimeTests {
         #expect(editor.cursor == 2)
 
         let middle = editor.apply(ReixInputRecord(kind: .left, sequence: sequence + 4)!)
-        guard let patch = middle.patch else { Issue.record("cursor update did not produce a patch"); return }
-        #expect(patch.kind == .replaceBuffer)
+        #expect(middle.requiresPresentation)
         let replacement = editor.apply(insertion([UInt8(ascii: "x")]))
-        guard let row = replacement.patch else { Issue.record("middle insertion did not redraw"); return }
-        #expect(row.kind == .replaceBuffer)
-        #expect(row.cursorColumn == 7)
-        #expect(row.count == 11)
+        #expect(replacement.requiresPresentation)
+        var renderedKind: ReixTextSurfaceFrameKind?
+        var renderedColumn: UInt16 = 0
+        var renderedLength: UInt32 = 0
+        #expect(editor.withFrame { frame in
+            renderedKind = frame.frame.kind
+            renderedColumn = frame.frame.cursorColumn
+            renderedLength = frame.frame.textLength
+            return true
+        })
+        #expect(renderedKind == .snapshot)
+        #expect(renderedColumn == 7)
+        #expect(renderedLength == 11)
     }
 
     @Test("editor patches retain the terminal event correlation")
@@ -144,22 +152,27 @@ struct TypedShellRuntimeTests {
         let insert      = insertBytes.withUnsafeBufferPointer {
             editor.apply(ReixInputRecord(kind: .insert, sequence: 7, bytes: $0.baseAddress!, count: $0.count)!)
         }
-        #expect(insert.patch?.sequence == 7)
+        #expect(insert.requiresPresentation)
+        #expect(editor.withFrame { $0.frame.correlation == 7 })
 
         let refusedEvent = ReixInputRecord(kind: .right, sequence: 4_096)!
         let refused      = editor.apply(refusedEvent)
         #expect(refused.action == .refused)
-        #expect(refused.patch?.sequence == refusedEvent.sequence)
+        #expect(!refused.requiresPresentation)
 
         let newlineEvent = ReixInputRecord(kind: .enter, sequence: 19)!
         let newline      = editor.apply(newlineEvent)
-        #expect(newline.patch?.kind == .newline)
-        #expect(newline.patch?.sequence == newlineEvent.sequence)
+        #expect(newline.requiresPresentation)
+        #expect(editor.withFrame {
+            $0.frame.kind == .patch && $0.frame.correlation == newlineEvent.sequence
+        })
 
         let replacementEvent = ReixInputRecord(kind: .left, sequence: 900_001)!
         let replacement      = editor.apply(replacementEvent)
-        #expect(replacement.patch?.kind == .replaceBuffer)
-        #expect(replacement.patch?.sequence == replacementEvent.sequence)
+        #expect(replacement.requiresPresentation)
+        #expect(editor.withFrame {
+            $0.frame.kind == .patch && $0.frame.correlation == replacementEvent.sequence
+        })
     }
 
     @Test("multiline movement follows logical rows and history only at boundaries")
@@ -196,8 +209,7 @@ struct TypedShellRuntimeTests {
         let replacement = editor.apply(
             ReixInputRecord(kind: .delete, sequence: 9)!
         )
-        #expect(replacement.patch?.kind == .replaceBuffer)
-        #expect(replacement.patch?.previousRows == 3)
+        #expect(replacement.requiresPresentation)
 
         editor.reset()
         let help = Array("help".utf8)

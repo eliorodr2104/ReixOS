@@ -50,29 +50,10 @@ public enum TextSurfaceVTRenderer {
         var startRow = descriptor.viewportRow
         var startColumn: UInt16 = 0
 
-        if useDiff, let position = position(of: start, in: screen),
-           position.row >= descriptor.viewportRow,
-           position.row < descriptor.viewportRow + descriptor.viewportRows {
-            startRow = position.row
-            startColumn = position.column
-            cup(
-                row: baseRow + position.row - descriptor.viewportRow,
-                column: position.column + 1,
-                count: &count,
-                emit: emit
-            )
-            clearToViewportEnd(
-                from: position.row - descriptor.viewportRow,
-                rows: descriptor.viewportRows,
-                baseRow: baseRow,
-                count: &count,
-                emit: emit
-            )
-        } else {
-            clearViewport(baseRow: baseRow, rows: descriptor.viewportRows, count: &count, emit: emit)
-        }
-
-        if useDiff, descriptor.textLength == 0, descriptor.replacedLength == 0 {
+        if useDiff,
+           descriptor.textLength == 0,
+           descriptor.replacedLength == 0,
+           stylesMatch(screen: screen, frame: frame) {
             style(.plain, count: &count, emit: emit)
             cup(
                 row: baseRow + descriptor.cursorRow - descriptor.viewportRow,
@@ -81,6 +62,31 @@ public enum TextSurfaceVTRenderer {
                 emit: emit
             )
             return count
+        }
+
+        if useDiff, let position = position(of: start, in: screen),
+           position.row >= descriptor.viewportRow,
+           position.row < descriptor.viewportRow + descriptor.viewportRows {
+            startRow = position.row
+            startColumn = position.column
+            if descriptor.patchOffset != UInt32(screen.textLength)
+                || descriptor.replacedLength != 0 {
+                cup(
+                    row: baseRow + position.row - descriptor.viewportRow,
+                    column: position.column + 1,
+                    count: &count,
+                    emit: emit
+                )
+                clearToViewportEnd(
+                    from: position.row - descriptor.viewportRow,
+                    rows: descriptor.viewportRows,
+                    baseRow: baseRow,
+                    count: &count,
+                    emit: emit
+                )
+            }
+        } else {
+            clearViewport(baseRow: baseRow, rows: descriptor.viewportRows, count: &count, emit: emit)
         }
         cup(
             row: baseRow + startRow - descriptor.viewportRow,
@@ -106,15 +112,35 @@ public enum TextSurfaceVTRenderer {
     ) -> Bool {
         let descriptor = frame.descriptor
         guard descriptor.kind == .patch,
-              descriptor.styleSpanCount == 0,
               descriptor.overlayLength == 0,
-              screen.styleSpanCount == 0,
               screen.overlayLength == 0,
               descriptor.viewportRow == screen.viewportRow,
-              descriptor.viewportRows == screen.viewportRows,
+              descriptor.viewportRows == screen.viewportRows
+        else { return false }
+        if descriptor.textLength == 0,
+           descriptor.replacedLength == 0,
+           stylesMatch(screen: screen, frame: frame) {
+            return true
+        }
+        guard ReixTextLayout.isGraphemeBoundary(
+                  Int(descriptor.patchOffset),
+                  count: screen.desiredTextLength(for: frame),
+                  byte: { screen.desiredTextByte(at: $0, for: frame) }
+              ),
               let position = position(of: Int(descriptor.patchOffset), in: screen),
               position.row >= descriptor.viewportRow
         else { return false }
+        return true
+    }
+
+    private static func stylesMatch(
+        screen: TextSurfaceScreenModel,
+        frame: ReixTextSurfaceFrameView
+    ) -> Bool {
+        guard screen.styleSpanCount == Int(frame.descriptor.styleSpanCount) else { return false }
+        for index in 0..<screen.styleSpanCount where screen.styleSpan(at: index) != frame.styleSpan(at: index) {
+            return false
+        }
         return true
     }
 
@@ -122,20 +148,13 @@ public enum TextSurfaceVTRenderer {
         of offset: Int,
         in model: TextSurfaceScreenModel
     ) -> (row: UInt16, column: UInt16)? {
-        guard offset >= 0, offset <= model.textLength else { return nil }
-        var row: UInt16 = 0
-        var column: UInt16 = 0
-        for index in 0..<offset {
-            guard let byte = model.textByte(at: index) else { return nil }
-            if byte == lineFeed {
-                row &+= 1
-                column = 0
-            } else if byte & 0xC0 != 0x80 {
-                column &+= 1
-                if column == model.columns { row &+= 1; column = 0 }
-            }
-        }
-        return (row, column)
+        guard let result = ReixTextLayout.position(
+            at: offset,
+            count: model.textLength,
+            columns: model.columns,
+            byte: model.textByte
+        ) else { return nil }
+        return (result.row, result.column)
     }
 
     private static func clearViewport(
@@ -177,30 +196,68 @@ public enum TextSurfaceVTRenderer {
         var column: UInt16 = 0
         var activeRole = ReixTextSurfaceStyleRole.plain
         let length = screen.desiredTextLength(for: frame)
-        for index in 0..<length {
-            guard let byte = screen.desiredTextByte(at: index, for: frame) else { return }
-            let visible = index >= start
-                && row >= descriptor.viewportRow
-                && row < descriptor.viewportRow + descriptor.viewportRows
-            if visible {
-                let role = styleRole(at: index, frame: frame)
-                if role != activeRole { style(role, count: &count, emit: emit); activeRole = role }
-                if byte == lineFeed {
+        var offset = 0
+        while offset < length {
+            guard let end = ReixTextLayout.nextGraphemeBoundary(
+                after: offset,
+                count: length,
+                byte: { screen.desiredTextByte(at: $0, for: frame) }
+            ),
+                  let first = screen.desiredTextByte(at: offset, for: frame),
+                  let width = ReixTextLayout.cellWidth(
+                      from: offset,
+                      to: end,
+                      count: length,
+                      byte: { screen.desiredTextByte(at: $0, for: frame) }
+                  )
+            else { return }
+            let wrapsBefore = first != lineFeed
+                && column > 0
+                && width > descriptor.columns - column
+            if wrapsBefore {
+                row &+= 1
+                column = 0
+                if offset >= start && visible(row, descriptor: descriptor) {
+                    emitted(carriageReturn, count: &count, emit: emit)
+                    emitted(lineFeed, count: &count, emit: emit)
+                }
+            }
+            if offset >= start && visible(row, descriptor: descriptor) {
+                let role = styleRole(at: offset, frame: frame)
+                if role != activeRole {
+                    style(role, count: &count, emit: emit)
+                    activeRole = role
+                }
+                if first == lineFeed {
                     emitted(carriageReturn, count: &count, emit: emit)
                     emitted(lineFeed, count: &count, emit: emit)
                 } else {
-                    emitted(byte, count: &count, emit: emit)
+                    for index in offset..<end {
+                        guard let byte = screen.desiredTextByte(at: index, for: frame) else { return }
+                        emitted(byte, count: &count, emit: emit)
+                    }
                 }
             }
-            if byte == lineFeed {
+            if first == lineFeed {
                 row &+= 1
                 column = 0
-            } else if byte & 0xC0 != 0x80 {
-                column &+= 1
-                if column == descriptor.columns { row &+= 1; column = 0 }
+            } else {
+                column += width
+                if column == descriptor.columns {
+                    row &+= 1
+                    column = 0
+                }
             }
+            offset = end
         }
         if activeRole != .plain { style(.plain, count: &count, emit: emit) }
+    }
+
+    private static func visible(
+        _ row: UInt16,
+        descriptor: ReixTextSurfaceFrameDescriptor
+    ) -> Bool {
+        row >= descriptor.viewportRow && row < descriptor.viewportRow + descriptor.viewportRows
     }
 
     private static func renderOverlay(

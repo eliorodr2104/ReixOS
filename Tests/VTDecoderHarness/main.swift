@@ -57,7 +57,10 @@ private func testSplitSequences() {
         [0x1B, 0x5B, 0x34, 0x7E],
         [0x1B, 0x5B, 0x33, 0x7E],
         [0x1B, 0x5B, 0x35, 0x7E],
-        [0x1B, 0x5B, 0x36, 0x7E]
+        [0x1B, 0x5B, 0x36, 0x7E],
+        [0x1B, 0x5B, 0x31, 0x3B, 0x32, 0x44],
+        [0x1B, 0x5B, 0x31, 0x33, 0x3B, 0x32, 0x75],
+        [0x1B, 0x5B, 0x31, 0x32, 0x32, 0x3B, 0x36, 0x75]
     ]
     for sequence in sequences {
         for split in 0...sequence.count {
@@ -73,6 +76,27 @@ private func testSplitSequences() {
         require(output[0].logicalKey == .escape)
     }
     require(records([0x09], split: 0)[0].logicalKey == .tab)
+    let shiftedLeft = records([0x1B, 0x5B, 0x31, 0x3B, 0x32, 0x44], split: 3)[0]
+    require(shiftedLeft.logicalKey == .left)
+    require(shiftedLeft.modifiers == [.shift])
+    let shiftedEnter = records([0x1B, 0x5B, 0x31, 0x33, 0x3B, 0x32, 0x75], split: 4)[0]
+    require(shiftedEnter.logicalKey == .enter)
+    require(shiftedEnter.modifiers == [.shift])
+    let redo = records([0x1B, 0x5B, 0x31, 0x32, 0x32, 0x3B, 0x36, 0x75], split: 4)[0]
+    require(redo.logicalKey == .redo)
+    require(redo.modifiers == [.shift, .control])
+    require(records([0x1A], split: 0)[0].logicalKey == .undo)
+    require(records([0x19], split: 0)[0].logicalKey == .redo)
+    let malformedCSI: [[UInt8]] = [
+        [0x1B, 0x5B, 0x32, 0x3B, 0x32, 0x44],
+        [0x1B, 0x5B, 0x31, 0x3B, 0x39, 0x44],
+        [0x1B, 0x5B, 0x31, 0x33, 0x3B, 0x39, 0x75]
+    ]
+    for malformed in malformedCSI {
+        let output = records(malformed, split: 3)
+        require(output.count == 1)
+        require(output[0].logicalKey == .escape)
+    }
     let controls = records([0x03, 0x04, 0x08, 0x7F], split: 2)
     require(controls[0].kind == .cancel)
     require(controls[1].kind == .eof)
@@ -176,7 +200,7 @@ private func testPasteSanitization() {
     let count = editor.copyLine(into: &line)
     require(count == expected.count)
     for index in 0..<count { require(line[index] == expected[index]) }
-    require(update?.patch != nil)
+    require(update?.requiresPresentation == true)
 
     let c1Paste: [UInt8] = [
         0x1B, 0x5B, 0x32, 0x30, 0x30, 0x7E,
@@ -195,7 +219,7 @@ private func testPasteSanitization() {
     require(c1Line[0] == 0xEF)
     require(c1Line[1] == 0xBF)
     require(c1Line[2] == 0xBD)
-    require(c1Update?.patch != nil)
+    require(c1Update?.requiresPresentation == true)
 }
 
 private func testQueueResume() {
@@ -276,7 +300,7 @@ private func testEditorPaste() {
     let enter = editor.apply(input(.enter, sequence: 5))
     require(enter.action == .submitted(4))
     _ = editor.apply(input(.pasteBegin, sequence: 6))
-    for offset in 0..<16 {
+    for offset in 0..<511 {
         _ = editor.apply(
             input(
                 .pasteChunk,
@@ -285,6 +309,10 @@ private func testEditorPaste() {
             )
         )
     }
+    _ = editor.apply(
+        input(.pasteChunk, sequence: 518, bytes: Array(repeating: 0x61, count: 12))
+    )
+    _ = editor.apply(input(.pasteChunk, sequence: 519, bytes: [0x61]))
     require(editor.count == 4)
 }
 

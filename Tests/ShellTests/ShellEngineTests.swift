@@ -188,9 +188,10 @@ struct ShellEngineTests {
     func theCaretIsUnderThePrompt() {
         let engine = ShellEngine(capacity: 128)
 
-        // The line is echoed after the prompt, so column zero is the first byte
+        // The line is echoed after the prompt, so column zero is the first cell
         // typed and sits directly after it.
-        #expect(ShellEngine.prompt.utf8CodeUnitCount == 6)
+        #expect(ShellEngine.prompt.utf8CodeUnitCount == 8)
+        #expect(ShellEngine.promptColumns == 6)
         #expect(engine.caret(under: 0) == 6)
         #expect(engine.caret(under: 7) == 13)
         #expect(engine.caret(under: 128) == 134)

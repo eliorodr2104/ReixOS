@@ -149,7 +149,10 @@ check(
 )
 check(decodedGreeting == greeting, "snapshot roundtrip")
 
-let maximumText = [UInt8](repeating: UInt8(ascii: "x"), count: 8192)
+let maximumText = [UInt8](
+    repeating: UInt8(ascii: "x"),
+    count: ReixTextSurfaceFrameDescriptor.maximumTextBytes
+)
 let maximumStyles = (0..<32).map {
     ReixTextSurfaceStyleSpan(offset: UInt32($0), length: 1, role: .input)!
 }
@@ -191,7 +194,10 @@ check(
 )
 check(
     consumer.popFrame(transaction: 2) { frame in
-        check(frame.textByte(at: 8191) == UInt8(ascii: "x"), "maximum text boundary")
+        check(
+            frame.textByte(at: ReixTextSurfaceFrameDescriptor.maximumTextBytes - 1) == UInt8(ascii: "x"),
+            "maximum text boundary"
+        )
         check(frame.overlayByte(at: 1023) == UInt8(ascii: "o"), "maximum overlay boundary")
         check(frame.styleSpan(at: 31)?.role == .input, "maximum style boundary")
         return .commit
@@ -389,6 +395,70 @@ check(ReixTextSurfaceFrameDescriptor.interactiveRows(for: 24) == 6, "quarter vie
 check(ReixTextSurfaceFrameDescriptor.interactiveRows(for: 60) == 15, "quarter viewport cap at 240 by 60")
 check(ReixTextSurfaceFrameDescriptor.interactiveRows(for: 3) == 1, "short terminal keeps one row")
 
+check(ReixTextSurfaceRing.initialize(page: page, token: 25), "Unicode model proposal")
+check(ReixTextSurfaceRing.accept(page: page, token: 25, epoch: 26), "Unicode model accept")
+producer = ReixTextSurfaceRing(page: page, token: 25, epoch: 26)!
+consumer = ReixTextSurfaceRing(page: page, token: 25, epoch: 26)!
+model = TextSurfaceScreenModel()
+let graphemes = Array("e\u{301}界👩‍💻🇮🇹".utf8)
+let graphemeStyle = [
+    ReixTextSurfaceStyleSpan(offset: 0, length: UInt16(graphemes.count), role: .input)!
+]
+let graphemeDescriptor = descriptor(
+    revision: 1,
+    textLength: graphemes.count,
+    styles: 1,
+    columns: 6,
+    rows: 12,
+    cursorRow: 1,
+    cursorColumn: 2,
+    viewportRows: 3
+)
+check(
+    push(
+        producer,
+        transaction: 1,
+        descriptor: graphemeDescriptor,
+        text: graphemes,
+        styles: graphemeStyle
+    ),
+    "Unicode model snapshot"
+)
+check(
+    consumer.popFrame(transaction: 1) { frame in
+        check(model.prepare(frame) == .ready, "Unicode model frame ready")
+        check(model.commit(frame), "Unicode model frame commit")
+        return .commit
+    } == .committed,
+    "Unicode model snapshot consumed"
+)
+check(model.cursorRow == 1 && model.cursorColumn == 2, "wide grapheme wraps before the edge")
+let splitCluster = Array("x".utf8)
+let splitDescriptor = descriptor(
+    kind: .patch,
+    correlation: 2,
+    revision: 2,
+    baseRevision: 1,
+    patchOffset: 1,
+    textLength: splitCluster.count,
+    columns: 6,
+    rows: 12,
+    cursorRow: 1,
+    cursorColumn: 3,
+    viewportRows: 3
+)
+check(
+    push(producer, transaction: 2, descriptor: splitDescriptor, text: splitCluster),
+    "split grapheme patch setup"
+)
+check(
+    consumer.popFrame(transaction: 2) { frame in
+        check(model.prepare(frame) == .resynchronizationRequired, "split grapheme patch refused")
+        return .commit
+    } == .committed,
+    "split grapheme patch consumed"
+)
+
 for geometry: (columns: UInt16, rows: UInt16) in [(40, 12), (80, 24), (240, 60), (10, 3)] {
     check(ReixTextSurfaceRing.initialize(page: page, token: 31), "renderer proposal")
     check(ReixTextSurfaceRing.accept(page: page, token: 31, epoch: 32), "renderer accept")
@@ -397,11 +467,15 @@ for geometry: (columns: UInt16, rows: UInt16) in [(40, 12), (80, 24), (240, 60),
     var rendererModel = TextSurfaceScreenModel()
     var terminal = TerminalScreenModel(columns: Int(geometry.columns), rows: Int(geometry.rows))
     let initial = Array("reix one\nnext".utf8)
+    let initialStyles = [
+        ReixTextSurfaceStyleSpan(offset: 0, length: UInt16(initial.count), role: .input)!
+    ]
     let visibleRows = ReixTextSurfaceFrameDescriptor.interactiveRows(for: geometry.rows)
     let viewportRow: UInt16 = visibleRows > 1 ? 0 : 1
     let initialDescriptor = descriptor(
         revision: 1,
         textLength: initial.count,
+        styles: initialStyles.count,
         columns: geometry.columns,
         rows: geometry.rows,
         cursorRow: 1,
@@ -409,7 +483,16 @@ for geometry: (columns: UInt16, rows: UInt16) in [(40, 12), (80, 24), (240, 60),
         viewportRow: viewportRow,
         viewportRows: visibleRows
     )
-    check(push(producer, transaction: 1, descriptor: initialDescriptor, text: initial), "renderer snapshot")
+    check(
+        push(
+            producer,
+            transaction: 1,
+            descriptor: initialDescriptor,
+            text: initial,
+            styles: initialStyles
+        ),
+        "renderer snapshot"
+    )
     check(
         consumer.popFrame(transaction: 1) { frame in
             var bytes: [UInt8] = []
@@ -429,6 +512,13 @@ for geometry: (columns: UInt16, rows: UInt16) in [(40, 12), (80, 24), (240, 60),
     )
 
     let suffix = Array("!".utf8)
+    let patchStyles = [
+        ReixTextSurfaceStyleSpan(
+            offset: 0,
+            length: UInt16(initial.count + suffix.count),
+            role: .input
+        )!
+    ]
     let patch = descriptor(
         kind: .patch,
         correlation: 2,
@@ -436,6 +526,7 @@ for geometry: (columns: UInt16, rows: UInt16) in [(40, 12), (80, 24), (240, 60),
         baseRevision: 1,
         patchOffset: UInt32(initial.count),
         textLength: suffix.count,
+        styles: patchStyles.count,
         columns: geometry.columns,
         rows: geometry.rows,
         cursorRow: 1,
@@ -443,7 +534,16 @@ for geometry: (columns: UInt16, rows: UInt16) in [(40, 12), (80, 24), (240, 60),
         viewportRow: viewportRow,
         viewportRows: visibleRows
     )
-    check(push(producer, transaction: 2, descriptor: patch, text: suffix), "renderer patch")
+    check(
+        push(
+            producer,
+            transaction: 2,
+            descriptor: patch,
+            text: suffix,
+            styles: patchStyles
+        ),
+        "renderer patch"
+    )
     check(
         consumer.popFrame(transaction: 2) { frame in
             var diffBytes: [UInt8] = []
@@ -472,6 +572,93 @@ for geometry: (columns: UInt16, rows: UInt16) in [(40, 12), (80, 24), (240, 60),
             return .commit
         } == .committed,
         "renderer patch consumed"
+    )
+
+    let combining = [UInt8(0xCC), UInt8(0x81)]
+    let combinedStyles = [
+        ReixTextSurfaceStyleSpan(
+            offset: 0,
+            length: UInt16(initial.count + suffix.count + combining.count),
+            role: .input
+        )!
+    ]
+    let combiningPatch = descriptor(
+        kind: .patch,
+        correlation: 3,
+        revision: 3,
+        baseRevision: 2,
+        patchOffset: UInt32(initial.count + suffix.count),
+        textLength: combining.count,
+        styles: combinedStyles.count,
+        columns: geometry.columns,
+        rows: geometry.rows,
+        cursorRow: 1,
+        cursorColumn: 5,
+        viewportRow: viewportRow,
+        viewportRows: visibleRows
+    )
+    check(
+        push(
+            producer,
+            transaction: 3,
+            descriptor: combiningPatch,
+            text: combining,
+            styles: combinedStyles
+        ),
+        "combining renderer patch"
+    )
+    check(
+        consumer.popFrame(transaction: 3) { frame in
+            let metrics = TextSurfaceVTRenderer.metrics(screen: rendererModel, frame: frame)
+            check(!metrics.usesDiff, "grapheme-merging patch selects full redraw")
+            check(rendererModel.commit(frame), "combining renderer patch commit")
+            return .commit
+        } == .committed,
+        "combining renderer patch consumed"
+    )
+
+    let metadataPatch = descriptor(
+        kind: .patch,
+        correlation: 4,
+        revision: 4,
+        baseRevision: 3,
+        patchOffset: 0,
+        textLength: 0,
+        styles: combinedStyles.count,
+        columns: geometry.columns,
+        rows: geometry.rows,
+        cursorRow: 1,
+        cursorColumn: 4,
+        viewportRow: viewportRow,
+        viewportRows: visibleRows
+    )
+    check(
+        push(
+            producer,
+            transaction: 4,
+            descriptor: metadataPatch,
+            text: [],
+            styles: combinedStyles
+        ),
+        "metadata renderer patch"
+    )
+    check(
+        consumer.popFrame(transaction: 4) { frame in
+            let previousCells = terminal.cells
+            let metrics = TextSurfaceVTRenderer.metrics(screen: rendererModel, frame: frame)
+            var bytes: [UInt8] = []
+            _ = TextSurfaceVTRenderer.render(
+                screen: rendererModel,
+                frame: frame,
+                useDiff: true
+            ) { bytes.append($0) }
+            check(metrics.usesDiff, "metadata patch selects bounded diff")
+            check(feed(bytes, into: &terminal), "metadata VT is accepted")
+            check(terminal.cells == previousCells, "metadata patch preserves rendered cells")
+            check(rendererModel.commit(frame), "metadata renderer patch commit")
+            return .commit
+        } == .committed,
+        "metadata renderer patch consumed"
     )
 }
 

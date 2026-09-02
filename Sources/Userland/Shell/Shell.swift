@@ -42,15 +42,12 @@ public func main() {
         exit(code: 1)
     }
 
-    var line     = InlineArray<256, UInt8>(repeating: 0)
     var editor   = ShellLineEditor()
-    var engine   = ShellEngine(capacity: line.count)
+    var engine   = ShellEngine(capacity: ShellLineEditor.capacity)
     var pipeline = ShellPipeline(environment: environment)
 
     while engine.reading {
-        ShellOutput.begin()
-        print("reix❯ ", terminator: "")
-        guard ShellOutput.flush(to: &terminal) else { exit(code: 1) }
+        guard editor.withFrame({ terminal.present($0) }) else { exit(code: 1) }
 
         var count = -1
 #if REIX_TERMINAL_PROFILE
@@ -74,23 +71,20 @@ public func main() {
             interactionMark(
                 point      : .editorCompleted,
                 correlation: event.sequence,
-                value      : min(UInt32(update.patch?.count ?? 0), InteractionTraceMark.maxValue),
+                value      : update.requiresPresentation ? UInt32(editor.count) : 0,
                 authority  : profileMarker
             )
 #endif
-            if let patch = update.patch,
-               !terminal.present(patch) { break input }
+            if update.requiresPresentation,
+               !editor.withFrame({ terminal.present($0) }) { break input }
 
             switch update.action {
                 case .editing, .refused:
                     continue
 
                 case .resized(let width, let height):
-                    guard terminal.resize(
-                        width      : width,
-                        height     : height,
-                        correlation: event.sequence
-                    ) else { break input }
+                    _ = width
+                    _ = height
                     continue
 
                 case .submitted(let length):
@@ -99,10 +93,8 @@ public func main() {
                     submittedCorrelation = event.sequence
 #endif
 
-                    count = editor.copyLine(into: &line)
-                    guard count == length else { count = -1; break input }
-
-                    editor.reset()
+                    guard length <= ShellLineEditor.capacity else { count = -1; break input }
+                    count = length
                     break input
 
                 case .cancelled:
@@ -116,14 +108,17 @@ public func main() {
             }
         }
 
+        terminal.finishEditor()
         ShellOutput.begin()
+        if count >= 0 { print("") }
 
 #if REIX_TERMINAL_PROFILE
         var parserMarked = false
 #endif
 
-        let step = line.span.withUnsafeBufferPointer { buffer in
-            engine.stepTyped(buffer.baseAddress!, count: count) { program in
+        let step = editor.withBytes { source, actualCount in
+            guard count <= actualCount else { return ShellEngine.TypedStep.overrun(count) }
+            return engine.stepTyped(source, count: count) { program in
 
 #if REIX_TERMINAL_PROFILE
                 interactionMark(
@@ -137,7 +132,7 @@ public func main() {
 
                 switch pipeline.execute(
                     program,
-                    source: buffer.baseAddress!,
+                    source: source,
                     count : count
                 ) {
                     case .failure(let failure):
@@ -152,6 +147,7 @@ public func main() {
                 }
             }
         }
+        if count >= 0 { editor.reset() }
 
 #if REIX_TERMINAL_PROFILE
         if submittedCorrelation != 0 && !parserMarked {

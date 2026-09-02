@@ -31,7 +31,8 @@ public struct ShellEngine {
     /// Here and not in the executable because the caret under a parse failure is
     /// measured from it: the column the parser reports is an offset into the
     /// line, and the line was echoed after the prompt.
-    public static let prompt: StaticString = "reix> "
+    public static let prompt: StaticString = "reix❯ "
+    public static let promptColumns = 6
 
     /// How many spaces go before the caret that points at `column`.
     ///
@@ -40,7 +41,7 @@ public struct ShellEngine {
     /// would be a hang rather than a caret in the wrong place, and adding to it
     /// unchecked would be an overflow trap in the code that reports a mistake.
     public func caret(under column: Int) -> Int {
-        let width = Self.prompt.utf8CodeUnitCount
+        let width = Self.promptColumns
 
         guard column >= 0, column <= capacity else { return width }
 
@@ -168,7 +169,10 @@ public struct ShellEngine {
         guard count <= capacity else { reading = false; return .overrun(count) }
         guard count > 0 else { return .blank }
         var visible = false
-        for index in 0..<count where line[index] != 0x20 && line[index] != 0x0A && line[index] != 0x0D { visible = true }
+        for index in 0..<count
+            where line[index] != 0x20 && line[index] != 0x0A && line[index] != 0x0D {
+            visible = true
+        }
         guard visible else { return .blank }
         switch TypedShellParser.parse(line, count: count) {
             case .failure(let failure): return .refused(failure)

@@ -32,7 +32,7 @@ public struct TextSurfaceScreenModel {
     public private(set) var styleSpanCount = 0
     public private(set) var overlayStyleSpanCount = 0
 
-    private var text = InlineArray<8192, UInt8>(repeating: 0)
+    private var text = InlineArray<8200, UInt8>(repeating: 0)
     private var overlay = InlineArray<1024, UInt8>(repeating: 0)
     private var styles = InlineArray<32, ReixTextSurfaceStyleSpan>(
         repeating: ReixTextSurfaceStyleSpan(offset: 0, length: 1, role: .plain)!
@@ -175,6 +175,10 @@ public struct TextSurfaceScreenModel {
         let resultLength = desiredTextLength(for: frame)
         guard resultLength >= 0,
               resultLength <= ReixTextSurfaceFrameDescriptor.maximumTextBytes,
+              ReixTextLayout.validUTF8(
+                  count: Int(descriptor.textLength),
+                  byte: { frame.textByte(at: $0) }
+              ),
               spansValid(frame, count: Int(descriptor.styleSpanCount), limit: resultLength, overlay: false),
               spansValid(
                   frame,
@@ -189,7 +193,7 @@ public struct TextSurfaceScreenModel {
     }
 
     private func boundary(_ index: Int) -> Bool {
-        index == 0 || index == textLength || text[index] & 0xC0 != 0x80
+        ReixTextLayout.isGraphemeBoundary(index, count: textLength) { text[$0] }
     }
 
     private func spansValid(
@@ -222,55 +226,43 @@ public struct TextSurfaceScreenModel {
     private func desiredBoundary(_ index: Int, frame: ReixTextSurfaceFrameView) -> Bool {
         let length = desiredTextLength(for: frame)
         guard index >= 0, index <= length else { return false }
-        return index == 0 || index == length || desiredTextByte(at: index, for: frame)! & 0xC0 != 0x80
+        return ReixTextLayout.isGraphemeBoundary(index, count: length) {
+            desiredTextByte(at: $0, for: frame)
+        }
     }
 
     private func overlayBoundary(_ index: Int, frame: ReixTextSurfaceFrameView) -> Bool {
         let length = Int(frame.descriptor.overlayLength)
         guard index >= 0, index <= length else { return false }
-        return index == 0 || index == length || frame.overlayByte(at: index)! & 0xC0 != 0x80
+        return ReixTextLayout.isGraphemeBoundary(index, count: length) { frame.overlayByte(at: $0) }
     }
 
     private func overlayValid(_ frame: ReixTextSurfaceFrameView) -> Bool {
         let descriptor = frame.descriptor
         guard descriptor.overlayLength > 0 else { return true }
-        var row: UInt16 = 0
-        var column: UInt16 = 0
-        for index in 0..<Int(descriptor.overlayLength) {
-            guard row < descriptor.overlayRows,
-                  let byte = frame.overlayByte(at: index)
-            else { return false }
-            if byte == 0x0A {
-                row &+= 1
-                column = 0
-            } else if byte & 0xC0 != 0x80 {
-                column &+= 1
-                if column == descriptor.overlayColumns { row &+= 1; column = 0 }
-            }
-        }
-        return row < descriptor.overlayRows || row == descriptor.overlayRows && column == 0
+        guard ReixTextLayout.validUTF8(
+            count: Int(descriptor.overlayLength),
+            byte: { frame.overlayByte(at: $0) }
+        ) else { return false }
+        guard let position = ReixTextLayout.position(
+            at: Int(descriptor.overlayLength),
+            count: Int(descriptor.overlayLength),
+            columns: descriptor.overlayColumns,
+            byte: { frame.overlayByte(at: $0) }
+        ) else { return false }
+        return position.row < descriptor.overlayRows
+            || position.row == descriptor.overlayRows && position.column == 0
     }
 
     private func cursorValid(_ frame: ReixTextSurfaceFrameView) -> Bool {
         let descriptor = frame.descriptor
-        var row: UInt16 = 0
-        var column: UInt16 = 0
-        var index = 0
-        while index < desiredTextLength(for: frame) {
-            if row == descriptor.cursorRow && column == descriptor.cursorColumn { return true }
-            guard let byte = desiredTextByte(at: index, for: frame) else { return false }
-            if byte == 0x0A {
-                row &+= 1
-                column = 0
-                index += 1
-                continue
-            }
-            if byte & 0xC0 != 0x80 {
-                column &+= 1
-                if column == descriptor.columns { row &+= 1; column = 0 }
-            }
-            index += 1
-        }
-        return row == descriptor.cursorRow && column == descriptor.cursorColumn
+        let length = desiredTextLength(for: frame)
+        return ReixTextLayout.byteOffset(
+            row: descriptor.cursorRow,
+            column: descriptor.cursorColumn,
+            count: length,
+            columns: descriptor.columns,
+            byte: { desiredTextByte(at: $0, for: frame) }
+        ) != nil
     }
 }

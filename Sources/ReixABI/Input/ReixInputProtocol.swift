@@ -8,7 +8,7 @@
 /// The InputServer-neutral keyboard contract carried from a terminal adapter to
 /// an editor. It is deliberately a byte layout, not a Swift layout.
 public enum ReixInputProtocol {
-    public static let version: UInt16 = 1
+    public static let version: UInt16 = 2
     public static let recordBytes = 32
     public static let headerBytes = 16
     public static let maximumPayload = 16
@@ -53,6 +53,8 @@ public enum ReixInputKey: UInt16, Equatable {
     case escape = 15
     case pageUp = 16
     case pageDown = 17
+    case undo = 18
+    case redo = 19
 }
 
 public enum ReixInputKind: UInt16, Equatable {

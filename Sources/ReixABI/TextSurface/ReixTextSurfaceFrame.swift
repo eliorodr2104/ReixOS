@@ -38,7 +38,7 @@ public struct ReixTextSurfaceStyleSpan: Equatable {
 /// Small metadata descriptor. Text and spans stay in caller-owned storage.
 public struct ReixTextSurfaceFrameDescriptor: Equatable {
     public static let wireBytes = 64
-    public static let maximumTextBytes = 8192
+    public static let maximumTextBytes = 8200
     public static let maximumOverlayBytes = 1024
     public static let maximumStyleSpans: UInt16 = 32
     public static let maximumOverlayStyleSpans: UInt16 = 16
@@ -216,10 +216,16 @@ public struct ReixTextSurfaceFrameDescriptor: Equatable {
 /// A producer view. The ring consumes the pointers before push returns.
 public struct ReixTextSurfaceFrameSource {
     public let descriptor: ReixTextSurfaceFrameDescriptor
-    public let text: UnsafePointer<UInt8>?
     public let styles: UnsafePointer<ReixTextSurfaceStyleSpan>?
     public let overlay: UnsafePointer<UInt8>?
     public let overlayStyles: UnsafePointer<ReixTextSurfaceStyleSpan>?
+
+    private let text0: UnsafePointer<UInt8>?
+    private let text1: UnsafePointer<UInt8>?
+    private let text2: UnsafePointer<UInt8>?
+    private let text0Length: Int
+    private let text1Length: Int
+    private let text2Length: Int
 
     public init?(
         descriptor: ReixTextSurfaceFrameDescriptor,
@@ -228,13 +234,50 @@ public struct ReixTextSurfaceFrameSource {
         overlay: UnsafePointer<UInt8>? = nil,
         overlayStyles: UnsafePointer<ReixTextSurfaceStyleSpan>? = nil
     ) {
-        guard (descriptor.textLength == 0) == (text == nil),
+        self.init(
+            descriptor: descriptor,
+            text0: text,
+            text0Length: Int(descriptor.textLength),
+            text1: nil,
+            text1Length: 0,
+            text2: nil,
+            text2Length: 0,
+            styles: styles,
+            overlay: overlay,
+            overlayStyles: overlayStyles
+        )
+    }
+
+    public init?(
+        descriptor: ReixTextSurfaceFrameDescriptor,
+        text0: UnsafePointer<UInt8>?,
+        text0Length: Int,
+        text1: UnsafePointer<UInt8>? = nil,
+        text1Length: Int = 0,
+        text2: UnsafePointer<UInt8>? = nil,
+        text2Length: Int = 0,
+        styles: UnsafePointer<ReixTextSurfaceStyleSpan>? = nil,
+        overlay: UnsafePointer<UInt8>? = nil,
+        overlayStyles: UnsafePointer<ReixTextSurfaceStyleSpan>? = nil
+    ) {
+        guard text0Length >= 0,
+              text1Length >= 0,
+              text2Length >= 0,
+              text0Length + text1Length + text2Length == Int(descriptor.textLength),
+              (text0Length == 0) == (text0 == nil),
+              (text1Length == 0) == (text1 == nil),
+              (text2Length == 0) == (text2 == nil),
               (descriptor.styleSpanCount == 0) == (styles == nil),
               (descriptor.overlayLength == 0) == (overlay == nil),
               (descriptor.overlayStyleSpanCount == 0) == (overlayStyles == nil)
         else { return nil }
         self.descriptor = descriptor
-        self.text = text
+        self.text0 = text0
+        self.text1 = text1
+        self.text2 = text2
+        self.text0Length = text0Length
+        self.text1Length = text1Length
+        self.text2Length = text2Length
         self.styles = styles
         self.overlay = overlay
         self.overlayStyles = overlayStyles
@@ -243,7 +286,7 @@ public struct ReixTextSurfaceFrameSource {
     public func payloadByte(at index: Int) -> UInt8? {
         guard index >= 0, index < descriptor.payloadBytes else { return nil }
         let textEnd = Int(descriptor.textLength)
-        if index < textEnd { return text![index] }
+        if index < textEnd { return textByte(at: index) }
         let styleEnd = textEnd + Int(descriptor.styleSpanCount) * ReixTextSurfaceStyleSpan.wireBytes
         if index < styleEnd {
             return Self.spanByte(
@@ -257,6 +300,15 @@ public struct ReixTextSurfaceFrameSource {
             overlayStyles![(index - overlayEnd) / ReixTextSurfaceStyleSpan.wireBytes],
             byte: (index - overlayEnd) % ReixTextSurfaceStyleSpan.wireBytes
         )
+    }
+
+    private func textByte(at index: Int) -> UInt8? {
+        if index < text0Length { return text0![index] }
+        let after0 = index - text0Length
+        if after0 < text1Length { return text1![after0] }
+        let after1 = after0 - text1Length
+        guard after1 < text2Length else { return nil }
+        return text2![after1]
     }
 
     private static func spanByte(_ span: ReixTextSurfaceStyleSpan, byte: Int) -> UInt8 {
