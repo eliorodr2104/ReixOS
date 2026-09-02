@@ -24,7 +24,7 @@ public enum ReixTextSurfaceKind: UInt16, Equatable {
     case bell = 7
 }
 
-/// Internal producer input kept while the shell migrates to native v2 frames.
+/// Internal producer input kept while the shell migrates to native v3 frames.
 public struct ReixTextSurfaceCommand: Equatable {
     public let kind: ReixTextSurfaceKind
     public let sequence: UInt32

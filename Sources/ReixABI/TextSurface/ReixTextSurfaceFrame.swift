@@ -10,6 +10,12 @@ public enum ReixTextSurfaceFrameKind: UInt16, Equatable {
     case patch = 2
 }
 
+/// Transcript frames flow at the terminal cursor. Editor frames own a bounded viewport.
+public enum ReixTextSurfaceFrameMode: UInt16, Equatable {
+    case transcript = 1
+    case editor = 2
+}
+
 public enum ReixTextSurfaceStyleRole: UInt8, Equatable {
     case plain = 0
     case prompt = 1
@@ -46,6 +52,7 @@ public struct ReixTextSurfaceFrameDescriptor: Equatable {
     public static let maximumRows: UInt16 = 120
 
     public let kind: ReixTextSurfaceFrameKind
+    public let mode: ReixTextSurfaceFrameMode
     public let correlation: UInt32
     public let revision: UInt32
     public let baseRevision: UInt32
@@ -68,6 +75,7 @@ public struct ReixTextSurfaceFrameDescriptor: Equatable {
 
     public init?(
         kind: ReixTextSurfaceFrameKind,
+        mode: ReixTextSurfaceFrameMode = .editor,
         correlation: UInt32,
         revision: UInt32,
         baseRevision: UInt32,
@@ -107,7 +115,12 @@ public struct ReixTextSurfaceFrameDescriptor: Equatable {
               overlayColumns <= columns,
               overlayLength == 0 ? overlayRows == 0 && overlayColumns == 0 : overlayRows > 0 && overlayColumns > 0,
               overlayRows == 0 || overlayRow <= viewportRows - overlayRows,
-              overlayColumns == 0 || overlayColumn <= columns - overlayColumns
+              overlayColumns == 0 || overlayColumn <= columns - overlayColumns,
+              mode == .editor || (
+                  viewportRows == 1
+                      && viewportRow == cursorRow
+                      && overlayLength == 0
+              )
         else { return nil }
 
         switch kind {
@@ -118,6 +131,7 @@ public struct ReixTextSurfaceFrameDescriptor: Equatable {
         }
 
         self.kind = kind
+        self.mode = mode
         self.correlation = correlation
         self.revision = revision
         self.baseRevision = baseRevision
@@ -157,7 +171,7 @@ public struct ReixTextSurfaceFrameDescriptor: Equatable {
         guard capacity >= Self.wireBytes else { return false }
         for index in 0..<Self.wireBytes { bytes[index] = 0 }
         write16(bytes, 0, kind.rawValue)
-        write16(bytes, 2, 0)
+        write16(bytes, 2, mode.rawValue)
         write32(bytes, 4, correlation)
         write32(bytes, 8, revision)
         write32(bytes, 12, baseRevision)
@@ -183,13 +197,14 @@ public struct ReixTextSurfaceFrameDescriptor: Equatable {
     public static func decode(_ bytes: UnsafePointer<UInt8>, length: Int) -> ReixTextSurfaceFrameDescriptor? {
         guard length == Self.wireBytes,
               let kind = ReixTextSurfaceFrameKind(rawValue: read16(bytes, 0)),
-              read16(bytes, 2) == 0,
+              let mode = ReixTextSurfaceFrameMode(rawValue: read16(bytes, 2)),
               read16(bytes, 54) == 0,
               read32(bytes, 56) == 0,
               read32(bytes, 60) == 0
         else { return nil }
         return ReixTextSurfaceFrameDescriptor(
             kind: kind,
+            mode: mode,
             correlation: read32(bytes, 4),
             revision: read32(bytes, 8),
             baseRevision: read32(bytes, 12),

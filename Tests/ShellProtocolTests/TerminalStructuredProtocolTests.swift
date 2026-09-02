@@ -130,7 +130,7 @@ struct TerminalStructuredProtocolTests {
         }
     }
 
-    @Test("TextSurface v2 has one exact frame envelope")
+    @Test("TextSurface v3 has one exact frame envelope")
     func surfaceFrames() {
         var storage = [UInt8](repeating: 0, count: ReixTextSurfaceProtocol.recordBytes)
         let descriptor = ReixTextSurfaceFrameDescriptor(
@@ -148,6 +148,17 @@ struct TerminalStructuredProtocolTests {
         var metadata = [UInt8](repeating: 0, count: ReixTextSurfaceFrameDescriptor.wireBytes)
         #expect(metadata.withUnsafeMutableBufferPointer {
             descriptor.encode(into: $0.baseAddress!, capacity: $0.count)
+        })
+        #expect(metadata[2] == UInt8(ReixTextSurfaceFrameMode.editor.rawValue))
+        #expect(metadata.withUnsafeBufferPointer {
+            ReixTextSurfaceFrameDescriptor.decode($0.baseAddress!, length: $0.count)?.mode
+                == .editor
+        })
+        var malformedMetadata = metadata
+        malformedMetadata[2] = 0
+        #expect(malformedMetadata.withUnsafeBufferPointer {
+            ReixTextSurfaceFrameDescriptor.decode($0.baseAddress!, length: $0.count)
+                == nil
         })
         let record = metadata.withUnsafeBufferPointer {
             ReixTextSurfaceFrameRecord(
@@ -173,6 +184,7 @@ struct TerminalStructuredProtocolTests {
             } == nil
         )
         #expect(ReixTextSurfaceTransport.pages == 3)
+        #expect(ReixTextSurfaceTransport.version == 3)
         #expect(ReixTextSurfaceTransport.maximumFrameRecords <= ReixTextSurfaceTransport.capacity)
     }
 

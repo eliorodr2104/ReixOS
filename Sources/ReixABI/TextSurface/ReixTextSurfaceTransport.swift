@@ -10,7 +10,7 @@ public enum ReixTextSurfaceTransport {
     public static let regionBytes = pageBytes * pages
     public static let headerBytes = 64
     public static let magic: UInt32 = 0x5358_4952 // "RIXS" little-endian
-    public static let version: UInt16 = 2
+    public static let version: UInt16 = 3
     public static let featureTypedFrames: UInt32 = 1 << 0
     public static let featureGeometry: UInt32 = 1 << 1
     public static let featureSemanticStyles: UInt32 = 1 << 2
@@ -20,9 +20,11 @@ public enum ReixTextSurfaceTransport {
     public static let featureFullSnapshot: UInt32 = 1 << 6
     public static let featureAcknowledgements: UInt32 = 1 << 7
     public static let featureResynchronization: UInt32 = 1 << 8
+    public static let featurePresentationModes: UInt32 = 1 << 9
     public static let supportedFeatures = featureTypedFrames | featureGeometry | featureSemanticStyles
         | featureViewport | featureOverlay | featureIncrementalUpdates | featureFullSnapshot
         | featureAcknowledgements | featureResynchronization
+        | featurePresentationModes
     public static let requiredFeatures = supportedFeatures
     public static let capacity = (regionBytes - headerBytes) / ReixTextSurfaceProtocol.recordBytes
     public static let maximumFrameRecords = 2 + (

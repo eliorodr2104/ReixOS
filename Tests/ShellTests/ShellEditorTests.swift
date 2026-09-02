@@ -216,6 +216,24 @@ struct ShellEditorTests {
         })
     }
 
+    @Test("editor viewport grows and shrinks with wrapped content")
+    func dynamicViewportRows() {
+        var editor = ShellLineEditor()
+        var sequence: UInt32 = 1
+        _ = editor.apply(ReixInputRecord(kind: .resize, sequence: sequence, width: 10, height: 8)!)
+        sequence += 1
+        #expect(editor.withFrame { $0.frame.viewportRows == 1 })
+
+        insert(Array("abcd".utf8), into: &editor, sequence: &sequence)
+        #expect(editor.withFrame { $0.frame.viewportRows == 2 })
+
+        _ = editor.apply(key(.backspace, sequence: sequence))
+        #expect(editor.withFrame {
+            $0.frame.viewportRows == 1
+                && $0.frame.viewportRow == 0
+        })
+    }
+
     @Test("Unicode profile reports cells for combining CJK and emoji")
     func unicodeCells() {
         #expect(ReixTextLayout.unicodeMajor == 16)

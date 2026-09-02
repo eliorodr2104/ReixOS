@@ -79,7 +79,7 @@ public struct TextSurfaceSession: ~Copyable {
         _ = capDrop(handle)
     }
 
-    /// Legacy editor commands are producer input only. The ring carries v2 frames.
+    /// Legacy editor commands are producer input only. The ring carries v3 frames.
     public mutating func present(_ command: ReixTextSurfaceCommand) -> Bool {
         guard usable,
               !nativeActive,
@@ -309,6 +309,7 @@ public struct TextSurfaceSession: ~Copyable {
             }
             guard let descriptor = ReixTextSurfaceFrameDescriptor(
                   kind: snapshot ? .snapshot : .patch,
+                  mode: .editor,
                   correlation: correlation,
                   revision: nextRevision,
                   baseRevision: snapshot ? 0 : revision,
@@ -568,11 +569,10 @@ public struct TextSurfaceSession: ~Copyable {
             return false
         }
         guard let cursor = cursorPosition() else { return false }
-        let visibleRows = ReixTextSurfaceFrameDescriptor.interactiveRows(for: rows)
-        let viewport = cursor.row >= visibleRows ? cursor.row - visibleRows + 1 : 0
         let snapshot = requiresSnapshot || revision == 0
         guard let descriptor = ReixTextSurfaceFrameDescriptor(
             kind: snapshot ? .snapshot : .patch,
+            mode: .transcript,
             correlation: correlation,
             revision: nextRevision,
             baseRevision: snapshot ? 0 : revision,
@@ -583,8 +583,8 @@ public struct TextSurfaceSession: ~Copyable {
             rows: rows,
             cursorRow: cursor.row,
             cursorColumn: cursor.column,
-            viewportRow: viewport,
-            viewportRows: visibleRows
+            viewportRow: cursor.row,
+            viewportRows: 1
         ) else { return false }
         let nextTransaction = transaction == UInt32.max ? 1 : transaction + 1
         transaction = nextTransaction

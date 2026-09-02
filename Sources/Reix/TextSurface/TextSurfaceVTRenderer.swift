@@ -43,6 +43,30 @@ public enum TextSurfaceVTRenderer {
         useDiff: Bool,
         emit: (UInt8) -> Void
     ) -> UInt32 {
+        switch frame.descriptor.mode {
+            case .transcript:
+                return renderTranscriptPlan(
+                    screen: screen,
+                    frame: frame,
+                    useDiff: useDiff,
+                    emit: emit
+                )
+            case .editor:
+                return renderEditorPlan(
+                    screen: screen,
+                    frame: frame,
+                    useDiff: useDiff,
+                    emit: emit
+                )
+        }
+    }
+
+    private static func renderEditorPlan(
+        screen: TextSurfaceScreenModel,
+        frame: ReixTextSurfaceFrameView,
+        useDiff: Bool,
+        emit: (UInt8) -> Void
+    ) -> UInt32 {
         var count: UInt32 = 0
         let descriptor = frame.descriptor
         let baseRow = descriptor.rows - descriptor.viewportRows + 1
@@ -86,7 +110,13 @@ public enum TextSurfaceVTRenderer {
                 )
             }
         } else {
-            clearViewport(baseRow: baseRow, rows: descriptor.viewportRows, count: &count, emit: emit)
+            let clearBase = editorClearBase(screen: screen, descriptor: descriptor)
+            clearViewport(
+                baseRow: clearBase,
+                rows: descriptor.rows - clearBase + 1,
+                count: &count,
+                emit: emit
+            )
         }
         cup(
             row: baseRow + startRow - descriptor.viewportRow,
@@ -106,12 +136,52 @@ public enum TextSurfaceVTRenderer {
         return count
     }
 
+    private static func renderTranscriptPlan(
+        screen: TextSurfaceScreenModel,
+        frame: ReixTextSurfaceFrameView,
+        useDiff: Bool,
+        emit: (UInt8) -> Void
+    ) -> UInt32 {
+        var count: UInt32 = 0
+        let start: Int
+        if useDiff {
+            start = Int(frame.descriptor.patchOffset)
+        } else {
+            start = 0
+            if screen.revision != 0 {
+                clearDisplay(count: &count, emit: emit)
+            }
+        }
+        renderTranscriptText(
+            screen: screen,
+            frame: frame,
+            from: start,
+            count: &count,
+            emit: emit
+        )
+        style(.plain, count: &count, emit: emit)
+        return count
+    }
+
     private static func diffEligible(
+        screen: TextSurfaceScreenModel,
+        frame: ReixTextSurfaceFrameView
+    ) -> Bool {
+        switch frame.descriptor.mode {
+            case .transcript:
+                return transcriptDiffEligible(screen: screen, frame: frame)
+            case .editor:
+                return editorDiffEligible(screen: screen, frame: frame)
+        }
+    }
+
+    private static func editorDiffEligible(
         screen: TextSurfaceScreenModel,
         frame: ReixTextSurfaceFrameView
     ) -> Bool {
         let descriptor = frame.descriptor
         guard descriptor.kind == .patch,
+              screen.mode == .editor,
               descriptor.overlayLength == 0,
               screen.overlayLength == 0,
               descriptor.viewportRow == screen.viewportRow,
@@ -129,6 +199,27 @@ public enum TextSurfaceVTRenderer {
               ),
               let position = position(of: Int(descriptor.patchOffset), in: screen),
               position.row >= descriptor.viewportRow
+        else { return false }
+        return true
+    }
+
+    private static func transcriptDiffEligible(
+        screen: TextSurfaceScreenModel,
+        frame: ReixTextSurfaceFrameView
+    ) -> Bool {
+        let descriptor = frame.descriptor
+        guard descriptor.kind == .patch,
+              descriptor.columns == screen.columns,
+              descriptor.rows == screen.rows,
+              descriptor.overlayLength == 0,
+              screen.overlayLength == 0,
+              descriptor.patchOffset == UInt32(screen.textLength),
+              descriptor.replacedLength == 0,
+              ReixTextLayout.isGraphemeBoundary(
+                  Int(descriptor.patchOffset),
+                  count: screen.desiredTextLength(for: frame),
+                  byte: { screen.desiredTextByte(at: $0, for: frame) }
+              )
         else { return false }
         return true
     }
@@ -167,6 +258,30 @@ public enum TextSurfaceVTRenderer {
             cup(row: baseRow + row, column: 1, count: &count, emit: emit)
             clearLine(count: &count, emit: emit)
         }
+    }
+
+    private static func editorClearBase(
+        screen: TextSurfaceScreenModel,
+        descriptor: ReixTextSurfaceFrameDescriptor
+    ) -> UInt16 {
+        guard screen.mode == .editor,
+              screen.rows == descriptor.rows,
+              screen.viewportRows <= screen.rows
+        else { return descriptor.rows - descriptor.viewportRows + 1 }
+        let oldBase = screen.rows - screen.viewportRows + 1
+        let newBase = descriptor.rows - descriptor.viewportRows + 1
+        return min(oldBase, newBase)
+    }
+
+    private static func clearDisplay(
+        count: inout UInt32,
+        emit: (UInt8) -> Void
+    ) {
+        emitted(escape, count: &count, emit: emit)
+        emitted(openBracket, count: &count, emit: emit)
+        emitted(UInt8(ascii: "2"), count: &count, emit: emit)
+        emitted(UInt8(ascii: "J"), count: &count, emit: emit)
+        cup(row: 1, column: 1, count: &count, emit: emit)
     }
 
     private static func clearToViewportEnd(
@@ -232,10 +347,14 @@ public enum TextSurfaceVTRenderer {
                     emitted(carriageReturn, count: &count, emit: emit)
                     emitted(lineFeed, count: &count, emit: emit)
                 } else {
-                    for index in offset..<end {
-                        guard let byte = screen.desiredTextByte(at: index, for: frame) else { return }
-                        emitted(byte, count: &count, emit: emit)
-                    }
+                    emitGrapheme(
+                        screen: screen,
+                        frame: frame,
+                        from: offset,
+                        to: end,
+                        count: &count,
+                        emit: emit
+                    )
                 }
             }
             if first == lineFeed {
@@ -251,6 +370,75 @@ public enum TextSurfaceVTRenderer {
             offset = end
         }
         if activeRole != .plain { style(.plain, count: &count, emit: emit) }
+    }
+
+    private static func renderTranscriptText(
+        screen: TextSurfaceScreenModel,
+        frame: ReixTextSurfaceFrameView,
+        from start: Int,
+        count: inout UInt32,
+        emit: (UInt8) -> Void
+    ) {
+        let length = screen.desiredTextLength(for: frame)
+        var activeRole = ReixTextSurfaceStyleRole.plain
+        var offset = start
+        while offset < length {
+            guard let end = ReixTextLayout.nextGraphemeBoundary(
+                after: offset,
+                count: length,
+                byte: { screen.desiredTextByte(at: $0, for: frame) }
+            ), let first = screen.desiredTextByte(at: offset, for: frame)
+            else { return }
+            let role = styleRole(at: offset, frame: frame)
+            if role != activeRole {
+                style(role, count: &count, emit: emit)
+                activeRole = role
+            }
+            if first == lineFeed {
+                emitted(carriageReturn, count: &count, emit: emit)
+                emitted(lineFeed, count: &count, emit: emit)
+            } else {
+                emitGrapheme(
+                    screen: screen,
+                    frame: frame,
+                    from: offset,
+                    to: end,
+                    count: &count,
+                    emit: emit
+                )
+            }
+            offset = end
+        }
+        if activeRole != .plain { style(.plain, count: &count, emit: emit) }
+    }
+
+    private static func emitGrapheme(
+        screen: TextSurfaceScreenModel,
+        frame: ReixTextSurfaceFrameView,
+        from start: Int,
+        to end: Int,
+        count: inout UInt32,
+        emit: (UInt8) -> Void
+    ) {
+        guard let first = screen.desiredTextByte(at: start, for: frame) else { return }
+        let second = start + 1 < end ? screen.desiredTextByte(at: start + 1, for: frame) : nil
+        let isC1Control = if let second {
+            first == 0xC2 && second >= 0x80 && second <= 0x9F
+        } else {
+            false
+        }
+        let control = first < 0x20 || first == 0x7F
+            || isC1Control
+        if control {
+            emitted(0xEF, count: &count, emit: emit)
+            emitted(0xBF, count: &count, emit: emit)
+            emitted(0xBD, count: &count, emit: emit)
+            return
+        }
+        for index in start..<end {
+            guard let byte = screen.desiredTextByte(at: index, for: frame) else { return }
+            emitted(byte, count: &count, emit: emit)
+        }
     }
 
     private static func visible(

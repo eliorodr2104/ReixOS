@@ -141,7 +141,15 @@ public struct ShellLineEditor: ~Copyable {
     public mutating func withFrame(_ body: (ShellEditorFrameSource) -> Bool) -> Bool {
         guard let pending else { return true }
         guard let cursorPosition = framePosition(at: cursor) else { return false }
-        followCursor(cursorPosition.row)
+        let endPosition: ReixTextLayout.Position
+        if cursor == count {
+            endPosition = cursorPosition
+        } else {
+            guard let position = framePosition(at: count) else { return false }
+            endPosition = position
+        }
+        let viewportRows = min(visibleRows, max(UInt16(1), endPosition.row + 1))
+        followCursor(cursorPosition.row, viewportRows: viewportRows)
         let selection = selectionRange()
         var spans = InlineArray<4, ReixTextSurfaceStyleSpan?>(repeating: nil)
         var spanCount = 0
@@ -152,7 +160,11 @@ public struct ShellLineEditor: ~Copyable {
         )!
         spanCount += 1
         appendInputSpans(selection: selection, spans: &spans, count: &spanCount)
-        let frame = frameMetadata(pending: pending, cursorPosition: cursorPosition)
+        let frame = frameMetadata(
+            pending: pending,
+            cursorPosition: cursorPosition,
+            viewportRows: viewportRows
+        )
         let result = withFrameText(pending: pending) { text in
             withUnsafeTemporaryAllocation(
                 of: ReixTextSurfaceStyleSpan.self,
@@ -945,11 +957,14 @@ public struct ShellLineEditor: ~Copyable {
         }
     }
 
-    private mutating func followCursor(_ cursorRow: UInt16) {
+    private mutating func followCursor(
+        _ cursorRow: UInt16,
+        viewportRows: UInt16
+    ) {
         guard !viewportPinned else { return }
         if cursorRow < viewportRow { viewportRow = cursorRow }
-        else if cursorRow - viewportRow >= visibleRows {
-            viewportRow = cursorRow - visibleRows + 1
+        else if cursorRow - viewportRow >= viewportRows {
+            viewportRow = cursorRow - viewportRows + 1
         }
     }
 
@@ -999,7 +1014,8 @@ public struct ShellLineEditor: ~Copyable {
 
     private func frameMetadata(
         pending: PendingChange,
-        cursorPosition: ReixTextLayout.Position
+        cursorPosition: ReixTextLayout.Position,
+        viewportRows: UInt16
     ) -> ShellEditorFrame {
         let kind: ReixTextSurfaceFrameKind
         let offset: UInt32
@@ -1034,7 +1050,7 @@ public struct ShellLineEditor: ~Copyable {
             cursorRow: cursorPosition.row,
             cursorColumn: cursorPosition.column,
             viewportRow: viewportRow,
-            viewportRows: visibleRows
+            viewportRows: viewportRows
         )
     }
 

@@ -7,7 +7,7 @@
 
 import ReixABI
 
-/// Bounded UTF-8 state for the interactive quarter and its separate overlay.
+/// Bounded UTF-8 state for transcript flow and the active editor viewport.
 public struct TextSurfaceScreenModel {
     public enum ApplyResult: Equatable {
         case ready
@@ -17,6 +17,7 @@ public struct TextSurfaceScreenModel {
 
     public private(set) var columns: UInt16 = 1
     public private(set) var rows: UInt16 = 1
+    public private(set) var mode = ReixTextSurfaceFrameMode.transcript
     public private(set) var cursorRow: UInt16 = 0
     public private(set) var cursorColumn: UInt16 = 0
     public private(set) var viewportRow: UInt16 = 0
@@ -118,6 +119,7 @@ public struct TextSurfaceScreenModel {
         }
         columns = descriptor.columns
         rows = descriptor.rows
+        mode = descriptor.mode
         cursorRow = descriptor.cursorRow
         cursorColumn = descriptor.cursorColumn
         viewportRow = descriptor.viewportRow

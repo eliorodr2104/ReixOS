@@ -37,6 +37,7 @@ private func feed(_ bytes: [UInt8], into screen: inout TerminalScreenModel) -> B
 
 private func descriptor(
     kind: ReixTextSurfaceFrameKind = .snapshot,
+    mode: ReixTextSurfaceFrameMode = .editor,
     correlation: UInt32 = 1,
     revision: UInt32 = 1,
     baseRevision: UInt32 = 0,
@@ -57,6 +58,7 @@ private func descriptor(
 ) -> ReixTextSurfaceFrameDescriptor {
     ReixTextSurfaceFrameDescriptor(
         kind: kind,
+        mode: mode,
         correlation: correlation,
         revision: revision,
         baseRevision: baseRevision,
@@ -148,6 +150,7 @@ check(
     "snapshot pop"
 )
 check(decodedGreeting == greeting, "snapshot roundtrip")
+check(greetingDescriptor.mode == .editor, "frame mode roundtrip")
 
 let maximumText = [UInt8](
     repeating: UInt8(ascii: "x"),
@@ -394,6 +397,73 @@ check(model.interactiveRows == 3, "quarter viewport at 40 by 12")
 check(ReixTextSurfaceFrameDescriptor.interactiveRows(for: 24) == 6, "quarter viewport at 80 by 24")
 check(ReixTextSurfaceFrameDescriptor.interactiveRows(for: 60) == 15, "quarter viewport cap at 240 by 60")
 check(ReixTextSurfaceFrameDescriptor.interactiveRows(for: 3) == 1, "short terminal keeps one row")
+
+check(ReixTextSurfaceRing.initialize(page: page, token: 27), "mode transition proposal")
+check(ReixTextSurfaceRing.accept(page: page, token: 27, epoch: 28), "mode transition accept")
+producer = ReixTextSurfaceRing(page: page, token: 27, epoch: 28)!
+consumer = ReixTextSurfaceRing(page: page, token: 27, epoch: 28)!
+var modeModel = TextSurfaceScreenModel()
+var modeTerminal = TerminalScreenModel(columns: 20, rows: 8)
+let prompt = Array("reix> x".utf8)
+let promptDescriptor = descriptor(
+    textLength: prompt.count,
+    columns: 20,
+    rows: 8,
+    cursorColumn: 7,
+    viewportRows: 1
+)
+check(push(producer, transaction: 1, descriptor: promptDescriptor, text: prompt), "editor mode setup")
+check(
+    consumer.popFrame(transaction: 1) { frame in
+        var bytes: [UInt8] = []
+        _ = TextSurfaceVTRenderer.render(screen: modeModel, frame: frame, useDiff: false) {
+            bytes.append($0)
+        }
+        check(feed(bytes, into: &modeTerminal), "editor mode VT is accepted")
+        check(modeModel.commit(frame), "editor mode commit")
+        return .commit
+    } == .committed,
+    "editor mode consumed"
+)
+check(modeTerminal.cursorRow == 7, "one-row editor is anchored at the bottom")
+let result = Array("\nresult".utf8)
+let transcriptDescriptor = descriptor(
+    kind: .patch,
+    mode: .transcript,
+    correlation: 2,
+    revision: 2,
+    baseRevision: 1,
+    patchOffset: UInt32(prompt.count),
+    textLength: result.count,
+    columns: 20,
+    rows: 8,
+    cursorRow: 1,
+    cursorColumn: 6,
+    viewportRow: 1,
+    viewportRows: 1
+)
+check(
+    push(producer, transaction: 2, descriptor: transcriptDescriptor, text: result),
+    "transcript mode setup"
+)
+check(
+    consumer.popFrame(transaction: 2) { frame in
+        let metrics = TextSurfaceVTRenderer.metrics(screen: modeModel, frame: frame)
+        var bytes: [UInt8] = []
+        _ = TextSurfaceVTRenderer.render(
+            screen: modeModel,
+            frame: frame,
+            useDiff: metrics.usesDiff
+        ) { bytes.append($0) }
+        check(metrics.usesDiff, "editor to transcript transition appends")
+        check(feed(bytes, into: &modeTerminal), "transcript mode VT is accepted")
+        check(modeModel.commit(frame), "transcript mode commit")
+        return .commit
+    } == .committed,
+    "transcript mode consumed"
+)
+check(modeTerminal.cursorRow == 7, "transcript output scrolls from the editor cursor")
+check(modeTerminal.cursorColumn == 6, "transcript cursor follows appended output")
 
 check(ReixTextSurfaceRing.initialize(page: page, token: 25), "Unicode model proposal")
 check(ReixTextSurfaceRing.accept(page: page, token: 25, epoch: 26), "Unicode model accept")
