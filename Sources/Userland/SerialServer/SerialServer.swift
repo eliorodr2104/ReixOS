@@ -12,8 +12,8 @@ public struct SerialServer: Service {
 
     private static let pageBytes: UInt64 = 4096
     private static let receiveWaitMilliseconds: UInt64 = 50
-    private static let transmitBudget = 48
-    private static let maximumTransmitWaits = 2
+    private static let transmitBudget = ReixSerialRingTransport.capacity
+        * ReixSerialProtocol.maximumPayload
 
     private let endpoint: UInt32
     private let uartBase: UnsafeMutableRawPointer
@@ -130,26 +130,7 @@ public struct SerialServer: Service {
             replyStatus(.write, .stale)
             return
         }
-        var result = transmit(from: ring)
-        var waits = 0
-        while result == .pending, waits < Self.maximumTransmitWaits {
-            pl011ClearTransmitInterrupt(uartBase)
-            pl011EnableTransmitInterrupt(uartBase)
-            let fired = irqWait(handle: interrupt, ticks: deadlineTicks())
-            guard fired != 0, fired != UInt64.max else {
-                pl011ClearTransmitInterrupt(uartBase)
-                pl011DisableTransmitInterrupt(uartBase)
-                replyStatus(.write, .timedOut)
-                return
-            }
-            result = transmit(from: ring)
-            pl011ClearTransmitInterrupt(uartBase)
-            _ = irqAck(handle: interrupt, bits: fired)
-            waits += 1
-        }
-        pl011ClearTransmitInterrupt(uartBase)
-        pl011DisableTransmitInterrupt(uartBase)
-        replyStatus(.write, result)
+        replyStatus(.write, transmit(from: ring))
     }
 
     private func status(access: ReixSerialAccess, request: ReceivedMessage) {
@@ -200,7 +181,12 @@ public struct SerialServer: Service {
             isEmpty: { ring.isEmpty },
             budget: Self.transmitBudget,
             sink: { byte in
-                pl011TryWriteByte(uartBase, byte)
+                // The writer ring bounds the number of bytes handled by this
+                // request. PL011 forward progress remains the hardware
+                // assumption: polling volatile TXFF, unlike TXIM on QEMU,
+                // progresses without an unrelated RX byte.
+                pl011WriteByte(uartBase, byte)
+                return true
             }
         )
     }

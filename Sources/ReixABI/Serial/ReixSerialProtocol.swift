@@ -25,13 +25,85 @@ public struct ReixSerialFlags: OptionSet, Equatable {
     public static let known: Self = [.endOfBatch]
 }
 
-/// A fixed wire record. Its bytes are copied into an inline buffer on decode.
+/// Forty-eight bytes without relying on `InlineArray`'s aggregate value
+/// representation across the freestanding module boundary. Serial chunks are
+/// copied through optionals and IPC-facing helpers; keeping six scalar words
+/// makes those copies ordinary Swift values while preserving indexed access.
+@frozen
+public struct ReixSerialPayload: Equatable {
+    private var word0: UInt64 = 0
+    private var word1: UInt64 = 0
+    private var word2: UInt64 = 0
+    private var word3: UInt64 = 0
+    private var word4: UInt64 = 0
+    private var word5: UInt64 = 0
+
+    public init() {}
+
+    public init?(bytes: UnsafePointer<UInt8>, count: Int) {
+        guard count >= 0, count <= ReixSerialProtocol.maximumPayload else { return nil }
+        for index in 0..<count { self[index] = bytes[index] }
+    }
+
+    public subscript(index: Int) -> UInt8 {
+        get {
+            precondition(index >= 0 && index < ReixSerialProtocol.maximumPayload)
+            let shift = UInt64((index & 7) * 8)
+            return UInt8(truncatingIfNeeded: word(index >> 3) >> shift)
+        }
+        set {
+            precondition(index >= 0 && index < ReixSerialProtocol.maximumPayload)
+            let slot = index >> 3
+            let shift = UInt64((index & 7) * 8)
+            let mask = UInt64(0xFF) << shift
+            setWord(slot, (word(slot) & ~mask) | UInt64(newValue) << shift)
+        }
+    }
+
+    /// Materializes a temporary contiguous view for parsers that consume a
+    /// byte span. The scalar words themselves are never exposed as storage.
+    public func withUnsafeBufferPointer<Result>(
+        _ body: (UnsafeBufferPointer<UInt8>) -> Result
+    ) -> Result {
+        withUnsafeTemporaryAllocation(
+            of: UInt8.self,
+            capacity: ReixSerialProtocol.maximumPayload
+        ) { bytes in
+            for index in 0..<bytes.count { bytes[index] = self[index] }
+            return body(UnsafeBufferPointer(bytes))
+        }
+    }
+
+    private func word(_ index: Int) -> UInt64 {
+        switch index {
+            case 0: word0
+            case 1: word1
+            case 2: word2
+            case 3: word3
+            case 4: word4
+            default: word5
+        }
+    }
+
+    private mutating func setWord(_ index: Int, _ value: UInt64) {
+        switch index {
+            case 0: word0 = value
+            case 1: word1 = value
+            case 2: word2 = value
+            case 3: word3 = value
+            case 4: word4 = value
+            default: word5 = value
+        }
+    }
+}
+
+/// A fixed wire record. Its bytes are copied into scalar payload storage.
 public struct ReixSerialChunk: Equatable {
     public let direction: ReixSerialDirection
     public let flags: ReixSerialFlags
     public let sequence: UInt32
     public let count: Int
-    public let payload: InlineArray<48, UInt8>
+    public let payload: ReixSerialPayload
 
     public init?(
         direction: ReixSerialDirection,
@@ -45,15 +117,12 @@ public struct ReixSerialChunk: Equatable {
               count > 0,
               count <= ReixSerialProtocol.maximumPayload
         else { return nil }
-        var payload = InlineArray<48, UInt8>(repeating: 0)
-        if count > 0 {
-            guard let bytes else { return nil }
-            for index in 0..<count { payload[index] = bytes[index] }
-        }
+        guard let bytes else { return nil }
         self.direction = direction
         self.flags = flags
         self.sequence = sequence
         self.count = count
+        guard let payload = ReixSerialPayload(bytes: bytes, count: count) else { return nil }
         self.payload = payload
     }
 
@@ -73,7 +142,9 @@ public struct ReixSerialChunk: Equatable {
         self.flags = flags
         self.sequence = sequence
         self.count = count
-        self.payload = payload
+        var scalarPayload = ReixSerialPayload()
+        for index in 0..<count { scalarPayload[index] = payload[index] }
+        self.payload = scalarPayload
     }
 
     public func encode(into bytes: UnsafeMutablePointer<UInt8>, capacity: Int) -> Bool {

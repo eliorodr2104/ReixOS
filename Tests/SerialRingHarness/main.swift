@@ -24,11 +24,17 @@ private func chunk(_ byte: UInt8, sequence: UInt32 = 1) -> ReixSerialChunk {
 }
 
 private func abi() {
+    require(MemoryLayout<ReixSerialPayload>.size == 48, "scalar payload size")
+    require(MemoryLayout<ReixSerialPayload>.stride == 48, "scalar payload stride")
     let access = ReixSerialAccess(role: .reader, channel: 1)!
     require(ReixSerialAccess(rawValue: access.rawValue) == access, "access roundtrip")
     require(ReixSerialAccess(rawValue: access.rawValue | (1 << 30)) == nil, "access reserved")
     require(ReixSerialChunk(direction: .receive, sequence: 1, bytes: nil, count: 0) == nil, "zero chunk")
     var byte: UInt8 = 42
+    withUnsafePointer(to: &byte) {
+        require(ReixSerialPayload(bytes: $0, count: -1) == nil, "negative payload count")
+        require(ReixSerialPayload(bytes: $0, count: 49) == nil, "oversized payload count")
+    }
     let record = withUnsafePointer(to: &byte) {
         ReixSerialChunk(
             direction: .receive,
@@ -42,6 +48,31 @@ private func abi() {
     defer { bytes.deallocate() }
     require(record.encode(into: bytes, capacity: ReixSerialProtocol.recordBytes), "encode")
     require(ReixSerialChunk.decode(UnsafePointer(bytes), length: ReixSerialProtocol.recordBytes) == record, "roundtrip")
+
+    let fullPayload = (0..<ReixSerialProtocol.maximumPayload).map {
+        UInt8(truncatingIfNeeded: $0 &* 37 &+ 11)
+    }
+    let fullRecord = fullPayload.withUnsafeBufferPointer {
+        ReixSerialChunk(
+            direction: .transmit,
+            sequence: 8,
+            bytes: $0.baseAddress!,
+            count: $0.count
+        )!
+    }
+    require(
+        fullRecord.encode(into: bytes, capacity: ReixSerialProtocol.recordBytes),
+        "full payload encode"
+    )
+    let fullRoundtrip = ReixSerialChunk.decode(
+        UnsafePointer(bytes),
+        length: ReixSerialProtocol.recordBytes
+    )!
+    require(fullRoundtrip == fullRecord, "full scalar payload roundtrip")
+    for index in fullPayload.indices {
+        require(fullRoundtrip.payload[index] == fullPayload[index], "full scalar payload byte")
+    }
+
     bytes[2] = 0
     require(
         ReixSerialChunk.decode(
@@ -149,6 +180,23 @@ private func transfer() {
         return .chunk(chunk(UInt8(queued), sequence: UInt32(queued)))
     }, isEmpty: { queued == 2 }, budget: 48, sink: { drained.append($0); return true })
     require(many == .ok && drained == [1, 2], "multiple chunks")
+
+    var bounded = SerialTransferCore()
+    var produced = 0
+    var complete: [UInt8] = []
+    let boundedResult = bounded.transfer(next: {
+        guard produced < ReixSerialRingTransport.capacity else { return .status(.empty) }
+        let byte = UInt8(truncatingIfNeeded: produced)
+        produced += 1
+        return .chunk(chunk(byte, sequence: UInt32(produced)))
+    }, isEmpty: {
+        produced == ReixSerialRingTransport.capacity
+    }, budget: ReixSerialRingTransport.capacity * ReixSerialProtocol.maximumPayload, sink: {
+        complete.append($0)
+        return true
+    })
+    require(boundedResult == .ok, "bounded blocking transfer completes")
+    require(complete.count == ReixSerialRingTransport.capacity, "bounded transfer owns every byte")
 }
 
 private func consoleWrap() {

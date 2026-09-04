@@ -40,6 +40,11 @@ public final class SerialReaderSession {
 
 /// A client-owned transmit page registered with SerialServer.
 public final class SerialWriterSession {
+    /// One server call makes bounded progress through the writer ring. A ring
+    /// contains at most this many chunks, so this bound can drain every byte
+    /// already owned by the session without an unbounded retry loop.
+    private static let maximumFlushAttempts = ReixSerialRingTransport.capacity + 1
+
     private let endpoint: UInt32
     private let handle: UInt32
     private let address: UInt64
@@ -83,47 +88,53 @@ public final class SerialWriterSession {
         let count = sum.partialValue
         guard count > 0 else { return .ok }
         guard secondCount == 0 || second != nil else { return .malformed }
-        let chunks = (count - 1) / ReixSerialProtocol.maximumPayload + 1
-        if needsFlush {
-            let flushed = flush()
-            guard flushed == .ok else { return flushed }
-        }
-        if ring.freeSlots ?? 0 < chunks {
-            _ = flush()
-        }
-        guard ring.freeSlots ?? 0 >= chunks else { return .full }
         var offset = 0
         while offset < count {
-            let amount = min(ReixSerialProtocol.maximumPayload, count - offset)
-            var payload = InlineArray<48, UInt8>(repeating: 0)
-            for index in 0..<amount {
-                let source = offset + index
-                if source < firstCount {
-                    payload[index] = first[source]
-                } else if let second {
-                    payload[index] = second[source - firstCount]
-                } else {
-                    return .malformed
-                }
+            guard var freeSlots = ring.freeSlots else { return .stale }
+            if freeSlots == 0 {
+                let flushed = flush()
+                guard flushed == .ok else { return flushed }
+                guard let available = ring.freeSlots, available > 0 else { return .full }
+                freeSlots = available
             }
-            guard let chunk = ReixSerialChunk(
-                direction: .transmit,
-                sequence: sequence,
-                payload: payload,
-                count: amount
-            ) else { return .malformed }
-            let pushed = ring.push(chunk)
-            guard pushed == .ok else { return pushed }
-            sequence = sequence == UInt32.max ? 1 : sequence + 1
-            offset += amount
+            let room = freeSlots * ReixSerialProtocol.maximumPayload
+            let batchEnd = offset + min(count - offset, room)
+            while offset < batchEnd {
+                let amount = min(ReixSerialProtocol.maximumPayload, batchEnd - offset)
+                var payload = InlineArray<48, UInt8>(repeating: 0)
+                for index in 0..<amount {
+                    let source = offset + index
+                    if source < firstCount {
+                        payload[index] = first[source]
+                    } else if let second {
+                        payload[index] = second[source - firstCount]
+                    } else {
+                        return .malformed
+                    }
+                }
+                guard let chunk = ReixSerialChunk(
+                    direction: .transmit,
+                    sequence: sequence,
+                    payload: payload,
+                    count: amount
+                ) else { return .malformed }
+                let pushed = ring.push(chunk)
+                guard pushed == .ok else { return pushed }
+                sequence = sequence == UInt32.max ? 1 : sequence + 1
+                offset += amount
+            }
+            needsFlush = true
+            if offset < count {
+                let flushed = flush()
+                guard flushed == .ok else { return flushed }
+            }
         }
-        needsFlush = true
         return .ok
     }
 
     public func flush() -> ReixSerialStatus {
         var attempts = 0
-        while attempts < 4 {
+        while attempts < Self.maximumFlushAttempts {
             guard case .success(let reply) = call(
                 handle: endpoint,
                 message: serialMessage(.write, token: token, epoch: epoch)

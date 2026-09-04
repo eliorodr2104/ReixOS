@@ -61,6 +61,16 @@ public func pl011TryWriteByte(
     _ byte: UInt8
 ) -> Bool
 
+/// Waits for one real FIFO slot and transfers exactly one byte. SerialServer
+/// uses this for its bounded writer-ring drain: QEMU's PL011 does not reliably
+/// raise a TX interrupt after IMSC.TXIM is armed, whereas RX activity on the
+/// shared UART line can wake the same waiter and make output appear input-led.
+@_silgen_name("pl011_write_byte")
+public func pl011WriteByte(
+    _ base: UnsafeMutableRawPointer,
+    _ byte: UInt8
+)
+
 @_silgen_name("pl011_enable_receive")
 public func pl011EnableReceive(_ base: UnsafeMutableRawPointer)
 

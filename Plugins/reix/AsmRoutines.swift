@@ -398,6 +398,17 @@ private func reixRoutines() -> [AsmRoutine] {
             ret()
         },
 
+        // The bounded SerialServer transfer core owns one byte at a time. This
+        // is the single-byte form of the span routine, linked into userland so
+        // TX progress does not depend on a QEMU PL011 TX interrupt.
+        fn("pl011_write_byte") {
+            label(".L_user_pl011_byte_wait")
+            raw("    ldr  w2, [x0, #0x18]")
+            raw("    tbnz w2, #5, .L_user_pl011_byte_wait")
+            raw("    strb w1, [x0]")
+            ret()
+        },
+
         // PL011 receive: one byte if the FIFO has one. Answers 0x100 when it is
         // empty, which no byte can be, so a caller needs no second call to ask.
         // x0 base. FR is 0x18 and RXFE its bit 4; DR is 0x00.
