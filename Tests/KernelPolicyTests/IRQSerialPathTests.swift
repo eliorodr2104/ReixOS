@@ -11,6 +11,7 @@ import Testing
 /// This suite owns `LogSink` (mode, transmit queue, drop counter) and
 /// `TraceRing` for its duration, and `.serialized` only orders its own tests.
 /// The run needs `swift test --no-parallel` (see the `test` target in the Makefile).
+extension KernelPolicyTestRoot {
 @Suite("IRQ serial production path", .serialized)
 struct IRQSerialPathTests {
     @Test("timer budget bounds probes and a large trace dump stays framed")
@@ -65,4 +66,7 @@ struct IRQSerialPathTests {
         #expect(lines.contains { $0.hasPrefix("[TRACE-DROP] omitted=") })
         #expect(lines.contains("[TRACE] end count=\(events.count)"))
     }
+}
+
+
 }

@@ -20,6 +20,7 @@ import KernelTestSupport
 /// the authority throughout, so a rejected buffer is rejected for being a bad
 /// buffer; until the shim became stateful no caller could be resolved at all and
 /// these tests all stopped at the authority check, one line into the syscall.
+extension KernelPolicyTestRoot {
 @Suite("ProcStats syscall", .serialized)
 struct ProcStatsSyscallTests {
 
@@ -218,4 +219,7 @@ struct ProcStatsSyscallTests {
     private func bytes(_ buffer: UnsafeMutableRawPointer) -> [UInt8] {
         Array(UnsafeBufferPointer(start: buffer.assumingMemoryBound(to: UInt8.self), count: 64))
     }
+}
+
+
 }

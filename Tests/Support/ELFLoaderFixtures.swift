@@ -548,6 +548,7 @@ public func withLoadedELFImage(
     arenaPages: Int = 64,
     _ body    : (LoadedELFImage) -> Void
 ) -> Bool {
+  withKernelTestGlobals {
 
     var opened = false
 
@@ -639,6 +640,7 @@ public func withLoadedELFImage(
     }
 
     return opened
+  }
 }
 
 

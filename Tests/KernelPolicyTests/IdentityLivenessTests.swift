@@ -20,6 +20,7 @@ import KernelTestSupport
 ///
 /// `.serialized`, and the run needs `--no-parallel`: `PPMBackend.physicalOffset`
 /// and `ProcessStatsIndex` are global and every spawn writes the second.
+extension KernelPolicyTestRoot {
 @Suite("Identity liveness", .serialized)
 struct IdentityLivenessTests {
 
@@ -188,4 +189,7 @@ struct IdentityLivenessTests {
             #expect(frame.x0 == 0)
         }
     }
+}
+
+
 }

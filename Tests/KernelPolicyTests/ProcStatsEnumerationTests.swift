@@ -13,6 +13,7 @@ import KernelTestSupport
 /// `.serialized` orders this suite's own tests; it does not stop another suite
 /// from running beside it, and `ProcessStatsIndex` is one global tree. The run
 /// needs `swift test --no-parallel` (see the `test` target in the Makefile).
+extension KernelPolicyTestRoot {
 @Suite("ProcStats enumeration", .serialized)
 struct ProcStatsEnumerationTests {
     @Test("empty index has no successor")
@@ -140,4 +141,7 @@ struct ProcStatsEnumerationTests {
 
         return result
     }
+}
+
+
 }

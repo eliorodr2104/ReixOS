@@ -40,15 +40,17 @@ public func withProcesses(
     resettingStatsIndex: Bool = false,
     _ body             : ([UnsafeMutablePointer<Process>]) -> Void
 ) {
-    if resettingStatsIndex { ProcessStatsIndex.reset() }
+    withKernelTestGlobals {
+      if resettingStatsIndex { ProcessStatsIndex.reset() }
 
-    let processes = pids.map(makeProcess(pid:))
-    defer {
-        if resettingStatsIndex { ProcessStatsIndex.reset() }
-        for process in processes { destroyProcess(process) }
+      let processes = pids.map(makeProcess(pid:))
+      defer {
+          if resettingStatsIndex { ProcessStatsIndex.reset() }
+          for process in processes { destroyProcess(process) }
+      }
+
+      body(processes)
     }
-
-    body(processes)
 }
 
 
@@ -141,10 +143,12 @@ public func withCurrentProcess(
     _ process: UnsafeMutablePointer<Process>,
     _ body   : () -> Void
 ) {
-    Arch.CPU.setCurrentProcess(VirtualAddress(UInt(bitPattern: process)))
-    defer { Arch.CPU.setCurrentProcess(0) }
+    withKernelTestGlobals {
+      Arch.CPU.setCurrentProcess(VirtualAddress(UInt(bitPattern: process)))
+      defer { Arch.CPU.setCurrentProcess(0) }
 
-    body()
+      body()
+    }
 }
 
 

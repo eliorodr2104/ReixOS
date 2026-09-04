@@ -9,6 +9,7 @@ import Testing
 @testable import Kernel
 import ReixABI
 
+extension KernelPolicyTestRoot {
 @Suite("ProfileControl authorization")
 struct ProfileControlAuthorizationTests {
     @Test("authority and attach handles reject high bits")
@@ -88,4 +89,7 @@ struct ProfileControlAuthorizationTests {
         #expect(MemoryLayout<TraceEvent>.stride == 32)
         #expect(TraceRing.capacity == 256)
     }
+}
+
+
 }

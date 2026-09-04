@@ -22,6 +22,7 @@ import KernelTestSupport
 /// not weaken the promise the first one made: an interrupt that fires with nobody
 /// listening is still not lost, because it was never the wake-up that stored it -
 /// the bits in the set are the storage, and always were.
+extension KernelPolicyTestRoot {
 @Suite("Interrupts on an endpoint", .serialized)
 struct InterruptBindTests {
 
@@ -393,5 +394,8 @@ struct InterruptBindTests {
     private func clientTag(_ process: UnsafeMutablePointer<Process>) -> UInt64 {
         process.pointee.context?.pointee.x1 ?? 0
     }
+
+}
+
 
 }

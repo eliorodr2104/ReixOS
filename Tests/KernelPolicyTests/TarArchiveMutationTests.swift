@@ -54,6 +54,7 @@ import KernelTestSupport
 /// The staging parks the archive in `Kernel.platformInfo`, which is process-wide.
 /// `.serialized` only orders this suite's own tests, so the run needs
 /// `swift test --no-parallel` (see the `test` target in the Makefile).
+extension KernelPolicyTestRoot {
 @Suite("Tar archive mutation", .serialized)
 struct TarArchiveMutationTests {
 
@@ -258,4 +259,7 @@ struct TarArchiveMutationTests {
 
         #expect(readAll(&fs, handle, upTo: size + 64) == expected, Comment(rawValue: "\(mutant.label): \(probe)"))
     }
+}
+
+
 }

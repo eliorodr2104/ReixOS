@@ -27,6 +27,7 @@ import KernelTestSupport
 /// This suite owns no kernel global: `getPlatformInfo` fills a caller's
 /// `PlatformInfo` and reads only the two initrd linker symbols. It runs under
 /// `swift test --no-parallel` with the rest all the same.
+extension KernelPolicyTestRoot {
 @Suite("Device tree corpus")
 struct DeviceTreeCorpusTests {
 
@@ -202,7 +203,9 @@ struct DeviceTreeCorpusTests {
     }
 }
 
-extension DeviceTreeCorpusTests {
+}
+
+extension KernelPolicyTestRoot.DeviceTreeCorpusTests {
 
     /// What the machine this actually runs on says its virtio bus is.
     ///

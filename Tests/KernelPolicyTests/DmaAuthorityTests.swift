@@ -24,6 +24,7 @@ import KernelHostShims
 /// `.dma` is the newer half of the first check, and the one worth watching. Any
 /// device window used to do, with any rights on it, so the console's window over
 /// a UART opened the door as wide as the disk controller's did.
+extension KernelPolicyTestRoot {
 @Suite("DMA authority", .serialized)
 struct DmaAuthorityTests {
 
@@ -314,4 +315,7 @@ struct DmaAuthorityTests {
             #expect(dcache_clean_calls() == 0)
         }
     }
+}
+
+
 }

@@ -25,6 +25,7 @@ import KernelTestSupport
 /// reads the two metadata blocks and bumps reference counts through the
 /// capability targets, and touches no allocator, scheduler or endpoint table on
 /// the way. What it does touch is real.
+extension KernelPolicyTestRoot {
 @Suite("Caps table cloning")
 struct CapsTableCloneTests {
 
@@ -223,4 +224,7 @@ struct CapsTableCloneTests {
             #expect(endpoint.pointee.references == UInt32(slots))
         }
     }
+}
+
+
 }

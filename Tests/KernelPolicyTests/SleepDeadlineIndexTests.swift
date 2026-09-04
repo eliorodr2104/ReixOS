@@ -9,6 +9,7 @@ import Testing
 @testable import Kernel
 import KernelTestSupport
 
+extension KernelPolicyTestRoot {
 @Suite("Sleep deadline index")
 struct SleepDeadlineIndexTests {
     @Test("collisions remove the requested sleeper without hiding survivors")
@@ -48,4 +49,7 @@ struct SleepDeadlineIndexTests {
             #expect(reused)
         }
     }
+}
+
+
 }

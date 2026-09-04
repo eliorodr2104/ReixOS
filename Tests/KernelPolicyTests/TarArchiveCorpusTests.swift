@@ -27,6 +27,7 @@ import KernelTestSupport
 /// process-wide, and `TarFileSystem.init` records the base from it. `.serialized`
 /// only orders this suite's own tests, so the run needs
 /// `swift test --no-parallel` (see the `test` target in the Makefile).
+extension KernelPolicyTestRoot {
 @Suite("Tar archive corpus", .serialized)
 struct TarArchiveCorpusTests {
 
@@ -252,6 +253,8 @@ struct TarArchiveCorpusTests {
 
         #expect(staged != nil, "the guarded mapping could not be made")
     }
+}
+
 }
 
 

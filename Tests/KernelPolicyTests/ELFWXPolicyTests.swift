@@ -12,6 +12,7 @@ import KernelTestSupport
 /// `.serialized` is not enough on its own: `loadELFFixture` parks the fixture
 /// archive in `Kernel.platformInfo`, which every suite shares, so the run needs
 /// `swift test --no-parallel` (see the `test` target in the Makefile).
+extension KernelPolicyTestRoot {
 @Suite("ELF W^X policy", .serialized)
 struct ELFWXPolicyTests {
 
@@ -122,4 +123,7 @@ struct ELFWXPolicyTests {
                 Comment(rawValue: String(describing: error))
         }
     }
+}
+
+
 }

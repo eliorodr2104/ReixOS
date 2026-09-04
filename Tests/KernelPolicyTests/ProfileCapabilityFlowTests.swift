@@ -10,6 +10,7 @@ import Foundation
 @testable import Kernel
 import ReixABI
 
+extension KernelPolicyTestRoot {
 @Suite("Profile capability flow")
 struct ProfileCapabilityFlowTests {
     @Test("delegation cannot amplify profile right")
@@ -170,5 +171,8 @@ struct ProfileCapabilityFlowTests {
         #expect(syscall.contains("InlineArray<10, CapGrant>"))
         #expect(syscall.contains("frame.pointee.x3 <= 10"))
     }
+
+}
+
 
 }

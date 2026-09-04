@@ -17,6 +17,7 @@ import KernelTestSupport
 /// high-half offset to the register bases unconditionally, so the driver cannot
 /// be built over host memory. What is covered is everything that decides *who*
 /// gets an interrupt, which is the half that carries authority.
+extension KernelPolicyTestRoot {
 @Suite("Interrupt authority", .serialized)
 struct InterruptAuthorityTests {
 
@@ -204,4 +205,7 @@ struct InterruptAuthorityTests {
 
         #expect(InterruptAuthority.resolve(handle: 0, of: orphan) == nil)
     }
+}
+
+
 }

@@ -11,7 +11,8 @@ public func withProcessManager(
     pages : Int,
     _ body: (HostRAM, UnsafeMutablePointer<KernelHeap>, UnsafeMutablePointer<ProcessManager>) -> Void
 ) {
-    withHostRAM(pages: pages) { ram in
+    withKernelTestGlobals {
+      withHostRAM(pages: pages) { ram in
         ram.installLiveManager()
         #expect(ram.donateAll())
 
@@ -47,8 +48,8 @@ public func withProcessManager(
         ))
         defer { manager.deinitialize(count: 1); manager.deallocate() }
 
-        body(ram, heap, manager)
+          body(ram, heap, manager)
+      }
     }
 }
-
 

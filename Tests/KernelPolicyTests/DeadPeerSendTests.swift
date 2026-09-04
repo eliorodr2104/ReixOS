@@ -24,6 +24,7 @@ import KernelTestSupport
 /// below: an endpoint really can have more than one process able to receive on
 /// it, so "the receiver died" has no answer while "nobody is left who could
 /// serve me" does.
+extension KernelPolicyTestRoot {
 @Suite("Sending where nobody can receive")
 struct DeadPeerSendTests {
 
@@ -301,4 +302,7 @@ struct DeadPeerSendTests {
             #expect(endpoint.pointee.state == .sendBlocked)
         }
     }
+}
+
+
 }

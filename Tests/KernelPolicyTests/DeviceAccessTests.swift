@@ -10,6 +10,7 @@ import KernelTestSupport
 /// and eight virtio slots share one. So the extent the capability names is
 /// enforced here, per access, and if it is enforced loosely it is not enforced:
 /// one word past the end is another device's register.
+extension KernelPolicyTestRoot {
 @Suite("Device register bounds", .serialized)
 struct DeviceAccessTests {
 
@@ -159,4 +160,7 @@ struct DeviceAccessTests {
         #expect(uart.size >= page && uart.size % page == 0 && uart.address % page == 0)
         #expect(virtio.size < page)
     }
+}
+
+
 }

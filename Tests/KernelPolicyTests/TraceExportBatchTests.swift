@@ -12,6 +12,7 @@ import KernelHostShims
 /// `TraceRing`, `TraceExport`'s attachment and the shim's barrier counter are
 /// all global, and `.serialized` only orders this suite's own tests.
 /// The run needs `swift test --no-parallel` (see the `test` target in the Makefile).
+extension KernelPolicyTestRoot {
 @Suite("Trace export batch publication", .serialized)
 struct TraceExportBatchTests {
     @Test("zero records leave the tail unpublished")
@@ -197,4 +198,7 @@ struct TraceExportBatchTests {
         schedulerStorage.deallocate()
         base.deallocate()
     }
+}
+
+
 }

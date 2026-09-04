@@ -31,6 +31,7 @@ private enum FakePMURegisters: PMURegisterAccess {
 /// `FakePMURegisters` and the `AArch64PMU` state it feeds are both static, and
 /// `.serialized` only orders this suite's own tests, not other suites beside it.
 /// The run needs `swift test --no-parallel` (see the `test` target in the Makefile).
+extension KernelPolicyTestRoot {
 @Suite("PMU availability", .serialized)
 struct PMUAvailabilityTests {
     @Test("only implemented PMU versions configure counters")
@@ -63,4 +64,7 @@ struct PMUAvailabilityTests {
         #expect(FakePMURegisters.pmcrReads == 1)
         #expect(AArch64PMU.probe() == 6)
     }
+}
+
+
 }

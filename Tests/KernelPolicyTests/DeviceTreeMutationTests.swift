@@ -71,6 +71,7 @@ import KernelTestSupport
 /// This suite owns no kernel global: `getPlatformInfo` fills a caller's
 /// `PlatformInfo`. It runs under `swift test --no-parallel` with the rest all
 /// the same.
+extension KernelPolicyTestRoot {
 @Suite("Device tree mutation")
 struct DeviceTreeMutationTests {
 
@@ -263,4 +264,7 @@ struct DeviceTreeMutationTests {
         #expect(stringsEnd <= total, Comment(rawValue: mutant.label))
         #expect(structEnd <= stringsOff || stringsEnd <= structOff, Comment(rawValue: mutant.label))
     }
+}
+
+
 }

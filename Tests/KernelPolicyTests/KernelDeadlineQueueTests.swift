@@ -9,6 +9,7 @@ import Testing
 @testable import Kernel
 import KernelTestSupport
 
+extension KernelPolicyTestRoot {
 @Suite("Kernel deadline queue")
 struct KernelDeadlineQueueTests {
     @Test("empty and future polls inspect only the heap root")
@@ -177,4 +178,7 @@ struct KernelDeadlineQueueTests {
             Issue.record("cancelled process expired")
         } == 0)
     }
+}
+
+
 }

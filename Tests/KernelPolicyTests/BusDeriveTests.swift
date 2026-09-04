@@ -26,6 +26,7 @@ import KernelTestSupport
 ///
 /// The interrupt side is tested for its refusals only. Succeeding at it ends in
 /// a write to the distributor, and there is no distributor on this host.
+extension KernelPolicyTestRoot {
 @Suite("Bus narrowing", .serialized)
 struct BusDeriveTests {
 
@@ -462,4 +463,7 @@ struct BusDeriveTests {
             #expect(Self.windows[0].line + 1 != taken)
         }
     }
+}
+
+
 }

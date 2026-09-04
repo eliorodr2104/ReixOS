@@ -24,6 +24,7 @@ import KernelTestSupport
 /// So there are six paths that lay a session into a receiver's frame, and this is
 /// the suite that says all six carry all sixty-four bits. They used to build the
 /// word each for themselves.
+extension KernelPolicyTestRoot {
 @Suite("Wide sessions", .serialized)
 struct WideSessionTests {
 
@@ -286,4 +287,7 @@ struct WideSessionTests {
             }
         }
     }
+}
+
+
 }

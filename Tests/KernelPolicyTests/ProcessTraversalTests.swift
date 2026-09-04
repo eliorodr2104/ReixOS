@@ -9,6 +9,7 @@ import Testing
 @testable import Kernel
 import KernelTestSupport
 
+extension KernelPolicyTestRoot {
 @Suite("Bounded process traversal")
 struct ProcessTraversalTests {
     @Test("zero limit visits nothing")
@@ -75,4 +76,7 @@ struct ProcessTraversalTests {
             #expect(pids == [root.pointee.pid, first.pointee.pid, second.pointee.pid, third.pointee.pid])
         }
     }
+}
+
+
 }

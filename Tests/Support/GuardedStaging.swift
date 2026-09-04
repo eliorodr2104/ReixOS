@@ -207,8 +207,8 @@ public func withStagedTarArchive<R>(
     _ archive: [UInt8],
     _ body   : (PhysicalAddress, PhysicalAddress) -> R
 ) -> R? {
-
-    withGuardedBlob(archive, placement: .trailing) { base, count in
+    withKernelTestGlobals {
+      withGuardedBlob(archive, placement: .trailing) { base, count in
         let savedStart = Kernel.platformInfo.initrdStart
         let savedEnd   = Kernel.platformInfo.initrdEnd
         defer {
@@ -222,6 +222,7 @@ public func withStagedTarArchive<R>(
         Kernel.platformInfo.initrdStart = start
         Kernel.platformInfo.initrdEnd   = end
 
-        return body(start, end)
+          return body(start, end)
+      }
     }
 }

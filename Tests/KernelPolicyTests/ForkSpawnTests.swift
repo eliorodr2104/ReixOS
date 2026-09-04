@@ -27,6 +27,7 @@ import KernelTestSupport
 /// `.serialized`, and the run needs `--no-parallel`: `PPMBackend.physicalOffset`
 /// and `ProcessStatsIndex` are global, and every spawn registers into the
 /// second one.
+extension KernelPolicyTestRoot {
 @Suite("Fork-like spawn", .serialized)
 struct ForkSpawnTests {
 
@@ -253,4 +254,7 @@ struct ForkSpawnTests {
             #expect(child.pointee.context  != nil)
         }
     }
+}
+
+
 }

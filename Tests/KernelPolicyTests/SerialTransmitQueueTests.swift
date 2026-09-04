@@ -8,6 +8,7 @@
 import Testing
 @testable import Kernel
 
+extension KernelPolicyTestRoot {
 @Suite("Bounded serial transmit queue", .serialized)
 struct SerialTransmitQueueTests {
     @Test("never-ready UART performs one probe and preserves the queue")
@@ -148,4 +149,7 @@ struct SerialTransmitQueueTests {
         #expect(queue.drain(budget: 1) { _ in probes += 1; return true } == 1)
         #expect(probes == 1)
     }
+}
+
+
 }

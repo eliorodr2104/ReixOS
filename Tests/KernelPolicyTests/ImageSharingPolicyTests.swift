@@ -49,6 +49,7 @@ import KernelTestSupport
 /// `Kernel.platformInfo` and moves `PPMBackend.physicalOffset`, both of which every
 /// suite shares, so the run needs `swift test --no-parallel` (see the `test` target
 /// in the Makefile).
+extension KernelPolicyTestRoot {
 @Suite("ELF initrd sharing policy", .serialized)
 struct ImageSharingPolicyTests {
 
@@ -612,4 +613,7 @@ struct ImageSharingPolicyTests {
                 Comment(rawValue: String(describing: error))
         }
     }
+}
+
+
 }

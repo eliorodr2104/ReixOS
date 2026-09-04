@@ -25,6 +25,7 @@ import KernelTestSupport
 /// server is exactly the set of processes pointing at it. So there is no table,
 /// nothing allocated per outstanding request, and the walk that finds them is the
 /// process tree - the one enumeration that sees a process wherever it is parked.
+extension KernelPolicyTestRoot {
 @Suite("Deferred replies", .serialized)
 struct DeferredReplyTests {
 
@@ -339,4 +340,7 @@ struct DeferredReplyTests {
             }
         }
     }
+}
+
+
 }
