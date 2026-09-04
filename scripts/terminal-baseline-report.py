@@ -84,9 +84,39 @@ def parse_system(lines):
     fields = measured[-1]
     required = (
         "total_pages", "free_pages", "counter_freq", "trace_lost",
-        "kernel_stack_peak_bytes", "exception_stack_peak_bytes",
+        "heap_high_water_bytes", "kernel_stack_peak_bytes", "exception_stack_peak_bytes",
     )
     return {name: parse_uint(fields.get(name, ""), f"system {name}") for name in required}
+
+
+def parse_editor(lines, frequency):
+    prefix = "[ TERMINAL BASELINE ] editor "
+    wanted = {"paste-8192": None, "layout-8192": None}
+    for line in lines:
+        if not line.startswith(prefix):
+            continue
+        fields = dict(token.split("=", 1) for token in line[len(prefix):].split() if "=" in token)
+        workload = fields.get("workload")
+        if fields.get("status") != "measured" or workload not in wanted:
+            continue
+        cycles = parse_uint(fields.get("cycles", ""), f"editor {workload} cycles")
+        measurement = {
+            "bytes": parse_uint(fields.get("bytes", ""), f"editor {workload} bytes"),
+            "cycles": cycles,
+            "instructions": parse_uint(
+                fields.get("instructions", ""), f"editor {workload} instructions"
+            ),
+            "microseconds": cycles * US_PER_SECOND / frequency,
+        }
+        if wanted[workload] is not None and wanted[workload] != measurement:
+            fail(f"conflicting editor baseline for {workload}")
+        wanted[workload] = measurement
+    missing = [name for name, values in wanted.items() if values is None]
+    if missing:
+        fail(f"missing measured editor workloads: {', '.join(missing)}")
+    if any(values["bytes"] != 8192 for values in wanted.values()):
+        fail("editor workloads did not measure 8192 bytes")
+    return wanted
 
 
 def parse_processes(lines):
@@ -258,6 +288,7 @@ def main(arguments):
         if system["trace_lost"] != 0:
             fail("terminal workload lost trace events")
         processes = parse_processes(serial_lines)
+        editor = parse_editor(serial_lines, frequency)
         (
             groups,
             invalid,
@@ -313,6 +344,20 @@ def main(arguments):
                 }
                 for name, values in processes.items()
             },
+            "editor_workloads": {
+                name: {
+                    "bytes": {"status": "measured", "value": values["bytes"], "provenance": "serial"},
+                    "cycles": {"status": "measured", "value": values["cycles"], "provenance": "pmu-el0"},
+                    "instructions": {
+                        "status": "measured", "value": values["instructions"], "provenance": "pmu-el0"
+                    },
+                    "microseconds": {
+                        "status": "derived", "value": values["microseconds"],
+                        "provenance": "pmu-cycles-over-counter-frequency"
+                    },
+                }
+                for name, values in editor.items()
+            },
             "provenance": {
                 "dirty": dirty,
                 "git_revision": revision,
@@ -325,7 +370,9 @@ def main(arguments):
                 "exception_stack_peak_bytes": {"status": "measured", "value": system["exception_stack_peak_bytes"], "provenance": "serial"},
                 "free_bytes": {"status": "derived", "value": system["free_pages"] * PAGE_BYTES, "provenance": "pages-4096"},
                 "free_pages": {"status": "measured", "value": system["free_pages"], "provenance": "serial"},
-                "heap_bytes": {"status": "unavailable", "reason": "counter-not-exposed"},
+                "heap_high_water_bytes": {
+                    "status": "measured", "value": system["heap_high_water_bytes"], "provenance": "serial"
+                },
                 "kernel_stack_peak_bytes": {"status": "measured", "value": system["kernel_stack_peak_bytes"], "provenance": "serial"},
                 "total_pages": {"status": "measured", "value": system["total_pages"], "provenance": "serial"},
                 "trace_lost": {"status": "measured", "value": system["trace_lost"], "provenance": "serial"},
@@ -335,7 +382,11 @@ def main(arguments):
                     "provenance": "trace-reset-before-workload",
                 },
             },
-            "workload": {"command": "shell.exit()", "storage": "absent"},
+            "workload": {
+                "command": "shell.exit()",
+                "editor": ["paste-8192", "layout-8192"],
+                "storage": "absent",
+            },
         }
         with open(output_path, "w", encoding="utf-8", newline="\n") as output:
             json.dump(document, output, sort_keys=True, separators=(",", ":"), allow_nan=False)

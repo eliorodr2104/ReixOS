@@ -11,10 +11,16 @@ import ReixABI
 struct UserHeap {
     var slab  = SlabCore<UserArena>(backend: UserArena())
     var large = InlineArray<32, LargeRegion>(repeating: LargeRegion())
+    var largeBytes   : UInt = 0
+    var highWaterBytes: UInt = 0
 
     mutating func alloc(size: UInt, alignment: UInt) -> UnsafeMutableRawPointer? {
         let need = max(roundUpPow2(max(size, 1)), max(alignment, 1))
-        if need <= 4096 { return slab.alloc(size: need) }
+        if need <= 4096 {
+            let pointer = slab.alloc(size: need)
+            if pointer != nil { recordHighWater() }
+            return pointer
+        }
         
         return allocLarge(size: size, alignment: alignment)
     }
@@ -31,16 +37,18 @@ struct UserHeap {
         size     : UInt,
         alignment: UInt
     ) -> UnsafeMutableRawPointer? {
-        guard alignment <= 4096 else { return nil }
+        guard alignment <= 4096,
+              size <= UInt.max - 4095,
+              let slot = (0..<large.count).first(where: { large[$0].base == 0 })
+        else { return nil }
         
         let rounded = (size + 4095) & ~UInt(4095)
         let base = mmap(size: UInt64(rounded))
         if base == 0 { return nil }
-        
-        for i in 0..<large.count where large[i].base == 0 {
-            large[i] = LargeRegion(base: UInt(base), size: rounded)
-            break
-        }
+
+        large[slot] = LargeRegion(base: UInt(base), size: rounded)
+        largeBytes += rounded
+        recordHighWater()
         
         return UnsafeMutableRawPointer(bitPattern: UInt(base))
     }
@@ -48,9 +56,17 @@ struct UserHeap {
     private mutating func freeLarge(_ arena: UInt) {
         for i in 0..<large.count where large[i].base == arena {
             _ = munmap(addr: UInt64(arena), size: UInt64(large[i].size))
+            largeBytes -= large[i].size
             large[i] = LargeRegion()
             return
         }
+    }
+
+    private mutating func recordHighWater() {
+        let slabBytes = slab.backend.arenaEnd >= slab.backend.arenaBase
+            ? slab.backend.arenaEnd - slab.backend.arenaBase
+            : 0
+        highWaterBytes = max(highWaterBytes, slabBytes + largeBytes)
     }
 }
 
@@ -81,4 +97,10 @@ func reix_free(_ ptr: UnsafeMutableRawPointer?) {
 @_cdecl("reix_malloc")
 func reix_malloc(_ size: UInt) -> UnsafeMutableRawPointer? {
     gHeap.alloc(size: max(size, 1), alignment: 16)
+}
+
+/// Maximum bytes reserved concurrently by this process's slab arena and large
+/// mappings. The counter is monotonic for the process lifetime.
+public func userHeapHighWaterBytes() -> UInt {
+    gHeap.highWaterBytes
 }
