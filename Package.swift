@@ -215,7 +215,8 @@ let package = Package(
         .testTarget(
             name        : "ShellTests",
             dependencies: ["ShellLanguage"],
-            path        : "Tests/ShellTests"
+            path        : "Tests/ShellTests",
+            resources   : [.copy("Fixtures")]
         ),
 
         .testTarget(
