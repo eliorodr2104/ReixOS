@@ -54,13 +54,14 @@ public enum TypedShellParser {
     }
 
     private struct Parser {
-        let source : UnsafePointer<UInt8>
-        let end    : Int
-        var cursor = 0
-        var result = TypedShellProgram()
+        let source        : UnsafePointer<UInt8>
+        let end           : Int
+        var cursor        = 0
+        var result        = TypedShellProgram()
+        var groupingDepth = 0
 
         mutating func program() -> Result<TypedShellProgram, TypedShellFailure> {
-            spaces()
+            programSpaces()
             guard cursor < end else { return .failure(.syntax(column: cursor)) }
             while cursor < end {
                 let binding = bindingName()
@@ -72,10 +73,16 @@ public enum TypedShellParser {
                 }
                 spaces()
                 guard cursor < end else { break }
-                guard source[cursor] == comma else { return .failure(.syntax(column: cursor)) }
-                cursor += 1
-                spaces()
-                guard cursor < end else { return .failure(.syntax(column: cursor)) }
+                if source[cursor] == comma {
+                    cursor += 1
+                    programSpaces()
+                    guard cursor < end else { return .failure(.syntax(column: cursor)) }
+                } else if takeStatementBreak() {
+                    programSpaces()
+                    if cursor == end { break }
+                } else {
+                    return .failure(.syntax(column: cursor))
+                }
             }
             return .success(result)
         }
@@ -94,7 +101,7 @@ public enum TypedShellParser {
         mutating func expression(compactRoot: Bool) -> Int? {
             guard var lhs = primary(compactRoot: compactRoot) else { return nil }
             while true {
-                spaces()
+                expressionSpaces()
                 if take(dot) {
                     guard let member = name() else { return nil }
                     spaces()
@@ -179,6 +186,8 @@ public enum TypedShellParser {
             var call = TypedShellCallSyntax(namespace: namespace, name: name)
             if canonical {
                 guard take(open) else { return nil }
+                groupingDepth += 1
+                defer { groupingDepth -= 1 }
                 spaces()
                 if take(close) { return result.append(.call(call)) }
                 while true {
@@ -200,7 +209,10 @@ public enum TypedShellParser {
             } else {
                 while cursor < end {
                     spaces()
-                    if cursor >= end || source[cursor] == comma || source[cursor] == closeBrace { break }
+                    if cursor >= end || source[cursor] == comma || source[cursor] == closeBrace
+                        || source[cursor] == lineFeed || source[cursor] == carriageReturn {
+                        break
+                    }
                     if source[cursor] == dot || source[cursor] == less || source[cursor] == greater { break }
                     var label : Span?
                     let saved = cursor
@@ -231,6 +243,8 @@ public enum TypedShellParser {
 
         mutating func parenthesizedSingleArgument() -> Int?? {
             guard take(open) else { return nil }
+            groupingDepth += 1
+            defer { groupingDepth -= 1 }
             spaces()
             if take(close) { return .some(nil) }
             guard let value = expression(compactRoot: false) else { return nil }
@@ -241,6 +255,8 @@ public enum TypedShellParser {
 
         mutating func closure() -> Int? {
             guard take(openBrace) else { return nil }
+            groupingDepth += 1
+            defer { groupingDepth -= 1 }
             spaces()
             guard let body = expression(compactRoot: false) else { return nil }
             spaces()
@@ -260,7 +276,10 @@ public enum TypedShellParser {
             let start = cursor
             while cursor < end {
                 let byte = source[cursor]
-                if byte == space || byte == comma || byte == dot || byte == close || byte == closeBrace { break }
+                if byte == space || byte == lineFeed || byte == carriageReturn
+                    || byte == comma || byte == dot || byte == close || byte == closeBrace {
+                    break
+                }
                 cursor += 1
             }
             return cursor > start ? Span(start: start, count: cursor - start) : nil
@@ -281,7 +300,76 @@ public enum TypedShellParser {
         }
 
         mutating func spaces() {
-            while cursor < end, source[cursor] == space || source[cursor] == lineFeed || source[cursor] == carriageReturn { cursor += 1 }
+            while cursor < end {
+                let byte = source[cursor]
+                if byte == space || groupingDepth > 0 && (byte == lineFeed || byte == carriageReturn) {
+                    cursor += 1
+                } else {
+                    break
+                }
+            }
+        }
+
+        /// A top-level newline ends a statement unless the next significant
+        /// token can only continue the expression on the previous line.
+        mutating func expressionSpaces() {
+            spaces()
+            guard groupingDepth == 0, cursor < end,
+                  source[cursor] == lineFeed || source[cursor] == carriageReturn
+            else { return }
+            let saved       = cursor
+            var probe       = cursor
+            var crossedLine = false
+            while probe < end {
+                if source[probe] == lineFeed {
+                    probe += 1
+                    crossedLine = true
+                } else if source[probe] == carriageReturn {
+                    probe += 1
+                    if probe < end, source[probe] == lineFeed { probe += 1 }
+                    crossedLine = true
+                } else if crossedLine && source[probe] == space {
+                    probe += 1
+                } else {
+                    break
+                }
+            }
+            guard crossedLine, probe < end else { return }
+            let next           = source[probe]
+            let pairedOperator = probe + 1 < end
+                && source[probe + 1] == equalsByte
+                && (next == exclamation || next == equalsByte)
+            if next == dot || next == less || next == greater || pairedOperator {
+                cursor = probe
+            } else {
+                cursor = saved
+            }
+        }
+
+        mutating func programSpaces() {
+            while cursor < end,
+                  source[cursor] == space || source[cursor] == lineFeed || source[cursor] == carriageReturn {
+                cursor += 1
+            }
+        }
+
+        mutating func takeStatementBreak() -> Bool {
+            guard cursor < end,
+                  source[cursor] == lineFeed || source[cursor] == carriageReturn
+            else { return false }
+            while cursor < end {
+                if source[cursor] == lineFeed {
+                    cursor += 1
+                } else if source[cursor] == carriageReturn {
+                    cursor += 1
+                    if cursor < end, source[cursor] == lineFeed { cursor += 1 }
+                } else if source[cursor] == space {
+                    cursor += 1
+                } else {
+                    break
+                }
+            }
+            return true
         }
 
         mutating func take(_ byte: UInt8) -> Bool {

@@ -13,6 +13,7 @@ public enum VTAdapterOperation: UInt32, IPCLabel {
     case register = 0
     case status = 1
     case present = 2
+    case drainPartial = 3
     case produce = 5
 }
 
@@ -24,17 +25,22 @@ public struct VTAdapter: Service {
     #if REIX_TERMINAL_PROFILE
     private let profileMarker: UInt32
     #endif
-    private var reader: SerialReaderSession
-    private var source: SourceSession
-    private var decoder = VTDecoder()
-    private var pendingChunk: ReixSerialChunk?
-    private var pendingOffset = 0
-    private var surface = ShmAttachment.Slot()
-    private var screen = TextSurfaceScreenModel()
+    private var reader               : SerialReaderSession
+    private var source               : SourceSession
+    private var decoder              = VTDecoder()
+    private var pendingChunk         : ReixSerialChunk?
+    private var pendingOffset        = 0
+    private var surface              = ShmAttachment.Slot()
+    private var screen               = TextSurfaceScreenModel()
+    private var compatibilityClients = InlineArray<32, UInt32?>(repeating: nil)
+    private var compatibilityRings   = InlineArray<32, Ring?>(repeating: nil)
+    private var compatibilityGrants  = InlineArray<32, UInt32?>(repeating: nil)
+    private var compatibilityIndex   = 0
 
-    private static let pageSize: UInt64 = 4096
-    private static let surfacePages = UInt32(ReixTextSurfaceTransport.pages)
-    private static let maximumTraceValue: UInt32 = 0x00FF_FFFF
+    private static let pageSize           : UInt64 = 4096
+    private static let surfacePages       = UInt32(ReixTextSurfaceTransport.pages)
+    private static let compatibilityPages : UInt32 = 1
+    private static let maximumTraceValue  : UInt32 = 0x00FF_FFFF
 
     public var serviceEndpoint: UInt32 { endpoint }
 
@@ -69,8 +75,8 @@ public struct VTAdapter: Service {
         Console.attach(console: console)
         self.reader = reader
         self.source = source
-        guard emitBracketedPasteMode() else {
-            print("[ SERVE ] VT Adapter could not enable bracketed paste")
+        guard emitTerminalModes() else {
+            print("[ SERVE ] VT Adapter could not enable terminal modes")
             exit(code: 1)
         }
         print("[ SERVE ] VT Adapter running")
@@ -78,13 +84,30 @@ public struct VTAdapter: Service {
 
     public mutating func handle(_ operation: VTAdapterOperation, request: inout ReceivedMessage) {
         sweepDeadSurface()
+        sweepDeadCompatibilityClients()
         switch operation {
             case .register:
-                register(&request)
+                if request.message.tag.length == 1 {
+                    registerCompatibility(&request)
+                } else {
+                    registerSurface(&request)
+                }
             case .status:
-                status(&request)
+                if request.message.tag.length == 1,
+                   request.message.words[0] == 0,
+                   compatibilitySlot(for: request.identity) != nil {
+                    kickCompatibility()
+                } else {
+                    surfaceStatus(&request)
+                }
             case .present:
-                present(&request)
+                if request.message.tag.length == 1 {
+                    flushCompatibility(&request)
+                } else {
+                    presentSurface(&request)
+                }
+            case .drainPartial:
+                drainPartialCompatibility(&request)
             case .produce:
                 sourcePull(&request)
         }
@@ -116,7 +139,7 @@ public struct VTAdapter: Service {
 
     private mutating func decodeOneChunk(correlation: UInt32) -> ReixInputSourceStatus {
         if let pending = pendingChunk {
-            let consumed = pending.payload.span.withUnsafeBufferPointer {
+            let consumed = pending.payload.withUnsafeBufferPointer {
                 decoder.consume(
                     $0.baseAddress! + pendingOffset,
                     count: pending.count - pendingOffset
@@ -192,7 +215,169 @@ public struct VTAdapter: Service {
         _ = capDrop(attachment.grant)
     }
 
-    private mutating func register(_ request: inout ReceivedMessage) {
+    /// Temporary ingress for existing `ConsoleClient` producers. It converts
+    /// their bounded UTF-8 rings to authenticated semantic records before any
+    /// byte reaches the VT backend. New producers should use TextSurface records.
+    private mutating func registerCompatibility(_ request: inout ReceivedMessage) {
+        let identity = request.identity
+        guard identity != 0,
+              request.message.words[0] == Self.compatibilityPages,
+              let granted = request.grantedCap,
+              shmPages(handle: granted) == Self.compatibilityPages
+        else { return }
+        if let stale = compatibilitySlot(for: identity) {
+            releaseCompatibility(slot: stale)
+        }
+        guard let slot = freeCompatibilitySlot() else { return }
+        let address = shmMap(handle: granted)
+        guard let base = UnsafeMutableRawPointer(bitPattern: UInt(address)),
+              let owned = request.takeGrant()
+        else { return }
+        compatibilityClients[slot] = identity
+        compatibilityRings[slot] = Ring(base: base, regionSize: Int(Self.pageSize))
+        compatibilityGrants[slot] = owned
+    }
+
+    private mutating func kickCompatibility() {
+        for offset in 0..<compatibilityClients.count {
+            let slot = (compatibilityIndex + offset) % compatibilityClients.count
+            guard let source = compatibilityClients[slot],
+                  let ring = compatibilityRings[slot]
+            else { continue }
+            _ = drainCompatibility(ring, source: source, includingPartialLine: false)
+        }
+        compatibilityIndex = (compatibilityIndex + 1) % compatibilityClients.count
+    }
+
+    private mutating func drainPartialCompatibility(_ request: inout ReceivedMessage) {
+        guard let slot = compatibilitySlot(for: request.identity),
+              let ring = compatibilityRings[slot]
+        else { return }
+        _ = drainCompatibility(ring, source: request.identity, includingPartialLine: true)
+    }
+
+    private mutating func flushCompatibility(_ request: inout ReceivedMessage) {
+        var status = ConsoleStatus.unregistered
+        if let slot = compatibilitySlot(for: request.identity),
+           let ring = compatibilityRings[slot] {
+            let drained = drainCompatibility(
+                ring,
+                source: request.identity,
+                includingPartialLine: false
+            )
+            status = drained && consoleFlush() ? .registered : .failed
+        }
+        _ = reply(message: ConsoleOperation.flush.message(word0: status.rawValue))
+    }
+
+    private mutating func drainCompatibility(
+        _ ring              : Ring,
+        source              : UInt32,
+        includingPartialLine: Bool
+    ) -> Bool {
+        var accepted = true
+        while accepted && ring.consumeLineChecked({ first, firstCount, second, secondCount in
+            accepted = presentCompatibility(
+                source: source,
+                first: first,
+                firstCount: firstCount,
+                second: second,
+                secondCount: secondCount
+            )
+            return accepted
+        }) { }
+        if includingPartialLine && accepted && !ring.isEmpty {
+            let consumed = ring.consumeAllChecked { first, firstCount, second, secondCount in
+                accepted = presentCompatibility(
+                    source: source,
+                    first: first,
+                    firstCount: firstCount,
+                    second: second,
+                    secondCount: secondCount
+                )
+                return accepted
+            }
+            if consumed == 0 && !ring.isEmpty { accepted = false }
+        }
+        return accepted
+    }
+
+    private mutating func presentCompatibility(
+        source     : UInt32,
+        first      : UnsafeRawPointer,
+        firstCount : Int,
+        second     : UnsafeRawPointer?,
+        secondCount: Int
+    ) -> Bool {
+        guard let record = ReixTextOutputRecord(
+            source: source,
+            severity: .info,
+            kind: .application,
+            payloadKind: .utf8Text,
+            first: first.assumingMemoryBound(to: UInt8.self),
+            firstCount: firstCount,
+            second: second?.assumingMemoryBound(to: UInt8.self),
+            secondCount: secondCount
+        ) else {
+            // A malformed compatibility record is consumed but never reaches VT;
+            // leaving it in the ring would deadlock every later record.
+            return true
+        }
+        guard let plan = screen.planExternalOutput(record) else { return true }
+        var accepted = true
+        _ = TextSurfaceVTRenderer.renderExternal(
+            screen: screen,
+            record: record,
+            plan: plan
+        ) { byte in
+            if accepted { accepted = consoleWriteBuffered(byte) }
+        }
+        guard accepted, consoleFlush() else { return false }
+        screen.commitExternalOutput(plan)
+        return true
+    }
+
+    private mutating func sweepDeadCompatibilityClients() {
+        for slot in 0..<compatibilityClients.count {
+            guard let identity = compatibilityClients[slot],
+                  !identityAlive(identity)
+            else { continue }
+            if let ring = compatibilityRings[slot] {
+                _ = drainCompatibility(ring, source: identity, includingPartialLine: true)
+            }
+            releaseCompatibility(slot: slot)
+        }
+    }
+
+    private func compatibilitySlot(for identity: UInt32) -> Int? {
+        guard identity != 0 else { return nil }
+        for slot in 0..<compatibilityClients.count where compatibilityClients[slot] == identity {
+            return slot
+        }
+        return nil
+    }
+
+    private func freeCompatibilitySlot() -> Int? {
+        for slot in 0..<compatibilityClients.count where compatibilityClients[slot] == nil {
+            return slot
+        }
+        return nil
+    }
+
+    private mutating func releaseCompatibility(slot: Int) {
+        if let ring = compatibilityRings[slot] {
+            _ = munmap(
+                addr: UInt64(UInt(bitPattern: ring.regionBase)),
+                size: Self.pageSize
+            )
+        }
+        if let grant = compatibilityGrants[slot] { _ = capDrop(grant) }
+        compatibilityClients[slot] = nil
+        compatibilityRings[slot] = nil
+        compatibilityGrants[slot] = nil
+    }
+
+    private mutating func registerSurface(_ request: inout ReceivedMessage) {
         let badge = request.identity
         let token = request.message.words[1]
         guard badge != 0,
@@ -234,9 +419,13 @@ public struct VTAdapter: Service {
             surrender(displaced)
         }
         screen = TextSurfaceScreenModel()
+        // A shell starts where the boot log left off, on the last row. Parking
+        // there makes the model's cursor true and keeps what came before.
+        _ = parkCursor()
+        _ = emitGeometryQuery()
     }
 
-    private func status(_ request: inout ReceivedMessage) {
+    private func surfaceStatus(_ request: inout ReceivedMessage) {
         let token = request.message.words[0]
         let held = request.message.tag.length == 1 ? surface.current : nil
         let known = held.map { $0.matches(identity: request.identity, token: token) && coherent($0) } ?? false
@@ -250,7 +439,7 @@ public struct VTAdapter: Service {
         _ = reply(message: Message(tag: MessageTag(VTAdapterOperation.status, length: 4), words: words))
     }
 
-    private mutating func present(_ request: inout ReceivedMessage) {
+    private mutating func presentSurface(_ request: inout ReceivedMessage) {
         guard let held = validated(request),
               let page = UnsafeMutableRawPointer(bitPattern: UInt(held.address))?.assumingMemoryBound(to: UInt8.self),
               let ring = ReixTextSurfaceRing(page: page, token: held.token, epoch: held.epoch)
@@ -258,7 +447,8 @@ public struct VTAdapter: Service {
             replyOperation(.present, status: .refused, sequence: request.message.words[0], token: 0, epoch: 0)
             return
         }
-        let transaction = request.message.words[0]
+        let transaction    = request.message.words[0]
+        let sourceIdentity = request.identity
         #if REIX_TERMINAL_PROFILE
         var correlation: UInt32 = 0
         var emittedBytes: UInt32 = 0
@@ -281,6 +471,13 @@ public struct VTAdapter: Service {
             #endif
             ackRevision = frame.descriptor.revision
             ackBaseRevision = frame.descriptor.baseRevision
+            guard frame.descriptor.source == 0
+                    || frame.descriptor.source == sourceIdentity
+            else {
+                response = .refused
+                ackStatus = .malformed
+                return .commit
+            }
             switch screen.prepare(frame) {
                 case .duplicate:
                     response = .ok
@@ -291,12 +488,15 @@ public struct VTAdapter: Service {
                     ackStatus = .snapshotRequired
                     return .commit
                 case .ready:
-                    let metrics = TextSurfaceVTRenderer.metrics(screen: screen, frame: frame)
+                    let metrics  = TextSurfaceVTRenderer.metrics(screen: screen, frame: frame)
+                    var accepted = true
                     let rendered = TextSurfaceVTRenderer.render(
                         screen: screen,
                         frame: frame,
                         useDiff: metrics.usesDiff
-                    ) { putchar(ch: $0) }
+                    ) { byte in
+                        if accepted { accepted = consoleWriteBuffered(byte) }
+                    }
                     #if REIX_TERMINAL_PROFILE
                     if ReixInteractionSequence.isCorrelated(correlation) {
                         mark(.presentationFullBytes, correlation: correlation, value: metrics.fullBytes)
@@ -304,7 +504,7 @@ public struct VTAdapter: Service {
                         mark(.presentationPlan, correlation: correlation, value: metrics.usesDiff ? 1 : 0)
                     }
                     #endif
-                    guard consoleFlush() else {
+                    guard accepted, consoleFlush() else {
                         screen.requireSnapshot()
                         response = .hardwareFailure
                         ackStatus = .hardwareFailure
@@ -398,7 +598,7 @@ public struct VTAdapter: Service {
         _ = reply(message: Message(tag: MessageTag(operation, length: 4), words: words))
     }
 
-    private func emitBracketedPasteMode() -> Bool {
+    private func emitTerminalModes() -> Bool {
         emit(Self.escape)
         emit(Self.openBracket)
         emit(UInt8(ascii: "?"))
@@ -407,11 +607,46 @@ public struct VTAdapter: Service {
         emit(UInt8(ascii: "0"))
         emit(UInt8(ascii: "4"))
         emit(UInt8(ascii: "h"))
+
+        // Preserve the text produced by every key while making modifiers on
+        // Enter, Tab and Backspace observable. Unsupported terminals ignore it.
+        emit(Self.escape)
+        emit(Self.openBracket)
+        emit(UInt8(ascii: ">"))
+        emit(UInt8(ascii: "2"))
+        emit(UInt8(ascii: "5"))
+        emit(UInt8(ascii: "u"))
+        return consoleFlush()
+    }
+
+    /// Asks the terminal how big it is. The answer arrives as an ordinary reply on
+    /// the serial line and the decoder turns it into a resize event; a terminal
+    /// that never answers leaves the producer on its declared default.
+    private func emitGeometryQuery() -> Bool {
+        emit(Self.escape)
+        emit(Self.openBracket)
+        emit(UInt8(ascii: "1"))
+        emit(UInt8(ascii: "8"))
+        emit(UInt8(ascii: "t"))
+        return consoleFlush()
+    }
+
+    /// `CUP` clamps, so a row past the end is the portable way to say "the bottom"
+    /// without waiting to hear how tall the terminal is.
+    private func parkCursor() -> Bool {
+        emit(Self.escape)
+        emit(Self.openBracket)
+        emit(UInt8(ascii: "9"))
+        emit(UInt8(ascii: "9"))
+        emit(UInt8(ascii: "9"))
+        emit(UInt8(ascii: ";"))
+        emit(UInt8(ascii: "1"))
+        emit(UInt8(ascii: "H"))
         return consoleFlush()
     }
 
     private func emit(_ byte: UInt8) {
-        putchar(ch: byte)
+        _ = consoleWriteBuffered(byte)
     }
 
     private static let escape: UInt8 = 0x1B

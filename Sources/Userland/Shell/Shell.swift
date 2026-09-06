@@ -47,7 +47,13 @@ public func main() {
     var pipeline = ShellPipeline(environment: environment)
 
     while engine.reading {
-        guard editor.withFrame({ terminal.present($0) }) else { exit(code: 1) }
+        // A refused frame is the adapter asking for a resend.
+        if !editor.withFrame({ terminal.present($0) }) {
+            if terminal.needsEditorSnapshot { editor.requireSnapshot() }
+            if !editor.withFrame({ terminal.present($0) }), !terminal.isUsable {
+                exit(code: 1)
+            }
+        }
 
         var count = -1
 #if REIX_TERMINAL_PROFILE
@@ -75,16 +81,23 @@ public func main() {
                 authority  : profileMarker
             )
 #endif
-            if update.requiresPresentation,
-               !editor.withFrame({ terminal.present($0) }) { break input }
+            if update.requiresPresentation, !editor.withFrame({ terminal.present($0) }) {
+                if terminal.needsEditorSnapshot { editor.requireSnapshot() }
+                if !editor.withFrame({ terminal.present($0) }), !terminal.isUsable {
+                    break input
+                }
+            }
 
             switch update.action {
                 case .editing, .refused:
                     continue
 
                 case .resized(let width, let height):
-                    _ = width
-                    _ = height
+                    _ = terminal.resize(
+                        width      : width,
+                        height     : height,
+                        correlation: event.sequence
+                    )
                     continue
 
                 case .submitted(let length):
@@ -108,9 +121,10 @@ public func main() {
             }
         }
 
-        terminal.finishEditor()
+        let submittedAsCode = editor.isCodeEditing
+        terminal.finishEditor(sequence: ShellOutput.nextSequence())
         ShellOutput.begin()
-        if count >= 0 { print("") }
+        if count >= 0, !submittedAsCode { print("") }
 
 #if REIX_TERMINAL_PROFILE
         var parserMarked = false
@@ -133,7 +147,12 @@ public func main() {
                 switch pipeline.execute(
                     program,
                     source: source,
-                    count : count
+                    count : count,
+                    flush : {
+                        guard ShellOutput.flush(to: &terminal) else { return false }
+                        ShellOutput.begin()
+                        return true
+                    }
                 ) {
                     case .failure(let failure):
                         return .failure(failure)
@@ -147,8 +166,6 @@ public func main() {
                 }
             }
         }
-        if count >= 0 { editor.reset() }
-
 #if REIX_TERMINAL_PROFILE
         if submittedCorrelation != 0 && !parserMarked {
             interactionMark(
@@ -178,17 +195,42 @@ public func main() {
                 exit(code: 1)
 
             case .refused(let failure):
-                report(failure, engine: engine)
+                var presentedCodeDiagnostic = false
+                if submittedAsCode {
+                    editor.withBytes { source, actualCount in
+                        let submittedCount = min(max(0, count), actualCount)
+                        presentedCodeDiagnostic = reportCodeFailure(
+                            failure,
+                            source: source,
+                            count: submittedCount
+                        )
+                        if !presentedCodeDiagnostic {
+                            report(failure, engine: engine)
+                        }
+                    }
+                } else {
+                    report(failure, engine: engine)
+                }
+                if presentedCodeDiagnostic {
+                    guard ShellOutput.flushDiagnostic(to: &terminal) else { exit(code: 1) }
+                    ShellOutput.begin()
+                }
 
             case .blank, .carriedOut, .finished, .closed:
                 break
         }
+
+        if count >= 0 { editor.reset() }
 
         guard ShellOutput.flush(to: &terminal) else { exit(code: 1) }
 
     }
 
 #if REIX_TERMINAL_PROFILE
+    guard writeTerminalEditorBaseline(to: &terminal) else {
+        exit(code: 1)
+    }
+
     guard writeTerminalBaselineSystem(authority: profileStats, to: &terminal) else {
         exit(code: 1)
     }
@@ -213,6 +255,80 @@ public func main() {
 
 #if REIX_TERMINAL_PROFILE
 @inline(__always)
+fileprivate func writeTerminalEditorBaseline(
+    to terminal: inout InteractionSession
+) -> Bool {
+    var editor            = ShellLineEditor()
+    var sequence          : UInt32 = 1
+    var pasteCycles       : UInt64 = 0
+    var pasteInstructions : UInt64 = 0
+    var pasteMeasured     = false
+
+    withUnsafeTemporaryAllocation(of: UInt8.self, capacity: ReixInputProtocol.maximumPayload) { bytes in
+        for index in 0..<bytes.count { bytes[index] = UInt8(ascii: "a") }
+
+        let section = PMUSection.begin()
+        guard let begin = ReixInputRecord(kind: .pasteBegin, sequence: sequence) else { return }
+        sequence += 1
+        _ = editor.apply(begin)
+
+        for _ in 0..<(ShellLineEditor.capacity / ReixInputProtocol.maximumPayload) {
+            guard let chunk = ReixInputRecord(
+                kind: .pasteChunk,
+                sequence: sequence,
+                bytes: bytes.baseAddress!,
+                count: bytes.count
+            ) else { return }
+            sequence += 1
+            let update = editor.apply(chunk)
+            guard update.action != .refused else { return }
+        }
+
+        guard let end = ReixInputRecord(kind: .pasteEnd, sequence: sequence) else { return }
+        sequence += 1
+        let update = editor.apply(end)
+        let delta  = section.end()
+
+        guard update.action != .refused,
+              update.requiresPresentation,
+              editor.count == ShellLineEditor.capacity
+        else { return }
+
+        pasteCycles = delta.cycles
+        pasteInstructions = delta.instructions
+        pasteMeasured = true
+    }
+
+    guard pasteMeasured,
+          let resize = ReixInputRecord(
+              kind: .resize,
+              sequence: sequence,
+              width: 120,
+              height: 40
+          )
+    else { return false }
+
+    let layoutSection = PMUSection.begin()
+    let layoutUpdate  = editor.apply(resize)
+    let layoutDelta   = layoutSection.end()
+    guard layoutUpdate.requiresPresentation,
+          layoutUpdate.action != .refused,
+          editor.count == ShellLineEditor.capacity
+    else { return false }
+
+    ShellOutput.begin()
+    print("[ TERMINAL BASELINE ] editor status=measured workload=paste-8192 bytes=8192 cycles=", terminator: "")
+    printDec(pasteCycles, terminator: "")
+    print(" instructions=", terminator: "")
+    printDec(pasteInstructions)
+    print("[ TERMINAL BASELINE ] editor status=measured workload=layout-8192 bytes=8192 cycles=", terminator: "")
+    printDec(layoutDelta.cycles, terminator: "")
+    print(" instructions=", terminator: "")
+    printDec(layoutDelta.instructions)
+    return ShellOutput.flush(to: &terminal)
+}
+
+@inline(__always)
 fileprivate func writeTerminalBaselineSystem(
        authority: UInt32,
     to terminal : inout InteractionSession
@@ -233,6 +349,9 @@ fileprivate func writeTerminalBaselineSystem(
 
         print(" trace_lost=", terminator: "")
         printDec(stats.traceLost, terminator: "")
+
+        print(" heap_high_water_bytes=", terminator: "")
+        printDec(UInt64(userHeapHighWaterBytes()), terminator: "")
 
         print(" kernel_stack_peak_bytes=", terminator: "")
         printDec(UInt64(stats.kernelStackPeak), terminator: "")
@@ -310,6 +429,90 @@ fileprivate func interactionMark(
     profileInteractionMark(mark, authority: authority)
 }
 #endif
+
+private func reportCodeFailure(
+    _ failure: TypedShellFailure,
+    source   : UnsafePointer<UInt8>,
+    count    : Int
+) -> Bool {
+    let offset : Int
+    let message: StaticString
+    switch failure {
+        case .syntax(let column):
+            offset = column
+            message = "syntax error"
+        case .incomplete:
+            offset = count
+            message = "the expression is incomplete"
+        default:
+            return false
+    }
+
+    let location = codeLocation(source: source, count: count, offset: offset)
+    var spaces   = ReixCodeEditorLayout.standardGutterColumns + UInt16(location.column)
+    while spaces > 0 {
+        putchar(ch: 0x20)
+        spaces -= 1
+    }
+    print("^  ", terminator: "")
+    print(message, terminator: "")
+    print(" at line ", terminator: "")
+    printDec(UInt64(location.line), terminator: "")
+    print(", column ", terminator: "")
+    printDec(UInt64(location.column + 1))
+    return true
+}
+
+private func codeLocation(
+    source: UnsafePointer<UInt8>,
+    count : Int,
+    offset: Int
+) -> (line: Int, column: Int, lineStart: Int, lineEnd: Int) {
+    let target    = min(max(0, offset), count)
+    var line      = 1
+    var lineStart = 0
+    var index     = 0
+    while index < target {
+        if source[index] == 0x0A {
+            line += 1
+            lineStart = index + 1
+        } else if source[index] == 0x0D {
+            if index + 1 < target, source[index + 1] == 0x0A { index += 1 }
+            line += 1
+            lineStart = index + 1
+        }
+        index += 1
+    }
+
+    var lineEnd = lineStart
+    while lineEnd < count, source[lineEnd] != 0x0A, source[lineEnd] != 0x0D {
+        lineEnd += 1
+    }
+    let columnEnd = min(target, lineEnd)
+    var column    = 0
+    var cursor    = lineStart
+    while cursor < columnEnd {
+        guard let next = ReixTextLayout.nextGraphemeBoundary(
+            after: cursor,
+            count: lineEnd,
+            byte: { source[$0] }
+        ),
+              next <= columnEnd,
+              let width = ReixTextLayout.cellWidth(
+                  from: cursor,
+                  to: next,
+                  count: lineEnd,
+                  byte: { source[$0] }
+              )
+        else {
+            column += columnEnd - cursor
+            break
+        }
+        column += Int(width)
+        cursor = next
+    }
+    return (line, column, lineStart, lineEnd)
+}
 
 private func report(
     _ failure: TypedShellFailure,

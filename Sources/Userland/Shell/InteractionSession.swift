@@ -32,14 +32,39 @@ public struct InteractionSession: ~Copyable {
         input.next()
     }
 
-    public mutating func present(_ command: ReixTextSurfaceCommand) -> Bool {
-        textSurface.present(command)
+    public mutating func append(
+        _ bytes   : UnsafePointer<UInt8>,
+          count   : Int,
+          sequence: UInt32
+    ) -> Bool {
+        textSurface.append(bytes, count: count, sequence: sequence)
     }
+
+    public mutating func appendDiagnostic(
+        _ bytes : UnsafePointer<UInt8>,
+        count   : Int,
+        sequence: UInt32
+    ) -> Bool {
+        textSurface.append(
+            bytes,
+            count: count,
+            sequence: sequence,
+            severity: .error,
+            kind: .diagnostic
+        )
+    }
+
+    /// False only when the region itself is gone. A refused frame is recoverable.
+    public var isUsable: Bool { textSurface.isUsable }
+
+    /// True when a refused frame left the surface expecting a whole line, not a patch.
+    public var needsEditorSnapshot: Bool { textSurface.needsEditorSnapshot }
 
     public mutating func present(_ source: ShellEditorFrameSource) -> Bool {
         let frame = source.frame
         return textSurface.presentNative(
             kind: frame.kind,
+            mode: frame.mode,
             correlation: frame.correlation,
             patchOffset: frame.patchOffset,
             replacedLength: frame.replacedLength,
@@ -60,8 +85,9 @@ public struct InteractionSession: ~Copyable {
         )
     }
 
-    public mutating func finishEditor() {
-        textSurface.finishNative()
+    @discardableResult
+    public mutating func finishEditor(sequence: UInt32) -> Bool {
+        textSurface.finishEditor(sequence: sequence)
     }
 
     public mutating func resize(width: UInt16, height: UInt16, correlation: UInt32) -> Bool {

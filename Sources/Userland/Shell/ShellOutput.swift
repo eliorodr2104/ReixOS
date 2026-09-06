@@ -73,21 +73,25 @@ enum ShellOutput {
         _ send: (UnsafePointer<UInt8>, Int) -> Bool
     ) -> Bool { buffer.flush(send) }
 
+    /// The next correlation for output the shell emits on its own account.
+    static func nextSequence() -> UInt32 {
+        presentationSequence = ReixInteractionSequence.nextAsynchronous(
+            after: presentationSequence
+        )
+
+        return presentationSequence
+    }
+
     static func flush(to terminal: inout InteractionSession) -> Bool {
 
         flush { source, amount in
-            presentationSequence = ReixInteractionSequence.nextAsynchronous(
-                after: presentationSequence
-            )
+            terminal.append(source, count: amount, sequence: nextSequence())
+        }
+    }
 
-            guard let command = ReixTextSurfaceCommand(
-                kind    : .insert,
-                sequence: presentationSequence,
-                bytes   : source,
-                count   : amount
-            ) else { return false }
-
-            return terminal.present(command)
+    static func flushDiagnostic(to terminal: inout InteractionSession) -> Bool {
+        flush { source, amount in
+            terminal.appendDiagnostic(source, count: amount, sequence: nextSequence())
         }
     }
 }

@@ -10,19 +10,23 @@ public enum ReixTextSurfaceFrameKind: UInt16, Equatable {
     case patch = 2
 }
 
-/// Transcript frames flow at the terminal cursor. Editor frames own a bounded viewport.
+/// Transcript frames append at the flow cursor and carry no geometry of their own.
+/// Editor frames own a bounded viewport anchored below the transcript.
 public enum ReixTextSurfaceFrameMode: UInt16, Equatable {
-    case transcript = 1
-    case editor = 2
+    case transcript     = 1
+    case editor         = 2
+    case codeEditor     = 3
+    case codeTranscript = 4
 }
 
 public enum ReixTextSurfaceStyleRole: UInt8, Equatable {
-    case plain = 0
-    case prompt = 1
-    case input = 2
-    case selection = 3
-    case diagnostic = 4
-    case overlay = 5
+    case plain        = 0
+    case prompt       = 1
+    case input        = 2
+    case selection    = 3
+    case diagnostic   = 4
+    case overlay      = 5
+    case editorChrome = 6
 }
 
 /// One semantic style over a UTF-8 byte range.
@@ -51,50 +55,58 @@ public struct ReixTextSurfaceFrameDescriptor: Equatable {
     public static let maximumColumns: UInt16 = 240
     public static let maximumRows: UInt16 = 120
 
-    public let kind: ReixTextSurfaceFrameKind
-    public let mode: ReixTextSurfaceFrameMode
-    public let correlation: UInt32
-    public let revision: UInt32
-    public let baseRevision: UInt32
-    public let patchOffset: UInt32
-    public let replacedLength: UInt32
-    public let textLength: UInt32
-    public let overlayLength: UInt16
-    public let styleSpanCount: UInt16
+    public let kind                 : ReixTextSurfaceFrameKind
+    public let mode                 : ReixTextSurfaceFrameMode
+    public let source               : UInt32
+    public let severity             : ReixTextOutputSeverity
+    public let outputKind           : ReixTextOutputKind
+    public let payloadKind          : ReixTextOutputPayloadKind
+    public let correlation          : UInt32
+    public let revision             : UInt32
+    public let baseRevision         : UInt32
+    public let patchOffset          : UInt32
+    public let replacedLength       : UInt32
+    public let textLength           : UInt32
+    public let overlayLength        : UInt16
+    public let styleSpanCount       : UInt16
     public let overlayStyleSpanCount: UInt16
-    public let columns: UInt16
-    public let rows: UInt16
-    public let cursorRow: UInt16
-    public let cursorColumn: UInt16
-    public let viewportRow: UInt16
-    public let viewportRows: UInt16
-    public let overlayRow: UInt16
-    public let overlayColumn: UInt16
-    public let overlayRows: UInt16
-    public let overlayColumns: UInt16
+    public let columns              : UInt16
+    public let rows                 : UInt16
+    public let cursorRow            : UInt16
+    public let cursorColumn         : UInt16
+    public let viewportRow          : UInt16
+    public let viewportRows         : UInt16
+    public let overlayRow           : UInt16
+    public let overlayColumn        : UInt16
+    public let overlayRows          : UInt16
+    public let overlayColumns       : UInt16
 
     public init?(
-        kind: ReixTextSurfaceFrameKind,
-        mode: ReixTextSurfaceFrameMode = .editor,
-        correlation: UInt32,
-        revision: UInt32,
-        baseRevision: UInt32,
-        patchOffset: UInt32 = 0,
-        replacedLength: UInt32 = 0,
-        textLength: UInt32,
-        overlayLength: UInt16 = 0,
-        styleSpanCount: UInt16 = 0,
+        kind                 : ReixTextSurfaceFrameKind,
+        mode                 : ReixTextSurfaceFrameMode = .editor,
+        source               : UInt32 = 0,
+        severity             : ReixTextOutputSeverity = .info,
+        outputKind           : ReixTextOutputKind = .application,
+        payloadKind          : ReixTextOutputPayloadKind = .utf8Text,
+        correlation          : UInt32,
+        revision             : UInt32,
+        baseRevision         : UInt32,
+        patchOffset          : UInt32 = 0,
+        replacedLength       : UInt32 = 0,
+        textLength           : UInt32,
+        overlayLength        : UInt16 = 0,
+        styleSpanCount       : UInt16 = 0,
         overlayStyleSpanCount: UInt16 = 0,
-        columns: UInt16,
-        rows: UInt16,
-        cursorRow: UInt16,
-        cursorColumn: UInt16,
-        viewportRow: UInt16 = 0,
-        viewportRows: UInt16,
-        overlayRow: UInt16 = 0,
-        overlayColumn: UInt16 = 0,
-        overlayRows: UInt16 = 0,
-        overlayColumns: UInt16 = 0
+        columns              : UInt16,
+        rows                 : UInt16,
+        cursorRow            : UInt16,
+        cursorColumn         : UInt16,
+        viewportRow          : UInt16 = 0,
+        viewportRows         : UInt16,
+        overlayRow           : UInt16 = 0,
+        overlayColumn        : UInt16 = 0,
+        overlayRows          : UInt16 = 0,
+        overlayColumns       : UInt16 = 0
     ) {
         guard correlation != 0,
               revision != 0,
@@ -116,10 +128,14 @@ public struct ReixTextSurfaceFrameDescriptor: Equatable {
               overlayLength == 0 ? overlayRows == 0 && overlayColumns == 0 : overlayRows > 0 && overlayColumns > 0,
               overlayRows == 0 || overlayRow <= viewportRows - overlayRows,
               overlayColumns == 0 || overlayColumn <= columns - overlayColumns,
-              mode == .editor || (
-                  viewportRows == 1
-                      && viewportRow == cursorRow
+              (mode != .transcript && mode != .codeTranscript) || (
+                  patchOffset == 0
+                      && replacedLength == 0
                       && overlayLength == 0
+                      && cursorRow == 0
+                      && cursorColumn == 0
+                      && viewportRow == 0
+                      && viewportRows == 1
               )
         else { return nil }
 
@@ -132,6 +148,10 @@ public struct ReixTextSurfaceFrameDescriptor: Equatable {
 
         self.kind = kind
         self.mode = mode
+        self.source = source
+        self.severity = severity
+        self.outputKind = outputKind
+        self.payloadKind = payloadKind
         self.correlation = correlation
         self.revision = revision
         self.baseRevision = baseRevision
@@ -191,20 +211,29 @@ public struct ReixTextSurfaceFrameDescriptor: Equatable {
         write16(bytes, 48, overlayColumn)
         write16(bytes, 50, overlayRows)
         write16(bytes, 52, overlayColumns)
+        write32(bytes, 54, source)
+        bytes[58] = severity.rawValue
+        bytes[59] = outputKind.rawValue
+        write16(bytes, 60, payloadKind.rawValue)
         return true
     }
 
     public static func decode(_ bytes: UnsafePointer<UInt8>, length: Int) -> ReixTextSurfaceFrameDescriptor? {
         guard length == Self.wireBytes,
-              let kind = ReixTextSurfaceFrameKind(rawValue: read16(bytes, 0)),
-              let mode = ReixTextSurfaceFrameMode(rawValue: read16(bytes, 2)),
-              read16(bytes, 54) == 0,
-              read32(bytes, 56) == 0,
-              read32(bytes, 60) == 0
+              let kind        = ReixTextSurfaceFrameKind(rawValue: read16(bytes, 0)),
+              let mode        = ReixTextSurfaceFrameMode(rawValue: read16(bytes, 2)),
+              let severity    = ReixTextOutputSeverity(rawValue: bytes[58]),
+              let outputKind  = ReixTextOutputKind(rawValue: bytes[59]),
+              let payloadKind = ReixTextOutputPayloadKind(rawValue: read16(bytes, 60)),
+              read16(bytes, 62) == 0
         else { return nil }
         return ReixTextSurfaceFrameDescriptor(
             kind: kind,
             mode: mode,
+            source: read32(bytes, 54),
+            severity: severity,
+            outputKind: outputKind,
+            payloadKind: payloadKind,
             correlation: read32(bytes, 4),
             revision: read32(bytes, 8),
             baseRevision: read32(bytes, 12),

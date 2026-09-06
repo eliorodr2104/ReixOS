@@ -33,8 +33,9 @@ struct ShellPipeline {
 
     mutating func execute(
         _ program: TypedShellProgram,
-          source   : UnsafePointer<UInt8>,
-          count    : Int
+          source : UnsafePointer<UInt8>,
+          count  : Int,
+          flush  : () -> Bool
     ) -> Result<ShellValue, TypedShellFailure> {
         var table          = InlineArray<26, TypedShellSignature?>(repeating: nil)
         let signatureCount = Self.signatures(into: &table)
@@ -43,7 +44,7 @@ struct ShellPipeline {
         let result         = table.span.withUnsafeBufferPointer { all in
             let signatures = UnsafeBufferPointer(start: all.baseAddress!, count: signatureCount)
             return evaluator.execute(program, source: source, count: count, signatures: signatures, arena: &sequenceArena) { invocation in
-                self.invoke(invocation, signatures: signatures)
+                self.invoke(invocation, signatures: signatures, flush: flush)
             }
         }
         runtime = evaluator
@@ -58,7 +59,8 @@ struct ShellPipeline {
 
     private mutating func invoke(
         _ invocation: TypedShellInvocation,
-          signatures  : UnsafeBufferPointer<TypedShellSignature?>
+          signatures: UnsafeBufferPointer<TypedShellSignature?>,
+          flush     : () -> Bool
     ) -> TypedShellInvocationResult {
         guard invocation.signatureIndex >= 0,
               invocation.signatureIndex < signatures.count,
@@ -175,6 +177,7 @@ struct ShellPipeline {
             guard ShellRenderer.present(result.records), result.frame.map({ ShellRenderer.present($0) }) ?? true else {
                 return .failure(UInt32.max)
             }
+            guard flush() else { return .failure(UInt32.max) }
             return .success(.void)
         }
     }

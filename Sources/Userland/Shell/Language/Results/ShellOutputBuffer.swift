@@ -8,6 +8,10 @@
 import ReixABI
 
 public struct ShellOutputBuffer {
+    /// Small enough that one flush is always one frame, so a scalar can never be
+    /// split across two of them and output never arrives half-styled.
+    public static let capacity = 4096
+
     private var bytes = InlineArray<4096, UInt8>(repeating: 0)
     private var count = 0
     public private(set) var overflowed = false
@@ -34,38 +38,14 @@ public struct ShellOutputBuffer {
         return true
     }
 
+    /// Hands the whole buffer over in one frame. What the receiver refuses stays
+    /// buffered exactly as it was, so a refusal costs one retry.
     public mutating func flush(_ send: (UnsafePointer<UInt8>, Int) -> Bool) -> Bool {
         guard !overflowed, !failed else { return false }
-        var offset = 0
-        while offset < count {
-            guard let amount = chunkLength(at: offset) else { return false }
-            let delivered = bytes.span.withUnsafeBufferPointer { source in
-                send(source.baseAddress! + offset, amount)
-            }
-            guard delivered else {
-                let remaining = count - offset
-                for index in 0..<remaining { bytes[index] = bytes[offset + index] }
-                count = remaining
-                return false
-            }
-            offset += amount
-        }
+        guard count > 0 else { return true }
+        let delivered = bytes.span.withUnsafeBufferPointer { send($0.baseAddress!, count) }
+        guard delivered else { return false }
         count = 0
         return true
-    }
-
-    /// Chooses one TextSurface-sized UTF-8 boundary without allocation. A
-    /// malformed sequence remains buffered when the receiver refuses it.
-    private func chunkLength(at offset: Int) -> Int? {
-        let remaining = count - offset
-        guard remaining > 0 else { return nil }
-        var amount = min(ReixTextSurfaceProtocol.maximumPayload, remaining)
-        if amount < remaining {
-            while amount > 0, (bytes[offset + amount] & 0xC0) == 0x80 {
-                amount -= 1
-            }
-        }
-        guard amount > 0 else { return nil }
-        return amount
     }
 }

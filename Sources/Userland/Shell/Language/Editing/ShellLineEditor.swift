@@ -7,6 +7,12 @@
 
 import ReixABI
 
+@_silgen_name("malloc")
+private func shellEditorMalloc(_ size: UInt) -> UnsafeMutableRawPointer?
+
+@_silgen_name("free")
+private func shellEditorFree(_ pointer: UnsafeMutableRawPointer?)
+
 /// A bounded multiline editor whose gap is always the insertion point.
 public struct ShellLineEditor: ~Copyable {
     public static let prompt: StaticString = "reix❯ "
@@ -59,35 +65,42 @@ public struct ShellLineEditor: ~Copyable {
     private var historyBytes: UnsafeMutablePointer<UInt8>?
     private var historyByteCount = 0
 
-    private var selectionAnchor: Int?
-    private var selectionHead = 0
-    private var columns: UInt16 = 80
-    private var rows: UInt16 = 24
-    private var viewportRow: UInt16 = 0
-    private var viewportPinned = false
-    private var pending: PendingChange? = .snapshot
-    private var pendingSequence: UInt32 = 1
+    private var selectionAnchor : Int?
+    private var selectionHead   = 0
+    private var columns         : UInt16         = 80
+    private var rows            : UInt16         = 24
+    private var viewportRow     : UInt16         = 0
+    private var viewportPinned  = false
+    private var pending         : PendingChange? = .snapshot
+    private var pendingSequence : UInt32         = 1
+    private var codeEditing     = false
 
-    private var pasteActive = false
-    private var pasteStart = 0
-    private var pasteRemoved = 0
-    private var pasteInserted = 0
-    private var pasteBackup: UnsafeMutablePointer<UInt8>?
-    private var pastePreviousPending: PendingChange?
+    private var pasteActive          = false
+    private var pasteContainsNewline = false
+    private var pasteStart           = 0
+    private var pasteRemoved         = 0
+    private var pasteInserted        = 0
+    private var pasteBackup          : UnsafeMutablePointer<UInt8>?
+    private var pastePreviousPending : PendingChange?
+    private let allocationFault      : ShellEditorAllocationFault?
+    private var allocationCounts     = InlineArray<4, Int>(repeating: 0)
 
-    public init() {}
-
-    deinit {
-        heap?.deallocate()
-        editBytes?.deallocate()
-        historyBytes?.deallocate()
-        pasteBackup?.deallocate()
+    public init(allocationFault: ShellEditorAllocationFault? = nil) {
+        self.allocationFault = allocationFault
     }
 
-    public var count: Int { gapStart + storageCapacity - gapEnd }
-    public var cursor: Int { gapStart }
-    public var hasSelection: Bool { selectionAnchor != nil && selectionAnchor != selectionHead }
-    public var visibleRows: UInt16 { ReixTextSurfaceFrameDescriptor.interactiveRows(for: rows) }
+    deinit {
+        Self.release(heap)
+        Self.release(editBytes)
+        Self.release(historyBytes)
+        Self.release(pasteBackup)
+    }
+
+    public var count        : Int { gapStart + storageCapacity - gapEnd }
+    public var cursor       : Int { gapStart }
+    public var hasSelection : Bool { selectionAnchor != nil && selectionAnchor != selectionHead }
+    public var isCodeEditing: Bool { codeEditing }
+    public var visibleRows  : UInt16 { ReixTextSurfaceFrameDescriptor.interactiveRows(for: rows) }
 
     public mutating func apply(_ event: ReixInputRecord) -> ShellEditorUpdate {
         pendingSequence = event.sequence
@@ -97,10 +110,8 @@ public struct ShellLineEditor: ~Copyable {
         if event.kind == .insert || event.kind == .textChunk || event.kind == .compositionCommit {
             return insertEvent(event)
         }
-        if event.kind == .cancel { return cancel() }
-        if event.kind == .eof { return count == 0 ? update(.eof, false) : refused() }
         if event.kind == .focusLost || event.kind == .stateReset { return refused() }
-        guard event.kind == .key || legacyKeyKind(event.kind),
+        guard event.kind == .key,
               event.phase != .release,
               let intent = intent(for: event)
         else { return refused() }
@@ -148,17 +159,29 @@ public struct ShellLineEditor: ~Copyable {
             guard let position = framePosition(at: count) else { return false }
             endPosition = position
         }
-        let viewportRows = min(visibleRows, max(UInt16(1), endPosition.row + 1))
-        followCursor(cursorPosition.row, viewportRows: viewportRows)
+        let contentRows = max(UInt16(1), endPosition.row + 1)
+        let chromeRows  = codeEditing
+            ? ReixCodeEditorLayout.footerRows(for: visibleRows)
+            : 0
+        let desiredRows = contentRows <= UInt16.max - chromeRows
+            ? contentRows + chromeRows
+            : UInt16.max
+        let viewportRows       = min(visibleRows, desiredRows)
+        let cursorViewportRows = codeEditing
+            ? max(1, ReixCodeEditorLayout.contentViewportRows(for: viewportRows))
+            : viewportRows
+        followCursor(cursorPosition.row, viewportRows: cursorViewportRows)
         let selection = selectionRange()
         var spans = InlineArray<4, ReixTextSurfaceStyleSpan?>(repeating: nil)
         var spanCount = 0
-        spans[spanCount] = ReixTextSurfaceStyleSpan(
-            offset: 0,
-            length: UInt16(Self.promptBytes),
-            role: .prompt
-        )!
-        spanCount += 1
+        if !codeEditing {
+            spans[spanCount] = ReixTextSurfaceStyleSpan(
+                offset: 0,
+                length: UInt16(Self.promptBytes),
+                role: .prompt
+            )!
+            spanCount += 1
+        }
         appendInputSpans(selection: selection, spans: &spans, count: &spanCount)
         let frame = frameMetadata(
             pending: pending,
@@ -180,7 +203,7 @@ public struct ShellLineEditor: ~Copyable {
                         text1Length: text.3,
                         text2: text.4,
                         text2Length: text.5,
-                        styles: UnsafePointer(styles.baseAddress!),
+                        styles: spanCount == 0 ? nil : UnsafePointer(styles.baseAddress!),
                         styleCount: spanCount
                     )
                 )
@@ -190,8 +213,15 @@ public struct ShellLineEditor: ~Copyable {
         return result
     }
 
+    /// Makes the next frame carry the whole line. A patch is only meaningful to a
+    /// consumer that took the one before it.
+    public mutating func requireSnapshot() {
+        pending = .snapshot
+    }
+
     public mutating func reset() {
         resetBuffer()
+        codeEditing = false
         historyIndex = historyCount
         pending = .snapshot
     }
@@ -213,11 +243,14 @@ public struct ShellLineEditor: ~Copyable {
         let range = selectionRange()
         let removed = range.1 - range.0
         if removed > 0 {
-            let backup = UnsafeMutablePointer<UInt8>.allocate(capacity: removed)
+            guard let backup = allocate(capacity: removed, site: .pasteBackup) else {
+                return refused()
+            }
             for index in 0..<removed { backup[index] = byte(at: range.0 + index) }
             pasteBackup = backup
         }
         pasteActive = true
+        pasteContainsNewline = false
         pastePreviousPending = pending
         pasteStart = range.0
         pasteRemoved = removed
@@ -241,6 +274,9 @@ public struct ShellLineEditor: ~Copyable {
                 let insertionStart = gapStart
                 let insertionCount = event.count
                 let insertionText = event.text
+                for index in 0..<insertionCount where insertionText[index] == 0x0A {
+                    pasteContainsNewline = true
+                }
                 withMutableStorage { storage in
                     for index in 0..<insertionCount {
                         storage[insertionStart + index] = insertionText[index]
@@ -253,11 +289,15 @@ public struct ShellLineEditor: ~Copyable {
                 pasteActive = false
                 recordPasteEdit()
                 releasePasteBackup()
-                if case nil = pastePreviousPending {
+                if pasteContainsNewline && !codeEditing {
+                    codeEditing = true
+                    pending = .snapshot
+                } else if case nil = pastePreviousPending {
                     pending = .patch(offset: pasteStart, removed: pasteRemoved, inserted: pasteInserted)
                 } else {
                     pending = .snapshot
                 }
+                pasteContainsNewline = false
                 pastePreviousPending = nil
                 viewportPinned = false
                 return update(.editing, true)
@@ -283,6 +323,7 @@ public struct ShellLineEditor: ~Copyable {
         selectionAnchor = pasteRemoved == 0 ? nil : pasteStart
         selectionHead = pasteStart + pasteRemoved
         pasteActive = false
+        pasteContainsNewline = false
         pasteInserted = 0
         releasePasteBackup()
         pending = pastePreviousPending
@@ -320,6 +361,14 @@ public struct ShellLineEditor: ~Copyable {
     }
 
     private mutating func apply(_ intent: ShellEditorIntent) -> ShellEditorUpdate {
+        if codeEditing {
+            switch intent {
+                case .historyPrevious, .historyNext:
+                    return update(.editing, false)
+                default:
+                    break
+            }
+        }
         switch intent {
             case .submit:
                 prepareSubmission()
@@ -327,8 +376,13 @@ public struct ShellLineEditor: ~Copyable {
                 queueMetadata()
                 return update(.submitted(count), true)
             case .submitOrNewline:
+                if codeEditing {
+                    return insertNewline() ? update(.editing, true) : refused()
+                }
                 let completeness = withBytes { TypedShellParser.completeness($0, count: $1) }
                 if case .incomplete = completeness {
+                    codeEditing = true
+                    pending = .snapshot
                     return insertNewline() ? update(.editing, true) : refused()
                 }
                 guard completeness == .complete else { return refused() }
@@ -337,13 +391,18 @@ public struct ShellLineEditor: ~Copyable {
                 queueMetadata()
                 return update(.submitted(count), true)
             case .newline:
+                if !codeEditing {
+                    codeEditing = true
+                    pending = .snapshot
+                    if count == 0 { return update(.editing, true) }
+                }
                 return insertNewline() ? update(.editing, true) : refused()
             case .cancel:
                 return cancel()
             case .eof:
                 return count == 0 ? update(.eof, false) : refused()
             case .complete:
-                return refused()
+                return codeEditing && insertIndent() ? update(.editing, true) : refused()
             default:
                 break
         }
@@ -398,10 +457,10 @@ public struct ShellLineEditor: ~Copyable {
             case .moveRight(let selecting): return move(to: boundaryAfter(cursor), selecting: selecting)
             case .moveUp(let selecting):
                 if moveVertical(up: true, selecting: selecting) { return true }
-                return !selecting && recall(previous: true)
+                return codeEditing || !selecting && recall(previous: true)
             case .moveDown(let selecting):
                 if moveVertical(up: false, selecting: selecting) { return true }
-                return !selecting && recall(previous: false)
+                return codeEditing || !selecting && recall(previous: false)
             case .home(let selecting): return move(to: physicalRowBoundary(end: false), selecting: selecting)
             case .end(let selecting): return move(to: physicalRowBoundary(end: true), selecting: selecting)
             case .eraseBackward: return erase(backward: true)
@@ -438,7 +497,8 @@ public struct ShellLineEditor: ~Copyable {
         guard let current = framePosition(at: cursor) else { return false }
         let targetRow: UInt16
         if up {
-            guard current.row > 0 else { return false }
+            let firstEditableRow = codeEditing ? ReixCodeEditorLayout.headerRows : 0
+            guard current.row > firstEditableRow else { return false }
             targetRow = current.row - 1
         } else {
             guard current.row < UInt16.max else { return false }
@@ -455,7 +515,20 @@ public struct ShellLineEditor: ~Copyable {
         let inputCount = count
         let width = columns
         let candidate = withStorage { storage in
-            ReixTextLayout.closestByteOffset(
+            if codeEditing {
+                let gutter          = ReixCodeEditorLayout.gutterColumns(for: width)
+                let preferredColumn = current.column >= gutter ? current.column - gutter : 0
+                return ReixCodeEditorLayout.closestByteOffset(
+                    row: targetRow,
+                    column: min(gutter + preferredColumn, width - 1),
+                    count: inputCount,
+                    columns: width,
+                    byte: { offset in
+                        storage[offset < start ? offset : offset + gap]
+                    }
+                )
+            }
+            return ReixTextLayout.closestByteOffset(
                 row: targetRow,
                 column: min(wantedColumn, width - 1),
                 count: Self.promptBytes + inputCount,
@@ -466,7 +539,7 @@ public struct ShellLineEditor: ~Copyable {
                     return storage[logical < start ? logical : logical + gap]
                 }
             )
-        }.map { max(0, $0 - Self.promptBytes) }
+        }.map { codeEditing ? $0 : max(0, $0 - Self.promptBytes) }
         return move(to: candidate, selecting: selecting)
     }
 
@@ -524,8 +597,37 @@ public struct ShellLineEditor: ~Copyable {
         return true
     }
 
+    private mutating func insertIndent() -> Bool {
+        let range    = selectionRange()
+        let removed  = range.1 - range.0
+        let inserted = 4
+        guard count - removed <= Self.capacity - inserted,
+              ensureGap(inserted + removed)
+        else { return false }
+        var spaces = InlineArray<16, UInt8>(repeating: 0)
+        for index in 0..<inserted { spaces[index] = 0x20 }
+        recordEdit(
+            offset: range.0,
+            removed: removed,
+            inserted: inserted,
+            insertedBytes: spaces
+        )
+        deleteRange(range.0, range.1)
+        let insertionStart = gapStart
+        withMutableStorage { storage in
+            for index in 0..<inserted { storage[insertionStart + index] = 0x20 }
+        }
+        gapStart += inserted
+        selectionAnchor = nil
+        selectionHead = gapStart
+        queuePatch(offset: range.0, removed: removed, inserted: inserted)
+        viewportPinned = false
+        return true
+    }
+
     private mutating func cancel() -> ShellEditorUpdate {
         resetBuffer()
+        codeEditing = false
         pending = .snapshot
         return update(.cancelled, true)
     }
@@ -684,7 +786,7 @@ public struct ShellLineEditor: ~Copyable {
     }
 
     private mutating func releasePasteBackup() {
-        pasteBackup?.deallocate()
+        Self.release(pasteBackup)
         pasteBackup = nil
     }
 
@@ -717,7 +819,7 @@ public struct ShellLineEditor: ~Copyable {
 
     private mutating func ensureEditStorage() -> Bool {
         if editBytes != nil { return true }
-        editBytes = UnsafeMutablePointer<UInt8>.allocate(capacity: Self.undoByteBudget)
+        editBytes = allocate(capacity: Self.undoByteBudget, site: .undo)
         return editBytes != nil
     }
 
@@ -792,7 +894,7 @@ public struct ShellLineEditor: ~Copyable {
 
     private mutating func ensureHistoryStorage() -> Bool {
         if historyBytes != nil { return true }
-        historyBytes = UnsafeMutablePointer<UInt8>.allocate(capacity: Self.historyByteBudget)
+        historyBytes = allocate(capacity: Self.historyByteBudget, site: .history)
         return historyBytes != nil
     }
 
@@ -813,13 +915,13 @@ public struct ShellLineEditor: ~Copyable {
 
     private mutating func grow(to next: Int) -> Bool {
         guard next > storageCapacity, next <= Self.capacity else { return next == storageCapacity }
-        let replacement = UnsafeMutablePointer<UInt8>.allocate(capacity: next)
+        guard let replacement = allocate(capacity: next, site: .storage) else { return false }
         let tail = storageCapacity - gapEnd
         withStorage { old in
             for index in 0..<gapStart { replacement[index] = old[index] }
             for index in 0..<tail { replacement[next - tail + index] = old[gapEnd + index] }
         }
-        heap?.deallocate()
+        Self.release(heap)
         heap = replacement
         storageCapacity = next
         gapEnd = next - tail
@@ -833,7 +935,11 @@ public struct ShellLineEditor: ~Copyable {
         withMutableStorage { storage in
             if offset < start {
                 let amount = start - offset
-                for index in 0..<amount { storage[end - amount + index] = storage[offset + index] }
+                // Source and destination overlap when the move is wider than the
+                // gap, so copy backwards: this is the right-shift half of memmove.
+                for index in stride(from: amount - 1, through: 0, by: -1) {
+                    storage[end - amount + index] = storage[offset + index]
+                }
             } else {
                 let amount = offset - start
                 for index in 0..<amount { storage[start + index] = storage[end + index] }
@@ -873,11 +979,47 @@ public struct ShellLineEditor: ~Copyable {
 
     private func physicalRowBoundary(end: Bool) -> Int? {
         guard let current = framePosition(at: cursor) else { return nil }
-        let targetColumn = end ? columns - 1 : 0
+        let targetColumn = end
+            ? columns - 1
+            : codeEditing ? ReixCodeEditorLayout.gutterColumns(for: columns) : 0
         let start = gapStart
         let gap = gapEnd - gapStart
         let inputCount = count
+
         let frameOffset = withStorage { storage -> Int? in
+            if codeEditing {
+                let candidate = ReixCodeEditorLayout.closestByteOffset(
+                    row: current.row,
+                    column: targetColumn,
+                    count: inputCount,
+                    columns: columns,
+                    byte: { offset in storage[offset < start ? offset : offset + gap] }
+                )
+                guard end,
+                      let candidate,
+                      candidate < inputCount,
+                      let position = ReixCodeEditorLayout.position(
+                          at: candidate,
+                          count: inputCount,
+                          columns: columns,
+                          byte: { offset in storage[offset < start ? offset : offset + gap] }
+                      ),
+                      position.row == current.row,
+                      let next = ReixTextLayout.nextGraphemeBoundary(
+                          after: candidate,
+                          count: inputCount,
+                          byte: { offset in storage[offset < start ? offset : offset + gap] }
+                      ),
+                      let width = ReixTextLayout.cellWidth(
+                          from: candidate,
+                          to: next,
+                          count: inputCount,
+                          byte: { offset in storage[offset < start ? offset : offset + gap] }
+                      ),
+                      width == columns - position.column
+                else { return candidate }
+                return next
+            }
             let total = Self.promptBytes + inputCount
             let candidate = ReixTextLayout.closestByteOffset(
                 row: current.row,
@@ -927,7 +1069,9 @@ public struct ShellLineEditor: ~Copyable {
             else { return candidate }
             return next
         }
-        return frameOffset.map { min(inputCount, max(0, $0 - Self.promptBytes)) }
+        return frameOffset.map {
+            codeEditing ? min(inputCount, max(0, $0)) : min(inputCount, max(0, $0 - Self.promptBytes))
+        }
     }
 
     private mutating func prepareSubmission() {
@@ -943,7 +1087,18 @@ public struct ShellLineEditor: ~Copyable {
         let inputCount = count
         let width = columns
         return withStorage { storage in
-            ReixTextLayout.position(
+            if codeEditing {
+                return ReixCodeEditorLayout.position(
+                    at: inputOffset,
+                    count: inputCount,
+                    columns: width,
+                    byte: { offset in
+                        guard offset >= 0, offset < inputCount else { return nil }
+                        return storage[offset < start ? offset : offset + gap]
+                    }
+                )
+            }
+            return ReixTextLayout.position(
                 at: Self.promptBytes + inputOffset,
                 count: Self.promptBytes + inputCount,
                 columns: width,
@@ -962,7 +1117,9 @@ public struct ShellLineEditor: ~Copyable {
         viewportRows: UInt16
     ) {
         guard !viewportPinned else { return }
-        if cursorRow < viewportRow { viewportRow = cursorRow }
+        if codeEditing && cursorRow == ReixCodeEditorLayout.headerRows {
+            viewportRow = 0
+        } else if cursorRow < viewportRow { viewportRow = cursorRow }
         else if cursorRow - viewportRow >= viewportRows {
             viewportRow = cursorRow - viewportRows + 1
         }
@@ -974,33 +1131,8 @@ public struct ShellLineEditor: ~Copyable {
     }
 
     private func intent(for event: ReixInputRecord) -> ShellEditorIntent? {
-        if event.kind == .key {
-            return ShellEditorKeymap.intent(key: event.logicalKey, modifiers: event.modifiers)
-        }
-        switch event.kind {
-            case .left: return .moveLeft(false)
-            case .right: return .moveRight(false)
-            case .up: return .moveUp(false)
-            case .down: return .moveDown(false)
-            case .home: return .home(false)
-            case .end: return .end(false)
-            case .backspace: return .eraseBackward
-            case .delete: return .eraseForward
-            case .enter: return .submitOrNewline
-            case .historyPrevious: return .historyPrevious
-            case .historyNext: return .historyNext
-            default: return nil
-        }
-    }
-
-    private func legacyKeyKind(_ kind: ReixInputKind) -> Bool {
-        switch kind {
-            case .left, .right, .up, .down, .home, .end, .backspace, .delete,
-                 .enter, .historyPrevious, .historyNext:
-                return true
-            default:
-                return false
-        }
+        guard event.kind == .key else { return nil }
+        return ShellEditorKeymap.intent(key: event.logicalKey, modifiers: event.modifiers)
     }
 
     private func repeatable(_ intent: ShellEditorIntent) -> Bool {
@@ -1017,19 +1149,20 @@ public struct ShellLineEditor: ~Copyable {
         cursorPosition: ReixTextLayout.Position,
         viewportRows: UInt16
     ) -> ShellEditorFrame {
-        let kind: ReixTextSurfaceFrameKind
-        let offset: UInt32
-        let removed: UInt32
-        let length: UInt32
+        let prefixBytes = codeEditing ? 0 : Self.promptBytes
+        let kind        : ReixTextSurfaceFrameKind
+        let offset      : UInt32
+        let removed     : UInt32
+        let length      : UInt32
         switch pending {
             case .snapshot:
                 kind = .snapshot
                 offset = 0
                 removed = 0
-                length = UInt32(Self.promptBytes + count)
+                length = UInt32(prefixBytes + count)
             case .patch(let patchOffset, let replaced, let inserted):
                 kind = .patch
-                offset = UInt32(Self.promptBytes + patchOffset)
+                offset = UInt32(prefixBytes + patchOffset)
                 removed = UInt32(replaced)
                 length = UInt32(inserted)
             case .metadata:
@@ -1040,13 +1173,14 @@ public struct ShellLineEditor: ~Copyable {
         }
         return ShellEditorFrame(
             kind: kind,
+            mode: codeEditing ? .codeEditor : .editor,
             correlation: pendingSequence,
             patchOffset: offset,
             replacedLength: removed,
             textLength: length,
             columns: columns,
             rows: rows,
-            cursorOffset: UInt32(Self.promptBytes + cursor),
+            cursorOffset: UInt32(prefixBytes + cursor),
             cursorRow: cursorPosition.row,
             cursorColumn: cursorPosition.column,
             viewportRow: viewportRow,
@@ -1059,14 +1193,19 @@ public struct ShellLineEditor: ~Copyable {
         spans: inout InlineArray<4, ReixTextSurfaceStyleSpan?>,
         count spanCount: inout Int
     ) {
+        let prefixBytes = codeEditing ? 0 : Self.promptBytes
         func append(_ start: Int, _ end: Int, _ role: ReixTextSurfaceStyleRole) {
             guard end > start else { return }
             spans[spanCount] = ReixTextSurfaceStyleSpan(
-                offset: UInt32(Self.promptBytes + start),
+                offset: UInt32(prefixBytes + start),
                 length: UInt16(end - start),
                 role: role
             )!
             spanCount += 1
+        }
+        if selection.0 == selection.1 {
+            append(0, count, .input)
+            return
         }
         append(0, selection.0, .input)
         append(selection.0, selection.1, .selection)
@@ -1081,6 +1220,16 @@ public struct ShellLineEditor: ~Copyable {
         withStorage { storage in
             switch pending {
                 case .snapshot:
+                    if codeEditing {
+                        return body((
+                            gapStart == 0 ? nil : UnsafePointer(storage),
+                            gapStart,
+                            gapEnd == storageCapacity ? nil : UnsafePointer(storage.advanced(by: gapEnd)),
+                            storageCapacity - gapEnd,
+                            nil,
+                            0
+                        ))
+                    }
                     return body((
                         Self.prompt.utf8Start,
                         Self.promptBytes,
@@ -1120,7 +1269,7 @@ public struct ShellLineEditor: ~Copyable {
     }
 
     private mutating func resetBuffer() {
-        heap?.deallocate()
+        Self.release(heap)
         heap = nil
         storageCapacity = Self.inlineCapacity
         gapStart = 0
@@ -1128,13 +1277,33 @@ public struct ShellLineEditor: ~Copyable {
         selectionAnchor = nil
         selectionHead = 0
         pasteActive = false
+        pasteContainsNewline = false
         pastePreviousPending = nil
         releasePasteBackup()
         viewportRow = 0
         viewportPinned = false
         clearEdits()
-        editBytes?.deallocate()
+        Self.release(editBytes)
         editBytes = nil
+    }
+
+    private mutating func allocate(
+        capacity: Int,
+        site    : ShellEditorAllocationSite
+    ) -> UnsafeMutablePointer<UInt8>? {
+        guard capacity > 0 else { return nil }
+        let index = Int(site.rawValue)
+        allocationCounts[index] += 1
+        if let allocationFault,
+           allocationFault.site == site,
+           allocationFault.occurrence == allocationCounts[index] {
+            return nil
+        }
+        return shellEditorMalloc(UInt(capacity))?.assumingMemoryBound(to: UInt8.self)
+    }
+
+    private static func release(_ pointer: UnsafeMutablePointer<UInt8>?) {
+        shellEditorFree(pointer.map(UnsafeMutableRawPointer.init))
     }
 
     private func physical(_ offset: Int) -> Int {

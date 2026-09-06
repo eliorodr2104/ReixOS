@@ -113,13 +113,6 @@ public func main() {
 
     guard let spawnCap = spawnService() else { return }
 
-    let environment = Environment(
-        console     : consoleEndpoint,
-        nameServer  : nameServerEndpoint,
-        spawn       : spawnCap,
-        serialReader: serialReader
-    )
-
     // TODO: - the Process Server was launched here, with a registrar capability
     // minted for the one name it may publish. It is disabled until the file
     // system can hand it an image: see Sources/Userland/ProcessServer. What
@@ -241,6 +234,16 @@ public func main() {
         handle: terminal.handle
     ).grantedCap else { return }
 
+    // From this point every ordinary producer writes to the semantic terminal
+    // consumer. Only VTAdapter retains the transport-only ConsoleServer cap.
+    Console.attach(console: terminalEndpoint)
+    let terminalEnvironment = Environment(
+        console     : terminalEndpoint,
+        nameServer  : nameServerEndpoint,
+        spawn       : spawnCap,
+        serialReader: serialReader
+    )
+
     // The bus walker, when the machine described a bus. It reads device ids and
     // starts a driver for what it finds, so all it needs is to spawn. It gets
     // no window and no line of its own: those it carves. And no registrar and
@@ -260,7 +263,7 @@ public func main() {
         ) { grants in
 
             grants[0] = CapGrant(
-                source: consoleEndpoint,
+                source: terminalEndpoint,
                 slot  : BootCap.console.rawValue,
                 rights: [.send, .grant]
             )
@@ -344,7 +347,7 @@ public func main() {
         ) { grants in
 
             grants[0] = CapGrant(
-                source: consoleEndpoint,
+                source: terminalEndpoint,
                 slot  : BootCap.console.rawValue,
                 rights: [.send, .grant]
             )
@@ -376,7 +379,7 @@ public func main() {
     if let machine {
         startStorageCheck(
             machine    : machine,
-            environment: environment,
+            environment: terminalEnvironment,
             diagnostic : diagnostic
         )
     }
@@ -408,7 +411,7 @@ public func main() {
         }
 
         give(CapGrant(
-            source: consoleEndpoint,
+            source: terminalEndpoint,
             slot  : BootCap.console.rawValue,
             rights: [.send, .grant]
         ))

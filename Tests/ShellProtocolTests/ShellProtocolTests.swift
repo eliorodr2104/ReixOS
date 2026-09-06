@@ -190,34 +190,30 @@ struct ShellProtocolTests {
         }
     }
 
-    @Test("a failed terminal presentation keeps only the unsent shell bytes")
+    @Test("a refused terminal presentation costs a retry and not a byte")
     func outputFailureKeepsUnsentBytes() {
         var output = ShellOutputBuffer()
         for value in 0..<300 { output.append(UInt8(value & 0x7F)) }
 
         var calls = 0
-        var first : [UInt8] = []
-        let sent  = output.flush { bytes, count in
+        #expect(!output.flush { _, _ in
             calls += 1
-            if calls == 1 {
-                for index in 0..<count { first.append(bytes[index]) }
-                return true
-            }
             return false
-        }
-        #expect(!sent)
-        #expect(first == Array(0..<256).map { UInt8($0 & 0x7F) })
+        })
+        #expect(calls == 1)
 
         var remaining: [UInt8] = []
         #expect(output.flush { bytes, count in
             for index in 0..<count { remaining.append(bytes[index]) }
             return true
         })
-        #expect(remaining == Array(256..<300).map { UInt8($0 & 0x7F) })
+        #expect(remaining == Array(0..<300).map { UInt8($0 & 0x7F) })
     }
 
-    @Test("UTF-8 output chunks preserve scalar boundaries and malformed data")
+    @Test("one flush is one frame, so no scalar is ever split across two")
     func outputUTF8Boundaries() {
+        #expect(ShellOutputBuffer.capacity <= ReixTextSurfaceFrameDescriptor.maximumTextBytes)
+
         var output = ShellOutputBuffer()
         for _ in 0..<254 { _ = output.append(UInt8(ascii: "x")) }
         for byte in [UInt8(0xF0), 0x9F, 0x98, 0x80, UInt8(ascii: "y")] { _ = output.append(byte) }
@@ -226,7 +222,7 @@ struct ShellProtocolTests {
             chunks.append(Array(UnsafeBufferPointer(start: bytes, count: count)))
             return true
         })
-        #expect(chunks.map { $0.count } == [254, 5])
+        #expect(chunks.map { $0.count } == [259])
         #expect(chunks.flatMap { $0 } == Array(repeating: UInt8(ascii: "x"), count: 254) + [0xF0, 0x9F, 0x98, 0x80, UInt8(ascii: "y")])
         var malformed = ShellOutputBuffer()
         _ = malformed.append(0xF0)
@@ -234,7 +230,7 @@ struct ShellProtocolTests {
         var calls = 0
         #expect(!malformed.flush { bytes, count in
             calls += 1
-            return ReixTextSurfaceCommand(kind: .insert, sequence: 1, bytes: bytes, count: count) != nil
+            return ReixTextSurfaceProtocol.validText(bytes, count: count)
         })
         #expect(calls == 1)
     }

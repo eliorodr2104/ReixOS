@@ -11,6 +11,18 @@ import ShellLanguage
 import ShellBenchmarkSupport
 import TerminalTestSupport
 
+func benchmarkKey(
+    _ key   : ReixInputKey,
+    sequence: UInt32
+) -> ReixInputRecord {
+    ReixInputRecord(
+        kind: .key,
+        sequence: sequence,
+        logicalKey: key,
+        physicalKey: 0x8000 | key.rawValue
+    )!
+}
+
 private let parser64Source = Array(("let value = \"" + String(repeating: "x", count: 64) + "\"").utf8)
 private func parse64() -> Int {
     parser64Source.withUnsafeBufferPointer {
@@ -36,6 +48,45 @@ private func seedEditor(
         sequence += 1
     }
     return editor.count == count && editor.cursor == count ? sequence : nil
+}
+
+func seedEditor(
+    _ editor                  : inout ShellLineEditor,
+      bytes                   : [UInt8],
+      sequence initialSequence: UInt32 = 1
+) -> UInt32? {
+    var written  = 0
+    var sequence = initialSequence
+    guard !editor.apply(ReixInputRecord(kind: .pasteBegin, sequence: sequence)!).requiresPresentation else {
+        return nil
+    }
+    sequence &+= 1
+    while written < bytes.count {
+        var amount = min(ReixInputProtocol.maximumPayload, bytes.count - written)
+        while written + amount < bytes.count,
+              bytes[written + amount] & 0xC0 == 0x80 {
+            amount -= 1
+        }
+        guard amount > 0 else { return nil }
+        let update = bytes.withUnsafeBufferPointer { source in
+            editor.apply(
+                ReixInputRecord(
+                    kind: .pasteChunk,
+                    sequence: sequence,
+                    bytes: source.baseAddress!.advanced(by: written),
+                    count: amount
+                )!
+            )
+        }
+        guard !update.requiresPresentation else { return nil }
+        written += amount
+        sequence &+= 1
+    }
+    guard editor.apply(ReixInputRecord(kind: .pasteEnd, sequence: sequence)!).requiresPresentation else {
+        return nil
+    }
+    sequence &+= 1
+    return editor.count == bytes.count && editor.cursor == bytes.count ? sequence : nil
 }
 
 private let complexSource = Array(
@@ -153,11 +204,11 @@ private func editor(
           var sequence = seedEditor(&value, count: size)
     else { return 0 }
     for _ in 0..<(size - position) {
-        _ = value.apply(ReixInputRecord(kind: .left, sequence: sequence)!)
+        _ = value.apply(benchmarkKey(.left, sequence: sequence))
         sequence += 1
     }
     if deleting {
-        let update = value.apply(ReixInputRecord(kind: .delete, sequence: sequence)!)
+        let update = value.apply(benchmarkKey(.delete, sequence: sequence))
         return update.requiresPresentation && value.count == size - 1 ? value.count : 0
     }
     var byte = UInt8(ascii: "z")
@@ -328,6 +379,56 @@ for size in [64, 256, 2048, 8192] {
         editor(size - 1, deleting: true, size: size)
     }
 }
+
+let ascii8KiB      = [UInt8](repeating: UInt8(ascii: "x"), count: ShellLineEditor.capacity - 1)
+var editStart8KiB  = EditorMutationFixture(bytes: ascii8KiB, movesFromEnd: ascii8KiB.count)
+var editCenter8KiB = EditorMutationFixture(bytes: ascii8KiB, movesFromEnd: ascii8KiB.count / 2)
+var editEnd8KiB    = EditorMutationFixture(bytes: ascii8KiB, movesFromEnd: 0)
+add("editor/edit-start/8192", "8 KiB edit and full layout at start") { editStart8KiB.step() }
+add("editor/edit-center/8192", "8 KiB edit and full layout at center") { editCenter8KiB.step() }
+add("editor/edit-end/8192", "8 KiB edit and full layout at end") { editEnd8KiB.step() }
+
+var denseWrap8KiB = EditorMutationFixture(
+    bytes: ascii8KiB,
+    movesFromEnd: ascii8KiB.count / 2,
+    columns: 8,
+    rows: 24
+)
+add("editor/dense-soft-wrap/8192", "8 KiB edit with eight-column soft wrapping") {
+    denseWrap8KiB.step()
+}
+
+let newline8KiB: [UInt8] = {
+    var value: [UInt8] = []
+    value.reserveCapacity(ShellLineEditor.capacity - 1)
+    for index in 0..<(ShellLineEditor.capacity - 1) {
+        value.append(index & 1 == 0 ? UInt8(ascii: "x") : UInt8(ascii: "\n"))
+    }
+    return value
+}()
+var newlineLayout8KiB = EditorMutationFixture(
+    bytes: newline8KiB,
+    movesFromEnd: newline8KiB.count / 2
+)
+add("editor/many-newlines/8192", "8 KiB edit with alternating text and newlines") {
+    newlineLayout8KiB.step()
+}
+
+let wide8KiB: [UInt8] = {
+    let scalar = Array("界".utf8)
+    var value  : [UInt8] = []
+    value.reserveCapacity(8_190)
+    for _ in 0..<2_730 { value.append(contentsOf: scalar) }
+    return value
+}()
+var wideLayout8KiB = EditorMutationFixture(
+    bytes: wide8KiB,
+    movesFromEnd: 1_365
+)
+add("editor/unicode-wide/8190", "8190-byte edit with Unicode wide graphemes") {
+    wideLayout8KiB.step()
+}
+
 for size in [1, 256, 1024, 8192] {
     add("paste/\(size)", "atomic bracketed paste") {
         var editor = ShellLineEditor()
@@ -378,15 +479,15 @@ var editorLayout = ShellLineEditor()
 guard var editorLayoutSequence = seedEditor(&editorLayout, count: ShellLineEditor.capacity) else {
     fatalError("ShellBench preflight: editor layout seed")
 }
-var editorLayoutRows: UInt16 = 24
+var editorLayoutColumns: UInt16 = 80
 add("editor/layout-8192/80x24", "bounded Unicode editor layout") {
-    editorLayoutRows = editorLayoutRows == 24 ? 25 : 24
+    editorLayoutColumns = editorLayoutColumns == 80 ? 79 : 80
     let resized = editorLayout.apply(
         ReixInputRecord(
             kind: .resize,
             sequence: editorLayoutSequence,
-            width: 80,
-            height: editorLayoutRows
+            width: editorLayoutColumns,
+            height: 24
         )!
     )
     editorLayoutSequence &+= 1

@@ -9,9 +9,13 @@ import Reix
 import ReixABI
 import ShellLanguage
 
-private func require(_ condition: Bool) {
+private func require(
+    _ condition: Bool,
+    file       : StaticString = #fileID,
+    line       : UInt = #line
+) {
     if !condition {
-        fatalError("VTDecoder harness failure")
+        fatalError("VTDecoder harness failure at \(file):\(line)")
     }
 }
 
@@ -89,8 +93,8 @@ private func testSplitSequences() {
     require(records([0x19], split: 0)[0].logicalKey == .redo)
     let malformedCSI: [[UInt8]] = [
         [0x1B, 0x5B, 0x32, 0x3B, 0x32, 0x44],
-        [0x1B, 0x5B, 0x31, 0x3B, 0x39, 0x44],
-        [0x1B, 0x5B, 0x31, 0x33, 0x3B, 0x39, 0x75]
+        [0x1B, 0x5B, 0x31, 0x3B, 0x30, 0x44],
+        [0x1B, 0x5B, 0x31, 0x33, 0x3B, 0x30, 0x75]
     ]
     for malformed in malformedCSI {
         let output = records(malformed, split: 3)
@@ -98,8 +102,8 @@ private func testSplitSequences() {
         require(output[0].logicalKey == .escape)
     }
     let controls = records([0x03, 0x04, 0x08, 0x7F], split: 2)
-    require(controls[0].kind == .cancel)
-    require(controls[1].kind == .eof)
+    require(controls[0].kind == .key && controls[0].logicalKey == .cancel)
+    require(controls[1].kind == .key && controls[1].logicalKey == .eof)
     require(controls[2].logicalKey == .backspace)
     require(controls[3].logicalKey == .backspace)
     require(records([0x00], split: 0)[0].kind == .ignored)
@@ -109,17 +113,31 @@ private func testTextAndPaste() {
     for split in 0...2 {
         let output = records([0x0D, 0x0A], split: split)
         require(output.count == 1)
-        require(output[0].kind == .enter)
+        require(output[0].kind == .key && output[0].logicalKey == .enter)
     }
     let valid = [UInt8]("A€".utf8)
     for split in 0...valid.count {
         let output = records(valid, split: split)
-        require(output.count == 2)
+        require(payload(output[...]) == valid)
+        require(output.allSatisfy { $0.kind == .insert })
+        require(output.count == (split == 0 || split == valid.count ? 1 : 2))
     }
+    let burst     = Array("sweet terminal flow".utf8)
+    let coalesced = records(burst, split: 0)
+    require(coalesced.count == 2)
+    require(coalesced[0].count == ReixInputProtocol.maximumPayload)
+    require(coalesced[1].count == burst.count - ReixInputProtocol.maximumPayload)
+    require(payload(coalesced[...]) == burst)
     let malformed: [UInt8] = [0xE0, 0x80, 0x41]
     for split in 0...malformed.count {
         let output = records(malformed, split: split)
-        require(output.count == 3)
+        require(
+            payload(output[...]) == [
+                0xEF, 0xBF, 0xBD,
+                0xEF, 0xBF, 0xBD,
+                0x41
+            ]
+        )
     }
     for malformed in [[UInt8](repeating: 0x80, count: 1), [0xC0], [0xED, 0xA0], [0xF4, 0x90]] {
         for split in 0...malformed.count {
@@ -150,6 +168,78 @@ private func testTextAndPaste() {
         require(payload(output[1...1]) == [0xE2, 0x82, 0xAC])
         require(output[2].kind == .pasteEnd)
     }
+}
+
+private func testEnhancedKeyboard() {
+    let textCases: [(String, [UInt8])] = [
+        ("\u{1B}[104;1;104u", Array("h".utf8)),
+        ("\u{1B}[105;;105u", Array("i".utf8)),
+        ("\u{1B}[97;2;65u", Array("A".utf8)),
+        ("\u{1B}[0;1;8364u", Array("€".utf8)),
+        ("\u{1B}[0;1;101:769u", Array("e\u{301}".utf8))
+    ]
+    for (sequence, expected) in textCases {
+        let bytes = Array(sequence.utf8)
+        for split in 0...bytes.count {
+            let output = records(bytes, split: split)
+            require(output.count == 1)
+            require(output[0].kind == .insert)
+            require(payload(output[...]) == expected)
+        }
+    }
+
+    let shiftedEnter = records(Array("\u{1B}[13;2u".utf8), split: 4)
+    require(shiftedEnter.count == 1)
+    require(shiftedEnter[0].logicalKey == .enter)
+    require(shiftedEnter[0].modifiers == [.shift])
+
+    let plainEnter = records(Array("\u{1B}[13u".utf8), split: 2)
+    require(plainEnter.count == 1)
+    require(plainEnter[0].logicalKey == .enter)
+    require(plainEnter[0].modifiers.isEmpty)
+
+    let shiftedEnterWithCaps = records(Array("\u{1B}[13;66u".utf8), split: 5)
+    require(shiftedEnterWithCaps.count == 1)
+    require(shiftedEnterWithCaps[0].logicalKey == .enter)
+    require(shiftedEnterWithCaps[0].modifiers == [.shift, .caps])
+
+    let controls: [(String, ReixInputKey)] = [
+        ("\u{1B}[99;5u", .cancel),
+        ("\u{1B}[100;5u", .eof),
+        ("\u{1B}[9;1u", .tab),
+        ("\u{1B}[127;1u", .backspace)
+    ]
+    for (sequence, expected) in controls {
+        let output = records(Array(sequence.utf8), split: 3)
+        require(output.count == 1)
+        require(output[0].kind == .key)
+        require(output[0].logicalKey == expected)
+    }
+
+    for malformed in [
+        "\u{1B}[97;1;0u",
+        "\u{1B}[97;1;55296u",
+        "\u{1B}[97;0;97u",
+        "\u{1B}[97;1;1114112u"
+    ] {
+        let output = records(Array(malformed.utf8), split: 4)
+        require(output.count == 1)
+        require(output[0].logicalKey == .escape)
+    }
+
+    let bounded = records(
+        Array("\u{1B}[0;1;128512:128512:128512:128512u".utf8),
+        split: 17
+    )
+    require(bounded.count == 1)
+    require(bounded[0].kind == .insert)
+    require(bounded[0].count == ReixInputProtocol.maximumPayload)
+    let oversized = records(
+        Array("\u{1B}[0;1;128512:128512:128512:128512:128512u".utf8),
+        split: 17
+    )
+    require(oversized.count == 1)
+    require(oversized[0].logicalKey == .escape)
 }
 
 private func testPasteMismatchAndReset() {
@@ -223,12 +313,13 @@ private func testPasteSanitization() {
 }
 
 private func testQueueResume() {
-    var decoder = VTDecoder()
-    let bytes = Array(repeating: UInt8(0x61), count: VTDecoder.queueCapacity + 1)
-    let consumed = bytes.withUnsafeBufferPointer {
+    var decoder     = VTDecoder()
+    let queuedBytes = VTDecoder.queueCapacity * ReixInputProtocol.maximumPayload
+    let bytes       = Array(repeating: UInt8(0x61), count: queuedBytes + 1)
+    let consumed    = bytes.withUnsafeBufferPointer {
         decoder.consume($0.baseAddress!, count: bytes.count)
     }
-    require(consumed == VTDecoder.queueCapacity)
+    require(consumed == queuedBytes)
     while decoder.pop() != nil {}
     let resumed = bytes.withUnsafeBufferPointer {
         decoder.consume($0.baseAddress!.advanced(by: consumed), count: bytes.count - consumed)
@@ -236,7 +327,7 @@ private func testQueueResume() {
     require(resumed == 1)
 
     var exact = VTDecoder()
-    let full = Array(repeating: UInt8(0x61), count: VTDecoder.queueCapacity)
+    let full  = Array(repeating: UInt8(0x61), count: queuedBytes)
     full.withUnsafeBufferPointer {
         require(exact.consume($0.baseAddress!, count: full.count) == full.count)
     }
@@ -261,7 +352,10 @@ private func testFinishIdle() {
     }
     require(decoder.finishIdle())
     require(decoder.pop()?.logicalKey == .escape)
-    let bytes = Array(repeating: UInt8(0x61), count: VTDecoder.queueCapacity)
+    let bytes = Array(
+        repeating: UInt8(0x61),
+        count: VTDecoder.queueCapacity * ReixInputProtocol.maximumPayload
+    )
     bytes.withUnsafeBufferPointer {
         require(decoder.consume($0.baseAddress!, count: bytes.count) == bytes.count)
     }
@@ -289,6 +383,20 @@ private func input(
     }
 }
 
+private func key(
+    _ value  : ReixInputKey,
+    modifiers: ReixInputModifiers = [],
+    sequence : UInt32
+) -> ReixInputRecord {
+    ReixInputRecord(
+        kind: .key,
+        modifiers: modifiers,
+        sequence: sequence,
+        logicalKey: value,
+        physicalKey: 0x8000 | value.rawValue
+    )!
+}
+
 private func testEditorPaste() {
     var editor = ShellLineEditor()
     _ = editor.apply(input(.insert, sequence: 1, bytes: [0x78]))
@@ -297,7 +405,7 @@ private func testEditorPaste() {
     let commit = editor.apply(input(.pasteEnd, sequence: 4))
     require(commit.action == .editing)
     require(editor.count == 4)
-    let enter = editor.apply(input(.enter, sequence: 5))
+    let enter = editor.apply(key(.enter, modifiers: [.control], sequence: 5))
     require(enter.action == .submitted(4))
     _ = editor.apply(input(.pasteBegin, sequence: 6))
     for offset in 0..<511 {
@@ -389,11 +497,36 @@ private func testEditorControls() {
     require(editor.count == 4)
 }
 
+/// The terminal answering `CSI 18 t` becomes a resize record.
+private func testGeometryReport() {
+    let report = Array("\u{1B}[8;40;120t".utf8)
+    for split in 0...report.count {
+        let output = records(report, split: split)
+        require(output.count == 1)
+        require(output[0].kind == .resize)
+        require(output[0].width == 120)
+        require(output[0].height == 40)
+        require(output[0].count == 0)
+    }
+    // A terminal bigger than the surface can address is reported at the limit.
+    let huge = records(Array("\u{1B}[8;400;900t".utf8), split: 0)
+    require(huge.count == 1)
+    require(huge[0].width == ReixTextSurfaceFrameDescriptor.maximumColumns)
+    require(huge[0].height == ReixTextSurfaceFrameDescriptor.maximumRows)
+    // Anything of another shape stays an escape.
+    for other in ["\u{1B}[8;40t", "\u{1B}[9;40;120t", "\u{1B}[8;0;120t", "\u{1B}[8;4a;12t"] {
+        let output = records(Array(other.utf8), split: 0)
+        require(!output.contains { $0.kind == .resize })
+    }
+}
+
 testSplitSequences()
 testTextAndPaste()
+testEnhancedKeyboard()
 testPasteMismatchAndReset()
 testPasteSanitization()
 testQueueResume()
 testFinishIdle()
 testEditorPaste()
 testEditorControls()
+testGeometryReport()

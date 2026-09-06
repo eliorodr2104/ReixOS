@@ -11,7 +11,8 @@ import ReixABI
 import ShellLanguage
 
 private final class TypedExecutionProbe: @unchecked Sendable {
-    var passed = false
+    var passed      = false
+    var invocations = 0
 }
 
 @Suite("Typed shell runtime")
@@ -90,6 +91,84 @@ struct TypedShellRuntimeTests {
                 #expect(program.count > 0)
             }
         }
+
+        let script = "shell.help()\nshell.help()"
+        script.utf8.withContiguousStorageIfAvailable { bytes in
+            guard case .success(let program) = TypedShellParser.parse(
+                bytes.baseAddress!,
+                count: bytes.count
+            ) else {
+                Issue.record("typed parser refused newline-separated statements")
+                return
+            }
+            #expect(program.count == 2)
+        }
+
+        let formattedCall = "shell.help(\n)"
+        formattedCall.utf8.withContiguousStorageIfAvailable { bytes in
+            guard case .success(let program) = TypedShellParser.parse(
+                bytes.baseAddress!,
+                count: bytes.count
+            ) else {
+                Issue.record("typed parser refused a newline inside parentheses")
+                return
+            }
+            #expect(program.count == 1)
+        }
+
+        let chainedExpression = "let folders = list\n                .filter { $0.isFolder }"
+        chainedExpression.utf8.withContiguousStorageIfAvailable { bytes in
+            guard case .success(let program) = TypedShellParser.parse(
+                bytes.baseAddress!,
+                count: bytes.count
+            ) else {
+                Issue.record("typed parser split a continued member chain")
+                return
+            }
+            #expect(program.count == 1)
+        }
+    }
+
+    @Test("newline-separated scripts execute every statement")
+    func newlineScriptExecution() {
+        let probe  = TypedExecutionProbe()
+        let worker = Thread {
+            var signatures = InlineArray<1, TypedShellSignature?>(repeating: nil)
+            signatures[0] = TypedShellSignature(
+                namespace: "shell",
+                name: "help",
+                parameters: InlineArray<4, TypedShellParameter?>(repeating: nil),
+                parameterCount: 0,
+                effect: .pure
+            )
+            let source = Array("shell.help()\nshell.help()".utf8)
+            source.withUnsafeBufferPointer { bytes in
+                guard case .success(let program) = TypedShellParser.parse(
+                    bytes.baseAddress!,
+                    count: bytes.count
+                ) else { return }
+                var runtime = TypedShellRuntime()
+                var arena   = TypedShellSequenceArena()
+                let result  = signatures.span.withUnsafeBufferPointer { table in
+                    runtime.execute(
+                        program,
+                        source: bytes.baseAddress!,
+                        count: bytes.count,
+                        signatures: table,
+                        arena: &arena
+                    ) { _ in
+                        probe.invocations += 1
+                        return .success(.number(UInt64(probe.invocations)))
+                    }
+                }
+                probe.passed = result == .success(.number(2))
+            }
+        }
+        worker.stackSize = 8 * 1024 * 1024
+        worker.start()
+        while !worker.isFinished { Thread.sleep(forTimeInterval: 0.001) }
+        #expect(probe.passed)
+        #expect(probe.invocations == 2)
     }
 
     @Test("editor uses semantic keys, multiline completeness and UTF-8 boundaries")
@@ -108,11 +187,13 @@ struct TypedShellRuntimeTests {
             }
         }
         for byte in Array("list.filter {".utf8) { _ = editor.apply(insertion([byte])) }
-        let newline = editor.apply(ReixInputRecord(kind: .enter, sequence: sequence)!)
+        let newline = editor.apply(shellTestKey(.enter, sequence: sequence))
         #expect(newline.action == .editing)
         #expect(editor.count > "list.filter {".utf8.count)
         for byte in Array("$0.isFolder }".utf8) { _ = editor.apply(insertion([byte])) }
-        let submitted = editor.apply(ReixInputRecord(kind: .enter, sequence: sequence + 1)!)
+        let submitted = editor.apply(
+            shellTestKey(.enter, sequence: sequence + 1, modifiers: [.control])
+        )
         guard case .submitted(let count) = submitted.action else {
             Issue.record("complete multiline input did not submit")
             return
@@ -122,12 +203,12 @@ struct TypedShellRuntimeTests {
 
         _ = editor.apply(insertion([0xC3, 0xA8]))
         #expect(editor.cursor == 2)
-        _ = editor.apply(ReixInputRecord(kind: .left, sequence: sequence + 2)!)
+        _ = editor.apply(shellTestKey(.left, sequence: sequence + 2))
         #expect(editor.cursor == 0)
-        _ = editor.apply(ReixInputRecord(kind: .right, sequence: sequence + 3)!)
+        _ = editor.apply(shellTestKey(.right, sequence: sequence + 3))
         #expect(editor.cursor == 2)
 
-        let middle = editor.apply(ReixInputRecord(kind: .left, sequence: sequence + 4)!)
+        let middle = editor.apply(shellTestKey(.left, sequence: sequence + 4))
         #expect(middle.requiresPresentation)
         let replacement = editor.apply(insertion([UInt8(ascii: "x")]))
         #expect(replacement.requiresPresentation)
@@ -155,19 +236,19 @@ struct TypedShellRuntimeTests {
         #expect(insert.requiresPresentation)
         #expect(editor.withFrame { $0.frame.correlation == 7 })
 
-        let refusedEvent = ReixInputRecord(kind: .right, sequence: 4_096)!
+        let refusedEvent = shellTestKey(.right, sequence: 4_096)
         let refused      = editor.apply(refusedEvent)
         #expect(refused.action == .refused)
         #expect(!refused.requiresPresentation)
 
-        let newlineEvent = ReixInputRecord(kind: .enter, sequence: 19)!
+        let newlineEvent = shellTestKey(.enter, sequence: 19)
         let newline      = editor.apply(newlineEvent)
         #expect(newline.requiresPresentation)
         #expect(editor.withFrame {
             $0.frame.kind == .patch && $0.frame.correlation == newlineEvent.sequence
         })
 
-        let replacementEvent = ReixInputRecord(kind: .left, sequence: 900_001)!
+        let replacementEvent = shellTestKey(.left, sequence: 900_001)
         let replacement      = editor.apply(replacementEvent)
         #expect(replacement.requiresPresentation)
         #expect(editor.withFrame {
@@ -196,18 +277,18 @@ struct TypedShellRuntimeTests {
             ReixInputRecord(kind: .pasteEnd, sequence: 3)!
         )
         #expect(editor.cursor == source.count)
-        _ = editor.apply(ReixInputRecord(kind: .up, sequence: 4)!)
+        _ = editor.apply(shellTestKey(.up, sequence: 4))
         #expect(editor.cursor == 5)
-        _ = editor.apply(ReixInputRecord(kind: .up, sequence: 5)!)
+        _ = editor.apply(shellTestKey(.up, sequence: 5))
         #expect(editor.cursor == 2)
-        _ = editor.apply(ReixInputRecord(kind: .down, sequence: 6)!)
+        _ = editor.apply(shellTestKey(.down, sequence: 6))
         #expect(editor.cursor == 5)
-        _ = editor.apply(ReixInputRecord(kind: .home, sequence: 7)!)
+        _ = editor.apply(shellTestKey(.home, sequence: 7))
         #expect(editor.cursor == 3)
-        _ = editor.apply(ReixInputRecord(kind: .end, sequence: 8)!)
+        _ = editor.apply(shellTestKey(.end, sequence: 8))
         #expect(editor.cursor == 8)
         let replacement = editor.apply(
-            ReixInputRecord(kind: .delete, sequence: 9)!
+            shellTestKey(.delete, sequence: 9)
         )
         #expect(replacement.requiresPresentation)
 
@@ -216,11 +297,11 @@ struct TypedShellRuntimeTests {
         _ = help.withUnsafeBufferPointer {
             editor.apply(ReixInputRecord(kind: .insert, sequence: 8, bytes: $0.baseAddress!, count: $0.count)!)
         }
-        _ = editor.apply(ReixInputRecord(kind: .enter, sequence: 9)!)
+        _ = editor.apply(shellTestKey(.enter, sequence: 9))
         editor.reset()
-        _ = editor.apply(ReixInputRecord(kind: .up, sequence: 10)!)
+        _ = editor.apply(shellTestKey(.up, sequence: 10))
         #expect(editor.count == 4)
-        _ = editor.apply(ReixInputRecord(kind: .down, sequence: 11)!)
+        _ = editor.apply(shellTestKey(.down, sequence: 11))
         #expect(editor.count == 0)
     }
 }

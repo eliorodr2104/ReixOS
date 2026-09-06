@@ -8,6 +8,11 @@
 import ReixABI
 
 /// Deterministic local conversion from semantic screen frames to bounded VT output.
+///
+/// One rule holds the two modes together: the editor block sits at the flow
+/// cursor, occupying the rows immediately below it, and the transcript resumes at
+/// the block's first row. Nothing is addressed relative to the bottom of the
+/// screen, so where the terminal actually is and where this writes cannot diverge.
 public enum TextSurfaceVTRenderer {
     public struct Metrics: Equatable {
         public let fullBytes: UInt32
@@ -37,6 +42,74 @@ public enum TextSurfaceVTRenderer {
         return renderPlan(screen: screen, frame: frame, useDiff: selectedDiff, emit: emit)
     }
 
+    /// Presents output owned by another producer while preserving the complete
+    /// semantic editor scene. The output record contains no VT bytes: controls
+    /// are rendered as replacement glyphs and only this backend emits escapes.
+    public static func renderExternal(
+        screen: TextSurfaceScreenModel,
+        record: ReixTextOutputRecord,
+        plan  : TextSurfaceScreenModel.ExternalOutputPlan,
+        emit  : (UInt8) -> Void
+    ) -> UInt32 {
+        var count         : UInt32 = 0
+        let redrawsEditor = screen.editorPainted && plan.editorPlacement != nil
+        if redrawsEditor {
+            cursorVisible(false, count: &count, emit: emit)
+            eraseEditor(screen: screen, count: &count, emit: emit)
+            cup(
+                row: screen.flowRow,
+                column: screen.flowColumn + 1,
+                count: &count,
+                emit: emit
+            )
+        }
+
+        renderExternalPayload(record, count: &count, emit: emit)
+
+        if let placement = plan.editorPlacement {
+            openStoredBlock(
+                screen: screen,
+                placement: placement,
+                count: &count,
+                emit: emit
+            )
+            cup(row: placement.anchorRow, column: 1, count: &count, emit: emit)
+            if screen.mode == .codeEditor {
+                renderStoredCodeEditor(
+                    screen: screen,
+                    baseRow: placement.anchorRow,
+                    count: &count,
+                    emit: emit
+                )
+            } else {
+                renderStoredText(screen: screen, count: &count, emit: emit)
+            }
+            renderStoredOverlay(
+                screen: screen,
+                baseRow: placement.anchorRow,
+                count: &count,
+                emit: emit
+            )
+            style(.plain, count: &count, emit: emit)
+            let cursorSurfaceRow = screen.mode == .codeEditor
+                ? ReixCodeEditorLayout.surfaceRow(
+                    for: screen.cursorRow,
+                    viewportRow: screen.viewportRow,
+                    viewportRows: screen.viewportRows
+                ) ?? ReixCodeEditorLayout.headerRows
+                : screen.cursorRow - screen.viewportRow
+            cup(
+                row: placement.anchorRow + cursorSurfaceRow,
+                column: screen.cursorColumn + 1,
+                count: &count,
+                emit: emit
+            )
+            cursorVisible(true, count: &count, emit: emit)
+        }
+
+        return count
+    }
+
     private static func renderPlan(
         screen: TextSurfaceScreenModel,
         frame: ReixTextSurfaceFrameView,
@@ -45,12 +118,9 @@ public enum TextSurfaceVTRenderer {
     ) -> UInt32 {
         switch frame.descriptor.mode {
             case .transcript:
-                return renderTranscriptPlan(
-                    screen: screen,
-                    frame: frame,
-                    useDiff: useDiff,
-                    emit: emit
-                )
+                return renderTranscriptPlan(screen: screen, frame: frame, emit: emit)
+            case .codeTranscript:
+                return renderCodeTranscriptPlan(screen: screen, frame: frame, emit: emit)
             case .editor:
                 return renderEditorPlan(
                     screen: screen,
@@ -58,21 +128,79 @@ public enum TextSurfaceVTRenderer {
                     useDiff: useDiff,
                     emit: emit
                 )
+            case .codeEditor:
+                return renderCodeEditorPlan(
+                    screen: screen,
+                    frame: frame,
+                    useDiff: useDiff,
+                    emit: emit
+                )
         }
     }
 
+    /// Appended output goes where the transcript left off. If the editor is on
+    /// screen its rows are given back first, because the text now owns them.
+    private static func renderTranscriptPlan(
+        screen: TextSurfaceScreenModel,
+        frame : ReixTextSurfaceFrameView,
+        emit  : (UInt8) -> Void
+    ) -> UInt32 {
+        var count: UInt32 = 0
+        if screen.reparks(frame) {
+            parkAtBottom(count: &count, emit: emit)
+        } else if screen.editorPainted {
+            eraseEditor(screen: screen, count: &count, emit: emit)
+            cup(
+                row: screen.flowRow,
+                column: screen.flowColumn + 1,
+                count: &count,
+                emit: emit
+            )
+        }
+        renderChunk(frame: frame, count: &count, emit: emit)
+        return count
+    }
+
+    /// A submitted script remains a semantic code block in the transcript.
+    /// The buffer still contains only source bytes; this backend derives the
+    /// title, gutter and visual background exactly as it does for the editor.
+    private static func renderCodeTranscriptPlan(
+        screen: TextSurfaceScreenModel,
+        frame : ReixTextSurfaceFrameView,
+        emit  : (UInt8) -> Void
+    ) -> UInt32 {
+        var count: UInt32 = 0
+        if screen.reparks(frame) {
+            parkAtBottom(count: &count, emit: emit)
+        } else if screen.editorPainted {
+            eraseEditor(screen: screen, count: &count, emit: emit)
+            cup(
+                row: screen.flowRow,
+                column: screen.flowColumn + 1,
+                count: &count,
+                emit: emit
+            )
+        }
+        renderCodeTranscript(frame: frame, count: &count, emit: emit)
+        return count
+    }
+
+    /// The block is repainted in place. A patch that only extends the last row is
+    /// written where the cursor already is, which is the whole point of the diff.
     private static func renderEditorPlan(
         screen: TextSurfaceScreenModel,
         frame: ReixTextSurfaceFrameView,
         useDiff: Bool,
         emit: (UInt8) -> Void
     ) -> UInt32 {
-        var count: UInt32 = 0
-        let descriptor = frame.descriptor
-        let baseRow = descriptor.rows - descriptor.viewportRows + 1
-        let start = useDiff ? Int(descriptor.patchOffset) : 0
-        var startRow = descriptor.viewportRow
-        var startColumn: UInt16 = 0
+        var count       : UInt32 = 0
+        let descriptor  = frame.descriptor
+        let placement   = screen.placement(for: frame)
+        let anchor      = placement.anchorRow
+        let height      = min(max(1, descriptor.viewportRows), descriptor.rows)
+        let start       = useDiff ? Int(descriptor.patchOffset) : 0
+        var startRow    = descriptor.viewportRow
+        var startColumn : UInt16 = 0
 
         if useDiff,
            descriptor.textLength == 0,
@@ -80,7 +208,7 @@ public enum TextSurfaceVTRenderer {
            stylesMatch(screen: screen, frame: frame) {
             style(.plain, count: &count, emit: emit)
             cup(
-                row: baseRow + descriptor.cursorRow - descriptor.viewportRow,
+                row: anchor + descriptor.cursorRow - descriptor.viewportRow,
                 column: descriptor.cursorColumn + 1,
                 count: &count,
                 emit: emit
@@ -88,91 +216,285 @@ public enum TextSurfaceVTRenderer {
             return count
         }
 
+        let destructive = !useDiff
+            || descriptor.patchOffset != UInt32(screen.textLength)
+            || descriptor.replacedLength != 0
+        let hidesCursor = destructive
+        if hidesCursor { cursorVisible(false, count: &count, emit: emit) }
+
         if useDiff, let position = position(of: start, in: screen),
            position.row >= descriptor.viewportRow,
-           position.row < descriptor.viewportRow + descriptor.viewportRows {
+           position.row < descriptor.viewportRow + height {
             startRow = position.row
             startColumn = position.column
-            if descriptor.patchOffset != UInt32(screen.textLength)
-                || descriptor.replacedLength != 0 {
-                cup(
-                    row: baseRow + position.row - descriptor.viewportRow,
-                    column: position.column + 1,
-                    count: &count,
-                    emit: emit
-                )
-                clearToViewportEnd(
-                    from: position.row - descriptor.viewportRow,
-                    rows: descriptor.viewportRows,
-                    baseRow: baseRow,
-                    count: &count,
-                    emit: emit
-                )
-            }
         } else {
-            let clearBase = editorClearBase(screen: screen, descriptor: descriptor)
-            clearViewport(
-                baseRow: clearBase,
-                rows: descriptor.rows - clearBase + 1,
+            openBlock(
+                screen: screen,
+                frame: frame,
+                placement: placement,
+                height: height,
                 count: &count,
                 emit: emit
             )
         }
         cup(
-            row: baseRow + startRow - descriptor.viewportRow,
+            row: anchor + startRow - descriptor.viewportRow,
             column: startColumn + 1,
             count: &count,
             emit: emit
         )
-        renderText(screen: screen, frame: frame, from: start, count: &count, emit: emit)
-        renderOverlay(frame, baseRow: baseRow, count: &count, emit: emit)
+        renderText(
+            screen: screen,
+            frame: frame,
+            from: start,
+            startRow: startRow,
+            count: &count,
+            emit: emit
+        )
+        // Paint the desired suffix before erasing residue. Without synchronized
+        // output, erasing first shows a blank gap for the length of the suffix.
+        if destructive, useDiff,
+           let end = desiredPosition(at: screen.desiredTextLength(for: frame), screen: screen, frame: frame),
+           end.row >= descriptor.viewportRow,
+           end.row < descriptor.viewportRow + height {
+            cup(
+                row: anchor + end.row - descriptor.viewportRow,
+                column: end.column + 1,
+                count: &count,
+                emit: emit
+            )
+            clearToViewportEnd(
+                from: end.row - descriptor.viewportRow,
+                rows: height,
+                baseRow: anchor,
+                count: &count,
+                emit: emit
+            )
+        }
+        renderOverlay(frame, baseRow: anchor, count: &count, emit: emit)
         style(.plain, count: &count, emit: emit)
         cup(
-            row: baseRow + descriptor.cursorRow - descriptor.viewportRow,
+            row: anchor + descriptor.cursorRow - descriptor.viewportRow,
             column: descriptor.cursorColumn + 1,
             count: &count,
             emit: emit
         )
+        if hidesCursor { cursorVisible(true, count: &count, emit: emit) }
         return count
     }
 
-    private static func renderTranscriptPlan(
-        screen: TextSurfaceScreenModel,
-        frame: ReixTextSurfaceFrameView,
+    /// Code-editor frames keep only script bytes in the surface mirror. Header,
+    /// line numbers, and continuation gutters are derived from the semantic mode
+    /// here, so they can never leak into the command submitted by the shell.
+    private static func renderCodeEditorPlan(
+        screen : TextSurfaceScreenModel,
+        frame  : ReixTextSurfaceFrameView,
         useDiff: Bool,
-        emit: (UInt8) -> Void
+        emit   : (UInt8) -> Void
     ) -> UInt32 {
-        var count: UInt32 = 0
-        let start: Int
-        if useDiff {
-            start = Int(frame.descriptor.patchOffset)
-        } else {
-            start = 0
-            if screen.revision != 0 {
-                clearDisplay(count: &count, emit: emit)
-            }
+        var count            : UInt32 = 0
+        let descriptor       = frame.descriptor
+        let placement        = screen.placement(for: frame)
+        let anchor           = placement.anchorRow
+        let height           = min(max(1, descriptor.viewportRows), descriptor.rows)
+        let contentHeight    = ReixCodeEditorLayout.contentViewportRows(for: height)
+        let start            = useDiff ? Int(descriptor.patchOffset) : 0
+        var startRow         = descriptor.viewportRow
+        let cursorSurfaceRow = ReixCodeEditorLayout.surfaceRow(
+            for: descriptor.cursorRow,
+            viewportRow: descriptor.viewportRow,
+            viewportRows: height
+        ) ?? ReixCodeEditorLayout.headerRows
+
+        if useDiff,
+           descriptor.textLength == 0,
+           descriptor.replacedLength == 0,
+           stylesMatch(screen: screen, frame: frame) {
+            style(.plain, count: &count, emit: emit)
+            cup(
+                row: anchor + cursorSurfaceRow,
+                column: descriptor.cursorColumn + 1,
+                count: &count,
+                emit: emit
+            )
+            return count
         }
-        renderTranscriptText(
-            screen: screen,
-            frame: frame,
-            from: start,
+
+        let destructive = !useDiff
+            || descriptor.patchOffset != UInt32(screen.textLength)
+            || descriptor.replacedLength != 0
+        let hidesCursor = destructive
+        if hidesCursor { cursorVisible(false, count: &count, emit: emit) }
+
+        if useDiff,
+           let position = codePosition(of: start, in: screen),
+           ReixCodeEditorLayout.surfaceRow(
+               for: position.row,
+               viewportRow: descriptor.viewportRow,
+               viewportRows: height
+           ) != nil {
+            startRow = position.row
+        } else {
+            openBlock(
+                screen: screen,
+                frame: frame,
+                placement: placement,
+                height: height,
+                count: &count,
+                emit: emit
+            )
+        }
+
+        renderCodeEditorRows(
+            length: screen.desiredTextLength(for: frame),
+            columns: descriptor.columns,
+            viewportRow: descriptor.viewportRow,
+            viewportRows: descriptor.viewportRows,
+            baseRow: anchor,
+            startRow: startRow,
+            clearRepaintedRows: destructive && useDiff,
+            byte: { screen.desiredTextByte(at: $0, for: frame) },
+            role: { styleRole(at: $0, frame: frame) },
             count: &count,
             emit: emit
         )
+        if destructive, useDiff,
+           let end = codeDesiredPosition(
+               at: screen.desiredTextLength(for: frame),
+               screen: screen,
+               frame: frame
+           ),
+           let endSurfaceRow = ReixCodeEditorLayout.surfaceRow(
+               for: end.row,
+               viewportRow: descriptor.viewportRow,
+               viewportRows: height
+           ) {
+            cup(
+                row: anchor + endSurfaceRow,
+                column: end.column + 1,
+                count: &count,
+                emit: emit
+            )
+            clearToViewportEnd(
+                from: endSurfaceRow,
+                rows: ReixCodeEditorLayout.headerRows + contentHeight,
+                baseRow: anchor,
+                count: &count,
+                emit: emit
+            )
+        }
+        if !useDiff {
+            renderCodeEditorFooter(
+                columns: descriptor.columns,
+                viewportRows: height,
+                baseRow: anchor,
+                count: &count,
+                emit: emit
+            )
+        }
+        renderOverlay(frame, baseRow: anchor, count: &count, emit: emit)
         style(.plain, count: &count, emit: emit)
+        cup(
+            row: anchor + cursorSurfaceRow,
+            column: descriptor.cursorColumn + 1,
+            count: &count,
+            emit: emit
+        )
+        if hidesCursor { cursorVisible(true, count: &count, emit: emit) }
         return count
+    }
+
+    /// Gives the block the rows it asked for: closes a partial transcript line,
+    /// scrolls if the bottom is in the way, then blanks what it is about to own.
+    private static func openBlock(
+        screen   : TextSurfaceScreenModel,
+        frame    : ReixTextSurfaceFrameView,
+        placement: TextSurfaceScreenModel.Placement,
+        height   : UInt16,
+        count    : inout UInt32,
+        emit     : (UInt8) -> Void
+    ) {
+        if screen.reparks(frame) {
+            parkAtBottom(count: &count, emit: emit)
+        } else if screen.editorPainted {
+            eraseEditor(screen: screen, count: &count, emit: emit)
+            cup(
+                row: screen.flowRow,
+                column: screen.flowColumn + 1,
+                count: &count,
+                emit: emit
+            )
+        }
+        style(.plain, count: &count, emit: emit)
+        if placement.breakLine {
+            emitted(carriageReturn, count: &count, emit: emit)
+            emitted(lineFeed, count: &count, emit: emit)
+        }
+        if placement.scrollRows > 0 {
+            cup(row: frame.descriptor.rows, column: 1, count: &count, emit: emit)
+            for _ in 0..<placement.scrollRows {
+                emitted(carriageReturn, count: &count, emit: emit)
+                emitted(lineFeed, count: &count, emit: emit)
+            }
+        }
+        clearViewport(
+            baseRow: placement.anchorRow,
+            rows: height,
+            count: &count,
+            emit: emit
+        )
+    }
+
+    private static func eraseEditor(
+        screen: TextSurfaceScreenModel,
+        count : inout UInt32,
+        emit  : (UInt8) -> Void
+    ) {
+        guard screen.editorRows > 0, screen.editorAnchorRow <= screen.rows else { return }
+        let available = screen.rows - screen.editorAnchorRow + 1
+        style(.plain, count: &count, emit: emit)
+        clearViewport(
+            baseRow: screen.editorAnchorRow,
+            rows: min(screen.editorRows, available),
+            count: &count,
+            emit: emit
+        )
+    }
+
+    private static func openStoredBlock(
+        screen   : TextSurfaceScreenModel,
+        placement: TextSurfaceScreenModel.Placement,
+        count    : inout UInt32,
+        emit     : (UInt8) -> Void
+    ) {
+        style(.plain, count: &count, emit: emit)
+        if placement.breakLine {
+            emitted(carriageReturn, count: &count, emit: emit)
+            emitted(lineFeed, count: &count, emit: emit)
+        }
+        if placement.scrollRows > 0 {
+            cup(row: screen.rows, column: 1, count: &count, emit: emit)
+            for _ in 0..<placement.scrollRows {
+                emitted(carriageReturn, count: &count, emit: emit)
+                emitted(lineFeed, count: &count, emit: emit)
+            }
+        }
+        clearViewport(
+            baseRow: placement.anchorRow,
+            rows: min(max(1, screen.editorRows), screen.rows),
+            count: &count,
+            emit: emit
+        )
     }
 
     private static func diffEligible(
         screen: TextSurfaceScreenModel,
         frame: ReixTextSurfaceFrameView
     ) -> Bool {
-        switch frame.descriptor.mode {
-            case .transcript:
-                return transcriptDiffEligible(screen: screen, frame: frame)
-            case .editor:
-                return editorDiffEligible(screen: screen, frame: frame)
-        }
+        guard frame.descriptor.mode != .transcript,
+              frame.descriptor.mode != .codeTranscript
+        else { return false }
+        return editorDiffEligible(screen: screen, frame: frame)
     }
 
     private static func editorDiffEligible(
@@ -180,8 +502,14 @@ public enum TextSurfaceVTRenderer {
         frame: ReixTextSurfaceFrameView
     ) -> Bool {
         let descriptor = frame.descriptor
+        let placement  = screen.placement(for: frame)
         guard descriptor.kind == .patch,
-              screen.mode == .editor,
+              screen.mode == descriptor.mode,
+              screen.editorPainted,
+              !screen.reparks(frame),
+              !placement.breakLine,
+              placement.scrollRows == 0,
+              placement.anchorRow == screen.editorAnchorRow,
               descriptor.overlayLength == 0,
               screen.overlayLength == 0,
               descriptor.viewportRow == screen.viewportRow,
@@ -199,27 +527,6 @@ public enum TextSurfaceVTRenderer {
               ),
               let position = position(of: Int(descriptor.patchOffset), in: screen),
               position.row >= descriptor.viewportRow
-        else { return false }
-        return true
-    }
-
-    private static func transcriptDiffEligible(
-        screen: TextSurfaceScreenModel,
-        frame: ReixTextSurfaceFrameView
-    ) -> Bool {
-        let descriptor = frame.descriptor
-        guard descriptor.kind == .patch,
-              descriptor.columns == screen.columns,
-              descriptor.rows == screen.rows,
-              descriptor.overlayLength == 0,
-              screen.overlayLength == 0,
-              descriptor.patchOffset == UInt32(screen.textLength),
-              descriptor.replacedLength == 0,
-              ReixTextLayout.isGraphemeBoundary(
-                  Int(descriptor.patchOffset),
-                  count: screen.desiredTextLength(for: frame),
-                  byte: { screen.desiredTextByte(at: $0, for: frame) }
-              )
         else { return false }
         return true
     }
@@ -248,6 +555,47 @@ public enum TextSurfaceVTRenderer {
         return (result.row, result.column)
     }
 
+    private static func codePosition(
+        of offset: Int,
+        in model : TextSurfaceScreenModel
+    ) -> (row: UInt16, column: UInt16)? {
+        guard let result = ReixCodeEditorLayout.position(
+            at: offset,
+            count: model.textLength,
+            columns: model.columns,
+            byte: model.textByte
+        ) else { return nil }
+        return (result.row, result.column)
+    }
+
+    private static func desiredPosition(
+        at offset: Int,
+        screen   : TextSurfaceScreenModel,
+        frame    : ReixTextSurfaceFrameView
+    ) -> (row: UInt16, column: UInt16)? {
+        guard let result = ReixTextLayout.position(
+            at: offset,
+            count: screen.desiredTextLength(for: frame),
+            columns: frame.descriptor.columns,
+            byte: { screen.desiredTextByte(at: $0, for: frame) }
+        ) else { return nil }
+        return (result.row, result.column)
+    }
+
+    private static func codeDesiredPosition(
+        at offset: Int,
+        screen   : TextSurfaceScreenModel,
+        frame    : ReixTextSurfaceFrameView
+    ) -> (row: UInt16, column: UInt16)? {
+        guard let result = ReixCodeEditorLayout.position(
+            at: offset,
+            count: screen.desiredTextLength(for: frame),
+            columns: frame.descriptor.columns,
+            byte: { screen.desiredTextByte(at: $0, for: frame) }
+        ) else { return nil }
+        return (result.row, result.column)
+    }
+
     private static func clearViewport(
         baseRow: UInt16,
         rows: UInt16,
@@ -260,28 +608,15 @@ public enum TextSurfaceVTRenderer {
         }
     }
 
-    private static func editorClearBase(
-        screen: TextSurfaceScreenModel,
-        descriptor: ReixTextSurfaceFrameDescriptor
-    ) -> UInt16 {
-        guard screen.mode == .editor,
-              screen.rows == descriptor.rows,
-              screen.viewportRows <= screen.rows
-        else { return descriptor.rows - descriptor.viewportRows + 1 }
-        let oldBase = screen.rows - screen.viewportRows + 1
-        let newBase = descriptor.rows - descriptor.viewportRows + 1
-        return min(oldBase, newBase)
-    }
-
-    private static func clearDisplay(
+    /// Sends the cursor to the last row without needing to know which one that is:
+    /// CUP clamps, so an out-of-range row is the portable way to say "the bottom".
+    /// Nothing is erased, because the transcript above belongs to the terminal.
+    private static func parkAtBottom(
         count: inout UInt32,
-        emit: (UInt8) -> Void
+        emit : (UInt8) -> Void
     ) {
-        emitted(escape, count: &count, emit: emit)
-        emitted(openBracket, count: &count, emit: emit)
-        emitted(UInt8(ascii: "2"), count: &count, emit: emit)
-        emitted(UInt8(ascii: "J"), count: &count, emit: emit)
-        cup(row: 1, column: 1, count: &count, emit: emit)
+        style(.plain, count: &count, emit: emit)
+        cup(row: bottomRow, column: 1, count: &count, emit: emit)
     }
 
     private static func clearToViewportEnd(
@@ -299,32 +634,38 @@ public enum TextSurfaceVTRenderer {
         }
     }
 
+    /// Writes the visible rows of the block, and only those. Every line break it
+    /// emits has to land inside the block: one past the last row would scroll the
+    /// screen out from under the anchor, and one before the first would waste it.
     private static func renderText(
-        screen: TextSurfaceScreenModel,
-        frame: ReixTextSurfaceFrameView,
+        screen    : TextSurfaceScreenModel,
+        frame     : ReixTextSurfaceFrameView,
         from start: Int,
-        count: inout UInt32,
-        emit: (UInt8) -> Void
+        startRow  : UInt16,
+        count     : inout UInt32,
+        emit      : (UInt8) -> Void
     ) {
         let descriptor = frame.descriptor
-        var row: UInt16 = 0
-        var column: UInt16 = 0
+        var row        : UInt16          = 0
+        var column     : UInt16          = 0
         var activeRole = ReixTextSurfaceStyleRole.plain
-        let length = screen.desiredTextLength(for: frame)
-        var offset = 0
+        let length     = screen.desiredTextLength(for: frame)
+        let byte       : (Int) -> UInt8? = { screen.desiredTextByte(at: $0, for: frame) }
+        var offset     = 0
         while offset < length {
             guard let end = ReixTextLayout.nextGraphemeBoundary(
                 after: offset,
                 count: length,
-                byte: { screen.desiredTextByte(at: $0, for: frame) }
+                byte: byte
             ),
-                  let first = screen.desiredTextByte(at: offset, for: frame),
+                  let first = byte(offset),
                   let width = ReixTextLayout.cellWidth(
                       from: offset,
                       to: end,
                       count: length,
-                      byte: { screen.desiredTextByte(at: $0, for: frame) }
-                  )
+                      byte: byte
+                  ),
+                  width <= descriptor.columns
             else { return }
             let wrapsBefore = first != lineFeed
                 && column > 0
@@ -332,7 +673,8 @@ public enum TextSurfaceVTRenderer {
             if wrapsBefore {
                 row &+= 1
                 column = 0
-                if offset >= start && visible(row, descriptor: descriptor) {
+                // The cursor was placed on startRow, so that row needs no break.
+                if offset >= start, row > startRow, visible(row, descriptor: descriptor) {
                     emitted(carriageReturn, count: &count, emit: emit)
                     emitted(lineFeed, count: &count, emit: emit)
                 }
@@ -344,17 +686,12 @@ public enum TextSurfaceVTRenderer {
                     activeRole = role
                 }
                 if first == lineFeed {
-                    emitted(carriageReturn, count: &count, emit: emit)
-                    emitted(lineFeed, count: &count, emit: emit)
+                    if visible(row &+ 1, descriptor: descriptor) {
+                        emitted(carriageReturn, count: &count, emit: emit)
+                        emitted(lineFeed, count: &count, emit: emit)
+                    }
                 } else {
-                    emitGrapheme(
-                        screen: screen,
-                        frame: frame,
-                        from: offset,
-                        to: end,
-                        count: &count,
-                        emit: emit
-                    )
+                    emitGrapheme(byte: byte, from: offset, to: end, count: &count, emit: emit)
                 }
             }
             if first == lineFeed {
@@ -372,35 +709,574 @@ public enum TextSurfaceVTRenderer {
         if activeRole != .plain { style(.plain, count: &count, emit: emit) }
     }
 
-    private static func renderTranscriptText(
-        screen: TextSurfaceScreenModel,
+    /// Appended transcript text needs no layout of its own: the terminal wraps it.
+    private static func renderChunk(
         frame: ReixTextSurfaceFrameView,
-        from start: Int,
         count: inout UInt32,
-        emit: (UInt8) -> Void
+        emit : (UInt8) -> Void
     ) {
-        let length = screen.desiredTextLength(for: frame)
-        var activeRole = ReixTextSurfaceStyleRole.plain
-        var offset = start
+        let length      = Int(frame.descriptor.textLength)
+        let byte        : (Int) -> UInt8?          = { frame.textByte(at: $0) }
+        let defaultRole : ReixTextSurfaceStyleRole = frame.descriptor.severity.rawValue
+            >= ReixTextOutputSeverity.warning.rawValue
+            || frame.descriptor.outputKind == .diagnostic
+            || frame.descriptor.outputKind == .audit
+            ? .diagnostic
+            : .plain
+        let background        = frame.descriptor.outputKind == .diagnostic
+        var activeRole        = ReixTextSurfaceStyleRole.plain
+        var offset            = 0
+        var endedWithLineFeed = false
         while offset < length {
             guard let end = ReixTextLayout.nextGraphemeBoundary(
                 after: offset,
                 count: length,
-                byte: { screen.desiredTextByte(at: $0, for: frame) }
-            ), let first = screen.desiredTextByte(at: offset, for: frame)
+                byte: byte
+            ), let first = byte(offset)
             else { return }
-            let role = styleRole(at: offset, frame: frame)
+            let framedRole = styleRole(at: offset, frame: frame)
+            let role       = framedRole == .plain ? defaultRole : framedRole
             if role != activeRole {
-                style(role, count: &count, emit: emit)
+                style(role, background: background, count: &count, emit: emit)
                 activeRole = role
             }
+            if first == lineFeed {
+                if background { clearToLineEnd(count: &count, emit: emit) }
+                emitted(carriageReturn, count: &count, emit: emit)
+                emitted(lineFeed, count: &count, emit: emit)
+                endedWithLineFeed = true
+            } else {
+                emitGrapheme(byte: byte, from: offset, to: end, count: &count, emit: emit)
+                endedWithLineFeed = false
+            }
+            offset = end
+        }
+        if background && !endedWithLineFeed { clearToLineEnd(count: &count, emit: emit) }
+        if activeRole != .plain || background { style(.plain, count: &count, emit: emit) }
+    }
+
+    private static func renderExternalPayload(
+        _ record: ReixTextOutputRecord,
+        count   : inout UInt32,
+        emit    : (UInt8) -> Void
+    ) {
+        let role: ReixTextSurfaceStyleRole = record.severity.rawValue >= ReixTextOutputSeverity.warning.rawValue
+            || record.kind == .diagnostic
+            || record.kind == .audit
+            ? .diagnostic
+            : .plain
+        let background = record.kind == .diagnostic
+        if role != .plain || background {
+            style(role, background: background, count: &count, emit: emit)
+        }
+        var offset            = 0
+        var endedWithLineFeed = false
+        while offset < record.payloadCount {
+            guard let end = ReixTextLayout.nextGraphemeBoundary(
+                after: offset,
+                count: record.payloadCount,
+                byte: record.payloadByte
+            ), let first = record.payloadByte(at: offset)
+            else { return }
+            if first == lineFeed {
+                if background { clearToLineEnd(count: &count, emit: emit) }
+                emitted(carriageReturn, count: &count, emit: emit)
+                emitted(lineFeed, count: &count, emit: emit)
+                endedWithLineFeed = true
+            } else {
+                emitGrapheme(
+                    byte: record.payloadByte,
+                    from: offset,
+                    to: end,
+                    count: &count,
+                    emit: emit
+                )
+                endedWithLineFeed = false
+            }
+            offset = end
+        }
+        if background && !endedWithLineFeed { clearToLineEnd(count: &count, emit: emit) }
+        if role != .plain || background { style(.plain, count: &count, emit: emit) }
+    }
+
+    private static func renderStoredText(
+        screen: TextSurfaceScreenModel,
+        count : inout UInt32,
+        emit  : (UInt8) -> Void
+    ) {
+        var row        : UInt16 = 0
+        var column     : UInt16 = 0
+        var activeRole = ReixTextSurfaceStyleRole.plain
+        var offset     = 0
+
+        while offset < screen.textLength {
+            guard let end = ReixTextLayout.nextGraphemeBoundary(
+                after: offset,
+                count: screen.textLength,
+                byte: screen.textByte
+            ),
+                  let first = screen.textByte(at: offset),
+                  let width = ReixTextLayout.cellWidth(
+                    from: offset,
+                    to: end,
+                    count: screen.textLength,
+                    byte: screen.textByte
+                  ),
+                  width <= screen.columns
+            else { return }
+            let wrapsBefore = first != lineFeed
+                && column > 0
+                && width > screen.columns - column
+            if wrapsBefore {
+                row &+= 1
+                column = 0
+                if row > screen.viewportRow && storedVisible(row, screen: screen) {
+                    emitted(carriageReturn, count: &count, emit: emit)
+                    emitted(lineFeed, count: &count, emit: emit)
+                }
+            }
+            if storedVisible(row, screen: screen) {
+                let role = storedStyleRole(at: offset, screen: screen)
+                if role != activeRole {
+                    style(role, count: &count, emit: emit)
+                    activeRole = role
+                }
+                if first == lineFeed {
+                    if storedVisible(row &+ 1, screen: screen) {
+                        emitted(carriageReturn, count: &count, emit: emit)
+                        emitted(lineFeed, count: &count, emit: emit)
+                    }
+                } else {
+                    emitGrapheme(
+                        byte: screen.textByte,
+                        from: offset,
+                        to: end,
+                        count: &count,
+                        emit: emit
+                    )
+                }
+            }
+            if first == lineFeed {
+                row &+= 1
+                column = 0
+            } else {
+                column += width
+                if column == screen.columns {
+                    row &+= 1
+                    column = 0
+                }
+            }
+            offset = end
+        }
+        if activeRole != .plain { style(.plain, count: &count, emit: emit) }
+    }
+
+    private static func renderStoredCodeEditor(
+        screen : TextSurfaceScreenModel,
+        baseRow: UInt16,
+        count  : inout UInt32,
+        emit   : (UInt8) -> Void
+    ) {
+        renderCodeEditorRows(
+            length: screen.textLength,
+            columns: screen.columns,
+            viewportRow: screen.viewportRow,
+            viewportRows: screen.viewportRows,
+            baseRow: baseRow,
+            startRow: screen.viewportRow,
+            clearRepaintedRows: false,
+            byte: screen.textByte,
+            role: { storedStyleRole(at: $0, screen: screen) },
+            count: &count,
+            emit: emit
+        )
+        renderCodeEditorFooter(
+            columns: screen.columns,
+            viewportRows: screen.viewportRows,
+            baseRow: baseRow,
+            count: &count,
+            emit: emit
+        )
+    }
+
+    private static func renderCodeEditorRows(
+        length            : Int,
+        columns           : UInt16,
+        viewportRow       : UInt16,
+        viewportRows      : UInt16,
+        baseRow           : UInt16,
+        startRow          : UInt16,
+        clearRepaintedRows: Bool,
+        byte              : (Int) -> UInt8?,
+        role              : (Int) -> ReixTextSurfaceStyleRole,
+        count             : inout UInt32,
+        emit              : (UInt8) -> Void
+    ) {
+        let contentRows     = ReixCodeEditorLayout.contentViewportRows(for: viewportRows)
+        let firstContentRow = ReixCodeEditorLayout.firstVisibleContentRow(
+            viewportRow: viewportRow
+        )
+        func isVisible(_ row: UInt16) -> Bool {
+            row >= firstContentRow && row < firstContentRow + contentRows
+        }
+
+        if startRow == viewportRow {
+            cup(row: baseRow, column: 1, count: &count, emit: emit)
+            emitEditorHeader(columns: columns, background: false, count: &count, emit: emit)
+        }
+
+        let gutter         = ReixCodeEditorLayout.gutterColumns(for: columns)
+        let contentColumns = columns - gutter
+        guard contentColumns > 0 else { return }
+        var offset       = 0
+        var row          = ReixCodeEditorLayout.headerRows
+        var line         = 1
+        var logicalStart = true
+        var pendingEmpty = length == 0
+
+        while offset < length || pendingEmpty {
+            pendingEmpty = false
+            let segmentStart    = offset
+            var segmentEnd      = offset
+            var used            : UInt16 = 0
+            var consumedNewline = false
+            var wrapped         = false
+
+            while offset < length {
+                guard let end = ReixTextLayout.nextGraphemeBoundary(
+                    after: offset,
+                    count: length,
+                    byte: byte
+                ),
+                      let first = byte(offset)
+                else { return }
+                if first == lineFeed {
+                    offset = end
+                    consumedNewline = true
+                    break
+                }
+                guard let width = ReixTextLayout.cellWidth(
+                    from: offset,
+                    to: end,
+                    count: length,
+                    byte: byte
+                ),
+                      width <= contentColumns
+                else { return }
+                if used > 0 && width > contentColumns - used {
+                    wrapped = true
+                    break
+                }
+                used += width
+                offset = end
+                segmentEnd = end
+                if used == contentColumns {
+                    wrapped = true
+                    break
+                }
+            }
+
+            if row >= startRow && isVisible(row) {
+                cup(
+                    row: baseRow + ReixCodeEditorLayout.headerRows + row - firstContentRow,
+                    column: 1,
+                    count: &count,
+                    emit: emit
+                )
+                emitCodeGutter(
+                    line: logicalStart ? line : nil,
+                    columns: gutter,
+                    background: false,
+                    count: &count,
+                    emit: emit
+                )
+                var activeRole = ReixTextSurfaceStyleRole.plain
+                var current    = segmentStart
+                while current < segmentEnd {
+                    guard let end = ReixTextLayout.nextGraphemeBoundary(
+                        after: current,
+                        count: length,
+                        byte: byte
+                    ) else { return }
+                    let nextRole = role(current)
+                    if nextRole != activeRole {
+                        style(nextRole, count: &count, emit: emit)
+                        activeRole = nextRole
+                    }
+                    emitGrapheme(
+                        byte: byte,
+                        from: current,
+                        to: end,
+                        count: &count,
+                        emit: emit
+                    )
+                    current = end
+                }
+                if activeRole != .plain { style(.plain, count: &count, emit: emit) }
+                if clearRepaintedRows && used < contentColumns {
+                    clearToLineEnd(count: &count, emit: emit)
+                }
+            }
+
+            if consumedNewline {
+                line += 1
+                logicalStart = true
+            } else if wrapped {
+                logicalStart = false
+            } else {
+                break
+            }
+            if offset == length { pendingEmpty = true }
+            guard row < UInt16.max else { return }
+            row += 1
+        }
+    }
+
+    private static func renderCodeEditorFooter(
+        columns     : UInt16,
+        viewportRows: UInt16,
+        baseRow     : UInt16,
+        count       : inout UInt32,
+        emit        : (UInt8) -> Void
+    ) {
+        guard ReixCodeEditorLayout.footerRows(for: viewportRows) == 1 else { return }
+        cup(
+            row: baseRow + viewportRows - 1,
+            column: 1,
+            count: &count,
+            emit: emit
+        )
+        style(.editorChrome, background: true, count: &count, emit: emit)
+        let hint            = StaticString("Ctrl+Enter run  |  Enter newline  |  Tab indent")
+        let writableColumns = columns > 0 ? Int(columns - 1) : 0
+        let limit           = min(hint.utf8CodeUnitCount, writableColumns)
+        for index in 0..<limit {
+            emitted(hint.utf8Start[index], count: &count, emit: emit)
+        }
+        clearToLineEnd(count: &count, emit: emit)
+        style(.plain, count: &count, emit: emit)
+    }
+
+    private static func emitEditorHeader(
+        columns   : UInt16,
+        background: Bool,
+        count     : inout UInt32,
+        emit      : (UInt8) -> Void
+    ) {
+        var remaining = Int(columns)
+        style(.prompt, background: background, count: &count, emit: emit)
+        let name      = StaticString("reix")
+        let nameCount = min(name.utf8CodeUnitCount, remaining)
+        for index in 0..<nameCount {
+            emitted(name.utf8Start[index], count: &count, emit: emit)
+        }
+        remaining -= nameCount
+        if nameCount == name.utf8CodeUnitCount, remaining > 0 {
+            let mark = StaticString("❯")
+            for index in 0..<mark.utf8CodeUnitCount {
+                emitted(mark.utf8Start[index], count: &count, emit: emit)
+            }
+            remaining -= 1
+        }
+        if remaining > 0 {
+            emitted(0x20, count: &count, emit: emit)
+            remaining -= 1
+        }
+        style(.editorChrome, background: background, count: &count, emit: emit)
+        let title      = StaticString("Editor Mode")
+        let titleCount = min(title.utf8CodeUnitCount, remaining)
+        for index in 0..<titleCount {
+            emitted(title.utf8Start[index], count: &count, emit: emit)
+        }
+        style(.plain, background: background, count: &count, emit: emit)
+    }
+
+    private static func renderCodeTranscript(
+        frame: ReixTextSurfaceFrameView,
+        count: inout UInt32,
+        emit : (UInt8) -> Void
+    ) {
+        let columns = frame.descriptor.columns
+        emitEditorHeader(columns: columns, background: true, count: &count, emit: emit)
+        clearToLineEnd(count: &count, emit: emit)
+        style(.plain, count: &count, emit: emit)
+        emitted(carriageReturn, count: &count, emit: emit)
+        emitted(lineFeed, count: &count, emit: emit)
+
+        let length         = Int(frame.descriptor.textLength)
+        let byte           : (Int) -> UInt8? = { frame.textByte(at: $0) }
+        let gutter         = ReixCodeEditorLayout.gutterColumns(for: columns)
+        let contentColumns = columns - gutter
+        guard contentColumns > 0 else { return }
+        var offset       = 0
+        var line         = 1
+        var logicalStart = true
+        var pendingEmpty = length == 0
+
+        while offset < length || pendingEmpty {
+            pendingEmpty = false
+            let segmentStart    = offset
+            var segmentEnd      = offset
+            var used            : UInt16 = 0
+            var consumedNewline = false
+            var wrapped         = false
+
+            while offset < length {
+                guard let end = ReixTextLayout.nextGraphemeBoundary(
+                    after: offset,
+                    count: length,
+                    byte: byte
+                ),
+                      let first = byte(offset)
+                else { return }
+                if first == lineFeed {
+                    offset = end
+                    consumedNewline = true
+                    break
+                }
+                guard let width = ReixTextLayout.cellWidth(
+                    from: offset,
+                    to: end,
+                    count: length,
+                    byte: byte
+                ),
+                      width <= contentColumns
+                else { return }
+                if used > 0 && width > contentColumns - used {
+                    wrapped = true
+                    break
+                }
+                used += width
+                offset = end
+                segmentEnd = end
+                if used == contentColumns {
+                    wrapped = true
+                    break
+                }
+            }
+
+            emitCodeGutter(
+                line: logicalStart ? line : nil,
+                columns: gutter,
+                background: true,
+                count: &count,
+                emit: emit
+            )
+            var activeRole = ReixTextSurfaceStyleRole.plain
+            var current    = segmentStart
+            while current < segmentEnd {
+                guard let end = ReixTextLayout.nextGraphemeBoundary(
+                    after: current,
+                    count: length,
+                    byte: byte
+                ) else { return }
+                let nextRole = styleRole(at: current, frame: frame)
+                if nextRole != activeRole {
+                    style(nextRole, background: true, count: &count, emit: emit)
+                    activeRole = nextRole
+                }
+                emitGrapheme(
+                    byte: byte,
+                    from: current,
+                    to: end,
+                    count: &count,
+                    emit: emit
+                )
+                current = end
+            }
+            style(.plain, background: true, count: &count, emit: emit)
+            clearToLineEnd(count: &count, emit: emit)
+            style(.plain, count: &count, emit: emit)
+            emitted(carriageReturn, count: &count, emit: emit)
+            emitted(lineFeed, count: &count, emit: emit)
+
+            if consumedNewline {
+                line += 1
+                logicalStart = true
+            } else if wrapped {
+                logicalStart = false
+            } else {
+                break
+            }
+            if offset == length { pendingEmpty = true }
+        }
+    }
+
+    private static func emitCodeGutter(
+        line      : Int?,
+        columns   : UInt16,
+        background: Bool,
+        count     : inout UInt32,
+        emit      : (UInt8) -> Void
+    ) {
+        guard columns > 0 else { return }
+        style(.editorChrome, background: background, count: &count, emit: emit)
+        if columns == ReixCodeEditorLayout.standardGutterColumns {
+            if let line {
+                emitPaddedDecimal(line, width: 4, count: &count, emit: emit)
+            } else {
+                for _ in 0..<4 { emitted(0x20, count: &count, emit: emit) }
+            }
+            emitted(0x20, count: &count, emit: emit)
+            emitted(UInt8(ascii: "|"), count: &count, emit: emit)
+            emitted(0x20, count: &count, emit: emit)
+        } else {
+            emitted(UInt8((line ?? 0) % 10) + 0x30, count: &count, emit: emit)
+            emitted(UInt8(ascii: "|"), count: &count, emit: emit)
+            emitted(0x20, count: &count, emit: emit)
+        }
+        style(.plain, background: background, count: &count, emit: emit)
+    }
+
+    private static func emitPaddedDecimal(
+        _ value: Int,
+        width  : Int,
+        count  : inout UInt32,
+        emit   : (UInt8) -> Void
+    ) {
+        var divisor = 1
+        var digits  = 1
+        while value / divisor >= 10 {
+            divisor *= 10
+            digits += 1
+        }
+        while divisor > 0 {
+            emitted(UInt8(value / divisor % 10) + 0x30, count: &count, emit: emit)
+            divisor /= 10
+        }
+        for _ in digits..<width { emitted(0x20, count: &count, emit: emit) }
+    }
+
+    private static func renderStoredOverlay(
+        screen : TextSurfaceScreenModel,
+        baseRow: UInt16,
+        count  : inout UInt32,
+        emit   : (UInt8) -> Void
+    ) {
+        guard screen.overlayLength > 0 else { return }
+        cup(
+            row: baseRow + screen.overlayRow,
+            column: screen.overlayColumn + 1,
+            count: &count,
+            emit: emit
+        )
+        var role   = ReixTextSurfaceStyleRole.plain
+        var offset = 0
+        while offset < screen.overlayLength {
+            guard let end = ReixTextLayout.nextGraphemeBoundary(
+                after: offset,
+                count: screen.overlayLength,
+                byte: screen.overlayByte
+            ), let first = screen.overlayByte(at: offset)
+            else { return }
+            let next = storedOverlayStyleRole(at: offset, screen: screen)
+            if next != role { style(next, count: &count, emit: emit); role = next }
             if first == lineFeed {
                 emitted(carriageReturn, count: &count, emit: emit)
                 emitted(lineFeed, count: &count, emit: emit)
             } else {
                 emitGrapheme(
-                    screen: screen,
-                    frame: frame,
+                    byte: screen.overlayByte,
                     from: offset,
                     to: end,
                     count: &count,
@@ -409,19 +1285,51 @@ public enum TextSurfaceVTRenderer {
             }
             offset = end
         }
-        if activeRole != .plain { style(.plain, count: &count, emit: emit) }
+        if role != .plain { style(.plain, count: &count, emit: emit) }
+    }
+
+    private static func storedVisible(
+        _ row : UInt16,
+        screen: TextSurfaceScreenModel
+    ) -> Bool {
+        row >= screen.viewportRow && row < screen.viewportRow + screen.viewportRows
+    }
+
+    private static func storedStyleRole(
+        at offset: Int,
+        screen   : TextSurfaceScreenModel
+    ) -> ReixTextSurfaceStyleRole {
+        for index in 0..<screen.styleSpanCount {
+            guard let span = screen.styleSpan(at: index) else { return .plain }
+            if offset >= Int(span.offset), offset < Int(span.offset) + Int(span.length) {
+                return span.role
+            }
+        }
+        return .plain
+    }
+
+    private static func storedOverlayStyleRole(
+        at offset: Int,
+        screen   : TextSurfaceScreenModel
+    ) -> ReixTextSurfaceStyleRole {
+        for index in 0..<screen.overlayStyleSpanCount {
+            guard let span = screen.overlayStyleSpan(at: index) else { return .overlay }
+            if offset >= Int(span.offset), offset < Int(span.offset) + Int(span.length) {
+                return span.role
+            }
+        }
+        return .overlay
     }
 
     private static func emitGrapheme(
-        screen: TextSurfaceScreenModel,
-        frame: ReixTextSurfaceFrameView,
+        byte      : (Int) -> UInt8?,
         from start: Int,
-        to end: Int,
-        count: inout UInt32,
-        emit: (UInt8) -> Void
+        to end    : Int,
+        count     : inout UInt32,
+        emit      : (UInt8) -> Void
     ) {
-        guard let first = screen.desiredTextByte(at: start, for: frame) else { return }
-        let second = start + 1 < end ? screen.desiredTextByte(at: start + 1, for: frame) : nil
+        guard let first = byte(start) else { return }
+        let second      = start + 1 < end ? byte(start + 1) : nil
         let isC1Control = if let second {
             first == 0xC2 && second >= 0x80 && second <= 0x9F
         } else {
@@ -436,8 +1344,8 @@ public enum TextSurfaceVTRenderer {
             return
         }
         for index in start..<end {
-            guard let byte = screen.desiredTextByte(at: index, for: frame) else { return }
-            emitted(byte, count: &count, emit: emit)
+            guard let value = byte(index) else { return }
+            emitted(value, count: &count, emit: emit)
         }
     }
 
@@ -500,15 +1408,25 @@ public enum TextSurfaceVTRenderer {
     }
 
     private static func style(
-        _ role: ReixTextSurfaceStyleRole,
-        count: inout UInt32,
-        emit: (UInt8) -> Void
+        _ role    : ReixTextSurfaceStyleRole,
+        background: Bool = false,
+        count     : inout UInt32,
+        emit      : (UInt8) -> Void
     ) {
         emitted(escape, count: &count, emit: emit)
         emitted(openBracket, count: &count, emit: emit)
+        if background {
+            let code = StaticString("0;48;5;236")
+            for index in 0..<code.utf8CodeUnitCount {
+                emitted(code.utf8Start[index], count: &count, emit: emit)
+            }
+            if role != .plain && role != .input {
+                emitted(UInt8(ascii: ";"), count: &count, emit: emit)
+            }
+        }
         switch role {
             case .plain, .input:
-                emitted(UInt8(ascii: "0"), count: &count, emit: emit)
+                if !background { emitted(UInt8(ascii: "0"), count: &count, emit: emit) }
             case .prompt:
                 emitted(UInt8(ascii: "1"), count: &count, emit: emit)
                 emitted(UInt8(ascii: ";"), count: &count, emit: emit)
@@ -522,6 +1440,8 @@ public enum TextSurfaceVTRenderer {
             case .overlay:
                 emitted(UInt8(ascii: "3"), count: &count, emit: emit)
                 emitted(UInt8(ascii: "5"), count: &count, emit: emit)
+            case .editorChrome:
+                emitted(UInt8(ascii: "2"), count: &count, emit: emit)
         }
         emitted(UInt8(ascii: "m"), count: &count, emit: emit)
     }
@@ -538,6 +1458,19 @@ public enum TextSurfaceVTRenderer {
         emitted(UInt8(ascii: ";"), count: &count, emit: emit)
         decimal(column, count: &count, emit: emit)
         emitted(UInt8(ascii: "H"), count: &count, emit: emit)
+    }
+
+    private static func cursorVisible(
+        _ visible: Bool,
+        count    : inout UInt32,
+        emit     : (UInt8) -> Void
+    ) {
+        emitted(escape, count: &count, emit: emit)
+        emitted(openBracket, count: &count, emit: emit)
+        emitted(UInt8(ascii: "?"), count: &count, emit: emit)
+        emitted(UInt8(ascii: "2"), count: &count, emit: emit)
+        emitted(UInt8(ascii: "5"), count: &count, emit: emit)
+        emitted(UInt8(ascii: visible ? "h" : "l"), count: &count, emit: emit)
     }
 
     private static func decimal(
@@ -574,6 +1507,9 @@ public enum TextSurfaceVTRenderer {
         emit(byte)
         if count < UInt32.max { count += 1 }
     }
+
+    /// Larger than any terminal this surface addresses, so CUP clamps to the last row.
+    private static let bottomRow: UInt16 = 999
 
     private static let carriageReturn: UInt8 = 0x0D
     private static let lineFeed: UInt8 = 0x0A

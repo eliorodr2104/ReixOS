@@ -35,30 +35,55 @@ private func feed(_ bytes: [UInt8], into screen: inout TerminalScreenModel) -> B
     }
 }
 
+private func occurrences(
+    of needle: [UInt8],
+    in bytes : [UInt8]
+) -> Int {
+    guard !needle.isEmpty, needle.count <= bytes.count else { return 0 }
+    var count = 0
+    for start in 0...(bytes.count - needle.count) {
+        var matches = true
+        for index in 0..<needle.count where bytes[start + index] != needle[index] {
+            matches = false
+            break
+        }
+        if matches { count += 1 }
+    }
+    return count
+}
+
 private func descriptor(
-    kind: ReixTextSurfaceFrameKind = .snapshot,
-    mode: ReixTextSurfaceFrameMode = .editor,
-    correlation: UInt32 = 1,
-    revision: UInt32 = 1,
-    baseRevision: UInt32 = 0,
-    patchOffset: UInt32 = 0,
+    kind          : ReixTextSurfaceFrameKind = .snapshot,
+    mode          : ReixTextSurfaceFrameMode = .editor,
+    source        : UInt32 = 0,
+    severity      : ReixTextOutputSeverity = .info,
+    outputKind    : ReixTextOutputKind = .application,
+    payloadKind   : ReixTextOutputPayloadKind = .utf8Text,
+    correlation   : UInt32 = 1,
+    revision      : UInt32 = 1,
+    baseRevision  : UInt32 = 0,
+    patchOffset   : UInt32 = 0,
     replacedLength: UInt32 = 0,
-    textLength: Int,
-    overlayLength: Int = 0,
-    styles: Int = 0,
-    overlayStyles: Int = 0,
-    columns: UInt16 = 80,
-    rows: UInt16 = 24,
-    cursorRow: UInt16 = 0,
-    cursorColumn: UInt16 = 0,
-    viewportRow: UInt16 = 0,
-    viewportRows: UInt16 = 6,
-    overlayRows: UInt16 = 0,
+    textLength    : Int,
+    overlayLength : Int = 0,
+    styles        : Int = 0,
+    overlayStyles : Int = 0,
+    columns       : UInt16 = 80,
+    rows          : UInt16 = 24,
+    cursorRow     : UInt16 = 0,
+    cursorColumn  : UInt16 = 0,
+    viewportRow   : UInt16 = 0,
+    viewportRows  : UInt16 = 6,
+    overlayRows   : UInt16 = 0,
     overlayColumns: UInt16 = 0
 ) -> ReixTextSurfaceFrameDescriptor {
     ReixTextSurfaceFrameDescriptor(
         kind: kind,
         mode: mode,
+        source: source,
+        severity: severity,
+        outputKind: outputKind,
+        payloadKind: payloadKind,
         correlation: correlation,
         revision: revision,
         baseRevision: baseRevision,
@@ -137,6 +162,10 @@ check(consumer.popFrame(transaction: 1) { _ in .commit } == .empty, "empty typed
 
 let greeting = Array("reix❯ vault".utf8)
 let greetingDescriptor = descriptor(
+    source: 7,
+    severity: .notice,
+    outputKind: .status,
+    payloadKind: .utf8KeyValue,
     textLength: greeting.count,
     cursorColumn: UInt16(greeting.count)
 )
@@ -151,6 +180,10 @@ check(
 )
 check(decodedGreeting == greeting, "snapshot roundtrip")
 check(greetingDescriptor.mode == .editor, "frame mode roundtrip")
+check(greetingDescriptor.source == 7, "frame source roundtrip")
+check(greetingDescriptor.severity == .notice, "frame severity roundtrip")
+check(greetingDescriptor.outputKind == .status, "frame output kind roundtrip")
+check(greetingDescriptor.payloadKind == .utf8KeyValue, "frame payload kind roundtrip")
 
 let maximumText = [UInt8](
     repeating: UInt8(ascii: "x"),
@@ -402,49 +435,77 @@ check(ReixTextSurfaceRing.initialize(page: page, token: 27), "mode transition pr
 check(ReixTextSurfaceRing.accept(page: page, token: 27, epoch: 28), "mode transition accept")
 producer = ReixTextSurfaceRing(page: page, token: 27, epoch: 28)!
 consumer = ReixTextSurfaceRing(page: page, token: 27, epoch: 28)!
-var modeModel = TextSurfaceScreenModel()
-var modeTerminal = TerminalScreenModel(columns: 20, rows: 8)
-let prompt = Array("reix> x".utf8)
+var modeModel    = TextSurfaceScreenModel()
+var modeTerminal = TerminalScreenModel(columns: 20, rows: 16)
+let prompt       = Array("reix> x".utf8)
+let promptStyle  = [
+    ReixTextSurfaceStyleSpan(offset: 0, length: 6, role: .prompt)!
+]
 let promptDescriptor = descriptor(
     textLength: prompt.count,
+    styles: promptStyle.count,
     columns: 20,
-    rows: 8,
+    rows: 16,
     cursorColumn: 7,
     viewportRows: 1
 )
-check(push(producer, transaction: 1, descriptor: promptDescriptor, text: prompt), "editor mode setup")
+check(
+    push(
+        producer,
+        transaction: 1,
+        descriptor: promptDescriptor,
+        text: prompt,
+        styles: promptStyle
+    ),
+    "editor mode setup"
+)
 check(
     consumer.popFrame(transaction: 1) { frame in
         var bytes: [UInt8] = []
         _ = TextSurfaceVTRenderer.render(screen: modeModel, frame: frame, useDiff: false) {
             bytes.append($0)
         }
+        check(
+            occurrences(of: [0x1B, 0x5B, 0x32, 0x4A], in: bytes) == 0,
+            "a shell starting does not wipe what the terminal already shows"
+        )
         check(feed(bytes, into: &modeTerminal), "editor mode VT is accepted")
         check(modeModel.commit(frame), "editor mode commit")
         return .commit
     } == .committed,
     "editor mode consumed"
 )
-check(modeTerminal.cursorRow == 7, "one-row editor is anchored at the bottom")
-let result = Array("\nresult".utf8)
-let transcriptDescriptor = descriptor(
+check(modeTerminal.line(15).hasPrefix("reix> x"), "the prompt sits on the last row")
+check(modeTerminal.cursorRow == 15, "the editor opens at the bottom, like a terminal")
+check(modeTerminal.cursorColumn == 7, "the editor cursor sits after the typed text")
+check(modeModel.editorAnchorRow == 16, "the block is anchored on the flow row")
+check(modeModel.editorRows == 1, "one row is claimed")
+
+let multilineSuffix     = Array("\none\ntwo\nthree".utf8)
+let multiline           = prompt + multilineSuffix
+let multilineDescriptor = descriptor(
     kind: .patch,
-    mode: .transcript,
     correlation: 2,
     revision: 2,
     baseRevision: 1,
     patchOffset: UInt32(prompt.count),
-    textLength: result.count,
+    textLength: multilineSuffix.count,
+    styles: promptStyle.count,
     columns: 20,
-    rows: 8,
-    cursorRow: 1,
-    cursorColumn: 6,
-    viewportRow: 1,
-    viewportRows: 1
+    rows: 16,
+    cursorRow: 3,
+    cursorColumn: 5,
+    viewportRows: 4
 )
 check(
-    push(producer, transaction: 2, descriptor: transcriptDescriptor, text: result),
-    "transcript mode setup"
+    push(
+        producer,
+        transaction: 2,
+        descriptor: multilineDescriptor,
+        text: multilineSuffix,
+        styles: promptStyle
+    ),
+    "multiline editor setup"
 )
 check(
     consumer.popFrame(transaction: 2) { frame in
@@ -455,15 +516,427 @@ check(
             frame: frame,
             useDiff: metrics.usesDiff
         ) { bytes.append($0) }
-        check(metrics.usesDiff, "editor to transcript transition appends")
+        check(feed(bytes, into: &modeTerminal), "multiline editor VT is accepted")
+        check(modeModel.commit(frame), "multiline editor commit")
+        return .commit
+    } == .committed,
+    "multiline editor consumed"
+)
+check(modeModel.editorAnchorRow == 13, "growth scrolls the screen rather than moving the block down")
+check(modeModel.editorRows == 4, "four rows are claimed")
+check(modeTerminal.line(12).hasPrefix("reix> x"), "the prompt row moved up with the screen")
+check(modeTerminal.line(15).hasPrefix("three"), "the last typed row is still the last row")
+check(modeTerminal.cursorRow == 15, "the cursor stays on the row being typed")
+
+let promoteDescriptor = descriptor(
+    kind: .patch,
+    mode: .transcript,
+    correlation: 3,
+    revision: 3,
+    baseRevision: 2,
+    textLength: multiline.count,
+    styles: promptStyle.count,
+    columns: 20,
+    rows: 16,
+    viewportRows: 1
+)
+check(
+    push(
+        producer,
+        transaction: 3,
+        descriptor: promoteDescriptor,
+        text: multiline,
+        styles: promptStyle
+    ),
+    "submitted line setup"
+)
+check(
+    consumer.popFrame(transaction: 3) { frame in
+        var bytes: [UInt8] = []
+        _ = TextSurfaceVTRenderer.render(screen: modeModel, frame: frame, useDiff: false) {
+            bytes.append($0)
+        }
+        check(
+            occurrences(of: [0x1B, 0x5B, 0x32, 0x4B], in: bytes) == 4,
+            "retiring the block gives back every row it held"
+        )
+        check(occurrences(of: [0x1B, 0x5B, 0x32, 0x4A], in: bytes) == 0, "no full-screen wipe")
+        check(feed(bytes, into: &modeTerminal), "submitted line VT is accepted")
+        check(modeModel.commit(frame), "submitted line commit")
+        return .commit
+    } == .committed,
+    "submitted line consumed"
+)
+check(modeTerminal.line(12).hasPrefix("reix> x"), "the submitted line becomes transcript in place")
+check(modeTerminal.line(15).hasPrefix("three"), "every editor row is kept")
+check(!modeModel.editorPainted, "no block is on screen after a submit")
+
+let result           = Array("\nresult".utf8)
+let resultDescriptor = descriptor(
+    kind: .patch,
+    mode: .transcript,
+    correlation: 4,
+    revision: 4,
+    baseRevision: 3,
+    textLength: result.count,
+    columns: 20,
+    rows: 16,
+    viewportRows: 1
+)
+check(
+    push(producer, transaction: 4, descriptor: resultDescriptor, text: result),
+    "transcript mode setup"
+)
+check(
+    consumer.popFrame(transaction: 4) { frame in
+        var bytes: [UInt8] = []
+        _ = TextSurfaceVTRenderer.render(screen: modeModel, frame: frame, useDiff: false) {
+            bytes.append($0)
+        }
         check(feed(bytes, into: &modeTerminal), "transcript mode VT is accepted")
         check(modeModel.commit(frame), "transcript mode commit")
         return .commit
     } == .committed,
     "transcript mode consumed"
 )
-check(modeTerminal.cursorRow == 7, "transcript output scrolls from the editor cursor")
-check(modeTerminal.cursorColumn == 6, "transcript cursor follows appended output")
+check(modeTerminal.line(11).hasPrefix("reix> x"), "output scrolls the submitted line up, it does not erase it")
+check(modeTerminal.line(14).hasPrefix("three"), "the whole submitted block scrolled together")
+check(modeTerminal.line(15).hasPrefix("result"), "output follows on the last row")
+check(modeTerminal.cursorRow == 15, "the cursor stays at the bottom")
+check(modeTerminal.cursorColumn == 6, "the transcript cursor follows appended output")
+check(
+    modeModel.flowRow == 16 && modeModel.flowColumn == 6,
+    "the model tracks the cursor the terminal actually has"
+)
+
+check(ReixTextSurfaceRing.initialize(page: page, token: 45), "code editor proposal")
+check(ReixTextSurfaceRing.accept(page: page, token: 45, epoch: 46), "code editor accept")
+producer = ReixTextSurfaceRing(page: page, token: 45, epoch: 46)!
+consumer = ReixTextSurfaceRing(page: page, token: 45, epoch: 46)!
+var codeModel    = TextSurfaceScreenModel()
+var codeTerminal = TerminalScreenModel(columns: 20, rows: 16)
+let codeText     = Array("alpha\nbeta".utf8)
+let codeStyle    = [
+    ReixTextSurfaceStyleSpan(offset: 0, length: UInt16(codeText.count), role: .input)!
+]
+let codeDescriptor = descriptor(
+    mode: .codeEditor,
+    textLength: codeText.count,
+    styles: codeStyle.count,
+    columns: 20,
+    rows: 16,
+    cursorRow: 2,
+    cursorColumn: 11,
+    viewportRows: 4
+)
+check(
+    push(
+        producer,
+        transaction: 1,
+        descriptor: codeDescriptor,
+        text: codeText,
+        styles: codeStyle
+    ),
+    "code editor snapshot setup"
+)
+check(
+    consumer.popFrame(transaction: 1) { frame in
+        var bytes: [UInt8] = []
+        _ = TextSurfaceVTRenderer.render(screen: codeModel, frame: frame, useDiff: false) {
+            bytes.append($0)
+        }
+        check(feed(bytes, into: &codeTerminal), "code editor snapshot VT is accepted")
+        check(codeModel.commit(frame), "code editor snapshot commit")
+        return .commit
+    } == .committed,
+    "code editor snapshot consumed"
+)
+check(codeTerminal.line(12).hasPrefix("reix❯ Editor Mode"), "code editor owns a branded non-editable header")
+check(codeTerminal.cells[12 * 20 + 6].attributes.dim, "code editor title is visually subdued")
+check(codeTerminal.line(13).hasPrefix("1    | alpha"), "first gutter starts at the left edge")
+check(codeTerminal.line(14).hasPrefix("2    | beta"), "second gutter starts at the left edge")
+check(codeTerminal.line(15).hasPrefix("Ctrl+Enter run"), "code editor keeps its submit shortcut on the last row")
+check(codeTerminal.cells[15 * 20].attributes.background == 236, "shortcut bar has a distinct background")
+check(codeTerminal.cursorRow == 14 && codeTerminal.cursorColumn == 11, "code cursor excludes gutter bytes")
+
+let shortenedCode  = Array("b".utf8)
+let shortenedStyle = [
+    ReixTextSurfaceStyleSpan(offset: 0, length: 7, role: .input)!
+]
+let shortenedDescriptor = descriptor(
+    kind: .patch,
+    mode: .codeEditor,
+    correlation: 2,
+    revision: 2,
+    baseRevision: 1,
+    patchOffset: 7,
+    replacedLength: 3,
+    textLength: shortenedCode.count,
+    styles: shortenedStyle.count,
+    columns: 20,
+    rows: 16,
+    cursorRow: 2,
+    cursorColumn: 8,
+    viewportRows: 4
+)
+check(
+    push(
+        producer,
+        transaction: 2,
+        descriptor: shortenedDescriptor,
+        text: shortenedCode,
+        styles: shortenedStyle
+    ),
+    "code editor shortening setup"
+)
+check(
+    consumer.popFrame(transaction: 2) { frame in
+        let metrics = TextSurfaceVTRenderer.metrics(screen: codeModel, frame: frame)
+        var bytes   : [UInt8] = []
+        _ = TextSurfaceVTRenderer.render(
+            screen: codeModel,
+            frame: frame,
+            useDiff: metrics.usesDiff
+        ) { bytes.append($0) }
+        check(metrics.usesDiff, "same-height code shortening stays incremental")
+        check(feed(bytes, into: &codeTerminal), "code shortening VT is accepted")
+        check(codeModel.commit(frame), "code shortening commit")
+        return .commit
+    } == .committed,
+    "code shortening consumed"
+)
+check(codeTerminal.line(14).hasPrefix("2    | b"), "shortened code row keeps its gutter")
+check(!codeTerminal.line(14).contains("beta"), "deleted code cells are erased immediately")
+
+let oneLineStyle = [
+    ReixTextSurfaceStyleSpan(offset: 0, length: 5, role: .input)!
+]
+let oneLineDescriptor = descriptor(
+    kind: .patch,
+    mode: .codeEditor,
+    correlation: 3,
+    revision: 3,
+    baseRevision: 2,
+    patchOffset: 5,
+    replacedLength: 2,
+    textLength: 0,
+    styles: oneLineStyle.count,
+    columns: 20,
+    rows: 16,
+    cursorRow: 1,
+    cursorColumn: 12,
+    viewportRows: 3
+)
+check(
+    push(
+        producer,
+        transaction: 3,
+        descriptor: oneLineDescriptor,
+        text: [],
+        styles: oneLineStyle
+    ),
+    "code editor line deletion setup"
+)
+check(
+    consumer.popFrame(transaction: 3) { frame in
+        var bytes: [UInt8] = []
+        _ = TextSurfaceVTRenderer.render(screen: codeModel, frame: frame, useDiff: true) {
+            bytes.append($0)
+        }
+        check(feed(bytes, into: &codeTerminal), "code line deletion VT is accepted")
+        check(codeModel.commit(frame), "code line deletion commit")
+        return .commit
+    } == .committed,
+    "code line deletion consumed"
+)
+check(codeTerminal.line(12) == String(repeating: " ", count: 20), "retired rows above the compacted editor are cleared")
+check(codeTerminal.line(13).hasPrefix("reix❯ Editor Mode"), "compacted editor stays attached to the bottom")
+check(codeTerminal.line(14).hasPrefix("1    | alpha"), "remaining code returns below the moved header")
+check(codeTerminal.line(15).hasPrefix("Ctrl+Enter run"), "footer remains on the bottom row")
+
+let submittedDescriptor = descriptor(
+    kind: .patch,
+    mode: .codeTranscript,
+    correlation: 4,
+    revision: 4,
+    baseRevision: 3,
+    textLength: codeText.prefix(5).count,
+    styles: oneLineStyle.count,
+    columns: 20,
+    rows: 16,
+    viewportRows: 1
+)
+check(
+    push(
+        producer,
+        transaction: 4,
+        descriptor: submittedDescriptor,
+        text: Array(codeText.prefix(5)),
+        styles: oneLineStyle
+    ),
+    "submitted code transcript setup"
+)
+check(
+    consumer.popFrame(transaction: 4) { frame in
+        var bytes: [UInt8] = []
+        _ = TextSurfaceVTRenderer.render(screen: codeModel, frame: frame, useDiff: false) {
+            bytes.append($0)
+        }
+        check(feed(bytes, into: &codeTerminal), "submitted code transcript VT is accepted")
+        check(codeModel.commit(frame), "submitted code transcript commit")
+        return .commit
+    } == .committed,
+    "submitted code transcript consumed"
+)
+check(codeTerminal.line(13).hasPrefix("reix❯ Editor Mode"), "submitted script retains its editor header")
+check(codeTerminal.line(14).hasPrefix("1    | alpha"), "submitted script retains its gutter")
+check(codeTerminal.cells[13 * 20].attributes.background == 236, "submitted header has a dark background")
+check(codeTerminal.cells[14 * 20 + 7].attributes.background == 236, "submitted source has a dark background")
+check(codeTerminal.cursorRow == 15 && codeTerminal.cursorColumn == 0, "submitted block leaves output on a fresh row")
+
+let diagnosticText       = Array("       ^ syntax\n".utf8)
+let diagnosticDescriptor = descriptor(
+    kind: .patch,
+    mode: .transcript,
+    source: 11,
+    severity: .error,
+    outputKind: .diagnostic,
+    correlation: 5,
+    revision: 5,
+    baseRevision: 4,
+    textLength: diagnosticText.count,
+    columns: 20,
+    rows: 16,
+    viewportRows: 1
+)
+check(
+    push(
+        producer,
+        transaction: 5,
+        descriptor: diagnosticDescriptor,
+        text: diagnosticText
+    ),
+    "code diagnostic setup"
+)
+check(
+    consumer.popFrame(transaction: 5) { frame in
+        var bytes: [UInt8] = []
+        _ = TextSurfaceVTRenderer.render(screen: codeModel, frame: frame, useDiff: false) {
+            bytes.append($0)
+        }
+        check(feed(bytes, into: &codeTerminal), "native code diagnostic VT is accepted")
+        check(codeModel.commit(frame), "native code diagnostic commit")
+        return .commit
+    } == .committed,
+    "native code diagnostic consumed"
+)
+check(codeTerminal.line(14).contains("^ syntax"), "syntax diagnostic follows the submitted block without repeating source")
+check(codeTerminal.cells[14 * 20].attributes.background == 236, "syntax diagnostic shares the script background")
+check(codeTerminal.cells.filter { $0.character == "a" }.count >= 1, "submitted source remains visible after its diagnostic")
+
+check(ReixTextSurfaceRing.initialize(page: page, token: 47), "scrolled code editor proposal")
+check(ReixTextSurfaceRing.accept(page: page, token: 47, epoch: 48), "scrolled code editor accept")
+producer = ReixTextSurfaceRing(page: page, token: 47, epoch: 48)!
+consumer = ReixTextSurfaceRing(page: page, token: 47, epoch: 48)!
+var scrolledCodeModel    = TextSurfaceScreenModel()
+var scrolledCodeTerminal = TerminalScreenModel(columns: 20, rows: 16)
+let scrolledCode         = Array("one\ntwo\nthree".utf8)
+let scrolledDescriptor   = descriptor(
+    mode: .codeEditor,
+    textLength: scrolledCode.count,
+    columns: 20,
+    rows: 16,
+    cursorRow: 3,
+    cursorColumn: 12,
+    viewportRow: 2,
+    viewportRows: 4
+)
+check(push(producer, transaction: 1, descriptor: scrolledDescriptor, text: scrolledCode), "scrolled code setup")
+check(
+    consumer.popFrame(transaction: 1) { frame in
+        var bytes: [UInt8] = []
+        _ = TextSurfaceVTRenderer.render(screen: scrolledCodeModel, frame: frame, useDiff: false) {
+            bytes.append($0)
+        }
+        check(feed(bytes, into: &scrolledCodeTerminal), "scrolled code VT is accepted")
+        check(scrolledCodeModel.commit(frame), "scrolled code commit")
+        return .commit
+    } == .committed,
+    "scrolled code consumed"
+)
+check(scrolledCodeTerminal.line(12).hasPrefix("reix❯ Editor Mode"), "header stays fixed while document rows scroll")
+check(scrolledCodeTerminal.line(13).hasPrefix("2    | two"), "scrolled viewport begins below the fixed header")
+check(scrolledCodeTerminal.line(14).hasPrefix("3    | three"), "scrolled viewport keeps the following document row")
+check(scrolledCodeTerminal.line(15).hasPrefix("Ctrl+Enter run"), "footer stays fixed while document rows scroll")
+
+check(ReixTextSurfaceRing.initialize(page: page, token: 29), "block bottom proposal")
+check(ReixTextSurfaceRing.accept(page: page, token: 29, epoch: 30), "block bottom accept")
+producer = ReixTextSurfaceRing(page: page, token: 29, epoch: 30)!
+consumer = ReixTextSurfaceRing(page: page, token: 29, epoch: 30)!
+var bottomModel            = TextSurfaceScreenModel()
+var bottomTerminal         = TerminalScreenModel(columns: 20, rows: 16)
+let bottomFiller           = Array(("top" + String(repeating: "\n", count: 12)).utf8)
+let bottomFillerDescriptor = descriptor(
+    mode: .transcript,
+    textLength: bottomFiller.count,
+    columns: 20,
+    rows: 16,
+    viewportRows: 1
+)
+check(
+    push(producer, transaction: 1, descriptor: bottomFillerDescriptor, text: bottomFiller),
+    "block bottom filler setup"
+)
+check(
+    consumer.popFrame(transaction: 1) { frame in
+        var bytes: [UInt8] = []
+        _ = TextSurfaceVTRenderer.render(screen: bottomModel, frame: frame, useDiff: false) {
+            bytes.append($0)
+        }
+        check(feed(bytes, into: &bottomTerminal), "block bottom filler VT is accepted")
+        check(bottomModel.commit(frame), "block bottom filler commit")
+        return .commit
+    } == .committed,
+    "block bottom filler consumed"
+)
+check(bottomModel.flowRow == 16, "the flow cursor stops at the last row")
+check(bottomTerminal.line(3).hasPrefix("top"), "twelve line feeds scrolled the marker to row four")
+
+// Six rows of text in a four-row viewport: the break after the last visible row
+// belongs to a row nobody can see, and emitting it here would scroll the screen.
+let clipped           = Array("a\nb\nc\nd\ne\nf".utf8)
+let clippedDescriptor = descriptor(
+    correlation: 2,
+    revision: 2,
+    textLength: clipped.count,
+    columns: 20,
+    rows: 16,
+    cursorRow: 0,
+    cursorColumn: 1,
+    viewportRows: 4
+)
+check(
+    push(producer, transaction: 2, descriptor: clippedDescriptor, text: clipped),
+    "clipped block setup"
+)
+check(
+    consumer.popFrame(transaction: 2) { frame in
+        var bytes: [UInt8] = []
+        _ = TextSurfaceVTRenderer.render(screen: bottomModel, frame: frame, useDiff: false) {
+            bytes.append($0)
+        }
+        check(feed(bytes, into: &bottomTerminal), "clipped block VT is accepted")
+        check(bottomModel.commit(frame), "clipped block commit")
+        return .commit
+    } == .committed,
+    "clipped block consumed"
+)
+check(bottomModel.editorAnchorRow == 13, "the block scrolled three rows free and took them")
+check(bottomTerminal.line(0).hasPrefix("top"), "the block scrolled exactly as far as it needed")
+check(bottomTerminal.line(12).hasPrefix("a"), "the block starts at its anchor")
+check(bottomTerminal.line(15).hasPrefix("d"), "the block stops at the viewport, not at the text")
+check(bottomTerminal.cursorRow == 12, "the cursor is on the block's first row")
+check(bottomTerminal.cursorColumn == 1, "the cursor is after the first grapheme")
 
 check(ReixTextSurfaceRing.initialize(page: page, token: 25), "Unicode model proposal")
 check(ReixTextSurfaceRing.accept(page: page, token: 25, epoch: 26), "Unicode model accept")
@@ -633,6 +1106,16 @@ for geometry: (columns: UInt16, rows: UInt16) in [(40, 12), (80, 24), (240, 60),
             var fullTerminal = terminal
             check(diffCount == metrics.diffBytes, "diff byte metric is exact")
             check(fullCount == metrics.fullBytes, "full byte metric is exact")
+            check(
+                occurrences(of: Array("\u{1B}[?25l".utf8), in: fullBytes) == 1
+                    && occurrences(of: Array("\u{1B}[?25h".utf8), in: fullBytes) == 1,
+                "full repaint hides the cursor until its final position"
+            )
+            check(
+                occurrences(of: Array("\u{1B}[?2026h".utf8), in: fullBytes) == 0
+                    && occurrences(of: Array("\u{1B}[?2026l".utf8), in: fullBytes) == 0,
+                "full repaint cannot strand the terminal in synchronized-output mode"
+            )
             check(feed(diffBytes, into: &diffTerminal), "diff VT is accepted")
             check(feed(fullBytes, into: &fullTerminal), "full VT is accepted")
             check(diffTerminal.cells == fullTerminal.cells, "diff and full cells are equivalent")
@@ -723,6 +1206,15 @@ for geometry: (columns: UInt16, rows: UInt16) in [(40, 12), (80, 24), (240, 60),
                 useDiff: true
             ) { bytes.append($0) }
             check(metrics.usesDiff, "metadata patch selects bounded diff")
+            check(
+                occurrences(of: Array("\u{1B}[?25l".utf8), in: bytes) == 0
+                    && occurrences(of: Array("\u{1B}[?25h".utf8), in: bytes) == 0,
+                "cursor-only movement emits no visibility flicker"
+            )
+            check(
+                occurrences(of: Array("\u{1B}[?2026h".utf8), in: bytes) == 0,
+                "cursor-only movement is not wrapped in a repaint transaction"
+            )
             check(feed(bytes, into: &terminal), "metadata VT is accepted")
             check(terminal.cells == previousCells, "metadata patch preserves rendered cells")
             check(rendererModel.commit(frame), "metadata renderer patch commit")
@@ -731,6 +1223,108 @@ for geometry: (columns: UInt16, rows: UInt16) in [(40, 12), (80, 24), (240, 60),
         "metadata renderer patch consumed"
     )
 }
+
+check(ReixTextSurfaceRing.initialize(page: page, token: 41), "external output proposal")
+check(ReixTextSurfaceRing.accept(page: page, token: 41, epoch: 42), "external output accept")
+producer = ReixTextSurfaceRing(page: page, token: 41, epoch: 42)!
+consumer = ReixTextSurfaceRing(page: page, token: 41, epoch: 42)!
+var arbitrationModel    = TextSurfaceScreenModel()
+var arbitrationTerminal = TerminalScreenModel(columns: 20, rows: 16)
+let editing             = Array("reix> echo vault".utf8)
+let editingDescriptor   = descriptor(
+    textLength: editing.count,
+    columns: 20,
+    rows: 16,
+    cursorColumn: UInt16(editing.count),
+    viewportRows: 1
+)
+check(
+    push(producer, transaction: 1, descriptor: editingDescriptor, text: editing),
+    "external output editor setup"
+)
+check(
+    consumer.popFrame(transaction: 1) { frame in
+        var bytes: [UInt8] = []
+        _ = TextSurfaceVTRenderer.render(
+            screen: arbitrationModel,
+            frame: frame,
+            useDiff: false
+        ) { bytes.append($0) }
+        check(feed(bytes, into: &arbitrationTerminal), "external output editor VT is accepted")
+        check(arbitrationModel.commit(frame), "external output editor commit")
+        return .commit
+    } == .committed,
+    "external output editor consumed"
+)
+let retainedRevision = arbitrationModel.revision
+let retainedCursor   = (arbitrationModel.cursorRow, arbitrationModel.cursorColumn)
+let asynchronous     = Array("worker done\n".utf8)
+asynchronous.withUnsafeBufferPointer { payload in
+    let record = ReixTextOutputRecord(
+        source: 77,
+        severity: .notice,
+        kind: .application,
+        payloadKind: .utf8Text,
+        first: payload.baseAddress!,
+        firstCount: payload.count
+    )!
+    check(record.source == 77, "external record retains authoritative source")
+    check(record.severity == .notice, "external record retains severity")
+    check(record.kind == .application, "external record retains kind")
+    guard let plan = arbitrationModel.planExternalOutput(record) else {
+        check(false, "external record is measurable")
+        return
+    }
+    var bytes: [UInt8] = []
+    _ = TextSurfaceVTRenderer.renderExternal(
+        screen: arbitrationModel,
+        record: record,
+        plan: plan
+    ) { bytes.append($0) }
+    check(
+        occurrences(of: Array("\u{1B}[?25l".utf8), in: bytes) == 1
+            && occurrences(of: Array("\u{1B}[?25h".utf8), in: bytes) == 1,
+        "external arbitration freezes and restores the cursor once"
+    )
+    check(feed(bytes, into: &arbitrationTerminal), "external arbitration VT is accepted")
+    arbitrationModel.commitExternalOutput(plan)
+}
+let injectedVT = Array("\u{1B}[2J".utf8)
+injectedVT.withUnsafeBufferPointer { payload in
+    let record = ReixTextOutputRecord(
+        source: 77,
+        severity: .notice,
+        kind: .application,
+        payloadKind: .utf8Text,
+        first: payload.baseAddress!,
+        firstCount: payload.count
+    )!
+    check(
+        arbitrationModel.planExternalOutput(record) == nil,
+        "external payload cannot inject VT"
+    )
+}
+check(
+    arbitrationTerminal.line(14).contains("worker")
+        && arbitrationTerminal.line(14).contains("done"),
+    "external output is visible as inert text above the editor"
+)
+check(
+    arbitrationTerminal.line(15).hasPrefix("reix> echo vault"),
+    "external output redraws the unchanged editor"
+)
+check(
+    arbitrationModel.revision == retainedRevision
+        && arbitrationModel.cursorRow == retainedCursor.0
+        && arbitrationModel.cursorColumn == retainedCursor.1
+        && arbitrationModel.textLength == editing.count,
+    "external output does not mutate the user scene"
+)
+check(
+    arbitrationTerminal.cursorRow == 15
+        && arbitrationTerminal.cursorColumn == editing.count,
+    "external output restores the editor cursor"
+)
 
 let proposalPage = UnsafeMutablePointer<UInt8>.allocate(capacity: ReixTextSurfaceTransport.regionBytes)
 defer { proposalPage.deallocate() }

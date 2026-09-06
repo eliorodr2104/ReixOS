@@ -25,7 +25,9 @@ struct TerminalScreenOracleTests {
         #expect(screen.line(0) == "ZX   ")
         #expect(screen.line(1) == "     ")
         #expect(screen.cells[1].attributes.bold)
-        #expect(throws: TerminalScreenModel.Error.self) { try screen.feed("\u{1B}[31m") }
+        try screen.feed("\u{1B}[31mY")
+        #expect(screen.cells[2].attributes.foreground == 31)
+        #expect(throws: TerminalScreenModel.Error.self) { try screen.feed("\u{1B}[99m") }
     }
 
     @Test func clockOnlyAdvancesWhenRequested() {

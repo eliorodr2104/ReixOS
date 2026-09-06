@@ -181,6 +181,51 @@ storage-4m	4M	embedded	-	window	16	[ DISK  ] serving 32768 sectors of 512 bytes|
 # forbidden marker could not say because the prompt before the exit is legitimate.
 shell-exit	-	qemu	-	typed:shell.exit()\nzzz.qqq()\n	25	[ SERVE ] VT Adapter running|ReixOS shell. Type shell.help() to see what this understands.|reix❯|[ SHELL ] this shell is done	[ PANIC ]|REIX-PANIC|[ ERROR ]|the terminal refused to register this reader|zzz.qqq|no such receiver	shell-closed	pass
 
+# One real PL011 interaction that is sensitive to the old input-led TX bug.
+# Two cursor-left records and one Backspace turn `shell.helpx()` into
+# `shell.help()`. There is exactly one newline: if TX only progresses when RX
+# fires, the final help line and the following prompt cannot both appear.
+terminal-edit-help	-	qemu	-	typed:shell.helpx()\033[D\033[D\177\n	25	[ SERVE ] VT Adapter running|ReixOS shell. Type shell.help() to see what this understands.|reix❯|shell.help                this text|the capability that would let it.|reix❯	[ PANIC ]|REIX-PANIC|[ ERROR ]|the terminal refused to register this reader|[ SHELL ] this shell is done	-	pass
+
+# A complete but misspelled command must remain in the editor when Shift+Enter
+# arrives as CSI-u. Backspace removes that forced newline, two Left keys place
+# the cursor before `(`, and `p` repairs the command. Ctrl+Enter submits the
+# resulting script; plain Enter remains a newline while the sheet is active.
+terminal-shift-enter	-	qemu	-	typed:shell.hel()\033[13;2u\033[127u\033[D\033[D\033[112;1;112u\033[13;5u	25	[ SERVE ] VT Adapter running|ReixOS shell. Type shell.help() to see what this understands.|reix❯|Editor Mode|shell.help                this text|the capability that would let it.|reix❯	[ PANIC ]|REIX-PANIC|[ ERROR ]|the terminal refused to register this reader|[ SHELL ] this shell is done	-	pass
+
+# Empty Shift+Enter opens the script sheet without inserting a phantom blank
+# line. Tab inserts four spaces, and Ctrl+Enter executes the indented command.
+# Requiring both the header and gutter makes this a presentation test as well as
+# an input test; the help tail proves the editor left PL011 able to drain.
+terminal-editor-sheet	-	qemu	-	typed:\033[13;2u\033[9;1ushell.help()\033[13;5u	25	[ SERVE ] VT Adapter running|ReixOS shell. Type shell.help() to see what this understands.|Editor Mode|shell.help                this text|the capability that would let it.|reix❯	[ PANIC ]|REIX-PANIC|[ ERROR ]|the terminal refused to register this reader|[ SHELL ] this shell is done	-	pass
+
+# Top-level newlines are statement separators in a mini script. Newlines inside
+# parentheses remain formatting whitespace, so this does not weaken the parser's
+# grouping rules. A following prompt proves the whole script was accepted.
+terminal-editor-script	-	qemu	-	typed:\033[13;2ushell.help()\nshell.help()\033[13;5u	25	[ SERVE ] VT Adapter running|ReixOS shell. Type shell.help() to see what this understands.|reix❯|Editor Mode|shell.help()|shell.help                this text|the capability that would let it.|reix❯	[ PANIC ]|REIX-PANIC|[ ERROR ]|syntax error|the terminal refused to register this reader|[ SHELL ] this shell is done	-	pass
+
+# A genuine parser error is reported directly below the submitted code block:
+# the block already owns the source row, while the diagnostic adds the caret and
+# one-based location without printing the source a second time.
+terminal-editor-syntax	-	qemu	-	typed:\033[13;2ushell.help()\n???\033[13;5u	25	[ SERVE ] VT Adapter running|ReixOS shell. Type shell.help() to see what this understands.|Editor Mode|???|^  syntax error at line 2, column 1|reix❯	[ PANIC ]|REIX-PANIC|[ ERROR ]|the terminal refused to register this reader|[ SHELL ] this shell is done	-	pass
+
+# A leading member access continues the preceding expression across the visual
+# newline. Runtime language coverage may reject the names later, but the parser
+# must not split `.filter` into a second statement or report a syntax error.
+terminal-editor-continuation	-	qemu	-	typed:\033[13;2ulet folders = list\n                .filter { $0.isFolder }\033[13;5u	25	[ SERVE ] VT Adapter running|ReixOS shell. Type shell.help() to see what this understands.|Editor Mode|.filter|service refused with status 3|reix❯	[ PANIC ]|REIX-PANIC|[ ERROR ]|syntax error|the terminal refused to register this reader|[ SHELL ] this shell is done	-	pass
+
+# A real bracketed-paste transaction over PL011, with a newline inside the
+# command rather than one record per pasted character. The newline is legal
+# whitespace inside the call, and Ctrl+Enter after CSI 201~ submits it. Seeing
+# both ends of help and the next prompt proves that the paste stayed atomic,
+# the multiline editor preserved the command, and TX drained without more RX.
+terminal-paste-multiline	-	qemu	-	typed:\033[200~shell.help(\n)\033[201~\033[13;5u	25	[ SERVE ] VT Adapter running|ReixOS shell. Type shell.help() to see what this understands.|reix❯|Editor Mode|shell.help                this text|the capability that would let it.|reix❯	[ PANIC ]|REIX-PANIC|[ ERROR ]|the terminal refused to register this reader|[ SHELL ] this shell is done	-	pass
+
+# More than the traffic volume that exposed the old sixteen-byte payload
+# corruption. Five complete help records must arrive in order and leave a
+# usable prompt, without any receive byte being needed to advance transmit.
+terminal-help-burst	-	qemu	-	typed:shell.help()\nshell.help()\nshell.help()\nshell.help()\nshell.help()\n	30	[ SERVE ] VT Adapter running|ReixOS shell. Type shell.help() to see what this understands.|reix❯|shell.help                this text|the capability that would let it.|reix❯|shell.help                this text|the capability that would let it.|reix❯|shell.help                this text|the capability that would let it.|reix❯|shell.help                this text|the capability that would let it.|reix❯|shell.help                this text|the capability that would let it.|reix❯	[ PANIC ]|REIX-PANIC|[ ERROR ]|the terminal refused to register this reader|[ SHELL ] this shell is done	-	pass
+
 # Instrumented only: the interaction marks add profile syscalls, so decoded
 # latencies include that measurement overhead. This terminal-focused row keeps
 # the 4 MiB floor and embedded initrd coupling but does not attach a disk:

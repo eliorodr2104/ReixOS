@@ -44,21 +44,38 @@ public struct ConsoleClient {
 
         static var isFull: Bool { count == capacity }
 
+        static func reset() { count = 0 }
+
         static func append(_ byte: UInt8) {
             bytes[count] = byte
             count += 1
         }
 
-        /// Hands the staged run to `body` as one contiguous pointer and
-        /// empties the stage, whatever `body` does with it.
-        static func drain(_ body: (UnsafeRawPointer, Int) -> Void) {
-            guard count > 0 else { return }
+        /// Hands the staged run to `body` as one contiguous pointer. The body
+        /// reports how much it durably accepted; a refused suffix stays staged
+        /// in order, so retrying can neither lose nor duplicate bytes.
+        static func drain(_ body: (UnsafeRawPointer, Int) -> Int) -> Bool {
+            guard count > 0 else { return true }
 
-            withUnsafeMutablePointer(to: &bytes) { ptr in
-                body(UnsafeRawPointer(ptr), count)
+            let original = count
+            let accepted = withUnsafeTemporaryAllocation(
+                of: UInt8.self,
+                capacity: original
+            ) { contiguous in
+                for index in 0..<original { contiguous[index] = bytes[index] }
+                return body(UnsafeRawPointer(contiguous.baseAddress!), original)
             }
-
-            count = 0
+            guard accepted >= 0, accepted <= original else { return false }
+            if accepted == original {
+                count = 0
+                return true
+            }
+            guard accepted > 0 else { return false }
+            for index in accepted..<original {
+                bytes[index - accepted] = bytes[index]
+            }
+            count = original - accepted
+            return false
         }
     }
 
@@ -76,6 +93,7 @@ public struct ConsoleClient {
             base      : base,
             regionSize: Self.pageSize
         )
+        Stage.reset()
         self.ring.reset()
 
         send(
@@ -89,36 +107,36 @@ public struct ConsoleClient {
         guard flushed() else { return nil }
     }
 
-    /// Stages `byte` instead of pushing it alone, and only touches the ring
-    /// once a line closes or the stage fills up: everything in between is a
-    /// plain array write, not a `push(_:)` and not a `dmb ish`.
-    ///
-    /// The byte that closes the stage (the newline, or whichever byte finds
-    /// the stage full) still goes through the original single-byte path
-    /// below unchanged, so its outcome, and the kick that follows a newline,
-    /// are reported exactly as before.
+    /// Compatibility writers preserve line visibility by notifying the server
+    /// when a newline closes. Scene backends use `writeBuffered` and publish one
+    /// whole presentation with `flushNow`, avoiding one IPC notification per
+    /// displayed line.
     public func write(_ byte: UInt8) -> ConsoleWrite {
+        write(byte, notifyOnNewline: true)
+    }
 
-        if byte == Self.newLine || Stage.isFull {
-            flushStage()
+    public func writeBuffered(_ byte: UInt8) -> ConsoleWrite {
+        write(byte, notifyOnNewline: false)
+    }
 
-        } else {
-            Stage.append(byte)
-            return .accepted
-        }
-
-        if !ring.push(byte) {
-            let result = drainAndRetry(byte)
+    private func write(
+        _ byte         : UInt8,
+        notifyOnNewline: Bool
+    ) -> ConsoleWrite {
+        if Stage.isFull {
+            let result = flushStage()
             guard result == .accepted else { return result }
+            let drain = requestPartialDrain()
+            guard drain == .accepted else { return drain }
         }
+        Stage.append(byte)
 
-        if byte == Self.newLine {
-            send(
-                handle : endpoint,
-                message: ConsoleOperation.kick.message()
-            )
+        if notifyOnNewline, byte == Self.newLine {
+            let result = flushStage()
+            guard result == .accepted else { return result }
+            guard send(handle: endpoint, message: ConsoleOperation.kick.message()).isDelivered
+            else { return .unregistered }
         }
-
         return .accepted
     }
 
@@ -130,19 +148,18 @@ public struct ConsoleClient {
     /// this is a call and not the default.
     @discardableResult
     public func flushNow() -> Bool {
-        flushStage()
+        guard flushStage() == .accepted else { return false }
+        return requestPartialDrain() == .accepted
+    }
 
-        // `drainPartial` and not `kick`: the console emits whole lines, and a
-        // prompt or an echoed character is not one. Without this the bytes sit
-        // in the ring until something closes the line, which for a terminal
-        // waiting at a prompt is never.
-        guard send(
+    /// Transfers ownership of queued bytes without waiting for the physical
+    /// UART to become empty. VTAdapter also serves input, so making a scene ack
+    /// wait for PL011 would serialize Backspace and Submit behind screen output.
+    private func requestPartialDrain() -> ConsoleWrite {
+        send(
             handle : endpoint,
             message: ConsoleOperation.drainPartial.message()
-
-        ).isDelivered else { return false }
-
-        return synchronized()
+        ).isDelivered ? .accepted : .unregistered
     }
 
 
@@ -151,13 +168,12 @@ public struct ConsoleClient {
     /// room for the whole run, more only when it has to ask the server to
     /// drain in between.
     ///
-    /// Bytes that still do not fit after `flushAttempts` retries, or whose
-    /// registration is gone, fall back to the same raw `.putchar` syscall a
-    /// single byte uses under backpressure, so nothing staged is ever lost.
-    /// Always empties the stage, whichever path it took.
-    private func flushStage() {
-
-        Stage.drain { pending, count in
+    /// A refused suffix remains in `Stage`. Falling through to the kernel here
+    /// would bypass VTAdapter, reorder the stream, and recreate the second
+    /// presentation path that TextSurface is meant to eliminate.
+    private func flushStage() -> ConsoleWrite {
+        var outcome  = ConsoleWrite.accepted
+        let complete = Stage.drain { pending, count in
 
             var offset = ring.push(pending, count: count)
 
@@ -167,9 +183,13 @@ public struct ConsoleClient {
 
                 for _ in 0..<Self.flushAttempts {
 
-                    guard flushed() else {
-                        Self.fallback(pending, from: offset, count: count)
-                        return
+                    guard let status = flushStatus() else {
+                        outcome = .unregistered
+                        return offset
+                    }
+                    guard status == .registered || status == .pending else {
+                        outcome = .unregistered
+                        return offset
                     }
 
                     let accepted = ring.push(pending + offset, count: count - offset)
@@ -182,29 +202,13 @@ public struct ConsoleClient {
                 }
 
                 guard progressed else {
-                    Self.fallback(pending, from: offset, count: count)
-                    return
+                    outcome = .backpressure
+                    return offset
                 }
             }
+            return offset
         }
-    }
-
-    /// Slow path for a full ring: ask the server to drain and retry, a bounded
-    /// number of times.
-    ///
-    /// The reply doubles as a liveness check, which is what separates real
-    /// backpressure from a registration the server dropped, in the latter case
-    /// draining is a no-op and retrying would never terminate.
-    private func drainAndRetry(_ byte: UInt8) -> ConsoleWrite {
-
-        for _ in 0..<Self.flushAttempts {
-
-            guard flushed() else { return .unregistered }
-
-            if ring.push(byte) { return .accepted }
-        }
-
-        return .backpressure
+        return complete ? .accepted : outcome
     }
 
     /// Asks the server to drain, and answers whether it still holds a ring for
@@ -212,17 +216,11 @@ public struct ConsoleClient {
     ///
     /// A call that did not happen answers `false`, which is the safe direction
     /// and the honest one: a server that cannot be reached is not draining, so
-    /// waiting for room in the ring would be waiting for nobody. The caller
-    /// falls back to printing through the kernel.
+    /// waiting for room in the ring would be waiting for nobody.
     private func flushed() -> Bool {
 
         guard let status = flushStatus() else { return false }
         return status == .registered || status == .pending
-    }
-
-    /// A terminal revision is durable only after SerialServer reports no pending work.
-    private func synchronized() -> Bool {
-        flushStatus() == .registered
     }
 
     private func flushStatus() -> ConsoleStatus? {
@@ -237,22 +235,31 @@ public struct ConsoleClient {
         return ConsoleStatus(rawValue: response.message.words[0])
     }
 
-    /// Emits `pending[from..<count]` one byte at a time through the raw
-    /// `.putchar` syscall, the same fallback a single byte takes.
-    private static func fallback(_ pending: UnsafeRawPointer, from: Int, count: Int) {
-        let bytes = pending.assumingMemoryBound(to: UInt8.self)
-        for i in from..<count {
-            _syscall(.putchar, UInt64(bytes[i]))
-        }
-    }
 }
 
-/// Makes everything written so far visible and confirms ConsoleServer retained
-/// the caller ring. A direct kernel-console path cannot provide that receipt.
+/// Publishes one complete presentation to ConsoleServer. The acknowledgement
+/// reports that the server owns the queued bytes; the physical UART may still
+/// be draining, and its backpressure leaves the scene valid.
 @inline(__always)
 @discardableResult
 public func consoleFlush() -> Bool {
     Console.client?.flushNow() ?? false
+}
+
+/// Scene backends batch newlines and notify ConsoleServer once per presentation.
+/// Returning `false` is fail-closed: callers must not commit their semantic
+/// screen state when the transport refused part of the VT transaction.
+@inline(__always)
+@discardableResult
+public func consoleWriteBuffered(_ byte: UInt8) -> Bool {
+    guard let client = Console.client else { return false }
+    switch client.writeBuffered(byte) {
+        case .accepted: return true
+        case .backpressure: return false
+        case .unregistered:
+            Console.client = nil
+            return false
+    }
 }
 
 
@@ -267,11 +274,9 @@ public func putchar(ch: UInt8) {
     switch client.write(ch) {
         case .accepted: break
 
-        case .backpressure:
-            _syscall(.putchar, UInt64(ch))
+        case .backpressure: break
 
         case .unregistered:
             Console.client = nil
-            _syscall(.putchar, UInt64(ch))
     }
 }

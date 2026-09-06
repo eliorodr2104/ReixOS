@@ -64,6 +64,32 @@ struct ShellEditorTests {
         #expect(editor.cursor == insertionPoint + 1)
     }
 
+    @Test("plain input styles do not split when the cursor moves")
+    func cursorMetadataKeepsCanonicalStyles() {
+        var editor   = ShellLineEditor()
+        var sequence : UInt32 = 1
+        #expect(editor.withFrame { _ in true })
+        insert(Array("abc".utf8), into: &editor, sequence: &sequence)
+        var insertedStyleCount = 0
+        #expect(editor.withFrame {
+            insertedStyleCount = $0.styleCount
+            return true
+        })
+
+        let moved = editor.apply(key(.left, sequence: sequence))
+        #expect(moved.requiresPresentation)
+        var movedStyleCount = 0
+        var movedTextLength : UInt32 = 1
+        #expect(editor.withFrame {
+            movedStyleCount = $0.styleCount
+            movedTextLength = $0.frame.textLength
+            return true
+        })
+        #expect(insertedStyleCount == 2)
+        #expect(movedStyleCount == insertedStyleCount)
+        #expect(movedTextLength == 0)
+    }
+
     @Test("Home and End follow physical soft-wrapped rows")
     func physicalHomeAndEnd() {
         var editor = ShellLineEditor()
@@ -147,6 +173,35 @@ struct ShellEditorTests {
         }
     }
 
+    @Test("long wide-text cursor walks preserve overlapping gap bytes")
+    func wideGapWalkPreservesUTF8() {
+        var editor   = ShellLineEditor()
+        let expected = Array(String(repeating: "界", count: 256).utf8)
+        var sequence : UInt32 = 1
+        var offset   = 0
+        while offset < expected.count {
+            let amount = min(15, expected.count - offset)
+            expected.withUnsafeBufferPointer { source in
+                _ = editor.apply(
+                    ReixInputRecord(
+                        kind: .insert,
+                        sequence: sequence,
+                        bytes: source.baseAddress!.advanced(by: offset),
+                        count: amount
+                    )!
+                )
+            }
+            offset += amount
+            sequence &+= 1
+        }
+        for _ in 0..<255 {
+            #expect(editor.apply(key(.left, sequence: sequence)).requiresPresentation)
+            sequence &+= 1
+        }
+        #expect(bytes(of: &editor) == expected)
+        #expect(editor.cursor == 3)
+    }
+
     @Test("selection replacement and undo redo are semantic operations")
     func selectionUndoRedo() {
         var editor = ShellLineEditor()
@@ -176,7 +231,9 @@ struct ShellEditorTests {
         let end = editor.apply(ReixInputRecord(kind: .pasteEnd, sequence: 4)!)
         #expect(end.requiresPresentation)
         #expect(editor.withFrame {
-            $0.frame.kind == .patch && $0.frame.textLength == 10
+            $0.frame.kind == .snapshot
+                && $0.frame.mode == .codeEditor
+                && $0.frame.textLength == 10
         })
         _ = editor.apply(key(.undo, sequence: 5, modifiers: [.control]))
         let emptyAfterUndo = editor.count
@@ -199,21 +256,175 @@ struct ShellEditorTests {
         #expect(bytes(of: &editor) == Array("redo".utf8))
     }
 
-    @Test("forced newline submit viewport and native styles stay bounded")
+    @Test("paste beyond 8192 bytes rolls the complete transaction back")
+    func pasteOverflowRollsBack() {
+        var editor   = ShellLineEditor()
+        var sequence : UInt32 = 1
+        insert(
+            [UInt8](repeating: UInt8(ascii: "a"), count: ShellLineEditor.capacity - 8),
+            into: &editor,
+            sequence: &sequence
+        )
+        let before = bytes(of: &editor)
+        let cursor = editor.cursor
+        #expect(!editor.apply(ReixInputRecord(kind: .pasteBegin, sequence: sequence)!).requiresPresentation)
+        sequence &+= 1
+        let refused = editor.apply(
+            paste([UInt8](repeating: UInt8(ascii: "z"), count: 16), sequence: sequence)
+        )
+        #expect(refused.action == .refused)
+        #expect(bytes(of: &editor) == before)
+        #expect(editor.cursor == cursor)
+        let hasSelection = editor.hasSelection
+        #expect(!hasSelection)
+    }
+
+    @Test("allocation faults leave storage journals history paste and scene coherent")
+    func allocationFaults() {
+        var sequence: UInt32 = 1
+
+        var promotion = ShellLineEditor(
+            allocationFault: ShellEditorAllocationFault(site: .storage)
+        )
+        insert(
+            [UInt8](repeating: UInt8(ascii: "a"), count: ShellLineEditor.inlineCapacity),
+            into: &promotion,
+            sequence: &sequence
+        )
+        var emitted = false
+        #expect(promotion.withFrame { _ in emitted = true; return true })
+        #expect(emitted)
+        let beforePromotion       = bytes(of: &promotion)
+        let beforePromotionCursor = promotion.cursor
+        let refusedPromotion      = insertByte(0x62, into: &promotion, sequence: &sequence)
+        #expect(refusedPromotion.action == .refused)
+        #expect(bytes(of: &promotion) == beforePromotion)
+        #expect(promotion.cursor == beforePromotionCursor)
+        emitted = false
+        #expect(promotion.withFrame { _ in emitted = true; return true })
+        #expect(!emitted)
+
+        var laterGrowth = ShellLineEditor(
+            allocationFault: ShellEditorAllocationFault(site: .storage, occurrence: 2)
+        )
+        insert([UInt8](repeating: 0x63, count: 1024), into: &laterGrowth, sequence: &sequence)
+        let beforeGrowth = bytes(of: &laterGrowth)
+        #expect(insertByte(0x64, into: &laterGrowth, sequence: &sequence).action == .refused)
+        #expect(bytes(of: &laterGrowth) == beforeGrowth)
+
+        var undo = ShellLineEditor(
+            allocationFault: ShellEditorAllocationFault(site: .undo)
+        )
+        #expect(insertByte(0x75, into: &undo, sequence: &sequence).action == .editing)
+        #expect(undo.apply(key(.undo, sequence: sequence, modifiers: [.control])).action == .refused)
+        sequence += 1
+        #expect(bytes(of: &undo) == [0x75])
+
+        var history = ShellLineEditor(
+            allocationFault: ShellEditorAllocationFault(site: .history)
+        )
+        insert(Array("history".utf8), into: &history, sequence: &sequence)
+        #expect(history.apply(key(.enter, sequence: sequence, modifiers: [.control])).action == .submitted(7))
+        sequence += 1
+        history.reset()
+        #expect(
+            history.apply(shellTestKey(.historyPrevious, sequence: sequence)).action
+                == .refused
+        )
+        sequence += 1
+        #expect(history.count == 0)
+
+        var backup = ShellLineEditor(
+            allocationFault: ShellEditorAllocationFault(site: .pasteBackup)
+        )
+        insert(Array("abc".utf8), into: &backup, sequence: &sequence)
+        for _ in 0..<2 {
+            _ = backup.apply(key(.left, sequence: sequence, modifiers: [.shift]))
+            sequence += 1
+        }
+        let beforeBackup                = bytes(of: &backup)
+        let beforeBackupCursor          = backup.cursor
+        let selectedBeforeBackupFailure = backup.hasSelection
+        #expect(selectedBeforeBackupFailure)
+        #expect(
+            backup.apply(ReixInputRecord(kind: .pasteBegin, sequence: sequence)!).action
+                == .refused
+        )
+        sequence += 1
+        #expect(bytes(of: &backup) == beforeBackup)
+        #expect(backup.cursor == beforeBackupCursor)
+        let selectedAfterBackupFailure = backup.hasSelection
+        #expect(selectedAfterBackupFailure)
+
+        var pasteGrowth = ShellLineEditor(
+            allocationFault: ShellEditorAllocationFault(site: .storage)
+        )
+        insert([UInt8](repeating: 0x70, count: 380), into: &pasteGrowth, sequence: &sequence)
+        let beforePaste = bytes(of: &pasteGrowth)
+        _ = pasteGrowth.apply(ReixInputRecord(kind: .pasteBegin, sequence: sequence)!)
+        sequence += 1
+        let pasteFailure = pasteGrowth.apply(
+            paste([UInt8](repeating: 0x71, count: 16), sequence: sequence)
+        )
+        sequence += 1
+        #expect(pasteFailure.action == .refused)
+        #expect(bytes(of: &pasteGrowth) == beforePaste)
+        #expect(pasteGrowth.cursor == beforePaste.count)
+    }
+
+    @Test("Shift Enter opens a script sheet and Tab inserts four spaces")
     func multilineViewportAndStyles() {
-        var editor = ShellLineEditor()
-        _ = editor.apply(ReixInputRecord(kind: .resize, sequence: 1, width: 10, height: 8)!)
-        let newline = editor.apply(key(.enter, sequence: 2, modifiers: [.shift]))
-        #expect(newline.action == .editing)
-        let newlineCount = editor.count
-        #expect(newlineCount == 1)
-        let submit = editor.apply(key(.enter, sequence: 3, modifiers: [.control]))
-        #expect(submit.action == .submitted(1))
+        var editor   = ShellLineEditor()
+        var sequence : UInt32 = 1
+        _ = editor.apply(ReixInputRecord(kind: .resize, sequence: sequence, width: 40, height: 12)!)
+        sequence += 1
+        let opened = editor.apply(key(.enter, sequence: sequence, modifiers: [.shift]))
+        sequence += 1
+        #expect(opened.action == .editing)
+        let openedCodeEditor = editor.isCodeEditing
+        #expect(openedCodeEditor)
+        #expect(editor.count == 0)
         #expect(editor.withFrame {
-            $0.frame.viewportRows == 2
-                && $0.frame.cursorRow >= $0.frame.viewportRow
-                && $0.styleCount >= 1
+            $0.frame.mode == .codeEditor
+                && $0.frame.textLength == 0
+                && $0.frame.cursorRow == 1
+                && $0.frame.cursorColumn == ReixCodeEditorLayout.standardGutterColumns
+                && $0.frame.viewportRows == 3
+                && $0.styleCount == 0
         })
+
+        let tab = editor.apply(key(.tab, sequence: sequence))
+        sequence += 1
+        #expect(tab.action == .editing)
+        #expect(bytes(of: &editor) == [0x20, 0x20, 0x20, 0x20])
+
+        insert(Array("shell.help()".utf8), into: &editor, sequence: &sequence)
+        let newline = editor.apply(key(.enter, sequence: sequence))
+        sequence += 1
+        #expect(newline.action == .editing)
+        #expect(bytes(of: &editor).last == 0x0A)
+        #expect(editor.withFrame {
+            $0.frame.mode == .codeEditor
+                && $0.frame.viewportRows == 3
+                && $0.styleCount == 1
+                && $0.styles?[0].offset == 0
+        })
+
+        let submit = editor.apply(key(.enter, sequence: sequence, modifiers: [.control]))
+        #expect(submit.action == .submitted(editor.count))
+        sequence += 1
+        editor.reset()
+        let resetCodeEditor = editor.isCodeEditing
+        #expect(!resetCodeEditor)
+
+        _ = editor.apply(key(.enter, sequence: sequence, modifiers: [.shift]))
+        sequence += 1
+        let historyBefore = bytes(of: &editor)
+        let upAtTop       = editor.apply(key(.up, sequence: sequence))
+        #expect(upAtTop.action == .editing)
+        #expect(bytes(of: &editor) == historyBefore)
+        let stillCodeEditing = editor.isCodeEditing
+        #expect(stillCodeEditing)
     }
 
     @Test("editor viewport grows and shrinks with wrapped content")
@@ -271,12 +482,12 @@ struct ShellEditorTests {
             editor.reset()
         }
         for marker in stride(from: 4, through: 1, by: -1) {
-            let update = editor.apply(ReixInputRecord(kind: .historyPrevious, sequence: sequence)!)
+            let update = editor.apply(shellTestKey(.historyPrevious, sequence: sequence))
             sequence += 1
             #expect(update.action == .editing)
             #expect(bytes(of: &editor).first == UInt8(ascii: "a") + UInt8(marker))
         }
-        #expect(editor.apply(ReixInputRecord(kind: .historyPrevious, sequence: sequence)!).action == .refused)
+        #expect(editor.apply(shellTestKey(.historyPrevious, sequence: sequence)).action == .refused)
     }
 
     @Test("maximum input stays segmented and resize forces a native snapshot")
@@ -331,7 +542,7 @@ struct ShellEditorTests {
                 count: buffer.count,
                 byte: { buffer[$0] }
             )
-            #expect(width == expected)
+            #expect(width == expected, "unexpected width for \(text)")
         }
     }
 }

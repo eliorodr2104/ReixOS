@@ -17,35 +17,42 @@ public struct VTDecoder {
         case csi
     }
 
-    private struct Checkpoint {
-        let queueCount: Int
-        let sequence: UInt32
-        let escapeState: EscapeState
-        let csi: InlineArray<12, UInt8>
-        let csiCount: Int
-        let pasteActive: Bool
-        let pasteCandidate: InlineArray<6, UInt8>
-        let pasteCandidateCount: Int
-        let utf8: InlineArray<4, UInt8>
-        let utf8Count: Int
-        let utf8Expected: Int
-        let skipNextLF: Bool
+    private struct CSIText {
+        let bytes: InlineArray<16, UInt8>
+        let count: Int
     }
 
-    private var queue = InlineArray<16, ReixInputRecord?>(repeating: nil)
-    private var queueHead = 0
-    private var queueCount = 0
-    private var sequence: UInt32 = 1
-    private var escapeState: EscapeState = .idle
-    private var csi = InlineArray<12, UInt8>(repeating: 0)
-    private var csiCount = 0
-    private var pasteActive = false
-    private var pasteCandidate = InlineArray<6, UInt8>(repeating: 0)
+    private struct Checkpoint {
+        let queueCount         : Int
+        let tailIndex          : Int
+        let tailRecord         : ReixInputRecord?
+        let sequence           : UInt32
+        let escapeState        : EscapeState
+        let csi                : InlineArray<64, UInt8>
+        let csiCount           : Int
+        let pasteActive        : Bool
+        let pasteCandidate     : InlineArray<6, UInt8>
+        let pasteCandidateCount: Int
+        let utf8               : InlineArray<4, UInt8>
+        let utf8Count          : Int
+        let utf8Expected       : Int
+        let skipNextLF         : Bool
+    }
+
+    private var queue               = InlineArray<16, ReixInputRecord?>(repeating: nil)
+    private var queueHead           = 0
+    private var queueCount          = 0
+    private var sequence            : UInt32      = 1
+    private var escapeState         : EscapeState = .idle
+    private var csi                 = InlineArray<64, UInt8>(repeating: 0)
+    private var csiCount            = 0
+    private var pasteActive         = false
+    private var pasteCandidate      = InlineArray<6, UInt8>(repeating: 0)
     private var pasteCandidateCount = 0
-    private var utf8 = InlineArray<4, UInt8>(repeating: 0)
-    private var utf8Count = 0
-    private var utf8Expected = 0
-    private var skipNextLF = false
+    private var utf8                = InlineArray<4, UInt8>(repeating: 0)
+    private var utf8Count           = 0
+    private var utf8Expected        = 0
+    private var skipNextLF          = false
 
     public init() {}
 
@@ -176,14 +183,28 @@ public struct VTDecoder {
         csi[csiCount] = byte
         csiCount += 1
         guard byte >= 0x40, byte <= 0x7E else { return true }
-        let key = csiKey()
-        if csiCount == 4,
+        let key  = csiKey()
+        let text = csiAssociatedText()
+        if let size = csiTextAreaSize() {
+            if let record = ReixInputRecord(
+                kind: .resize,
+                sequence: sequence,
+                width: size.width,
+                height: size.height
+            ) {
+                guard enqueue(record) else { return false }
+            }
+        } else if csiCount == 4,
            csi[0] == 0x32,
            csi[1] == 0x30,
            csi[2] == 0x30,
            csi[3] == 0x7E {
             guard emit(kind: .pasteBegin) else { return false }
             pasteActive = true
+        } else if let text {
+            guard emitText(kind: .insert, bytes: text.bytes, count: text.count) else {
+                return false
+            }
         } else if let key {
             guard emitKey(key.key, modifiers: key.modifiers) else { return false }
         } else {
@@ -197,6 +218,9 @@ public struct VTDecoder {
     private func csiKey() -> (key: ReixInputKey, modifiers: ReixInputModifiers)? {
         guard csiCount > 0 else { return nil }
         let final = csi[csiCount - 1]
+        if final == UInt8(ascii: "u") {
+            return csiUKey()
+        }
         let separator = separatorIndex()
         let modifiers: ReixInputModifiers
         if let separator {
@@ -206,15 +230,6 @@ public struct VTDecoder {
             modifiers = decoded
         } else {
             modifiers = []
-        }
-        if final == 0x75, let separator {
-            let codepoint = number(from: 0, to: separator)
-            if codepoint == 13 { return (.enter, modifiers) }
-            if codepoint == 122 && modifiers.contains(.control) {
-                return modifiers.contains(.shift) ? (.redo, modifiers) : (.undo, modifiers)
-            }
-            if codepoint == 121 && modifiers.contains(.control) { return (.redo, modifiers) }
-            return nil
         }
         if final == 0x41 || final == 0x42 || final == 0x43 || final == 0x44
             || final == 0x48 || final == 0x46 {
@@ -240,6 +255,165 @@ public struct VTDecoder {
         }
     }
 
+    private func csiUKey() -> (key: ReixInputKey, modifiers: ReixInputModifiers)? {
+        let finalIndex = csiCount - 1
+        let separator  = separatorIndex()
+        let keyEnd     = separator ?? finalIndex
+        guard let codepoint = numberBeforeSubfield(from: 0, to: keyEnd) else {
+            return nil
+        }
+        let modifiers: ReixInputModifiers
+        if let separator {
+            let modifierStart = separator + 1
+            let modifierCode  = modifierStart == finalIndex
+                ? 1
+                : numberBeforeSubfield(from: modifierStart, to: finalIndex)
+            guard let modifierCode, let decoded = modifier(code: modifierCode) else {
+                return nil
+            }
+            modifiers = decoded
+        } else {
+            modifiers = []
+        }
+        if codepoint == 13 { return (.enter, modifiers) }
+        if codepoint == 9 { return (.tab, modifiers) }
+        if codepoint == 27 { return (.escape, modifiers) }
+        if codepoint == 127 { return (.backspace, modifiers) }
+        if codepoint == 99 && modifiers.contains(.control) { return (.cancel, modifiers) }
+        if codepoint == 100 && modifiers.contains(.control) { return (.eof, modifiers) }
+        if codepoint == 122 && modifiers.contains(.control) {
+            return modifiers.contains(.shift) ? (.redo, modifiers) : (.undo, modifiers)
+        }
+        if codepoint == 121 && modifiers.contains(.control) { return (.redo, modifiers) }
+        return nil
+    }
+
+    /// Associated text from Kitty's `CSI key ; modifiers ; text u` form.
+    /// The negotiated mode sends at most one bounded input record per key event.
+    private func csiAssociatedText() -> CSIText? {
+        guard csiCount > 0, csi[csiCount - 1] == UInt8(ascii: "u") else {
+            return nil
+        }
+        var firstSeparator  = -1
+        var secondSeparator = -1
+        for index in 0..<(csiCount - 1) where csi[index] == UInt8(ascii: ";") {
+            if firstSeparator < 0 {
+                firstSeparator = index
+            } else if secondSeparator < 0 {
+                secondSeparator = index
+            } else {
+                return nil
+            }
+        }
+        guard firstSeparator > 0,
+              secondSeparator >= firstSeparator + 1,
+              secondSeparator + 1 < csiCount - 1,
+              numberBeforeSubfield(from: 0, to: firstSeparator) != nil,
+              let modifierCode = firstSeparator + 1 == secondSeparator
+                  ? 1
+                  : numberBeforeSubfield(
+                      from: firstSeparator + 1,
+                      to: secondSeparator
+                  ),
+              modifier(code: modifierCode) != nil
+        else { return nil }
+
+        var bytes       = InlineArray<16, UInt8>(repeating: 0)
+        var byteCount   = 0
+        var scalarStart = secondSeparator + 1
+        for index in (secondSeparator + 1)...(csiCount - 1) {
+            guard index == csiCount - 1 || csi[index] == UInt8(ascii: ":") else {
+                continue
+            }
+            guard let scalar = number(from: scalarStart, to: index),
+                  appendUTF8(scalar, to: &bytes, count: &byteCount)
+            else { return nil }
+            scalarStart = index + 1
+        }
+        return byteCount == 0 ? nil : CSIText(bytes: bytes, count: byteCount)
+    }
+
+    private func numberBeforeSubfield(
+        from start: Int,
+        to end    : Int
+    ) -> Int? {
+        guard start >= 0, start < end else { return nil }
+        var fieldEnd = end
+        for index in start..<end where csi[index] == UInt8(ascii: ":") {
+            fieldEnd = index
+            break
+        }
+        return number(from: start, to: fieldEnd)
+    }
+
+    private func appendUTF8(
+        _ scalar: Int,
+        to bytes: inout InlineArray<16, UInt8>,
+        count   : inout Int
+    ) -> Bool {
+        guard scalar >= 0x20,
+              scalar <= 0x10_FFFF,
+              scalar != 0x7F,
+              !(0x80...0x9F).contains(scalar),
+              !(0xD800...0xDFFF).contains(scalar)
+        else { return false }
+        let needed: Int
+        if scalar <= 0x7F {
+            needed = 1
+        } else if scalar <= 0x7FF {
+            needed = 2
+        } else if scalar <= 0xFFFF {
+            needed = 3
+        } else {
+            needed = 4
+        }
+        guard count <= bytes.count - needed else { return false }
+        switch needed {
+            case 1:
+                bytes[count] = UInt8(scalar)
+            case 2:
+                bytes[count] = 0xC0 | UInt8((scalar >> 6) & 0x1F)
+                bytes[count + 1] = 0x80 | UInt8(scalar & 0x3F)
+            case 3:
+                bytes[count] = 0xE0 | UInt8((scalar >> 12) & 0x0F)
+                bytes[count + 1] = 0x80 | UInt8((scalar >> 6) & 0x3F)
+                bytes[count + 2] = 0x80 | UInt8(scalar & 0x3F)
+            default:
+                bytes[count] = 0xF0 | UInt8((scalar >> 18) & 0x07)
+                bytes[count + 1] = 0x80 | UInt8((scalar >> 12) & 0x3F)
+                bytes[count + 2] = 0x80 | UInt8((scalar >> 6) & 0x3F)
+                bytes[count + 3] = 0x80 | UInt8(scalar & 0x3F)
+        }
+        count += needed
+        return true
+    }
+
+    /// `CSI 8 ; rows ; columns t`, the terminal answering the adapter's `CSI 18 t`.
+    /// A terminal larger than the surface can address is reported at the limit,
+    /// which keeps the first columns correct.
+    private func csiTextAreaSize() -> (width: UInt16, height: UInt16)? {
+        guard csiCount >= 6,
+              csi[csiCount - 1] == UInt8(ascii: "t"),
+              csi[0] == UInt8(ascii: "8"),
+              csi[1] == 0x3B
+        else { return nil }
+        var second = -1
+        for index in 2..<(csiCount - 1) where csi[index] == 0x3B {
+            guard second < 0 else { return nil }
+            second = index
+        }
+        guard second > 2,
+              let rows    = number(from: 2, to: second),
+              let columns = number(from: second + 1, to: csiCount - 1),
+              rows > 0,
+              columns > 0
+        else { return nil }
+        return (
+            UInt16(min(columns, Int(ReixTextSurfaceFrameDescriptor.maximumColumns))),
+            UInt16(min(rows, Int(ReixTextSurfaceFrameDescriptor.maximumRows)))
+        )
+    }
+
     private func separatorIndex() -> Int? {
         guard csiCount > 1 else { return nil }
         for index in 0..<(csiCount - 1) where csi[index] == 0x3B { return index }
@@ -251,23 +425,23 @@ public struct VTDecoder {
         var result = 0
         for index in start..<end {
             guard csi[index] >= 0x30, csi[index] <= 0x39 else { return nil }
-            result = result * 10 + Int(csi[index] - 0x30)
+            let digit = Int(csi[index] - 0x30)
+            guard result <= (Int.max - digit) / 10 else { return nil }
+            result = result * 10 + digit
         }
         return result
     }
 
     private func modifier(code: Int) -> ReixInputModifiers? {
-        switch code {
-            case 1: return []
-            case 2: return [.shift]
-            case 3: return [.alt]
-            case 4: return [.shift, .alt]
-            case 5: return [.control]
-            case 6: return [.shift, .control]
-            case 7: return [.alt, .control]
-            case 8: return [.shift, .alt, .control]
-            default: return nil
-        }
+        guard code > 0 else { return nil }
+        let bits      = code - 1
+        var modifiers : ReixInputModifiers = []
+        if bits & 0x01 != 0 { modifiers.insert(.shift) }
+        if bits & 0x02 != 0 { modifiers.insert(.alt) }
+        if bits & 0x04 != 0 { modifiers.insert(.control) }
+        if bits & 0x08 != 0 { modifiers.insert(.super) }
+        if bits & 0x40 != 0 { modifiers.insert(.caps) }
+        return modifiers
     }
 
     private mutating func processPaste(_ byte: UInt8) -> Bool {
@@ -319,14 +493,14 @@ public struct VTDecoder {
     ) -> Bool {
         if pasteActive { return processPasteText(byte) }
         if !pasteActive {
-            if byte == 0x03 { return emit(kind: .cancel) }
+            if byte == 0x03 { return emitKey(.cancel, modifiers: [.control]) }
             if byte == 0x1A { return emitKey(.undo, modifiers: [.control]) }
             if byte == 0x19 { return emitKey(.redo, modifiers: [.control]) }
-            if byte == 0x04 { return emit(kind: .eof) }
+            if byte == 0x04 { return emitKey(.eof, modifiers: [.control]) }
             if byte == 0x08 || byte == 0x7F { return emitKey(.backspace) }
         }
         if byte == 0x0D {
-            guard emit(kind: .enter) else { return false }
+            guard emitKey(.enter) else { return false }
             skipNextLF = true
             return true
         }
@@ -335,7 +509,7 @@ public struct VTDecoder {
                 skipNextLF = false
                 return true
             }
-            return emit(kind: .enter)
+            return emitKey(.enter)
         }
         skipNextLF = false
         if !pasteActive, byte == 0x09 {
@@ -529,7 +703,44 @@ public struct VTDecoder {
         }
     }
 
+    private mutating func emitText(
+          kind : ReixInputKind,
+          bytes: InlineArray<16, UInt8>,
+          count: Int
+    ) -> Bool {
+        bytes.span.withUnsafeBufferPointer {
+            guard let record = ReixInputRecord(
+                kind: kind,
+                sequence: sequence,
+                bytes: $0.baseAddress,
+                count: count
+            ) else { return false }
+            return enqueue(record)
+        }
+    }
+
     private mutating func enqueue(_ record: ReixInputRecord) -> Bool {
+        if record.kind == .insert, queueCount > 0 {
+            let tail = (queueHead + queueCount - 1) % Self.queueCapacity
+            if let previous = queue[tail],
+               previous.kind == .insert,
+               record.count <= ReixInputProtocol.maximumPayload - previous.count {
+                var merged = InlineArray<16, UInt8>(repeating: 0)
+                for index in 0..<previous.count { merged[index] = previous.text[index] }
+                for index in 0..<record.count { merged[previous.count + index] = record.text[index] }
+                let combined = merged.span.withUnsafeBufferPointer {
+                    ReixInputRecord(
+                        kind: .insert,
+                        sequence: previous.sequence,
+                        bytes: $0.baseAddress,
+                        count: previous.count + record.count
+                    )
+                }
+                guard let combined else { return false }
+                queue[tail] = combined
+                return true
+            }
+        }
         guard queueCount < Self.queueCapacity else { return false }
         let index = (queueHead + queueCount) % Self.queueCapacity
         queue[index] = record
@@ -554,8 +765,13 @@ public struct VTDecoder {
     }
 
     private func checkpoint() -> Checkpoint {
-        Checkpoint(
+        let tailIndex = queueCount == 0
+            ? 0
+            : (queueHead + queueCount - 1) % Self.queueCapacity
+        return Checkpoint(
             queueCount: queueCount,
+            tailIndex: tailIndex,
+            tailRecord: queueCount == 0 ? nil : queue[tailIndex],
             sequence: sequence,
             escapeState: escapeState,
             csi: csi,
@@ -571,6 +787,9 @@ public struct VTDecoder {
     }
 
     private mutating func restore(_ checkpoint: Checkpoint) {
+        if checkpoint.queueCount > 0 {
+            queue[checkpoint.tailIndex] = checkpoint.tailRecord
+        }
         queueCount = checkpoint.queueCount
         sequence = checkpoint.sequence
         escapeState = checkpoint.escapeState
