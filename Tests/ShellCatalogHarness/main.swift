@@ -349,6 +349,34 @@ private func testQuotesMayBeLeftOffOneWord() {
     require(split.failure != nil)
 }
 
+/// The written form of a compact call has to mean the same thing, which is
+/// what the help has always claimed and what the live shell refused.
+private func testWrittenArgumentsMayBeBareWords() {
+    require(run("fileSystem.createDirectory(at: vault)").calls == [
+        RecordedCall(command: "fileSystem.createDirectory", arguments: ["vault"]),
+    ])
+    require(run("fileSystem.changeDir(at: reix::app/doc)").calls == [
+        RecordedCall(command: "fileSystem.changeDir", arguments: ["reix::app/doc"]),
+    ])
+    require(run("info(at: a.txt)").calls == [
+        RecordedCall(command: "fileSystem.info", arguments: ["a.txt"]),
+    ])
+
+    // The word rule is for arguments, not for the verb: a misspelled command
+    // is still nothing this shell knows.
+    let unknown = run("readd(at: a.txt)")
+    require(unknown.calls.isEmpty)
+    require(unknown.failure != nil)
+
+    // `$0` outside a closure is a name the evaluator owes, not a word.
+    let orphan = run("fileSystem.read(at: $0)")
+    require(orphan.calls.isEmpty)
+    guard case .unknownSymbol? = orphan.failure else {
+        require(false, "an unsupplied $0 became its own spelling")
+        return
+    }
+}
+
 /// The receiver rule must not swallow the member chains the language already
 /// had. A verb is not a receiver, and a value named like one is still a value.
 private func testReachingIntoValuesStillReads() {
@@ -373,7 +401,8 @@ testOmissionNeedsAUniqueAnswer()
 testAmbiguityIsRefused()
 testQuotesMayBeLeftOffOneWord()
 testReachingIntoValuesStillReads()
+testWrittenArgumentsMayBeBareWords()
 
 // `print` would reach Reix's freestanding `putchar`, which has no console
 // here. The harness says how it went through the file descriptor instead.
-FileHandle.standardOutput.write(Data("ShellCatalogHarness: 13 checks passed\n".utf8))
+FileHandle.standardOutput.write(Data("ShellCatalogHarness: 14 checks passed\n".utf8))

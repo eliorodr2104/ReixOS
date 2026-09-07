@@ -148,11 +148,18 @@ public struct TypedShellRuntime {
         }
         var values = InlineArray<4, TypedShellArgument?>(repeating: nil)
         for argument in 0..<call.count {
+            let label = call.labels[argument].flatMap { text($0, source, sourceCount) }
             switch evaluate(call.values[argument], program, source, sourceCount, signatures, zero, one, invoke) {
-                case .failure(let failure): return .failure(failure)
                 case .success(let value):
-                    let label = call.labels[argument].flatMap { text($0, source, sourceCount) }
                     values[argument] = TypedShellArgument(label: label, value: value)
+                case .failure(let failure):
+                    // A name in an argument that answers to nothing is a word.
+                    // `read(at: notes.txt)` is the written form of `read
+                    // notes.txt`, where the same bytes were a word already.
+                    guard case .unknownSymbol = failure,
+                          let word = bareWord(call.values[argument], program, source, sourceCount)
+                    else { return .failure(failure) }
+                    values[argument] = TypedShellArgument(label: label, value: .text(word))
             }
         }
         let resolution = resolve(call, values, source, sourceCount, signatures)
@@ -169,6 +176,36 @@ public struct TypedShellRuntime {
                     case .failure(let status): return .failure(.service(status))
                 }
         }
+    }
+
+    /// The text of an argument written as a plain name, if that is what it is.
+    ///
+    /// `$0` and `$1` are names the evaluator supplies, so a closure used where
+    /// there is nothing to supply stays an error rather than becoming its own
+    /// spelling.
+    private func bareWord(
+        _ node       : Int,
+        _ program    : TypedShellProgram,
+        _ source     : UnsafePointer<UInt8>,
+        _ sourceCount: Int
+    ) -> ShellText? {
+        guard node >= 0, node < program.nodeCount else { return nil }
+        var end  = -1
+        var walk = node
+        // A dotted name is one word, so `read(at: a.txt)` asks for the file
+        // and not for the `txt` of something called `a`.
+        while case .member(let base, let name)? = program.nodes[walk] {
+            if end < 0 { end = name.start + name.count }
+            walk = base
+        }
+        guard walk >= 0, walk < program.nodeCount,
+              case .identifier(let root)? = program.nodes[walk],
+              root.count > 0, root.start >= 0, root.start < sourceCount,
+              source[root.start] != 0x24
+        else { return nil }
+        if end < 0 { end = root.start + root.count }
+        guard end > root.start, end <= sourceCount else { return nil }
+        return text(Span(start: root.start, count: end - root.start), source, sourceCount)
     }
 
     private func resolve(

@@ -213,7 +213,7 @@ public enum TypedShellParser {
                         spaces()
                         if take(colon) { label = candidate; spaces() } else { cursor = saved }
                     }
-                    guard let value = expression(compactRoot: false), call.count < call.values.count else { return nil }
+                    guard let value = writtenArgument(), call.count < call.values.count else { return nil }
                     call.labels[call.count] = label
                     call.values[call.count] = value
                     call.count += 1
@@ -254,6 +254,32 @@ public enum TypedShellParser {
                 }
             }
             return result.append(.call(call))
+        }
+
+        /// One value inside written parentheses.
+        ///
+        /// A path is a word and not an expression: nothing in this language
+        /// spells `::` or `/`, so `changeDir(at: reix::app/doc)` says what
+        /// `changeDir reix::app/doc` says.
+        mutating func writtenArgument() -> Int? {
+            let saved = cursor
+            if cursor < end, source[cursor] != quote, source[cursor] != openBrace,
+               let word = bare(), isPath(word) {
+                spaces()
+                if cursor < end, source[cursor] == comma || source[cursor] == close {
+                    return result.append(.literal(word))
+                }
+            }
+            cursor = saved
+            return expression(compactRoot: false)
+        }
+
+        func isPath(_ span: Span) -> Bool {
+            for index in 0..<span.count {
+                let byte = source[span.start + index]
+                if byte == colon || byte == slash { return true }
+            }
+            return false
         }
 
         mutating func parenthesizedSingleArgument() -> Int?? {
@@ -447,6 +473,7 @@ public enum TypedShellParser {
     private static let openBrace     : UInt8 = 0x7B
     private static let closeBrace    : UInt8 = 0x7D
     private static let dollar        : UInt8 = 0x24
+    private static let slash         : UInt8 = 0x2F
     private static let underscore    : UInt8 = 0x5F
     private static let upperA        : UInt8 = 0x41
     private static let upperZ        : UInt8 = 0x5A
