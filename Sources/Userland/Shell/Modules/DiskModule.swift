@@ -10,7 +10,43 @@ import ReixABI
 import ShellLanguage
 
 public enum DiskModule: ShellModule {
-    public static let receiver: StaticString = "disk"
+    enum Verb: UInt16 {
+        case info, read
+    }
+
+    public static var namespace: ShellNamespaceDescriptor {
+        ShellNamespaceDescriptor("disk", capability: .block, summary: "the disk, sector by sector")
+    }
+
+    public static var commandCount: Int { 2 }
+
+    public static func command(at index: Int) -> ShellCommandDescriptor? {
+        switch Verb(rawValue: UInt16(index)) {
+            case .info:
+                return ShellCommandDescriptor(
+                    code      : Verb.info.rawValue,
+                    verb      : "info",
+                    signature : TypedShellSignature(namespace: "disk", name: "info", namespaceRequired: true),
+                    capability: .block,
+                    summary   : "what the disk is"
+                )
+            case .read:
+                return ShellCommandDescriptor(
+                    code      : Verb.read.rawValue,
+                    verb      : "read",
+                    signature : TypedShellSignature(
+                        namespace        : "disk",
+                        name             : "read",
+                        TypedShellParameter("sector"),
+                        namespaceRequired: true
+                    ),
+                    capability: .block,
+                    summary   : "the first bytes of one sector"
+                )
+            case nil:
+                return nil
+        }
+    }
 
     public static func handle(
         _ command   : Command,
@@ -56,8 +92,6 @@ public enum DiskModule: ShellModule {
         }
         return ShellCommandResult(outcome: .handled, records: records)
     }
-
-    public static func describe() {}
 
 
     private enum Disk {

@@ -11,7 +11,46 @@ import ShellLanguage
 
 public enum CoreModule: ShellModule {
 
-    public static let receiver: StaticString = "shell"
+    /// This module's private name for each verb it declares.
+    enum Verb: UInt16 {
+        case help, exit, halt
+    }
+
+    public static var namespace: ShellNamespaceDescriptor {
+        ShellNamespaceDescriptor("shell", summary: "this shell itself")
+    }
+
+    public static var commandCount: Int { 3 }
+
+    public static func command(at index: Int) -> ShellCommandDescriptor? {
+        switch Verb(rawValue: UInt16(index)) {
+            case .help:
+                return ShellCommandDescriptor(
+                    code     : Verb.help.rawValue,
+                    verb     : "help",
+                    signature: TypedShellSignature(namespace: "shell", name: "help", effect: .pure),
+                    summary  : "what this shell understands"
+                )
+            case .exit:
+                return ShellCommandDescriptor(
+                    code     : Verb.exit.rawValue,
+                    verb     : "exit",
+                    signature: TypedShellSignature(namespace: "shell", name: "exit", effect: .session),
+                    summary  : "stop this shell, leave the machine up"
+                )
+            case .halt:
+                return ShellCommandDescriptor(
+                    code      : Verb.halt.rawValue,
+                    verb      : "halt",
+                    signature : TypedShellSignature(namespace: "shell", name: "halt", effect: .machine),
+                    capability: .sessionControl,
+                    sensitive : true,
+                    summary   : "request a coordinated shutdown"
+                )
+            case nil:
+                return nil
+        }
+    }
 
     public static func handle(
         _ command   : Command,
@@ -55,7 +94,6 @@ public enum CoreModule: ShellModule {
         return ShellCommandResult(outcome: .handled, records: records)
     }
 
-    public static func describe() {}
 }
 
 private func halt(

@@ -33,4 +33,50 @@ public struct TypedShellSignature {
         self.effect = effect
         self.namespaceRequired = namespaceRequired
     }
+
+    /// One parameter, spelled where it is read. Modules declare signatures by
+    /// hand, so the shape of a call should not cost them a table.
+    public init(
+        namespace        : StaticString,
+        name             : StaticString,
+        _ first          : TypedShellParameter,
+        result           : ShellValueType = .void,
+        effect           : ShellEffect = .service,
+        namespaceRequired: Bool = false
+    ) {
+        var table = InlineArray<4, TypedShellParameter?>(repeating: nil)
+        table[0] = first
+        self.init(
+            namespace        : namespace,
+            name             : name,
+            parameters       : table,
+            parameterCount   : 1,
+            result           : result,
+            effect           : effect,
+            namespaceRequired: namespaceRequired
+        )
+    }
+
+    public init(
+        namespace        : StaticString,
+        name             : StaticString,
+        _ first          : TypedShellParameter,
+        _ second         : TypedShellParameter,
+        result           : ShellValueType = .void,
+        effect           : ShellEffect = .service,
+        namespaceRequired: Bool = false
+    ) {
+        var table = InlineArray<4, TypedShellParameter?>(repeating: nil)
+        table[0] = first
+        table[1] = second
+        self.init(
+            namespace        : namespace,
+            name             : name,
+            parameters       : table,
+            parameterCount   : 2,
+            result           : result,
+            effect           : effect,
+            namespaceRequired: namespaceRequired
+        )
+    }
 }

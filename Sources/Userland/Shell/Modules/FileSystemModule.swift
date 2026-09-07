@@ -18,7 +18,116 @@ import ShellLanguage
 /// happening in a signature.
 public enum FileSystemModule: ShellModule {
 
-    public static let receiver: StaticString = "fileSystem"
+    /// The commands this module declares, which are not the same list as the
+    /// verbs its handler answers: `changeDir` and `move` are spelled `move`
+    /// and `rename` inside, and two of them share one handler.
+    enum Declared: UInt16 {
+        case list, currentDirectory, changeDir, move, free, info, read, write
+        case createDirectory, createFile, createContainer, remove, name
+        case unmount, compact, scrub
+    }
+
+    public static var namespace: ShellNamespaceDescriptor {
+        ShellNamespaceDescriptor("fileSystem", capability: .container, summary: "this shell's container")
+    }
+
+    public static var commandCount: Int { Int(Declared.scrub.rawValue) + 1 }
+
+    public static func command(at index: Int) -> ShellCommandDescriptor? {
+        guard let declared = Declared(rawValue: UInt16(index)) else { return nil }
+        switch declared {
+            case .list:
+                return descriptor(declared, "list", TypedShellSignature(namespace: "fileSystem", name: "list", result: .sequence),
+                                  schema: .file, summary: "what is here")
+            case .currentDirectory:
+                return descriptor(declared, "where", TypedShellSignature(namespace: "fileSystem", name: "currentDirectory", effect: .session),
+                                  summary: "say where this shell is standing")
+            case .changeDir:
+                return descriptor(declared, "move", TypedShellSignature(namespace: "fileSystem", name: "changeDir", TypedShellParameter("at"), effect: .session),
+                                  summary: "change this session's directory")
+            case .move:
+                return descriptor(declared, "rename", TypedShellSignature(namespace: "fileSystem", name: "move", TypedShellParameter("from"), TypedShellParameter("to")),
+                                  sensitive: true, summary: "rename it, or move it")
+            case .free:
+                return descriptor(declared, "free", TypedShellSignature(namespace: "fileSystem", name: "free"),
+                                  summary: "how much room is left")
+            case .info:
+                return descriptor(declared, "info", TypedShellSignature(namespace: "fileSystem", name: "info", TypedShellParameter("at")),
+                                  summary: "what something is, and when")
+            case .read:
+                return descriptor(declared, "read", TypedShellSignature(namespace: "fileSystem", name: "read", TypedShellParameter("at")),
+                                  summary: "the first bytes of a file")
+            case .write:
+                return descriptor(declared, "write", TypedShellSignature(namespace: "fileSystem", name: "write", TypedShellParameter("at"), TypedShellParameter("text")),
+                                  sensitive: true, summary: "replace what a file says")
+            case .createDirectory:
+                return descriptor(declared, "folder", TypedShellSignature(namespace: "fileSystem", name: "createDirectory", TypedShellParameter("at")),
+                                  summary: "make a folder")
+            case .createFile:
+                return descriptor(declared, "write", TypedShellSignature(namespace: "fileSystem", name: "createFile", TypedShellParameter("at")),
+                                  sensitive: true, summary: "make an empty file")
+            case .createContainer:
+                return descriptor(declared, "container", TypedShellSignature(namespace: "fileSystem", name: "createContainer", TypedShellParameter("name"), TypedShellParameter("blocks")),
+                                  sensitive: true, summary: "cut a container out of this one")
+            case .remove:
+                return descriptor(declared, "remove", TypedShellSignature(namespace: "fileSystem", name: "remove", TypedShellParameter("at")),
+                                  sensitive: true, summary: "take it away")
+            case .name:
+                return descriptor(declared, "name", TypedShellSignature(namespace: "fileSystem", name: "name", TypedShellParameter("name")),
+                                  sensitive: true, summary: "rename the machine")
+            case .unmount:
+                return descriptor(declared, "unmount", TypedShellSignature(namespace: "fileSystem", name: "unmount"),
+                                  sensitive: true, summary: "mark the disk clean before stopping")
+            case .compact:
+                return descriptor(declared, "compact", TypedShellSignature(namespace: "fileSystem", name: "compact", TypedShellParameter("at")),
+                                  summary: "put a scattered file back in one piece")
+            case .scrub:
+                return descriptor(declared, "scrub", TypedShellSignature(namespace: "fileSystem", name: "scrub"),
+                                  summary: "read the whole disk and say what is wrong")
+        }
+    }
+
+    /// Listing answers with the directory itself rather than with records.
+    public static func value(
+        for code  : UInt16,
+          in session: inout ShellSession
+    ) -> TypedShellInvocationResult? {
+        guard Declared(rawValue: code) == .list else { return nil }
+        return listValue(in: &session)
+    }
+
+    /// `createFile` is `write` with nothing to write, and an empty argument is
+    /// the only way to say so.
+    public static func fill(
+        _ command: inout Command,
+          for code: UInt16,
+          at cursor: Int
+    ) -> Bool {
+        guard Declared(rawValue: code) == .createFile else { return true }
+        guard command.argumentCount < command.arguments.count else { return false }
+        command.arguments[command.argumentCount] = Span(start: cursor, count: 0)
+        command.argumentCount += 1
+        return true
+    }
+
+    private static func descriptor(
+        _ declared : Declared,
+        _ verb     : StaticString,
+        _ signature: TypedShellSignature,
+          sensitive: Bool = false,
+          schema   : ShellTypeSchema = .none,
+          summary  : StaticString
+    ) -> ShellCommandDescriptor {
+        ShellCommandDescriptor(
+            code      : declared.rawValue,
+            verb      : verb,
+            signature : signature,
+            capability: .container,
+            sensitive : sensitive,
+            schema    : schema,
+            summary   : summary
+        )
+    }
 
     public static func handle(
         _ command   : Command,
@@ -74,8 +183,6 @@ public enum FileSystemModule: ShellModule {
         carry(verb, command, &session, files)
         return .handled
     }
-
-    public static func describe() {}
 
     /// Supplies one bounded, eager directory materialization to the evaluator.
     /// The service is consumed through its real batch cursor, but records are

@@ -203,6 +203,15 @@ let package = Package(
             dependencies: ["Reix", "ReixABI", "KernelHostShims"],
             path: "Tests/SerialRingHarness"
         ),
+        // The shell's catalog and grammar, over the modules the shell is built
+        // with. Not a suite in ShellTests: Reix's freestanding `malloc` and
+        // `putchar` collide with the kernel's inside one test bundle.
+        .executableTarget(
+            name: "ShellCatalogHarness",
+            dependencies: ["Shell", "ShellLanguage", "ReixABI", "KernelHostShims"],
+            path: "Tests/ShellCatalogHarness"
+        ),
+
         .executableTarget(
             name: "VTDecoderHarness",
             dependencies: ["Reix", "ReixABI", "ShellLanguage", "KernelHostShims"],

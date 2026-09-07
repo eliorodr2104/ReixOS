@@ -16,17 +16,15 @@ import ShellLanguage
 /// the contract is written now so that what changes then is where the modules
 /// come from and not what a module is.
 ///
+/// A module documents itself: `ShellCommandProvider` has no default, so a
+/// receiver that answers a verb it never declared cannot be written. What the
+/// modules declare is what the catalog merges, and the catalog is what the
+/// parser, help and the editor read.
+///
 /// Static, deliberately: a module holds no state of its own. What state there
 /// is belongs to the session, which is handed in and handed back changed. A
 /// module that wanted its own would be a module the shell could not restart.
-public protocol ShellModule {
-
-    /// The name that selects this module: `fs`, `process`, `disk`.
-    ///
-    /// A receiver is not decoration. It names the authority a command acts
-    /// through, so `process.spawn` reads as what it is, and a receiver the
-    /// shell holds no capability for simply does not answer.
-    static var receiver: StaticString { get }
+public protocol ShellModule: ShellCommandProvider {
 
     /// Carries out one command.
     ///
@@ -42,8 +40,24 @@ public protocol ShellModule {
           in session: inout ShellSession
     ) -> ShellCommandResult
 
-    /// One line per verb, printed by `help`.
-    static func describe()
+    /// Answers a declared command with a value instead of with records.
+    ///
+    /// `nil` means the ordinary path: the command is spelled out and handed to
+    /// `handleResult` like any other.
+    static func value(
+        for code  : UInt16,
+        in session: inout ShellSession
+    ) -> TypedShellInvocationResult?
+
+    /// The module's last word on a command before its handler sees it.
+    ///
+    /// `cursor` is where the spelled-out line ends, so an argument appended
+    /// here names nothing rather than borrowing somebody else's bytes.
+    static func fill(
+        _ command: inout Command,
+          for code: UInt16,
+          at cursor: Int
+    ) -> Bool
 }
 
 
@@ -54,4 +68,15 @@ public extension ShellModule {
     ) -> ShellCommandResult {
         ShellCommandResult(outcome: handle(command, in: &session))
     }
+
+    static func value(
+        for code  : UInt16,
+        in session: inout ShellSession
+    ) -> TypedShellInvocationResult? { nil }
+
+    static func fill(
+        _ command: inout Command,
+          for code: UInt16,
+          at cursor: Int
+    ) -> Bool { true }
 }

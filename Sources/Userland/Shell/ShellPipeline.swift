@@ -10,16 +10,8 @@ import ReixABI
 import ShellLanguage
 
 struct ShellPipeline {
-    private enum Service: Int {
-        case help, exit, halt
-        case processList, processes, spawn
-        case diskInfo, diskRead
-        case list, currentDirectory, changeDirectory, move
-        case free, info, read, write, createDirectory, createFile
-        case container, remove, name, unmount, compact, scrub
-    }
-
     private let environment  : Environment
+    private let catalog      : ShellCatalog
     private var runtime      = TypedShellRuntime()
     private var arena        = TypedShellSequenceArena()
     private var container    : UInt32 = 0
@@ -29,7 +21,23 @@ struct ShellPipeline {
 
     init(environment: Environment) {
         self.environment = environment
+        self.catalog = Self.merged()
     }
+
+    /// Every module the shell was built with, in one catalog.
+    ///
+    /// This list is the whole of what a shell offers: a module absent here is
+    /// absent from resolution, from help and from completion at once.
+    static func merged() -> ShellCatalog {
+        var catalog = ShellCatalog()
+        _ = catalog.merge(CoreModule.self)
+        _ = catalog.merge(ProcessModule.self)
+        _ = catalog.merge(DiskModule.self)
+        _ = catalog.merge(FileSystemModule.self)
+        return catalog
+    }
+
+    var documentation: ShellCatalog { catalog }
 
     mutating func execute(
         _ program: TypedShellProgram,
@@ -37,13 +45,10 @@ struct ShellPipeline {
           count  : Int,
           flush  : () -> Bool
     ) -> Result<ShellValue, TypedShellFailure> {
-        var table          = InlineArray<26, TypedShellSignature?>(repeating: nil)
-        let signatureCount = Self.signatures(into: &table)
-        var evaluator      = runtime
-        var sequenceArena  = arena
-        let result         = table.span.withUnsafeBufferPointer { all in
-            let signatures = UnsafeBufferPointer(start: all.baseAddress!, count: signatureCount)
-            return evaluator.execute(program, source: source, count: count, signatures: signatures, arena: &sequenceArena) { invocation in
+        var evaluator     = runtime
+        var sequenceArena = arena
+        let result        = catalog.withSignatures { signatures in
+            evaluator.execute(program, source: source, count: count, signatures: signatures, arena: &sequenceArena) { invocation in
                 self.invoke(invocation, signatures: signatures, flush: flush)
             }
         }
@@ -57,6 +62,10 @@ struct ShellPipeline {
         return result
     }
 
+    /// Routes one resolved call to the module that documented it.
+    ///
+    /// The namespace a command was declared under is the module that answers
+    /// it, so nothing here knows a verb by name.
     private mutating func invoke(
         _ invocation: TypedShellInvocation,
           signatures: UnsafeBufferPointer<TypedShellSignature?>,
@@ -64,43 +73,35 @@ struct ShellPipeline {
     ) -> TypedShellInvocationResult {
         guard invocation.signatureIndex >= 0,
               invocation.signatureIndex < signatures.count,
-              signatures[invocation.signatureIndex] != nil,
-              let service = Service(rawValue: invocation.signatureIndex)
+              let descriptor = catalog.command(at: invocation.signatureIndex),
+              let receiver = catalog.receiver(ofCommandAt: invocation.signatureIndex)
         else { return .failure(UInt32.max) }
 
-        if service == .list {
-            return withSession(line: UnsafePointer(Self.empty.utf8Start), count: 0) {
-                FileSystemModule.listValue(in: &$0)
-            }
+        if same(receiver.name, CoreModule.namespace.name) {
+            return dispatch(CoreModule.self, descriptor, invocation, flush)
         }
-        if service == .processList || service == .processes {
-            return ProcessModule.listValue(authority: environment.profiler)
+        if same(receiver.name, ProcessModule.namespace.name) {
+            return dispatch(ProcessModule.self, descriptor, invocation, flush)
         }
+        if same(receiver.name, DiskModule.namespace.name) {
+            return dispatch(DiskModule.self, descriptor, invocation, flush)
+        }
+        if same(receiver.name, FileSystemModule.namespace.name) {
+            return dispatch(FileSystemModule.self, descriptor, invocation, flush)
+        }
+        return .failure(UInt32.max)
+    }
 
-        let target: (namespace: StaticString, verb: StaticString)
-        switch service {
-            case .help: target = ("shell", "help")
-            case .exit: target = ("shell", "exit")
-            case .halt: target = ("shell", "halt")
-            case .spawn: target = ("process", "spawn")
-            case .diskInfo: target = ("disk", "info")
-            case .diskRead: target = ("disk", "read")
-            case .currentDirectory: target = ("fs", "where")
-            case .changeDirectory: target = ("fs", "move")
-            case .move: target = ("fs", "rename")
-            case .free: target = ("fs", "free")
-            case .info: target = ("fs", "info")
-            case .read: target = ("fs", "read")
-            case .write: target = ("fs", "write")
-            case .createDirectory: target = ("fs", "folder")
-            case .createFile: target = ("fs", "write")
-            case .container: target = ("fs", "container")
-            case .remove: target = ("fs", "remove")
-            case .name: target = ("fs", "name")
-            case .unmount: target = ("fs", "unmount")
-            case .compact: target = ("fs", "compact")
-            case .scrub: target = ("fs", "scrub")
-            case .list, .processList, .processes: return .failure(UInt32.max)
+    private mutating func dispatch<Module: ShellModule>(
+        _ module     : Module.Type,
+        _ descriptor : ShellCommandDescriptor,
+        _ invocation : TypedShellInvocation,
+        _ flush      : () -> Bool
+    ) -> TypedShellInvocationResult {
+        if let value = withSession(line: UnsafePointer(Self.empty.utf8Start), count: 0, {
+            Module.value(for: descriptor.code, in: &$0)
+        }) {
+            return value
         }
 
         return withUnsafeTemporaryAllocation(of: UInt8.self, capacity: 512) { storage in
@@ -112,7 +113,9 @@ struct ShellPipeline {
                 cursor += text.utf8CodeUnitCount
                 return span
             }
-            guard let receiver = append(target.namespace), let verb = append(target.verb) else { return .failure(UInt32.max) }
+            guard let receiver = append(Module.namespace.name),
+                  let verb = append(descriptor.verb)
+            else { return .failure(UInt32.max) }
             var command = Command(receiver: receiver, verb: verb)
             for index in 0..<invocation.argumentCount {
                 guard let argument = invocation.arguments[index], command.argumentCount < command.arguments.count else {
@@ -147,23 +150,12 @@ struct ShellPipeline {
                 command.arguments[command.argumentCount] = Span(start: start, count: cursor - start)
                 command.argumentCount += 1
             }
-            if service == .createFile {
-                guard command.argumentCount < command.arguments.count else { return .failure(UInt32.max) }
-                command.arguments[command.argumentCount] = Span(start: cursor, count: 0)
-                command.argumentCount += 1
+            guard Module.fill(&command, for: descriptor.code, at: cursor) else {
+                return .failure(UInt32.max)
             }
 
             let result = withSession(line: storage.baseAddress!, count: cursor) { session in
-                switch service {
-                    case .help, .exit, .halt:
-                        return CoreModule.handleResult(command, in: &session)
-                    case .processList, .processes, .spawn:
-                        return ProcessModule.handleResult(command, in: &session)
-                    case .diskInfo, .diskRead:
-                        return DiskModule.handleResult(command, in: &session)
-                    default:
-                        return FileSystemModule.handleResult(command, in: &session)
-                }
+                Module.handleResult(command, in: &session)
             }
             outcome = result.outcome
             guard result.status == .ok else { return .failure(result.status.rawValue) }
@@ -196,6 +188,17 @@ struct ShellPipeline {
         return result
     }
 
+    private func same(
+        _ left : StaticString,
+        _ right: StaticString
+    ) -> Bool {
+        guard left.utf8CodeUnitCount == right.utf8CodeUnitCount else { return false }
+        for index in 0..<left.utf8CodeUnitCount where left.utf8Start[index] != right.utf8Start[index] {
+            return false
+        }
+        return true
+    }
+
     mutating func present(_ value: ShellValue) -> Bool {
         switch value {
             case .void: return true
@@ -218,43 +221,6 @@ struct ShellPipeline {
                 }
         }
         return !ShellOutput.overflowed
-    }
-
-    private static func signatures(into table: inout InlineArray<26, TypedShellSignature?>) -> Int {
-        func parameters(_ values: TypedShellParameter...) -> InlineArray<4, TypedShellParameter?> {
-            var result = InlineArray<4, TypedShellParameter?>(repeating: nil)
-            for index in values.indices where index < result.count { result[index] = values[index] }
-            return result
-        }
-        func put(
-            _ service  : Service,
-            _ signature: TypedShellSignature
-        ) { table[service.rawValue] = signature }
-        put(.help, TypedShellSignature(namespace: "shell", name: "help", effect: .pure))
-        put(.exit, TypedShellSignature(namespace: "shell", name: "exit", effect: .session))
-        put(.halt, TypedShellSignature(namespace: "shell", name: "halt", effect: .machine))
-        put(.processList, TypedShellSignature(namespace: "process", name: "list", result: .sequence, namespaceRequired: true))
-        put(.processes, TypedShellSignature(namespace: "process", name: "processes", result: .sequence))
-        put(.spawn, TypedShellSignature(namespace: "process", name: "spawn", parameters: parameters(TypedShellParameter("name")), parameterCount: 1))
-        put(.diskInfo, TypedShellSignature(namespace: "disk", name: "info", namespaceRequired: true))
-        put(.diskRead, TypedShellSignature(namespace: "disk", name: "read", parameters: parameters(TypedShellParameter("sector")), parameterCount: 1, namespaceRequired: true))
-        put(.list, TypedShellSignature(namespace: "fileSystem", name: "list", result: .sequence))
-        put(.currentDirectory, TypedShellSignature(namespace: "fileSystem", name: "currentDirectory", effect: .session))
-        put(.changeDirectory, TypedShellSignature(namespace: "fileSystem", name: "changeDir", parameters: parameters(TypedShellParameter("at")), parameterCount: 1, effect: .session))
-        put(.move, TypedShellSignature(namespace: "fileSystem", name: "move", parameters: parameters(TypedShellParameter("from"), TypedShellParameter("to")), parameterCount: 2))
-        put(.free, TypedShellSignature(namespace: "fileSystem", name: "free"))
-        put(.info, TypedShellSignature(namespace: "fileSystem", name: "info", parameters: parameters(TypedShellParameter("at")), parameterCount: 1))
-        put(.read, TypedShellSignature(namespace: "fileSystem", name: "read", parameters: parameters(TypedShellParameter("at")), parameterCount: 1))
-        put(.write, TypedShellSignature(namespace: "fileSystem", name: "write", parameters: parameters(TypedShellParameter("at"), TypedShellParameter("text")), parameterCount: 2))
-        put(.createDirectory, TypedShellSignature(namespace: "fileSystem", name: "createDirectory", parameters: parameters(TypedShellParameter("at")), parameterCount: 1))
-        put(.createFile, TypedShellSignature(namespace: "fileSystem", name: "createFile", parameters: parameters(TypedShellParameter("at")), parameterCount: 1))
-        put(.container, TypedShellSignature(namespace: "fileSystem", name: "createContainer", parameters: parameters(TypedShellParameter("name"), TypedShellParameter("blocks")), parameterCount: 2))
-        put(.remove, TypedShellSignature(namespace: "fileSystem", name: "remove", parameters: parameters(TypedShellParameter("at")), parameterCount: 1))
-        put(.name, TypedShellSignature(namespace: "fileSystem", name: "name", parameters: parameters(TypedShellParameter("name")), parameterCount: 1))
-        put(.unmount, TypedShellSignature(namespace: "fileSystem", name: "unmount"))
-        put(.compact, TypedShellSignature(namespace: "fileSystem", name: "compact", parameters: parameters(TypedShellParameter("at")), parameterCount: 1))
-        put(.scrub, TypedShellSignature(namespace: "fileSystem", name: "scrub"))
-        return Service.scrub.rawValue + 1
     }
 
     private static let empty: StaticString = ""

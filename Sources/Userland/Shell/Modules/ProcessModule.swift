@@ -11,7 +11,58 @@ import ShellLanguage
 
 public enum ProcessModule: ShellModule {
 
-    public static let receiver: StaticString = "process"
+    enum Verb: UInt16 {
+        case list, processes, spawn
+    }
+
+    public static var namespace: ShellNamespaceDescriptor {
+        ShellNamespaceDescriptor("process", capability: .profiler, summary: "what is running")
+    }
+
+    public static var commandCount: Int { 3 }
+
+    public static func command(at index: Int) -> ShellCommandDescriptor? {
+        switch Verb(rawValue: UInt16(index)) {
+            case .list:
+                return ShellCommandDescriptor(
+                    code      : Verb.list.rawValue,
+                    verb      : "list",
+                    signature : TypedShellSignature(namespace: "process", name: "list", result: .sequence, namespaceRequired: true),
+                    capability: .profiler,
+                    schema    : .process,
+                    summary   : "the live process table"
+                )
+            case .processes:
+                return ShellCommandDescriptor(
+                    code      : Verb.processes.rawValue,
+                    verb      : "list",
+                    signature : TypedShellSignature(namespace: "process", name: "processes", result: .sequence),
+                    capability: .profiler,
+                    schema    : .process,
+                    summary   : "the live process table, without naming the receiver"
+                )
+            case .spawn:
+                return ShellCommandDescriptor(
+                    code      : Verb.spawn.rawValue,
+                    verb      : "spawn",
+                    signature : TypedShellSignature(namespace: "process", name: "spawn", TypedShellParameter("name")),
+                    capability: .processServer,
+                    summary   : "run an image and wait for it"
+                )
+            case nil:
+                return nil
+        }
+    }
+
+    /// Both spellings of the process table answer with the table itself, so
+    /// neither takes the record path.
+    public static func value(
+        for code  : UInt16,
+          in session: inout ShellSession
+    ) -> TypedShellInvocationResult? {
+        guard Verb(rawValue: code) == .list || Verb(rawValue: code) == .processes else { return nil }
+        return listValue(authority: session.environment.profiler)
+    }
 
     public static func handle(
         _ command   : Command,
@@ -50,8 +101,6 @@ public enum ProcessModule: ShellModule {
         spawn(name.bytes, length: name.count, environment: session.environment, into: &records)
         return ShellCommandResult(outcome: .handled, records: records)
     }
-
-    public static func describe() {}
 
     public static func listValue(authority: UInt32?) -> TypedShellInvocationResult {
         guard let authority else { return .failure(1) }
