@@ -173,9 +173,14 @@ programs-release: release disk
 # One-program development loop. Example: `make app APP=Shell` recompiles,
 # relinks, validates, and installs only Shell. It never opens kernel.bin or
 # initrd.tar, which makes their unchanged hashes a mechanical release gate.
+#
+# The build below is the whole graph and not `--target $(APP)`: building one
+# target compiles its objects without archiving the `.a` files, so the link
+# step below would take a fresh app and stale libraries. It is incremental
+# either way; what it costs is the kernel's objects, not a rebuild of them.
 APP ?= Shell
 app: disk
-	FREESTANDING=1 $(SWIFT) build --triple $(TRIPLE) --scratch-path $(BUILD_PATH) --target $(APP)
+	FREESTANDING=1 $(SWIFT) build --triple $(TRIPLE) --scratch-path $(BUILD_PATH)
 	FREESTANDING=1 REIX_BUILD_PATH=$(BUILD_PATH) $(SWIFT) package $(PLUGIN) app link $(APP)
 	FREESTANDING= $(SWIFT) package $(PLUGIN) app install --format-if-blank \
 		--disk $(DISK) $(OUT)/stripped/$(APP).elf
