@@ -68,6 +68,15 @@ public struct ShellCatalog {
         return receivers[index]
     }
 
+    /// The receivers, as the parser needs them: names only, in merge order.
+    public func namespaceSet() -> ShellNamespaceSet {
+        var set = ShellNamespaceSet()
+        for index in 0..<namespaceCount {
+            guard let receiver = receivers[index], set.insert(receiver.name) else { break }
+        }
+        return set
+    }
+
     public func namespaceIndex(named name: StaticString) -> Int? {
         for index in 0..<namespaceCount {
             guard let receiver = receivers[index] else { continue }

@@ -97,7 +97,15 @@ public struct ShellEngine {
     /// what bounds both the count a reader may answer and the caret's column.
     private let capacity: Int
 
-    public init(capacity: Int) {
+    /// The receivers this shell documented, which is what lets the parser read
+    /// `fileSystem.changeDir vault` as a call rather than as a member.
+    private let namespaces: ShellNamespaceSet
+
+    public init(
+        capacity  : Int,
+        namespaces: ShellNamespaceSet = ShellNamespaceSet()
+    ) {
+        self.namespaces = namespaces
         self.capacity = max(0, capacity)
     }
 
@@ -174,7 +182,7 @@ public struct ShellEngine {
             visible = true
         }
         guard visible else { return .blank }
-        switch TypedShellParser.parse(line, count: count) {
+        switch TypedShellParser.parse(line, count: count, namespaces: namespaces) {
             case .failure(let failure): return .refused(failure)
             case .success(let program):
                 switch carryOut(program) {

@@ -44,8 +44,11 @@ public func main() {
     guard environment.signalReady() else { exit(code: 1) }
 
     var editor   = ShellLineEditor()
-    var engine   = ShellEngine(capacity: ShellLineEditor.capacity)
     var pipeline = ShellPipeline(environment: environment)
+    var engine   = ShellEngine(
+        capacity  : ShellLineEditor.capacity,
+        namespaces: pipeline.documentation.namespaceSet()
+    )
 
     while engine.reading {
         // A refused frame is the adapter asking for a resend.

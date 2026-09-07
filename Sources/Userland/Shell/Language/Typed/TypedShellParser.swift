@@ -40,22 +40,27 @@ public enum TypedShellParser {
         return .complete
     }
 
+    /// `namespaces` is what the catalog documented. Left empty, `a.b` can only
+    /// mean reaching into a value, which is all it can mean when nothing
+    /// claims `a` as a receiver.
     public static func parse(
-        _ source: UnsafePointer<UInt8>,
-          count : Int
+        _ source    : UnsafePointer<UInt8>,
+          count     : Int,
+          namespaces: ShellNamespaceSet = ShellNamespaceSet()
     ) -> Result<TypedShellProgram, TypedShellFailure> {
         switch completeness(source, count: count) {
             case .invalid(let column): return .failure(.syntax(column: column))
             case .incomplete: return .failure(.incomplete)
             case .complete: break
         }
-        var parser = Parser(source: source, end: count)
+        var parser = Parser(source: source, end: count, namespaces: namespaces)
         return parser.program()
     }
 
     private struct Parser {
         let source        : UnsafePointer<UInt8>
         let end           : Int
+        let namespaces    : ShellNamespaceSet
         var cursor        = 0
         var result        = TypedShellProgram()
         var groupingDepth = 0
@@ -164,6 +169,15 @@ public enum TypedShellParser {
                 if cursor < end, source[cursor] == open {
                     namespace = first
                     verb = second
+                } else if namespaces.contains(source, span: first), cursor >= end || source[cursor] != openBrace {
+                    // A documented receiver with a verb after it is a call,
+                    // written or not. Its arguments follow only at the root,
+                    // where there is no outer call for them to belong to.
+                    //
+                    // A closure after the verb is the exception: no command
+                    // takes one, so `receiver.verb { }` is somebody reaching
+                    // into a value that happens to be named like a receiver.
+                    return call(namespace: first, name: second, canonical: false, arguments: compactRoot)
                 } else {
                     cursor = saved
                 }
@@ -181,7 +195,8 @@ public enum TypedShellParser {
         mutating func call(
               namespace: Span,
               name     : Span,
-              canonical: Bool
+              canonical: Bool,
+              arguments: Bool = true
         ) -> Int? {
             var call = TypedShellCallSyntax(namespace: namespace, name: name)
             if canonical {
@@ -206,7 +221,7 @@ public enum TypedShellParser {
                     if take(close) { break }
                     guard take(comma) else { return nil }
                 }
-            } else {
+            } else if arguments {
                 while cursor < end {
                     spaces()
                     if cursor >= end || source[cursor] == comma || source[cursor] == closeBrace
@@ -272,14 +287,17 @@ public enum TypedShellParser {
             return Span(start: start, count: cursor - start - 1)
         }
 
+        /// A word, dots and all: `a.txt` is one name and not a member of `a`.
+        /// A leading dot is not part of one, it continues the chain before it.
         mutating func bare() -> Span? {
             let start = cursor
             while cursor < end {
                 let byte = source[cursor]
                 if byte == space || byte == lineFeed || byte == carriageReturn
-                    || byte == comma || byte == dot || byte == close || byte == closeBrace {
+                    || byte == comma || byte == close || byte == closeBrace {
                     break
                 }
+                if byte == dot && cursor == start { break }
                 cursor += 1
             }
             return cursor > start ? Span(start: start, count: cursor - start) : nil
