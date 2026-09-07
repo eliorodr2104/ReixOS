@@ -8,36 +8,15 @@
 import ReixABI
 
 public enum TypedShellParser {
+    /// How finished a source is, read by the same scanner the editor's
+    /// analysis uses. One reading, so what the editor colours and what Enter
+    /// decides can never disagree.
     public static func completeness(
         _ source: UnsafePointer<UInt8>,
           count : Int
     ) -> ShellCompleteness {
         guard count >= 0 else { return .invalid(column: 0) }
-        var parentheses = 0
-        var braces      = 0
-        var quoted      = false
-        var index       = 0
-        while index < count {
-            let byte = source[index]
-            if byte == quote { quoted.toggle() }
-            if !quoted {
-                if byte == open { parentheses += 1 }
-                if byte == close {
-                    guard parentheses > 0 else { return .invalid(column: index) }
-                    parentheses -= 1
-                }
-                if byte == openBrace { braces += 1 }
-                if byte == closeBrace {
-                    guard braces > 0 else { return .invalid(column: index) }
-                    braces -= 1
-                }
-            }
-            index += 1
-        }
-        if quoted || parentheses > 0 || braces > 0 {
-            return .incomplete(indent: parentheses + braces)
-        }
-        return .complete
+        return ShellLexer.scan(source, count: count).completeness
     }
 
     /// `namespaces` is what the catalog documented. Left empty, `a.b` can only
