@@ -212,7 +212,12 @@ terminal-editor-syntax	-	qemu	-	typed:\033[13;2ushell.help()\n???\033[13;5u	25	[
 # A leading member access continues the preceding expression across the visual
 # newline. Runtime language coverage may reject the names later, but the parser
 # must not split `.filter` into a second statement or report a syntax error.
-terminal-editor-continuation	-	qemu	-	typed:\033[13;2ulet folders = list\n                .filter { $0.isFolder }\033[13;5u	25	[ SERVE ] VT Adapter running|ReixOS shell. Type shell.help() to see what this understands.|Editor Mode|.filter|service refused with status 3|reix❯	[ PANIC ]|REIX-PANIC|[ ERROR ]|syntax error|the terminal refused to register this reader|[ SHELL ] this shell is done	-	pass
+#
+# What the runtime then answers is deliberately not asserted. This row pinned
+# `service refused with status 3` for a while, which was the answer of a shell
+# whose file system had not been handed over; a shell holding a container lists
+# the folders instead, and neither of those is what this row is about.
+terminal-editor-continuation	-	qemu	-	typed:\033[13;2ulet folders = list\n                .filter { $0.isFolder }\033[13;5u	25	[ SERVE ] VT Adapter running|ReixOS shell. Type shell.help() to see what this understands.|Editor Mode|.filter|reix❯	[ PANIC ]|REIX-PANIC|[ ERROR ]|syntax error|the terminal refused to register this reader|[ SHELL ] this shell is done	-	pass
 
 # A real bracketed-paste transaction over PL011, with a newline inside the
 # command rather than one record per pasted character. The newline is legal
