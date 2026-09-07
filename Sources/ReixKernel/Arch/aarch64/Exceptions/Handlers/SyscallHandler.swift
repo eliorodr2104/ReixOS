@@ -147,6 +147,18 @@ public struct SyscallHandler: RXAllocatable {
             case .identityAlive : IdentityAliveSyscall .handle(frame: frame, context: context)
 
 
+            // Suspended task construction and stable job control
+            case .taskCreate        : TaskCreateSyscall        .handle(frame: frame, context: context)
+            case .taskMapAnonymous  : TaskMapAnonymousSyscall  .handle(frame: frame, context: context)
+            case .taskWrite         : TaskWriteSyscall         .handle(frame: frame, context: context)
+            case .taskSealAndProtect: TaskSealAndProtectSyscall.handle(frame: frame, context: context)
+            case .taskSetContext    : TaskSetContextSyscall    .handle(frame: frame, context: context)
+            case .taskStart         : TaskStartSyscall         .handle(frame: frame, context: context)
+            case .taskAbort         : TaskAbortSyscall         .handle(frame: frame, context: context)
+            case .taskTerminate     : TaskTerminateSyscall     .handle(frame: frame, context: context)
+            case .taskStatus        : TaskStatusSyscall        .handle(frame: frame, context: context)
+
+
             // Caps
             case .capExists     : CapExistsSyscall     .handle(frame: frame, context: context)
             case .capDrop       : CapDropSyscall       .handle(frame: frame, context: context)

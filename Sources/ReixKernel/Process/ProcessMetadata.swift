@@ -34,6 +34,10 @@ public struct ProcessMetadata: RXAllocatable {
 
     public var deviceCap     : UInt32?      // 5 Byte, padded to 8
 
+    /// Stable registry token for a task built through the suspended-task API.
+    /// Bootstrap processes created by the legacy loader have none.
+    public var taskControl   : TaskControl?
+
 
     /// Current program break. Populated by the brk milestone (step 5);
     /// kept at zero until the VMA chain is wired so that any consumer
@@ -97,6 +101,7 @@ public struct ProcessMetadata: RXAllocatable {
         self.capsTable       = CapsTable()
         self.parentEndpoint  = nil
         self.deviceCap       = nil
+        self.taskControl     = nil
         self.name            = InlineArray<16, UInt8>(repeating: 0)
         self.nameLength      = 0
     }
@@ -111,6 +116,7 @@ public struct ProcessMetadata: RXAllocatable {
         self.capsTable       = CapsTable()
         self.parentEndpoint  = nil
         self.deviceCap       = nil
+        self.taskControl     = nil
         self.name            = InlineArray<16, UInt8>(repeating: 0)
         self.nameLength      = 0
     }

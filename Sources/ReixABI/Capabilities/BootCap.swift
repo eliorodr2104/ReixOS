@@ -66,4 +66,14 @@ public enum BootCap: UInt32 {
     /// Role-badged SerialServer endpoints, never raw UART authority.
     case serialReader        = 19
     case serialWriter        = 20
+
+    /// Read-only program directory held by the bootstrap ProcessServer.
+    case programs            = 21
+
+    /// ProcessServer service endpoint delivered to ordinary applications.
+    case processServer       = 22
+
+    /// Session supervisor endpoint. It carries the request for a coordinated
+    /// session transition; input focus, unmount and power stay behind it.
+    case sessionControl      = 23
 }

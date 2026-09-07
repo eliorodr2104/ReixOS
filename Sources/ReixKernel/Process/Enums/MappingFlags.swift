@@ -31,4 +31,9 @@ public struct MappingFlags: OptionSet {
     /// Track the VMA without reserving physical pages eagerly: the
     /// first touch will fault and the page-fault handler will allocate.
     public static let noReserve   = MappingFlags(rawValue: 1 << 3)
+
+    /// Preserve the exact range as a task-construction sealing boundary.
+    /// Adjacent loader regions must not merge while their final permissions
+    /// are still being established independently.
+    static let taskConstruction = MappingFlags(rawValue: 1 << 4)
 }

@@ -40,6 +40,8 @@ public struct Capability: Equatable {
         case bus
         case interrupt
         case profileControl
+        case task
+        case job
         case clock
         case power
     }
@@ -125,6 +127,16 @@ public struct Capability: Equatable {
                 extent = 0
                 kind   = .profileControl
 
+            case .task(let control):
+                word   = UInt64(control.generation)
+                extent = UInt32(control.slot)
+                kind   = .task
+
+            case .job(let control):
+                word   = UInt64(control.generation)
+                extent = UInt32(control.slot)
+                kind   = .job
+
             case .clock:
                 word   = 0
                 extent = 0
@@ -176,6 +188,22 @@ public struct Capability: Equatable {
 
             case .profileControl:
                 .profileControl
+
+            case .task:
+                .task(
+                    TaskControl(
+                        slot      : UInt8(truncatingIfNeeded: extent),
+                        generation: UInt32(truncatingIfNeeded: word)
+                    )
+                )
+
+            case .job:
+                .job(
+                    TaskControl(
+                        slot      : UInt8(truncatingIfNeeded: extent),
+                        generation: UInt32(truncatingIfNeeded: word)
+                    )
+                )
 
             case .clock:
                 .clock

@@ -15,7 +15,7 @@ import ShellLanguage
 @_cdecl("_start")
 public func main() {
 
-    let environment = Runtime.bootstrap()
+    var environment = Runtime.bootstrap()
 
 #if REIX_TERMINAL_PROFILE
     guard let profileMarker = environment.profileMarker else {
@@ -41,6 +41,7 @@ public func main() {
     guard ShellOutput.flush(to: &terminal) else {
         exit(code: 1)
     }
+    guard environment.signalReady() else { exit(code: 1) }
 
     var editor   = ShellLineEditor()
     var engine   = ShellEngine(capacity: ShellLineEditor.capacity)

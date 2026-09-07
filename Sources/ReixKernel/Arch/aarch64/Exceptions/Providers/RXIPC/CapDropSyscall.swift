@@ -34,6 +34,15 @@ public struct CapDropSyscall: SyscallProvider {
 
         let handle = UInt32(truncatingIfNeeded: frame.pointee.x0)
 
+        if let capability = current.pointee.metadata?.pointee.capsTable.resolve(handle),
+           case .task(let control) = capability.target,
+           TaskRegistry.isOwned(control, by: current.pointee.identity) {
+            _ = context.processManager.pointee.abortTask(
+                control,
+                context: context
+            )
+        }
+
         switch context.ipc.pointee.releaseCapability(handle, of: current) {
             case .success: frame.pointee.x0 = 0
             case .failure: frame.pointee.x0 = UInt64.max

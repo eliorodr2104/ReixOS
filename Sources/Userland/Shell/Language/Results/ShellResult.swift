@@ -88,6 +88,19 @@ public struct ShellResult {
         append(.scalar(.processExit, pid, code, field0: .pid, field1: .exitCode))
     }
 
+    public mutating func appendJobExit(
+          job : UInt32,
+          code: UInt64
+    ) -> Bool {
+        append(.scalar(
+            .processExit,
+            UInt64(job),
+            code,
+            field0: .job,
+            field1: .exitCode
+        ))
+    }
+
     public mutating func appendProcessStart(
         _ status: UInt64,
           name  : UnsafePointer<UInt8>,

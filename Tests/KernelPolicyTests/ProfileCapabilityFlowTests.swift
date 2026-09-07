@@ -169,7 +169,8 @@ struct ProfileCapabilityFlowTests {
             encoding: .utf8
         )
         #expect(syscall.contains("InlineArray<10, CapGrant>"))
-        #expect(syscall.contains("frame.pointee.x3 <= 10"))
+        #expect(syscall.contains("static let maximumGrantCount = 10"))
+        #expect(syscall.contains("frame.pointee.x3 <= UInt64(maximumGrantCount)"))
     }
 
 }

@@ -20,6 +20,8 @@ public enum CapTarget: Equatable {
     case bus     (UnsafeMutablePointer<BusAuthority>)
     case interrupt(UnsafeMutablePointer<InterruptSet>)
     case profileControl
+    case task(TaskControl)
+    case job(TaskControl)
 
     /// The right to tell the machine what time it is.
     ///

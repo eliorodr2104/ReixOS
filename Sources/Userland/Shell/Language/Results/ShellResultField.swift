@@ -31,4 +31,5 @@ public enum ShellResultField: UInt16, Equatable {
     case sequence        = 20
     case sector          = 21
     case data            = 22
+    case job             = 23
 }

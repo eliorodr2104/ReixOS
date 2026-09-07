@@ -17,12 +17,10 @@ private enum Top {
 @_cdecl("_start")
 public func main() {
 
-    let environment = Runtime.bootstrap()
+    var environment = Runtime.bootstrap()
 
     print("")
     print("[ TOP   ] Hi, this is top process!\n")
-
-    sleep(for: .seconds(5))
 
     guard let profiler = environment.profiler else {
         print("[ TOP   ] profiler authority missing")
@@ -48,6 +46,8 @@ public func main() {
         base: shmBase + Export.pageSize,
         mask: UInt32(ringCapacity - 1)
     )
+    guard environment.signalReady() else { exit(code: 1) }
+    sleep(for: .seconds(5))
 
     var sys = SystemStats()
     

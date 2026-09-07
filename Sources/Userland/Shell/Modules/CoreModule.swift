@@ -62,26 +62,30 @@ private func halt(
     _ environment : Environment,
       into records: inout ShellResult
 ) {
-    if let files = Files.attached(environment) {
-        _ = records.appendUnmount(files.unmount().rawValue)
-    }
-
-    guard let authority = environment.power else {
+    guard let supervisor = environment.sessionControl else {
         _ = records.appendPower(0)
         return
     }
 
-    _ = records.appendPower(1)
-    if !powerOff(authority: authority) {
+    guard case .success(let answer) = call(
+        handle : supervisor,
+        message: SessionControlOperation.shutdown.request
+    ), answer.message.tag.label == SessionControlOperation.shutdown.rawValue,
+       answer.message.tag.length == 1,
+       answer.message.words[0] == SessionControlStatus.ok.rawValue
+    else {
         _ = records.appendPower(2)
+        return
     }
+
+    _ = records.appendPower(1)
 }
 
 private func help(into records: inout ShellResult) {
     _ = records.appendPresentation("\n")
     _ = records.appendPresentation("  shell.help                this text\n")
     _ = records.appendPresentation("  shell.exit                stop this shell, leave the machine up\n")
-    _ = records.appendPresentation("  shell.halt                unmount the disk and stop the machine\n")
+    _ = records.appendPresentation("  shell.halt                request a coordinated shutdown\n")
     _ = records.appendPresentation("  process.list              the live process table\n")
     _ = records.appendPresentation("  process.spawn \"Name.elf\"  run an image and wait for it\n")
     _ = records.appendPresentation("  disk.info                 what the disk is\n")

@@ -115,40 +115,23 @@ private func spawn(
     environment: Environment,
     into records: inout ShellResult
 ) {
-    guard let console = environment.console else {
-        _ = records.appendProcessStart(0, name: name, count: length)
-        return
-    }
-
-    let result = withUnsafeTemporaryAllocation(
-        of      : CapGrant.self,
-        capacity: 2
-    ) { grants in
-        var count = 0
-        grants[count] = CapGrant(
-            source: console,
-            slot  : BootCap.console.rawValue,
-            rights: [.send, .grant]
-        )
-        count += 1
-
-        if let profiler = environment.profiler {
-            grants[count] = ProfileAuthorityGrant.tool(source: profiler)
-            count += 1
-        }
-
-        return spawnProcess(
-            path  : name,
-            length: length,
-            grants: grants.baseAddress!,
-            count : count
-        )
-    }
-
-    guard result.pid != UInt64.max else {
+    guard let processServer = environment.processServer else {
         _ = records.appendProcessStart(1, name: name, count: length)
         return
     }
 
-    _ = records.appendProcessExit(pid: result.pid, code: reapChild(for: result.pid))
+    let result = launchProgram(
+        through: processServer,
+        name   : name,
+        length : length
+    )
+
+    guard result.status == .ok, let job = result.job else {
+        _ = records.appendProcessStart(1, name: name, count: length)
+        return
+    }
+
+    let terminal = waitForJob(job)
+    _ = records.appendJobExit(job: job, code: terminal.exitCode)
+    _ = capDrop(job)
 }

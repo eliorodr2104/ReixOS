@@ -76,9 +76,9 @@ public struct ProcessManager: RXAllocatable, Loggable {
     /// whole boot.
     public internal(set) var initProcess: UnsafeMutablePointer<Process>? = nil
 
-    private let vmm       : UnsafeMutablePointer<VirtualMemoryManager>
-    private let ppm       : UnsafeMutablePointer<KernelPPM>
-    private let heap      : UnsafeMutablePointer<BucketsHeap>
+    let vmm               : UnsafeMutablePointer<VirtualMemoryManager>
+    let ppm               : UnsafeMutablePointer<KernelPPM>
+    let heap              : UnsafeMutablePointer<BucketsHeap>
     private let fileSystem: UnsafeMutablePointer<KernelInternalFileSystem>
     
     
@@ -387,6 +387,10 @@ public struct ProcessManager: RXAllocatable, Loggable {
         }
 
         if let metadata = process.pointee.metadata {
+            if let control = metadata.pointee.taskControl {
+                TaskRegistry.markProcessGone(control)
+            }
+
             heap.pointee.kfree(metadata)
             process.pointee.metadata = nil
         }
@@ -461,6 +465,8 @@ public struct ProcessManager: RXAllocatable, Loggable {
 
         guard case .terminated = status else {
 
+            terminateTasks(ownedBy: process.pointee.identity, context: context)
+
             releaseOrphanedZombies(of: process, context)
 
             let adopter = initProcess.flatMap { candidate -> UnsafeMutablePointer<Process>? in
@@ -492,6 +498,13 @@ public struct ProcessManager: RXAllocatable, Loggable {
 
             process.pointee.status                       = .terminated
             process.pointee.metadata?.pointee.exitReason = reason
+
+            if let control = process.pointee.metadata?.pointee.taskControl {
+                TaskRegistry.markExited(
+                    control,
+                    code: Self.exitStatus(of: process)
+                )
+            }
 
             Trace.emit(
                 TraceProc.self,

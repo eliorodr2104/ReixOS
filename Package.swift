@@ -10,8 +10,9 @@ import PackageDescription
 /// the host (arm64-apple-macosx), those flags are dropped so the editor can load
 /// the macOS standard library and provide code intelligence.
 /// (0xKSor, thanks)
-let isFreestanding    = ProcessInfo.processInfo.environment["FREESTANDING"] == "1"
-let isTerminalProfile = ProcessInfo.processInfo.environment["TERMINAL_PROFILE"] == "1"
+let isFreestanding         = ProcessInfo.processInfo.environment["FREESTANDING"] == "1"
+let isTerminalProfile      = ProcessInfo.processInfo.environment["TERMINAL_PROFILE"] == "1"
+let reixPluginDependencies : [Target.Dependency] = isFreestanding ? [] : ["ReixApp"]
 
 // @_extern stays on in both modes so the editor resolves the @_extern(c) shims.
 var bareMetal: [SwiftSetting] = [
@@ -80,6 +81,8 @@ let package = Package(
         .library(name: "BlockServer",   type: .static, targets: ["BlockServer"]),
         .library(name: "FileSystemServer", type: .static, targets: ["FileSystemServer"]),
         .library(name: "StorageCheck",  type: .static, targets: ["StorageCheck"]),
+        .library(name: "ProcessServerCore", type: .static, targets: ["ProcessServerCore"]),
+        .library(name: "ProcessServer", type: .static, targets: ["ProcessServer"]),
     ],
     targets: [
         // Shared ABI: IPC types + syscall numbers. No dependencies.
@@ -87,6 +90,15 @@ let package = Package(
 
         // Userland SDK: syscall wrappers + service clients. Re-exports ReixABI.
         .target(name: "Reix", dependencies: ["ReixABI"], path: "Sources/Reix", swiftSettings: terminalProfile),
+
+        // Pure, bounded ELF policy. It knows no filesystem, syscall, process,
+        // or kernel type; ProcessServer supplies bytes and applies the plan.
+        .target(
+            name         : "ProcessServerCore",
+            dependencies : ["ReixABI"],
+            path         : "Sources/Userland/ProcessServerCore",
+            swiftSettings: terminalProfile
+        ),
 
         // Kernel: everything else. Imports the header-only CElf module via -I.
         .target(
@@ -113,6 +125,12 @@ let package = Package(
         // The one program that holds nothing: it exercises the whole storage
         // stack through capabilities somebody handed it.
         app("StorageCheck", bareMetal),
+        .target(
+            name         : "ProcessServer",
+            dependencies : ["Reix", "ProcessServerCore"],
+            path         : "Sources/Userland/ProcessServer",
+            swiftSettings: terminalProfile
+        ),
         .target(
             name         : "FileSystemServer",
             dependencies : ["Reix", "ReixFS"],
@@ -149,6 +167,11 @@ let package = Package(
         ),
 
     ] + (isFreestanding ? [] : [
+        .executableTarget(
+            name        : "ReixApp",
+            dependencies: ["ReixFS", "ReixABI", "ProcessServerCore"],
+            path        : "Tools/ReixApp"
+        ),
         .executableTarget(
             name        : "ShellBench",
             dependencies: ["ShellLanguage", "ReixABI", "TerminalTestSupport", "ShellBenchmarkSupport"],
@@ -208,6 +231,12 @@ let package = Package(
             name        : "KernelPolicyTests",
             dependencies: ["Kernel", "ReixABI", "KernelHostShims", "KernelTestSupport"],
             path        : "Tests/KernelPolicyTests"
+        ),
+
+        .testTarget(
+            name        : "ProcessServerCoreTests",
+            dependencies: ["ProcessServerCore", "ReixABI"],
+            path        : "Tests/ProcessServerCoreTests"
         ),
 
         // The shell's command language, which is the one piece of it that is
@@ -276,6 +305,7 @@ let package = Package(
                     .writeToPackageDirectory(reason: "writes kernel.elf/kernel.bin/*.elf/initrd.tar into .reix/")
                 ]
             ),
+            dependencies: reixPluginDependencies,
             path: "Plugins/reix"
         ),
     ],

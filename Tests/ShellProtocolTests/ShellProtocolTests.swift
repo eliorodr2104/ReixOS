@@ -365,6 +365,27 @@ struct ShellProtocolTests {
         for index in expected.indices { #expect(rendered.bytes[index] == expected[index]) }
     }
 
+    @Test("a job exit is rendered as an opaque job, not an ambient PID")
+    func jobExitResult() {
+        var result   = ShellResult()
+        let appended = result.appendJobExit(job: 7, code: 0)
+        #expect(appended)
+
+        guard let record = result.record(at: 0),
+              let rendered = ShellTextRenderer.render(record)
+        else {
+            Issue.record("job exit record did not render")
+            return
+        }
+
+        #expect(record.field0 == .job)
+        let expected = Array("[job 7] exited with 0\n".utf8)
+        #expect(rendered.count == expected.count)
+        for index in expected.indices {
+            #expect(rendered.bytes[index] == expected[index])
+        }
+    }
+
     @Test("block and filesystem values retain typed fields before rendering")
     func storageCommandResults() {
         var result   = ShellResult()

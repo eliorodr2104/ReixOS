@@ -47,6 +47,7 @@ INITRD_MODE="${INITRD_MODE:-qemu}"
 LOG="${LOG:-$OUT/smoke.log}"
 TIMEOUT="${TIMEOUT:-30}"
 INPUT="${INPUT:-}"
+DISK="${DISK:-$OUT/disk.img}"
 POLL_INTERVAL=0.5
 
 # The lines a boot can end on. The VT adapter prints the first after the input
@@ -55,6 +56,7 @@ SUCCESS_MARKER="${SUCCESS_MARKER:-[ SERVE ] VT Adapter running}"
 FAIL_REGEX='REIX-PANIC'
 
 qemu_pid=
+disk_live=
 
 # Runs on every exit path (normal or signalled) so no run can leave a QEMU
 # process behind. TERM first, KILL only if it ignores that within 2s.
@@ -70,6 +72,9 @@ cleanup() {
         kill -9 "$qemu_pid" 2>/dev/null
     fi
     wait "$qemu_pid" 2>/dev/null
+    if [ -n "$disk_live" ]; then
+        rm -f "$disk_live"
+    fi
 }
 trap cleanup EXIT INT TERM
 
@@ -99,6 +104,21 @@ fi
 
 mkdir -p "$(dirname "$LOG")"
 : > "$LOG"
+
+# A host-side exclusion boundary shared with `reix app install`. The importer
+# also takes an advisory file lock; this marker covers the managed QEMU paths
+# even on hosts where QEMU and `flock(2)` use different lock families.
+if [ -f "$DISK" ]; then
+    disk_live="$DISK.live"
+    if [ -e "$disk_live" ]; then
+        echo "SETUP: disk already in use ($disk_live)" >&2
+        exit 3
+    fi
+    ( set -C; : > "$disk_live" ) 2>/dev/null || {
+        echo "SETUP: could not claim disk marker ($disk_live)" >&2
+        exit 3
+    }
+fi
 
 # Synthetic serial input: `-nographic` puts the guest's UART on our stdin, so a
 # file there is a typist. Nothing has to be timed, because QEMU pushes only what

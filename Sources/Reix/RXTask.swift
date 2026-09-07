@@ -10,9 +10,33 @@ public typealias PID = UInt64
 
 /// Raw layout written by `_asm_spawn` into the output buffer.
 /// Two contiguous 64-bit words to match the `str x0/x1` stores exactly.
-private struct SpawnResultRaw {
-    var pid   : UInt64 = 0
-    var handle: UInt64 = 0
+private struct TwoWordResultRaw {
+    var first : UInt64 = 0
+    var second: UInt64 = 0
+}
+
+@inline(__always)
+private func twoWordSyscall(
+    _ number: SyscallNumber,
+    _ x0    : UInt64 = 0,
+    _ x1    : UInt64 = 0,
+    _ x2    : UInt64 = 0,
+    _ x3    : UInt64 = 0
+) -> TwoWordResultRaw {
+    var raw = TwoWordResultRaw()
+
+    withUnsafeMutablePointer(to: &raw) { ptr in
+        _ = _asm_spawn_raw(
+            number.rawValue,
+            x0,
+            x1,
+            x2,
+            x3,
+            UnsafeMutableRawPointer(ptr)
+        )
+    }
+
+    return raw
 }
 
 /// Result handed back to userland: the child PID and the handle of the
@@ -62,7 +86,7 @@ public func split() -> PID {
 @inline(__always)
 public func spawnProcess(path: StaticString) -> SpawnResult {
 
-    var raw = SpawnResultRaw()
+    var raw = TwoWordResultRaw()
 
     withUnsafeMutablePointer(to: &raw) { ptr in
         _ = _asm_spawn_raw(
@@ -76,8 +100,8 @@ public func spawnProcess(path: StaticString) -> SpawnResult {
     }
 
     return SpawnResult(
-        pid   : raw.pid,
-        handle: UInt32(truncatingIfNeeded: raw.handle)
+        pid   : raw.first,
+        handle: UInt32(truncatingIfNeeded: raw.second)
     )
 }
 
@@ -94,7 +118,7 @@ public func spawnProcess(
     count : Int
 ) -> SpawnResult {
 
-    var raw = SpawnResultRaw()
+    var raw = TwoWordResultRaw()
 
     withUnsafeMutablePointer(to: &raw) { ptr in
         _ = _asm_spawn_raw(
@@ -108,8 +132,8 @@ public func spawnProcess(
     }
 
     return SpawnResult(
-        pid   : raw.pid,
-        handle: UInt32(truncatingIfNeeded: raw.handle)
+        pid   : raw.first,
+        handle: UInt32(truncatingIfNeeded: raw.second)
     )
 }
 
@@ -121,7 +145,7 @@ public func spawnProcess(
     count : Int
 ) -> SpawnResult {
 
-    var raw = SpawnResultRaw()
+    var raw = TwoWordResultRaw()
 
     withUnsafeMutablePointer(to: &raw) { ptr in
         _ = _asm_spawn_raw(
@@ -135,15 +159,15 @@ public func spawnProcess(
     }
 
     return SpawnResult(
-        pid   : raw.pid,
-        handle: UInt32(truncatingIfNeeded: raw.handle)
+        pid   : raw.first,
+        handle: UInt32(truncatingIfNeeded: raw.second)
     )
 }
 
 @inline(__always)
 public func spawnProcess() -> SpawnResult {
 
-    var raw = SpawnResultRaw()
+    var raw = TwoWordResultRaw()
 
     withUnsafeMutablePointer(to: &raw) { ptr in
         _ = _asm_spawn_raw(
@@ -157,8 +181,8 @@ public func spawnProcess() -> SpawnResult {
     }
 
     return SpawnResult(
-        pid   : raw.pid,
-        handle: UInt32(truncatingIfNeeded: raw.handle)
+        pid   : raw.first,
+        handle: UInt32(truncatingIfNeeded: raw.second)
     )
 }
 
@@ -236,4 +260,130 @@ public func sleep(for mode: SleepModality) -> Bool {
 @inline(__always)
 public func terminate(pid: PID) -> Bool {
     _syscall(.terminate, pid) == 0
+}
+
+
+// MARK: - Suspended tasks and stable jobs
+
+/// Create an empty, unscheduled task plus the parent's bootstrap endpoint.
+/// No user instruction can run until every region is sealed and `taskStart`
+/// converts this task handle into a job handle in the same slot.
+@inline(__always)
+public func taskCreate() -> TaskCreation {
+    let raw = twoWordSyscall(.taskCreate)
+    return TaskCreation(
+        task     : UInt32(truncatingIfNeeded: raw.first),
+        bootstrap: UInt32(truncatingIfNeeded: raw.second)
+    )
+}
+
+@inline(__always)
+public func taskMapAnonymous(
+    _ task    : UInt32,
+    at address: UInt64,
+    pages     : UInt32
+) -> TaskResult {
+    TaskResult(rawValue: _syscall(
+        .taskMapAnonymous,
+        UInt64(task),
+        address,
+        UInt64(pages)
+    )) ?? .malformed
+}
+
+@inline(__always)
+public func taskWrite(
+    _ task    : UInt32,
+    at address: UInt64,
+    bytes     : UnsafeRawPointer,
+    count     : Int
+) -> TaskResult {
+    guard count > 0 else { return .invalidRange }
+
+    return TaskResult(rawValue: _syscall(
+        .taskWrite,
+        UInt64(task),
+        address,
+        UInt64(UInt(bitPattern: bytes)),
+        UInt64(count)
+    )) ?? .malformed
+}
+
+@inline(__always)
+public func taskSealAndProtect(
+    _ task     : UInt32,
+    at address : UInt64,
+    pages      : UInt32,
+    permissions: TaskMemoryPermissions
+) -> TaskResult {
+    TaskResult(rawValue: _syscall(
+        .taskSealAndProtect,
+        UInt64(task),
+        address,
+        UInt64(pages),
+        UInt64(permissions.rawValue)
+    )) ?? .malformed
+}
+
+@inline(__always)
+public func taskSetContext(
+    _ task      : UInt32,
+    entry       : UInt64,
+    stack       : UInt64,
+    programBreak: UInt64
+) -> TaskResult {
+    TaskResult(rawValue: _syscall(
+        .taskSetContext,
+        UInt64(task),
+        entry,
+        stack,
+        programBreak
+    )) ?? .malformed
+}
+
+/// Seal the construction phase. On success `task` is now a job handle; every
+/// configuration right has disappeared before the scheduler sees the child.
+@inline(__always)
+public func taskStart(_ task: UInt32) -> TaskStartResult {
+    let raw = twoWordSyscall(.taskStart, UInt64(task))
+    return TaskStartResult(
+        result: TaskResult(rawValue: raw.first) ?? .malformed,
+        pid   : raw.second
+    )
+}
+
+@inline(__always)
+public func taskAbort(_ task: UInt32) -> TaskResult {
+    TaskResult(rawValue: _syscall(.taskAbort, UInt64(task))) ?? .malformed
+}
+
+@inline(__always)
+public func jobCancel(_ job: UInt32) -> TaskResult {
+    TaskResult(rawValue: _syscall(.taskTerminate, UInt64(job))) ?? .malformed
+}
+
+@inline(__always)
+public func jobStatus(_ job: UInt32) -> TaskStatus {
+    let raw = twoWordSyscall(.taskStatus, UInt64(job))
+    return TaskStatus(
+        state   : TaskState(rawValue: raw.first) ?? .invalid,
+        exitCode: raw.second
+    )
+}
+
+/// Wait for a job without exposing its kernel PID. A kernel wait-set can
+/// replace this bounded poll later without changing callers or the Job ABI.
+public func waitForJob(
+    _ job                         : UInt32,
+    pollEveryMilliseconds interval: UInt64 = 10
+) -> TaskStatus {
+    while true {
+        let status = jobStatus(job)
+        switch status.state {
+            case .configuring, .running:
+                _ = sleep(for: .milliseconds(interval))
+            case .exited, .aborted, .invalid:
+                return status
+        }
+    }
 }

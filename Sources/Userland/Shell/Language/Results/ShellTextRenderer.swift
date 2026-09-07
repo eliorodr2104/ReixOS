@@ -35,11 +35,11 @@ public enum ShellTextRenderer {
                 else { return nil }
                 switch record.value0 {
                     case 0:
-                        guard append("  this shell was not given the right to stop the machine\n", into: &bytes, count: &count) else { return nil }
+                        guard append("  this shell has no session supervisor\n", into: &bytes, count: &count) else { return nil }
                     case 1:
                         guard append("  stopping\n", into: &bytes, count: &count) else { return nil }
                     case 2:
-                        guard append("  the machine would not stop\n", into: &bytes, count: &count) else { return nil }
+                        guard append("  the session supervisor refused shutdown\n", into: &bytes, count: &count) else { return nil }
                     default: return nil
                 }
 
@@ -66,10 +66,10 @@ public enum ShellTextRenderer {
                 else { return nil }
 
             case .processExit:
-                guard record.field0 == .pid,
+                guard (record.field0 == .pid || record.field0 == .job),
                       record.field1 == .exitCode,
                       record.field2 == .none,
-                      append("[", into: &bytes, count: &count),
+                      append(record.field0 == .job ? "[job " : "[", into: &bytes, count: &count),
                       appendDecimal(record.value0, into: &bytes, count: &count),
                       append("] exited with ", into: &bytes, count: &count),
                       appendDecimal(record.value1, into: &bytes, count: &count),

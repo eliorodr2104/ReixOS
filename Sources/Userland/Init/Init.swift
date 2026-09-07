@@ -70,6 +70,8 @@ public func main() {
           let serialWriter = derive(handle: serialEndpoint, session: writerAccess.rawValue, rights: [.send, .grant])
     else { return }
 
+    _ = capDrop(serial.handle)
+    _ = capDrop(serialEndpoint)
     _ = capDrop(device)
     _ = capDrop(BootCap.interrupt.rawValue)
 
@@ -94,6 +96,8 @@ public func main() {
     guard let consoleEndpoint = receive(
         handle: console.handle
     ).grantedCap else { return }
+    _ = capDrop(console.handle)
+    _ = capDrop(serialWriter)
 
     Console.attach(console: consoleEndpoint)
 
@@ -110,15 +114,9 @@ public func main() {
     guard let nameServerEndpoint = receive(
         handle: nameServer.handle
     ).grantedCap else { return }
+    _ = capDrop(nameServer.handle)
 
     guard let spawnCap = spawnService() else { return }
-
-    // TODO: - the Process Server was launched here, with a registrar capability
-    // minted for the one name it may publish. It is disabled until the file
-    // system can hand it an image: see Sources/Userland/ProcessServer. What
-    // comes back with it is the `derive` of `NameServerSession.registrar(for:)`
-    // above this line, which is the only place in the boot that mints one, so
-    // nothing publishes a name while it is gone.
 
     // Narrowed to `.profileStats` on the way in by `ProfileAuthorityGrant.tool`:
     // a stats reader has no business dumping the trace ring over the console.
@@ -168,6 +166,8 @@ public func main() {
           let inputConsumer = derive(handle: inputEndpoint, session: consumerAccess.rawValue, rights: [.send, .grant]),
           let inputFocus = derive(handle: inputEndpoint, session: focusAccess.rawValue, rights: [.send])
     else { return }
+    _ = capDrop(inputServer.handle)
+    _ = capDrop(inputEndpoint)
 
     let focusWords = InlineArray<4, UInt32>(repeating: 0)
     guard case .success(let focusReply) = call(
@@ -233,6 +233,10 @@ public func main() {
     guard let terminalEndpoint = receive(
         handle: terminal.handle
     ).grantedCap else { return }
+    _ = capDrop(terminal.handle)
+    _ = capDrop(inputSource)
+    _ = capDrop(serialReader)
+    _ = capDrop(consoleEndpoint)
 
     // From this point every ordinary producer writes to the semantic terminal
     // consumer. Only VTAdapter retains the transport-only ConsoleServer cap.
@@ -300,7 +304,9 @@ public func main() {
         // without, so a machine with no block device carries on from here.
         if bus.hasEndpoint {
             disk = receive(handle: bus.handle).grantedCap
+            _ = capDrop(bus.handle)
         }
+        _ = capDrop(BootCap.virtioBus.rawValue)
 
         // Two views, both cut before the disk is given away, because afterwards
         // init holds nothing to cut them from.
@@ -370,6 +376,7 @@ public func main() {
 
         machine  = awaitContainer(from: files.handle)
         filesPid = files.pid
+        _ = capDrop(files.handle)
 
         // Given away, so not held. From here nobody in the machine can reach a
         // raw sector for writing except the process that mounted it.
@@ -384,14 +391,28 @@ public func main() {
         )
     }
 
-    // After the storage check, not before: it is handed the same view.
-    if let diagnostic { _ = capDrop(diagnostic) }
+    // The shell gets every filesystem right except `unmount`; the
+    // administrative root stays in Init, which the server intersects against.
+    let shellMachine = machine.flatMap { endpoint -> UInt32? in
+        guard let files = FileSystemClient(fileSystem: endpoint) else { return nil }
+        return files.bind(files.root, rights: .everything.subtracting(.unmount))
+    }
 
-    // Counted as they are written rather than placed at fixed indices: which
-    // capabilities the shell gets depends on what this machine turned out to
-    // have, and an index worked out from two optionals is an index that gets
-    // worked out wrong.
-    _ = withUnsafeTemporaryAllocation(
+    // The executable namespace is rooted exactly at `system/programs`, and
+    // carries lookup and read on that directory's children.
+    let programs = machine.flatMap(programDirectory(in:))
+    if programs == nil {
+        print("[ INIT  ] no system/programs capability; ordinary programs stay stopped")
+    }
+
+    // The task bootstrap endpoint is gone after Ready, so shutdown and A/B
+    // replacement need an endpoint of their own.
+    let sessionEndpoint = spawnEndpoint()
+
+    // ProcessServer is still an initrd bootstrap service. It gets the legacy
+    // spawn authority taskCreate needs, plus what its profiles may attenuate.
+    let processServer = programs.map { programDirectory in
+        withUnsafeTemporaryAllocation(
         of      : CapGrant.self,
         capacity: {
             #if REIX_TERMINAL_PROFILE
@@ -400,92 +421,127 @@ public func main() {
             ShellGrantCapacity.normal
             #endif
         }()
-    ) { grants in
+        ) { grants in
 
-        var count = 0
+            var count = 0
 
-        func give(_ grant: CapGrant) {
-            precondition(count < grants.count)
-            grants[count] = grant
-            count += 1
-        }
+            func give(_ grant: CapGrant) {
+                precondition(count < grants.count)
+                grants[count] = grant
+                count += 1
+            }
 
-        give(CapGrant(
-            source: terminalEndpoint,
-            slot  : BootCap.console.rawValue,
-            rights: [.send, .grant]
-        ))
-
-        // Lookup only. The shell can find the services that have names; it
-        // cannot publish one, which is what would let it answer as one. The
-        // disk is not among them any more.
-        give(CapGrant(
-            source: nameServerEndpoint,
-            slot  : BootCap.nameServer.rawValue,
-            rights: [.send]
-        ))
-        give(CapGrant(
-            source: spawnCap,
-            slot  : BootCap.spawn.rawValue,
-            rights: [.spawn, .grant]
-        ))
-        give(CapGrant(
-            source: terminalEndpoint,
-            slot  : BootCap.terminal.rawValue,
-            rights: [.send]
-        ))
-        give(CapGrant(
-            source: inputConsumer,
-            slot  : BootCap.inputConsumer.rawValue,
-            rights: [.send]
-        ))
-        // `launcher` and not `tool`: the shell has to be able to pass a
-        // reader's share to the commands it runs, and what it passes drops the
-        // right to pass it further.
-        give(ProfileAuthorityGrant.launcher(source: profiler))
-        #if REIX_TERMINAL_PROFILE
-        // Separate from the delegable launcher: this can mark and dump only.
-        give(ProfileAuthorityGrant.marker(source: profiler, console: true))
-        #endif
-
-        // The whole machine, because the person at the keyboard is meant to see
-        // the whole disk. Not a privilege the shell has: a capability it was
-        // handed, exactly like every narrower one below it.
-        if let machine {
             give(CapGrant(
-                source: machine,
-                slot  : BootCap.container.rawValue,
+                source: terminalEndpoint,
+                slot  : BootCap.console.rawValue,
                 rights: [.send, .grant]
             ))
-        }
-
-        // And the disk underneath it, to look at and not to touch. Reading raw
-        // sectors is how you find out whether the layer above is telling the
-        // truth, so the shell keeps that; what it no longer has is any way to
-        // write one, or to read one while the file system is mounted.
-        if let diagnostic {
             give(CapGrant(
-                source: diagnostic,
-                slot  : BootCap.block.rawValue,
-                rights: [.send]
+                source: spawnCap,
+                slot  : BootCap.spawn.rawValue,
+                rights: [.spawn]
             ))
-        }
-
-        // And the right to stop the machine, for the same reason: the person at
-        // the keyboard is the one who turns it off.
-        if capExists(BootCap.power.rawValue) {
+            give(ProfileAuthorityGrant.launcher(source: profiler))
             give(CapGrant(
-                source: BootCap.power.rawValue,
-                slot  : BootCap.power.rawValue,
-                rights: [.write]
+                source: nameServerEndpoint,
+                slot  : BootCap.nameServer.rawValue,
+                rights: [.send, .grant]
             ))
+            give(CapGrant(
+                source: inputConsumer,
+                slot  : BootCap.inputConsumer.rawValue,
+                rights: [.send, .grant]
+            ))
+
+            if let shellMachine {
+                give(CapGrant(
+                    source: shellMachine,
+                    slot  : BootCap.container.rawValue,
+                    rights: [.send, .grant]
+                ))
+            }
+
+            give(CapGrant(
+                source: programDirectory,
+                slot  : BootCap.programs.rawValue,
+                rights: [.send, .grant]
+            ))
+            give(CapGrant(
+                source: sessionEndpoint,
+                slot  : BootCap.sessionControl.rawValue,
+                rights: [.send, .grant]
+            ))
+
+            if let diagnostic {
+                give(CapGrant(
+                    source: diagnostic,
+                    slot  : BootCap.block.rawValue,
+                    rights: [.send, .grant]
+                ))
+            }
+
+            #if REIX_TERMINAL_PROFILE
+            give(ProfileAuthorityGrant.marker(source: profiler, console: true))
+            #endif
+
+            return spawnProcess(
+                path  : "ProcessServer.elf",
+                grants: grants.baseAddress!,
+                count : count
+            )
+        }
+    }
+
+    let processServerEndpoint = processServer.flatMap { spawned -> UInt32? in
+        guard spawned.hasEndpoint else {
+            print("[ INIT  ] ProcessServer bootstrap spawn was refused")
+            return nil
         }
 
-        return spawnProcess(
-            path  : "Shell.elf",
-            grants: grants.baseAddress!,
-            count : count
+        guard var announcement = receive(handle: spawned.handle, timeout: 500),
+              announcement.message.tag.label == BootMessage.announce.rawValue,
+              let endpoint = announcement.takeGrant()
+        else {
+            print("[ INIT  ] ProcessServer did not publish an endpoint")
+            return nil
+        }
+
+        print("[ INIT  ] ProcessServer endpoint ready")
+        return endpoint
+    }
+
+    let shellJob = processServerEndpoint.flatMap { endpoint -> UInt32? in
+        let name     : StaticString = "Shell.elf"
+        let launched = launchProgram(
+            through: endpoint,
+            name   : name.utf8Start,
+            length : name.utf8CodeUnitCount
         )
+        guard launched.status == .ok, let job = launched.job else {
+            print("[ INIT  ] ProcessServer refused Shell.elf status=", terminator: "")
+            print(launched.status.rawValue)
+            return nil
+        }
+
+        print("[ INIT  ] Shell.elf reached Ready")
+        return job
+    }
+
+    if processServerEndpoint != nil, shellJob == nil {
+        print("[ INIT  ] no foreground session was committed")
+    }
+
+    if let diagnostic { _ = capDrop(diagnostic) }
+    if let shellMachine { _ = capDrop(shellMachine) }
+    if let programs { _ = capDrop(programs) }
+
+    if let shellJob {
+        superviseSession(
+            on     : sessionEndpoint,
+            shell  : shellJob,
+            machine: machine
+        )
+        _ = capDrop(shellJob)
     }
 
     if let warden, let filesPid {
@@ -495,6 +551,85 @@ public func main() {
     while true {
         sleep(for: .seconds(1))
     }
+}
+
+
+/// Owns the effects that end the foreground session.
+///
+/// Shell receives only its private bootstrap endpoint and a filesystem view
+/// without `unmount`. Init keeps both authorities, validates the request, marks
+/// the volume clean first, acknowledges the caller, and only then asks firmware
+/// to stop the machine. A malformed request changes nothing.
+private func superviseSession(
+    on endpoint: UInt32,
+    shell job  : UInt32,
+    machine    : UInt32?
+) {
+    while true {
+        let state = jobStatus(job).state
+        guard state == .configuring || state == .running else { return }
+
+        guard var request = receive(handle: endpoint, timeout: 10) else {
+            continue
+        }
+
+        guard request.message.tag.label == SessionControlOperation.shutdown.rawValue,
+              request.message.tag.length == 0,
+              request.grantedCap == nil
+        else {
+            if let stray = request.takeGrant() { _ = capDrop(stray) }
+            _ = reply(message: SessionControlStatus.malformed.response)
+            continue
+        }
+
+        guard capExists(BootCap.power.rawValue) else {
+            _ = reply(message: SessionControlStatus.unavailable.response)
+            continue
+        }
+
+        if let machine {
+            guard let files = FileSystemClient(fileSystem: machine),
+                  files.unmount() == .ok
+            else {
+                _ = reply(message: SessionControlStatus.refused.response)
+                continue
+            }
+        }
+
+        _ = reply(message: SessionControlStatus.ok.response)
+        _ = powerOff(authority: BootCap.power.rawValue)
+    }
+}
+
+
+/// Cut the executable namespace out of the machine root. Failure is a normal
+/// boot result for an unprovisioned disk: ProcessServer is not started and no
+/// legacy TAR fallback can silently restore ambient pathname execution.
+private func programDirectory(in machine: UInt32) -> UInt32? {
+    guard let files = FileSystemClient(fileSystem: machine) else { return nil }
+
+    let systemName : StaticString = "system"
+    let system     = files.open(
+        systemName.utf8Start,
+        length: systemName.utf8CodeUnitCount
+    )
+    guard system.status == .ok,
+          let systemFolder = system.file,
+          systemFolder.kind == .folder
+    else { return nil }
+
+    let programsName : StaticString = "programs"
+    let programs     = files.open(
+        programsName.utf8Start,
+        length: programsName.utf8CodeUnitCount,
+        in    : systemFolder.object
+    )
+    guard programs.status == .ok,
+          let directory = programs.file,
+          directory.kind == .folder
+    else { return nil }
+
+    return files.bind(directory.object, rights: .reader)
 }
 
 
@@ -694,6 +829,7 @@ private func startStorageCheck(
     guard child.hasEndpoint else { return }
 
     pourGift(files, gift: gift, to: child.handle)
+    _ = capDrop(child.handle)
 
     orphanedClaim(files, in: container, of: child.pid)
 }

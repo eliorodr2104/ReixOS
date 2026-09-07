@@ -10,6 +10,12 @@ import ReixABI
 
 @frozen
 public struct CapsTable {
+
+    /// Number of handles in one process capability table.
+    ///
+    /// Public so syscall preflight can reject a fixed-slot grant before the
+    /// child exists, while none of its environment has arrived yet.
+    public static let slotCount: UInt32 = 32
     
     /// Thirty-two, not sixteen.
     ///
@@ -150,5 +156,9 @@ public struct CapsTable {
 
     public func hasFreeSlot() -> Bool {
         counterElements < caps.count
+    }
+
+    public func hasFreeSlots(_ count: UInt) -> Bool {
+        count <= UInt(caps.count) - counterElements
     }
 }

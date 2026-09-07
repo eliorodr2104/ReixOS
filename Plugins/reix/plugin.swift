@@ -42,8 +42,14 @@ struct ReixPlugin: CommandPlugin {
         "VirtioBus",
         "BlockServer",
         "FileSystemServer",
-        "StorageCheck"
+        "StorageCheck",
+        "ProcessServer",
     ]
+
+    /// Ordinary programs are linked and stripped beside the image, outside
+    /// the bootstrap archive. `reix app install` provisions these into RxFS
+    /// before QEMU opens the disk.
+    let diskApps = ["Shell", "Top"]
 
     let kernelNative = [
         "Sources/ReixKernel/Arch/aarch64/Boot/boot.S",
@@ -56,6 +62,22 @@ struct ReixPlugin: CommandPlugin {
     ]
 
     func performCommand(context: PluginContext, arguments: [String]) async throws {
+        if arguments.first == "app" {
+            if arguments.dropFirst().first == "link" {
+                try linkApp(context: context, arguments: Array(arguments.dropFirst(2)))
+                return
+            }
+
+            let installer = try context.tool(named: "ReixApp")
+            try run(
+                installer.url.path,
+                Array(arguments.dropFirst()),
+                cwd: context.package.directoryURL,
+                inheritIO: true
+            )
+            return
+        }
+
         // Not a build at all, so it runs before anything else: it never needs
         // the .a files, the output directory or write permission.
         if arguments.first == "symbolize" {
@@ -75,13 +97,13 @@ struct ReixPlugin: CommandPlugin {
         let release   = arguments.contains("--release")
         let doRun     = arguments.contains("run")
         let config    = release ? "release" : "debug"
-        let buildRoot = ProcessInfo.processInfo.environment["REIX_BUILD_PATH"] ?? ".build"
+        let buildRoot = ProcessInfo.processInfo.environment["REIX_BUILD_PATH"] ?? ".build-freestanding"
         let buildDir  = root.appending(path: "\(buildRoot)/\(triple)/\(config)")
 
         let out = root.appending(path: outputDir)
         try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
 
-        let mustExist = (["libKernel", "libReixABI", "libReix", "libShellLanguage"] + apps.map { "lib\($0)" })
+        let mustExist = (["libKernel", "libReixABI", "libReix", "libShellLanguage", "libProcessServerCore"] + apps.map { "lib\($0)" })
             .map { buildDir.appending(path: "\($0).a") }
         let missing = mustExist.filter { !FileManager.default.fileExists(atPath: $0.path) }
         guard missing.isEmpty else {
@@ -144,6 +166,7 @@ struct ReixPlugin: CommandPlugin {
                 buildDir.appending(path: "libReix.a").path,
                 buildDir.appending(path: "libReixABI.a").path,
                 buildDir.appending(path: "libShellLanguage.a").path,
+                buildDir.appending(path: "libProcessServerCore.a").path,
                 "--end-group",
             ], cwd: root)
         }
@@ -160,12 +183,13 @@ struct ReixPlugin: CommandPlugin {
                               out.appending(path: "\(app).elf").path,
                               strippedDir.appending(path: "\(app).elf").path], cwd: root)
         }
-        print("✓ \(apps.count) stripped for initrd")
+        print("✓ \(apps.count) stripped (bootstrap + disk programs)")
 
         let initrd = out.appending(path: "initrd.tar")
         // Written by UstarWriter, not /usr/bin/tar: it page-aligns each
         // member's data, which the initrd page-sharing design depends on.
-        let members = try apps.map {
+        let initrdApps = apps.filter { !diskApps.contains($0) }
+        let members    = try initrdApps.map {
             UstarWriter.Member(name: "\($0).elf",
                                 data: try Data(contentsOf: strippedDir.appending(path: "\($0).elf")))
         }
@@ -174,7 +198,7 @@ struct ReixPlugin: CommandPlugin {
             throw ReixError.tool("initrd.tar: a member's data is not 4096-aligned")
         }
         try archive.write(to: initrd)
-        print("✓ \(outputDir)/initrd.tar (\(archive.count) bytes)")
+        print("✓ \(outputDir)/initrd.tar (\(archive.count) bytes; Shell/Top excluded)")
 
         // The archive goes into the kernel image too, which is why the link
         // below happens here and not before the userland ELFs were packed.
@@ -225,6 +249,86 @@ struct ReixPlugin: CommandPlugin {
         } else {
             print("To run:  swift package --allow-writing-to-package-directory reix run")
         }
+    }
+
+    /// Link and strip exactly one already-compiled application library.
+    /// Kernel and initrd artifacts are intentionally not opened by this path.
+    func linkApp(
+        context  : PluginContext,
+        arguments: [String]
+    ) throws {
+        guard let app = arguments.first, apps.contains(app) else {
+            throw ReixError.tool("usage: reix app link <\(apps.joined(separator: "|"))> [--release]")
+        }
+
+        let root      = context.package.directoryURL
+        let work      = context.pluginWorkDirectoryURL
+        let release   = arguments.contains("--release")
+        let config    = release ? "release" : "debug"
+        let buildRoot = ProcessInfo.processInfo.environment["REIX_BUILD_PATH"] ?? ".build-freestanding"
+        let buildDir  = root.appending(path: "\(buildRoot)/\(triple)/\(config)")
+        let out       = root.appending(path: outputDir)
+        let stripped  = out.appending(path: "stripped")
+        try FileManager.default.createDirectory(at: stripped, withIntermediateDirectories: true)
+
+        var libraries = ["lib\(app)", "libReix", "libReixABI"]
+        if app == "Shell" { libraries.append("libShellLanguage") }
+        if app == "ProcessServer" { libraries.append("libProcessServerCore") }
+        let missing = libraries
+            .map { buildDir.appending(path: "\($0).a") }
+            .filter { !FileManager.default.fileExists(atPath: $0.path) }
+        guard missing.isEmpty else {
+            throw ReixError.tool(
+                "missing app libraries: \(missing.map(\.lastPathComponent).joined(separator: ", "))"
+            )
+        }
+
+        func object(_ source: String) -> URL {
+            work.appending(path: "app-" + (source as NSString).lastPathComponent + ".o")
+        }
+
+        for source in reixNative {
+            try run(clang, [
+                "-target", triple,
+                "-c", root.appending(path: source).path,
+                "-o", object(source).path,
+            ], cwd: root)
+        }
+
+        var generated: [URL] = []
+        for (name, source) in generatedUserlandAsm() {
+            let assembly = work.appending(path: "App." + name)
+            try source.write(to: assembly, atomically: true, encoding: .utf8)
+            let output = work.appending(path: "App." + name + ".o")
+            try run(clang, [
+                "-target", triple,
+                "-c", assembly.path,
+                "-o", output.path,
+            ], cwd: root)
+            generated.append(output)
+        }
+
+        let elf              = out.appending(path: "\(app).elf")
+        let groupedLibraries = libraries.map { buildDir.appending(path: "\($0).a").path }
+        var linkArguments    = [
+            "-T", root.appending(path: "user.ld").path,
+            "-z", "max-page-size=4096",
+            "--gc-sections",
+            "-o", elf.path,
+        ]
+        linkArguments.append(contentsOf: reixNative.map { object($0).path })
+        linkArguments.append(contentsOf: generated.map(\.path))
+        linkArguments.append(contentsOf: [
+            "--whole-archive", buildDir.appending(path: "lib\(app).a").path,
+            "--no-whole-archive", "--start-group",
+        ])
+        linkArguments.append(contentsOf: groupedLibraries.dropFirst())
+        linkArguments.append("--end-group")
+        try run(lld, linkArguments, cwd: root)
+
+        let installed = stripped.appending(path: "\(app).elf")
+        try run(objcopy, ["--strip-all", elf.path, installed.path], cwd: root)
+        print("✓ linked disk program \(outputDir)/stripped/\(app).elf")
     }
 
     /// The word after `flag`, when the argument list carries one.

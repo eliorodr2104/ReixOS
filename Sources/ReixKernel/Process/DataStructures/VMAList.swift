@@ -247,6 +247,7 @@ public struct VMAList: VMAStructure {
               first.pointee.endAddress            == second.pointee.startAddress,
               first.pointee.permissions.rawValue  == second.pointee.permissions.rawValue,
               first.pointee.mappingFlags.rawValue == second.pointee.mappingFlags.rawValue,
+              !first.pointee.mappingFlags.contains(.taskConstruction),
               first.pointee.backingType           == second.pointee.backingType
         else { return nil }
 

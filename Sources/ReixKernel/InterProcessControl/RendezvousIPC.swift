@@ -1276,6 +1276,8 @@ public struct RendezvousIPC: IPCInterface, Loggable {
             case .dma     (let dmaRegionPtr)   : rxRetain(dmaRegionPtr)
             case .interrupt(let setPtr)        : rxRetain(setPtr)
             case .bus     (let busPtr)         : rxRetain(busPtr)
+            case .task    (let control),
+                 .job     (let control)        : TaskRegistry.retain(control)
             
             default: break // Targets without reference-counted backing.
         }
@@ -1343,6 +1345,9 @@ public struct RendezvousIPC: IPCInterface, Loggable {
 
                 InterruptClaims.releaseAll(of: setPtr)
                 heap.pointee.kfree(setPtr)
+
+            case .task(let control), .job(let control):
+                TaskRegistry.release(control)
 
             default: break // Targets without reference-counted backing.
         }

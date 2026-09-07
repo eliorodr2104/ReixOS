@@ -64,4 +64,19 @@ public struct CapRights: OptionSet {
     /// File one interaction mark only. This does not authorize profile
     /// control, trace dumping, or process and counter statistics.
     public static let profileMark = CapRights(rawValue: 1 << 9)
+
+    /// Configure the address space and initial CPU context of a suspended task.
+    public static let taskConfigure = CapRights(rawValue: 1 << 10)
+
+    /// Irreversibly seal and make a suspended task runnable.
+    public static let taskStart = CapRights(rawValue: 1 << 11)
+
+    /// Destroy a task that has not started.
+    public static let taskAbort = CapRights(rawValue: 1 << 12)
+
+    /// Cancel a running task or job.
+    public static let taskTerminate = CapRights(rawValue: 1 << 13)
+
+    /// Read the lifecycle state and exit code of a task or job.
+    public static let taskStatus = CapRights(rawValue: 1 << 14)
 }

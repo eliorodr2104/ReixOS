@@ -39,7 +39,11 @@ OUT         := .reix
 # SwiftPM build tree. The profiling image needs its own graph because Package.swift
 # derives compile defines from TERMINAL_PROFILE and SwiftPM does not key its
 # manifest cache on arbitrary environment variables.
-BUILD_PATH  ?= .build
+# Keep bare-metal products out of SwiftPM's host/plugin build database. `reix
+# app install` is a host executable and may run immediately before a cross
+# rebuild; sharing one scratch tree makes llbuild reuse registrations for the
+# wrong graph.
+BUILD_PATH  ?= .build-freestanding
 # QEMU: resolved from PATH by default (Homebrew on macOS, distro package on Linux).
 #
 # `pmu=on` gives the guest a PMUv3 block, which the kernel enables at boot and
@@ -90,7 +94,7 @@ QEMU_INITRD  = $(if $(filter embedded,$(INITRD_MODE)),,-initrd $(OUT)/initrd.tar
 # instead and get working code intelligence.
 export FREESTANDING := 1
 
-.PHONY: all build image release run run-release run-4m smoke smoke-4m test host-test vm-test terminal-baseline-4m disk prune-dups clean-image clean
+.PHONY: all build image release app programs programs-release run run-release run-4m smoke smoke-4m test host-test vm-test terminal-baseline-4m disk prune-dups clean-image clean
 
 all: image
 
@@ -133,15 +137,19 @@ release: prune-dups
 	REIX_BUILD_PATH=$(BUILD_PATH) $(SWIFT) package $(PLUGIN) --release
 
 # Boot in QEMU (Ctrl-A X to quit). qemu runs here, not inside the plugin sandbox.
-run: image disk
-	$(QEMU) $(QEMU_FLAGS) $(QEMU_MEM) $(QEMU_DISK) -kernel $(OUT)/kernel.bin $(QEMU_INITRD)
+run: programs
+	@live="$(DISK).live"; test ! -e "$$live" || { echo "disk already in use: $$live" >&2; exit 1; }; \
+	  : > "$$live"; trap 'rm -f "$$live"' EXIT HUP INT TERM; \
+	  $(QEMU) $(QEMU_FLAGS) $(QEMU_MEM) $(QEMU_DISK) -kernel $(OUT)/kernel.bin $(QEMU_INITRD)
 
-run-release: release disk
-	$(QEMU) $(QEMU_FLAGS) $(QEMU_MEM) $(QEMU_DISK) -kernel $(OUT)/kernel.bin $(QEMU_INITRD)
+run-release: programs-release
+	@live="$(DISK).live"; test ! -e "$$live" || { echo "disk already in use: $$live" >&2; exit 1; }; \
+	  : > "$$live"; trap 'rm -f "$$live"' EXIT HUP INT TERM; \
+	  $(QEMU) $(QEMU_FLAGS) $(QEMU_MEM) $(QEMU_DISK) -kernel $(OUT)/kernel.bin $(QEMU_INITRD)
 
 # Headless boot smoke test: no human at the serial port, script watches the
 # log for the SHM-OK line (success) or a panic/SHM-FAIL (failure) instead.
-smoke: image disk
+smoke: programs
 	QEMU=$(QEMU) QEMU_FLAGS='$(QEMU_FLAGS) $(QEMU_DISK)' MEM='$(MEM)' \
 	    INITRD_MODE='$(INITRD_MODE)' OUT=$(OUT) scripts/smoke.sh
 
@@ -150,6 +158,27 @@ disk: $(DISK)
 $(DISK):
 	@mkdir -p $(OUT)
 	qemu-img create -f raw $(DISK) $(DISK_SIZE) >/dev/null
+
+# Provision ordinary programs through the same ReixFS implementation the guest
+# mounts. This is deliberately offline: the importer refuses $(DISK).live, and
+# every managed QEMU path below creates that marker before opening the image.
+programs: image disk
+	FREESTANDING= $(SWIFT) package $(PLUGIN) app install --format-if-blank \
+		--disk $(DISK) $(OUT)/stripped/Shell.elf $(OUT)/stripped/Top.elf
+
+programs-release: release disk
+	FREESTANDING= $(SWIFT) package $(PLUGIN) app install --format-if-blank \
+		--disk $(DISK) $(OUT)/stripped/Shell.elf $(OUT)/stripped/Top.elf
+
+# One-program development loop. Example: `make app APP=Shell` recompiles,
+# relinks, validates, and installs only Shell. It never opens kernel.bin or
+# initrd.tar, which makes their unchanged hashes a mechanical release gate.
+APP ?= Shell
+app: disk
+	FREESTANDING=1 $(SWIFT) build --triple $(TRIPLE) --scratch-path $(BUILD_PATH) --target $(APP)
+	FREESTANDING=1 REIX_BUILD_PATH=$(BUILD_PATH) $(SWIFT) package $(PLUGIN) app link $(APP)
+	FREESTANDING= $(SWIFT) package $(PLUGIN) app install --format-if-blank \
+		--disk $(DISK) $(OUT)/stripped/$(APP).elf
 
 # The 4 MiB floor the project targets, as a target rather than a hand-typed
 # invocation. Both variables are load-bearing; see INITRD_MODE above.
@@ -220,7 +249,7 @@ host-test: prune-dups
 # and a target-specific variable applies to a target's prerequisites too, so
 # clearing it would break the cross build. The one post-check that needs a host
 # toolchain clears it around its own `swift` call instead.
-vm-test: image disk
+vm-test: programs
 	QEMU=$(QEMU) QEMU_FLAGS='$(QEMU_FLAGS) $(QEMU_DISK)' SWIFT=$(SWIFT) OUT=$(OUT) \
 	    scripts/scenarios.sh
 
@@ -238,4 +267,4 @@ clean-image:
 	rm -rf $(OUT)
 
 clean: clean-image
-	rm -rf .build .build-terminal-profile
+	rm -rf .build .build-freestanding .build-terminal-profile

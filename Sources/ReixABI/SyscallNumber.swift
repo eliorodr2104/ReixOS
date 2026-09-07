@@ -108,4 +108,16 @@ public enum SyscallNumber: UInt64 {
     /// carries, and nothing told it when to let that state go. This is the
     /// question it could not ask.
     case identityAlive
+
+
+    // Suspended task construction. Appended to preserve every existing number.
+    case taskCreate
+    case taskMapAnonymous
+    case taskWrite
+    case taskSealAndProtect
+    case taskSetContext
+    case taskStart
+    case taskAbort
+    case taskTerminate
+    case taskStatus
 }

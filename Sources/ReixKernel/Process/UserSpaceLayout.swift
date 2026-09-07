@@ -5,6 +5,8 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 28/05/2026.
 //
 
+import ReixABI
+
 /// Per-process virtual address space layout.
 ///
 /// All constants live here to avoid scattering magic numbers across
@@ -37,7 +39,7 @@
 public enum UserSpaceLayout {
 
     /// Granule shared with the MMU and the PPM allocator.
-    public static let pageSize: UInt64 = 4096
+    public static let pageSize: UInt64 = TaskABI.pageSize
 
     /// First mappable user VA: the start of L0 entry 1 (512 GiB).
     ///
@@ -48,16 +50,16 @@ public enum UserSpaceLayout {
     /// user space to L0[1..255] keeps user and kernel in disjoint top-level
     /// entries. Everything below 512 GiB (incl. `0x0`) is therefore unmapped
     /// for user space, so NULL-derived accesses still trap.
-    public static let userMin: VirtualAddress = 0x0000_0080_0000_0000
+    public static let userMin: VirtualAddress = TaskABI.userMin
 
     /// Last mappable user VA (exclusive upper bound). Sits just below
     /// the 48-bit TTBR0 ceiling.
-    public static let userMax: VirtualAddress = 0x0000_7FFF_FFFF_F000
+    public static let userMax: VirtualAddress = TaskABI.userMax
 
     /// Default base used by user ELF binaries when linked with `user.ld`.
     /// Sits 4 MiB into L0 entry 1 (512 GiB), leaving the bottom of the user
     /// region as a guard and keeping the ELF image clear of `userMin`.
-    public static let elfBaseTypical: VirtualAddress = 0x0000_0080_0040_0000
+    public static let elfBaseTypical: VirtualAddress = TaskABI.programBase
 
     /// Top of the mmap allocation area. mmap allocations grow downward
     /// from this anchor.
@@ -71,7 +73,7 @@ public enum UserSpaceLayout {
     /// ceiling of the brk heap. Leaves the heap ~508 MiB above the ELF base
     /// and the mmap area ~432 MiB, both far past what a machine sized for this
     /// kernel can back with frames.
-    public static let mmapMin: VirtualAddress = 0x0000_0080_2000_0000
+    public static let mmapMin: VirtualAddress = TaskABI.heapLimit
 
     /// Top of the initial user stack. The first stack page sits at
     /// `stackTop - pageSize`.
@@ -79,7 +81,7 @@ public enum UserSpaceLayout {
     /// Kept below `0x80_4000_0000`, the end of the first gigabyte of L0[1], so
     /// the stack shares its L1 and L2 tables with the image instead of
     /// building three levels of its own.
-    public static let stackTop: VirtualAddress = 0x0000_0080_3FFF_E000
+    public static let stackTop: VirtualAddress = TaskABI.stackTop
 
     /// Lower bound the user stack is allowed to grow down to. Anything
     /// below `stackLimit` belongs to the guard area or to the mmap
@@ -89,7 +91,7 @@ public enum UserSpaceLayout {
     /// of unusable slack. The machines this targets have single-digit
     /// megabytes of RAM, so the stack runs out of frames long before it runs
     /// out of addresses.
-    public static let stackLimit: VirtualAddress = 0x0000_0080_3C00_0000
+    public static let stackLimit: VirtualAddress = TaskABI.stackLimit
 
     /// Number of guard pages reserved just below `stackLimit`. Touching
     /// a guard page raises a permission fault that the kernel turns into
