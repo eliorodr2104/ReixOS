@@ -273,15 +273,30 @@ public enum TypedShellParser {
             return .some(value)
         }
 
+        /// `{ body }`, or `{ name in body }`.
+        ///
+        /// The name is optional and `$0` still works without one, which is
+        /// what makes the short form short.
         mutating func closure() -> Int? {
             guard take(openBrace) else { return nil }
             groupingDepth += 1
             defer { groupingDepth -= 1 }
             spaces()
+            var parameter: Span?
+            let saved = cursor
+            if let candidate = name() {
+                spaces()
+                if let keyword = name(), equals(keyword, "in") {
+                    parameter = candidate
+                } else {
+                    cursor = saved
+                }
+            }
+            spaces()
             guard let body = expression(compactRoot: false) else { return nil }
             spaces()
             guard take(closeBrace) else { return nil }
-            return result.append(.closure(body))
+            return result.append(.closure(parameter: parameter, body: body))
         }
 
         mutating func quoted() -> Span? {

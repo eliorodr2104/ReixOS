@@ -46,8 +46,9 @@ public enum ShellAnalyzer {
         // What `$0` stands for while a closure is open, and what the value was
         // before it opened. One level: a closure inside a closure keeps the
         // outer element, which is what `sorted` and `filter` ever need.
-        var closureElement = ShellTypeSchema.none
-        var beforeClosure  = ShellTypeSchema.none
+        var closureElement   = ShellTypeSchema.none
+        var beforeClosure    = ShellTypeSchema.none
+        var closureParameter : Span?
         var bindings       = InlineArray<8, Span?>(repeating: nil)
         var bindingCount   = 0
 
@@ -204,6 +205,17 @@ public enum ShellAnalyzer {
                     // Inside a closure over a list, `$0` is one of them.
                     closureElement = schema.elementType
                     beforeClosure = schema
+                    // `{ entry in ... }` names that one, and the name is a
+                    // value everywhere in the body.
+                    if let named = stream.token(at: index), named.kind == .name,
+                       let keyword = stream.token(at: index + 1), keyword.kind == .name,
+                       spells(source, keyword.span, "in") {
+                        index += 2
+                        mark(named, .variable)
+                        remember(named)
+                        closureParameter = named.span
+                        mark(keyword, .keyword)
+                    }
                     after(.value)
 
                 case .closeBrace:
@@ -211,6 +223,7 @@ public enum ShellAnalyzer {
                     if token.state == .invalid { note(.unbalanced, token) }
                     schema = beforeClosure
                     closureElement = .none
+                    closureParameter = nil
                     after(.value)
 
                 case .text:
@@ -358,6 +371,9 @@ public enum ShellAnalyzer {
                     // word, which is what an unquoted argument is.
                     let bound = isBinding(token)
                     mark(token, bound ? .variable : .plain)
+                    if let closureParameter, same(source, token.span, source, closureParameter) {
+                        schema = closureElement
+                    }
                     lastValueWasWord = !bound
                     argument += 1
                     here(.value, token, expected: parameterType(of: command, at: argument - 1))

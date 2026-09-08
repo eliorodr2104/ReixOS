@@ -375,14 +375,29 @@ public struct TypedShellRuntime {
         guard let arena = sequenceArena,
               case .sequence(let handle) = base, handle >= 0, handle < arena.pointee.count,
               let sequence = arena.pointee.sequences[handle], let argument,
-              case .closure(let body)? = program.nodes[argument]
+              case .closure(let parameter, let body)? = program.nodes[argument]
         else { return .failure(.type(expected: .sequence, actual: base.type)) }
+
+        // A closure that named its element binds that name while its body
+        // runs, and only while it runs.
+        let outerBindings = bindings
+        let outerCount    = bindingCount
+        defer {
+            bindings = outerBindings
+            bindingCount = outerCount
+        }
+        let parameterName = parameter.flatMap { text($0, source, count) }
+        func bind(_ value: ShellValue) -> Bool {
+            guard let parameterName else { return true }
+            return set(parameterName, value)
+        }
 
         if name.equals("filter") || name.equals("map") || name.equals("compactMap") || name.equals("flatMap") {
             var output = ShellSequence()
             output.beginBatch()
             for index in 0..<sequence.count {
                 guard let object = sequence.value(at: index) else { continue }
+                guard bind(.record(object)) else { return .failure(.programLimit) }
                 switch evaluate(body, program, source, count, signatures, .record(object), nil, invoke) {
                     case .failure(let failure): return .failure(failure)
                     case .success(let transformed):
@@ -431,6 +446,7 @@ public struct TypedShellRuntime {
         if name.equals("contains") {
             for index in 0..<sequence.count {
                 guard let object = sequence.value(at: index) else { continue }
+                guard bind(.record(object)) else { return .failure(.programLimit) }
                 switch evaluate(body, program, source, count, signatures, .record(object), nil, invoke) {
                     case .failure(let failure): return .failure(failure)
                     case .success(let answer):
@@ -449,6 +465,7 @@ public struct TypedShellRuntime {
             while index < output.count {
                 var position = index
                 while position > 0, let current = output.value(at: position), let previous = output.value(at: position - 1) {
+                    guard bind(.record(current)) else { return .failure(.programLimit) }
                     let order = evaluate(body, program, source, count, signatures, .record(current), .record(previous), invoke)
                     guard case .success(.boolean(let precedes)) = order else {
                         if case .failure(let failure) = order { return .failure(failure) }

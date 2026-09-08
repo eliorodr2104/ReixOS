@@ -13,7 +13,9 @@ public enum TypedShellNode {
     case call(TypedShellCallSyntax)
     case member(base: Int, name: Span)
     case method(base: Int, name: Span, argument: Int?)
-    case closure(Int)
+    /// `{ $0.isFolder }` or `{ entry in entry.isFolder }`: the parameter is
+    /// the name the body calls each element by, when it was given one.
+    case closure(parameter: Span?, body: Int)
     case unaryNot(Int)
     case binary(TypedShellBinaryOperator, Int, Int)
 }

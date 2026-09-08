@@ -193,6 +193,21 @@ struct ShellAnalyzerTests {
         #expect(diagnostics(wrong) == [.unknownMember])
     }
 
+    @Test("A closure may name what it is given")
+    func namedClosureParameter() {
+        let source   = "list.filter { entry in entry.isFolder }"
+        let snapshot = analyze(source)
+        #expect(role(snapshot, source, of: "entry in") == .variable)
+        #expect(role(snapshot, source, of: "in entry") == .keyword)
+        #expect(role(snapshot, source, of: "isFolder") == .member)
+        #expect(diagnostics(snapshot).isEmpty)
+
+        // The name stands for one element, so reaching into it offers a file.
+        let reaching = analyze("list.filter { entry in entry.")
+        #expect(reaching.context.subject == .member)
+        #expect(reaching.context.schema == .file)
+    }
+
     @Test("A binding is a value everywhere it is used")
     func bindings() {
         let source   = "let folders = list, folders.filter { $0.isFile }"

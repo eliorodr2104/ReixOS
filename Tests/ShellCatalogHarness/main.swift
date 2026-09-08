@@ -377,6 +377,20 @@ private func testWrittenArgumentsMayBeBareWords() {
     }
 }
 
+/// A closure may name what it is handed, and the name is a value for as long
+/// as its body runs.
+private func testClosuresMayNameTheirElement() {
+    require(parses("list.filter { entry in entry.isFolder }"), "a named closure parameter parses")
+    require(parses("list.sorted { left in left.name }"), "and so does one on sorted")
+    require(parses("list.filter { $0.isFolder }"), "the short form still works")
+
+    // `in` is what makes it a parameter. Without it, it is an expression.
+    require(parses("list.filter { $0.name.contains(\"a\") }"), "a body that is not a name")
+
+    let named = run("list.filter { entry in entry.isFolder }")
+    require(named.failure == nil || named.calls.count == 1, "it reaches the service, whatever the disk says")
+}
+
 /// The receiver rule must not swallow the member chains the language already
 /// had. A verb is not a receiver, and a value named like one is still a value.
 private func testReachingIntoValuesStillReads() {
@@ -545,8 +559,9 @@ testOmissionNeedsAUniqueAnswer()
 testAmbiguityIsRefused()
 testQuotesMayBeLeftOffOneWord()
 testReachingIntoValuesStillReads()
+testClosuresMayNameTheirElement()
 testWrittenArgumentsMayBeBareWords()
 
 // `print` would reach Reix's freestanding `putchar`, which has no console
 // here. The harness says how it went through the file descriptor instead.
-FileHandle.standardOutput.write(Data("ShellCatalogHarness: 18 checks passed\n".utf8))
+FileHandle.standardOutput.write(Data("ShellCatalogHarness: 19 checks passed\n".utf8))
