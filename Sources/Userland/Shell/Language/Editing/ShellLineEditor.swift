@@ -216,6 +216,8 @@ public struct ShellLineEditor: ~Copyable {
         }
         let snapshot = analysis()
         appendInputSpans(snapshot, selection: selection, spans: &spans, count: &spanCount)
+        let ghost      = suggestion(for: snapshot)
+        let ghostTyped = Int(snapshot.context.count)
 
         // The panel takes the rows the input is not using, and none of the
         // ones it is.
@@ -229,6 +231,8 @@ public struct ShellLineEditor: ~Copyable {
                 capacity: ShellPanelPainter.spanCapacity
             ) { overlaySpans in
                 var geometry: ShellPanelGeometry?
+                var panelRow = UInt16(0)
+                var panelRows = UInt16(0)
                 if let panel, room > 0 {
                     geometry = ShellPanelPainter.paint(
                         panel,
@@ -237,13 +241,28 @@ public struct ShellLineEditor: ~Copyable {
                         into: overlayBytes.baseAddress!,
                         spans: overlaySpans.baseAddress!
                     )
+                    panelRows = geometry?.rows ?? 0
+                    panelRow = panelRows == 0 ? 0 : viewportRows
+                } else if let ghost, cursorPosition.column < columns {
+                    // The grey word sits where the cursor is, on the row the
+                    // cursor is on, and takes no row of its own.
+                    geometry = ghost.withName { bytes, length in
+                        ShellPanelPainter.ghost(
+                            bytes.advanced(by: ghostTyped),
+                            count: length - ghostTyped,
+                            room : columns - cursorPosition.column,
+                            into : overlayBytes.baseAddress!,
+                            spans: overlaySpans.baseAddress!
+                        )
+                    }
+                    if geometry != nil { panelRow = cursorPosition.row - viewportRow }
                 }
-                let panelRows = geometry?.rows ?? 0
                 let frame = frameMetadata(
                     pending: pending,
                     cursorPosition: cursorPosition,
                     viewportRows: viewportRows + panelRows,
-                    panelRow: panelRows == 0 ? 0 : viewportRows,
+                    panelRow: panelRow,
+                    panelColumn: panelRows == 0 ? cursorPosition.column : 0,
                     panel: geometry
                 )
                 return withFrameText(pending: pending) { text in
@@ -502,11 +521,12 @@ public struct ShellLineEditor: ~Copyable {
                 return count == 0 ? update(.eof, false) : refused()
             case .complete, .completePrevious:
                 // A Tab with nothing but blanks behind it on its line is an
-                // indent, in a sheet. Anywhere else it is a question about
-                // what would fit.
+                // indent, in a sheet. Anywhere else it answers what is on the
+                // screen: the grey word if there is one, the box if not.
                 if codeEditing, atLineIndent() {
                     return insertIndent() ? update(.editing, true) : refused()
                 }
+                if intent == .complete, acceptSuggestion() { return update(.editing, true) }
                 if openPanel() { return update(.editing, true) }
                 return codeEditing && insertIndent() ? update(.editing, true) : refused()
             default:
@@ -1255,6 +1275,7 @@ public struct ShellLineEditor: ~Copyable {
         cursorPosition: ReixTextLayout.Position,
         viewportRows: UInt16,
         panelRow: UInt16 = 0,
+        panelColumn: UInt16 = 0,
         panel: ShellPanelGeometry? = nil
     ) -> ShellEditorFrame {
         let prefixBytes = codeEditing ? 0 : Self.promptBytes
@@ -1294,7 +1315,7 @@ public struct ShellLineEditor: ~Copyable {
             viewportRow: viewportRow,
             viewportRows: viewportRows,
             overlayRow: panelRow,
-            overlayColumn: 0,
+            overlayColumn: panel == nil ? 0 : panelColumn,
             overlayRows: panel?.rows ?? 0,
             overlayColumns: panel?.columns ?? 0
         )
@@ -1321,6 +1342,48 @@ public struct ShellLineEditor: ~Copyable {
         panel = ShellPanel.candidates(offered, title: Self.title(for: snapshot.context.subject))
         pending = .snapshot
         return true
+    }
+
+    /// The one candidate that would finish what is being typed.
+    ///
+    /// Only at the end of the line, only with something typed to extend, and
+    /// only from what is documented: this is the static side, so it never
+    /// asks a disk anything and never survives a keystroke.
+    private mutating func suggestion(for snapshot: ShellAnalysisSnapshot) -> ShellCompletion? {
+        guard panel == nil, cursor == count else { return nil }
+        let typed = Int(snapshot.context.count)
+        guard typed > 0 else { return nil }
+        let offered = withUnsafePointer(to: catalog) { table in
+            withBytes { source, length in
+                ShellCompletionEngine.complete(
+                    for    : snapshot,
+                    source : source,
+                    count  : length,
+                    catalog: table.pointee
+                )
+            }
+        }
+        guard let best = offered.candidate(at: 0), best.count > typed else { return nil }
+        return best
+    }
+
+    private mutating func suggestion() -> ShellCompletion? {
+        let snapshot = analysis()
+        return suggestion(for: snapshot)
+    }
+
+    /// Writes the rest of what was suggested, and whatever follows it.
+    private mutating func acceptSuggestion() -> Bool {
+        guard let best = suggestion() else { return false }
+        let typed = Int(analysis().context.count)
+        guard best.count > typed else { return false }
+        var written = best.withName { bytes, length in
+            insertRun(bytes.advanced(by: typed), length - typed)
+        }
+        if written, best.suffix.utf8CodeUnitCount > 0 {
+            written = insertRun(best.suffix.utf8Start, best.suffix.utf8CodeUnitCount)
+        }
+        return written
     }
 
     /// Whether nothing but blanks stands between the cursor and the start of

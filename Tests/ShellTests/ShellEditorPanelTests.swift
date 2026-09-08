@@ -137,15 +137,19 @@ struct ShellEditorPanelTests {
     func acceptWrites() {
         var sequence: UInt32 = 1
         var subject = editor()
-        type("fileSystem.cha", into: &subject, sequence: &sequence)
+        // With nothing typed after the dot there is no grey word to take, so
+        // Tab opens the box.
+        type("fileSystem.", into: &subject, sequence: &sequence)
         _ = press(.tab, into: &subject, sequence: &sequence)
         let opened = subject.isPanelOpen
         #expect(opened)
+        _ = press(.down, into: &subject, sequence: &sequence)
 
         #expect(press(.enter, into: &subject, sequence: &sequence).action == .editing)
         let closed = !subject.isPanelOpen
         #expect(closed)
-        #expect(line(&subject) == "fileSystem.changeDir")
+        // list, remove, changeDir: shorter first, so one step down is remove.
+        #expect(line(&subject) == "fileSystem.remove")
     }
 
     @Test("A receiver accepted brings its dot with it")

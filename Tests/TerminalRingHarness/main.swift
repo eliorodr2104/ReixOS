@@ -35,6 +35,34 @@ private func feed(_ bytes: [UInt8], into screen: inout TerminalScreenModel) -> B
     }
 }
 
+/// Whether every colour change starts by resetting.
+///
+/// Roles are additive: `selection` is reverse video and `command` is a
+/// foreground, so a switch that does not reset first leaves the reverse
+/// running under everything after it. That is what painted the rows below a
+/// selected row, and beyond the box they were in.
+private func everyStyleResets(_ bytes: [UInt8]) -> Bool {
+    var index = 0
+    while index + 1 < bytes.count {
+        guard bytes[index] == 0x1B, bytes[index + 1] == UInt8(ascii: "[") else {
+            index += 1
+            continue
+        }
+        var end = index + 2
+        while end < bytes.count, bytes[end] != UInt8(ascii: "m"),
+              bytes[end] >= 0x30, bytes[end] <= 0x3F {
+            end += 1
+        }
+        guard end < bytes.count, bytes[end] == UInt8(ascii: "m") else {
+            index += 1
+            continue
+        }
+        guard bytes[index + 2] == UInt8(ascii: "0") else { return false }
+        index = end + 1
+    }
+    return true
+}
+
 private func occurrences(
     of needle: [UInt8],
     in bytes : [UInt8]
@@ -1415,6 +1443,7 @@ check(
             bytes.append($0)
         }
         check(feed(bytes, into: &restyleTerminal), "restyled VT is accepted")
+        check(everyStyleResets(bytes), "every colour change resets before it adds")
         check(restyleModel.commit(frame), "restyled commit")
         return .commit
     } == .committed,

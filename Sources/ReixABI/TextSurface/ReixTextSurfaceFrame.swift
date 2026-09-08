@@ -47,6 +47,11 @@ public enum ReixTextSurfaceStyleRole: UInt8, Equatable {
 
     /// Wrong, and finished enough to say so.
     case error = 18
+
+    /// Not typed at all: what the shell would write if it were asked to
+    /// finish the word. It is not in the line and it never will be unless
+    /// somebody accepts it.
+    case ghost = 19
 }
 
 /// One semantic style over a UTF-8 byte range.

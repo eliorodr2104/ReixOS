@@ -37,6 +37,36 @@ public enum ShellPanelPainter {
     public static let minimumRows    : UInt16 = 3
     public static let maximumColumns : UInt16 = 56
 
+    /// Draws what the shell would write next, in one row at the cursor.
+    ///
+    /// Nothing here is in the line: it is drawn over the empty screen after
+    /// the cursor and disappears with the next revision.
+    public static func ghost(
+        _ text : UnsafePointer<UInt8>,
+          count: Int,
+          room : UInt16,
+          into bytes: UnsafeMutablePointer<UInt8>,
+          spans     : UnsafeMutablePointer<ReixTextSurfaceStyleSpan>
+    ) -> ShellPanelGeometry? {
+        guard count > 0, room > 1 else { return nil }
+        let shown = min(count, min(Int(room) - 1, byteCapacity))
+        guard shown > 0 else { return nil }
+        for index in 0..<shown { bytes[index] = text[index] }
+        guard let span = ReixTextSurfaceStyleSpan(
+            offset: 0,
+            length: UInt16(shown),
+            role: .ghost
+        ) else { return nil }
+        spans[0] = span
+        return ShellPanelGeometry(
+            rows: 1,
+            columns: UInt16(shown + 1),
+            byteCount: shown,
+            spanCount: 1,
+            shownRows: 1
+        )
+    }
+
     public static func paint(
         _ panel  : ShellPanel,
           columns: UInt16,

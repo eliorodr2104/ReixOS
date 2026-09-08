@@ -466,6 +466,8 @@ private func testEveryRoleHasAColour() {
     for profile in [ReixTerminalColorProfile.indexed256, .ansi16] {
         TextSurfacePalette.profile = profile
         for role in roles {
+            // Plain adds nothing to the reset the renderer already emits.
+            guard role != .plain, role != .input else { continue }
             require(TextSurfacePalette.parameters(for: role).utf8CodeUnitCount > 0, "a role with no colour")
         }
         // The distinctions the eye is meant to make.

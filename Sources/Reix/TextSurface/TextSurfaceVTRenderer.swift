@@ -1453,18 +1453,19 @@ public enum TextSurfaceVTRenderer {
     ) {
         emitted(escape, count: &count, emit: emit)
         emitted(openBracket, count: &count, emit: emit)
-        let plain = role == .plain || role == .input
+        // Always reset first. Roles are additive, so anything else leaves the
+        // previous role's attributes running underneath this one, which is how
+        // a selected row's reverse video reached the rows below it.
+        emitted(UInt8(ascii: "0"), count: &count, emit: emit)
         if background {
-            let code = StaticString("0;48;5;236")
+            let code = StaticString(";48;5;236")
             for index in 0..<code.utf8CodeUnitCount {
                 emitted(code.utf8Start[index], count: &count, emit: emit)
             }
-            if !plain {
-                emitted(UInt8(ascii: ";"), count: &count, emit: emit)
-            }
         }
-        if !background || !plain {
-            let parameters = TextSurfacePalette.parameters(for: role)
+        let parameters = TextSurfacePalette.parameters(for: role)
+        if parameters.utf8CodeUnitCount > 0 {
+            emitted(UInt8(ascii: ";"), count: &count, emit: emit)
             for index in 0..<parameters.utf8CodeUnitCount {
                 emitted(parameters.utf8Start[index], count: &count, emit: emit)
             }

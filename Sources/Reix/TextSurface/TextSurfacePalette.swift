@@ -30,7 +30,12 @@ public enum TextSurfacePalette {
 
     nonisolated(unsafe) public static var profile: ReixTerminalColorProfile = .indexed256
 
-    /// The SGR parameters for a role, without the escape or the `m`.
+    /// The SGR parameters for a role, without the escape, the `m`, or a reset.
+    ///
+    /// Additive on purpose: the renderer always resets first, so a role only
+    /// says what it adds. A role that carried its own reset could not sit on a
+    /// background, and a role that carried none would leave the last one's
+    /// reverse video running down the screen.
     public static func parameters(for role: ReixTextSurfaceStyleRole) -> StaticString {
         switch profile {
             case .indexed256: return gruvbox(role)
@@ -42,7 +47,7 @@ public enum TextSurfacePalette {
     /// 214, orange 208, purple 175, blue 109, red 167, gray 245.
     private static func gruvbox(_ role: ReixTextSurfaceStyleRole) -> StaticString {
         switch role {
-            case .plain, .input: return "0"
+            case .plain, .input: return ""
             case .prompt: return "1;38;5;108"
             case .selection: return "7"
             case .diagnostic: return "38;5;167"
@@ -60,12 +65,13 @@ public enum TextSurfacePalette {
             case .closure: return "38;5;245"
             case .incomplete: return "38;5;245"
             case .error: return "4;38;5;167"
+            case .ghost: return "2;38;5;245"
         }
     }
 
     private static func coarse(_ role: ReixTextSurfaceStyleRole) -> StaticString {
         switch role {
-            case .plain, .input: return "0"
+            case .plain, .input: return ""
             case .prompt: return "1;36"
             case .selection: return "7"
             case .diagnostic: return "31"
@@ -83,6 +89,7 @@ public enum TextSurfacePalette {
             case .closure: return "90"
             case .incomplete: return "90"
             case .error: return "4;31"
+            case .ghost: return "2;90"
         }
     }
 }
