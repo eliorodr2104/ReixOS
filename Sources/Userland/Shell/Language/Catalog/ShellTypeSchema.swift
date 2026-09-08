@@ -18,11 +18,20 @@ public struct ShellTypeSchema: Equatable {
     /// What one of them is.
     public enum Element: UInt8, Equatable {
         case nothing
-        case file
+
+        /// One thing a container holds. Deliberately not `File`: a folder and
+        /// a container are entries too, and somebody reading `[File]` would
+        /// not expect a folder in it.
+        case entry
         case process
         case text
         case number
         case boolean
+
+        /// What a closure answered when it did not answer with an entry: the
+        /// evaluator keeps it as an object with a name, and that is all it
+        /// promises about it.
+        case named
     }
 
     /// How many of them there are.
@@ -44,12 +53,13 @@ public struct ShellTypeSchema: Equatable {
     }
 
     public static let none      = ShellTypeSchema(shape: .nothing, element: .nothing)
-    public static let file      = ShellTypeSchema(shape: .one, element: .file)
+    public static let entry     = ShellTypeSchema(shape: .one, element: .entry)
+    public static let named     = ShellTypeSchema(shape: .one, element: .named)
     public static let process   = ShellTypeSchema(shape: .one, element: .process)
     public static let text      = ShellTypeSchema(shape: .one, element: .text)
     public static let number    = ShellTypeSchema(shape: .one, element: .number)
     public static let boolean   = ShellTypeSchema(shape: .one, element: .boolean)
-    public static let files     = ShellTypeSchema(shape: .list, element: .file)
+    public static let entries   = ShellTypeSchema(shape: .list, element: .entry)
     public static let processes = ShellTypeSchema(shape: .list, element: .process)
     public static let texts     = ShellTypeSchema(shape: .list, element: .text)
 
@@ -74,7 +84,8 @@ public struct ShellTypeSchema: Equatable {
             case .one:
                 switch element {
                     case .nothing: return "Void"
-                    case .file: return "File"
+                    case .entry: return "Entry"
+                    case .named: return "Named"
                     case .process: return "Process"
                     case .text: return "Text"
                     case .number: return "Number"
@@ -83,7 +94,8 @@ public struct ShellTypeSchema: Equatable {
             case .list:
                 switch element {
                     case .nothing: return "[]"
-                    case .file: return "[File]"
+                    case .entry: return "[Entry]"
+                    case .named: return "[Named]"
                     case .process: return "[Process]"
                     case .text: return "[Text]"
                     case .number: return "[Number]"

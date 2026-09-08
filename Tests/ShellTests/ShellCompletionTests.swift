@@ -21,7 +21,7 @@ private enum CompletionFiles: ShellCommandProvider {
                     code     : 0,
                     verb     : "list",
                     signature: TypedShellSignature(namespace: "fileSystem", name: "list", result: .sequence),
-                    schema   : .files,
+                    schema   : .entries,
                     summary  : "what is here"
                 )
             case 1:

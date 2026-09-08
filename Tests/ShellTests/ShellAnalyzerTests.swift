@@ -23,7 +23,7 @@ private enum FilesProvider: ShellCommandProvider {
                     code     : 0,
                     verb     : "list",
                     signature: TypedShellSignature(namespace: "fileSystem", name: "list", result: .sequence),
-                    schema   : .files,
+                    schema   : .entries,
                     summary  : "what is here"
                 )
             case 1:
@@ -193,6 +193,26 @@ struct ShellAnalyzerTests {
         #expect(diagnostics(wrong) == [.unknownMember])
     }
 
+    @Test("What a method answers is worked out, not assumed")
+    func closureResults() {
+        // `filter` keeps the list it was given.
+        let filtered = analyze("list.filter { $0.isFolder }.")
+        #expect(filtered.context.schema == .entries)
+
+        // `map` answers with a list of whatever the closure said, which the
+        // evaluator keeps as objects with a name.
+        let mapped = analyze("list.map { $0.name }.")
+        #expect(mapped.context.schema == ShellTypeSchema(shape: .list, element: .named))
+
+        // Mapping an element to itself keeps the entries.
+        let identity = analyze("list.map { $0 }.")
+        #expect(identity.context.schema == .entries)
+
+        // `contains` answers a Bool wherever it is asked.
+        let asked = analyze("list.contains { $0.isFile }.")
+        #expect(asked.context.schema == .boolean)
+    }
+
     @Test("A closure may name what it is given")
     func namedClosureParameter() {
         let source   = "list.filter { entry in entry.isFolder }"
@@ -205,7 +225,7 @@ struct ShellAnalyzerTests {
         // The name stands for one element, so reaching into it offers a file.
         let reaching = analyze("list.filter { entry in entry.")
         #expect(reaching.context.subject == .member)
-        #expect(reaching.context.schema == .file)
+        #expect(reaching.context.schema == .entry)
     }
 
     @Test("A binding is a value everywhere it is used")
@@ -266,12 +286,12 @@ struct ShellAnalyzerTests {
         // Reaching into a value offers what that value is.
         let member = analyze("list.")
         #expect(member.context.subject == .member)
-        #expect(member.context.schema == .files)
+        #expect(member.context.schema == .entries)
 
         // And inside a closure over it, one of them.
         let element = analyze("list.filter { $0.")
         #expect(element.context.subject == .member)
-        #expect(element.context.schema == .file)
+        #expect(element.context.schema == .entry)
 
         // Inside the verb itself, what fits is another verb, and one byte
         // further along it is that verb's first argument.

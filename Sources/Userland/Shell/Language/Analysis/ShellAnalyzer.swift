@@ -49,6 +49,8 @@ public enum ShellAnalyzer {
         var closureElement   = ShellTypeSchema.none
         var beforeClosure    = ShellTypeSchema.none
         var closureParameter : Span?
+        var pendingMethod    : ShellMethodDescriptor?
+        var pendingReceiver  = ShellTypeSchema.none
         var bindings       = InlineArray<8, Span?>(repeating: nil)
         var bindingCount   = 0
 
@@ -221,7 +223,16 @@ public enum ShellAnalyzer {
                 case .closeBrace:
                     mark(token, token.state == .invalid ? .error : .closure)
                     if token.state == .invalid { note(.unbalanced, token) }
-                    schema = beforeClosure
+                    // What the closure answered is the last thing in it, and
+                    // that is what tells `map` what it is a list of.
+                    let answered = schema
+                    if let method = pendingMethod {
+                        schema = method.resultType(on: pendingReceiver, closure: answered)
+                        pendingMethod = nil
+                        pendingReceiver = .none
+                    } else {
+                        schema = beforeClosure
+                    }
                     closureElement = .none
                     closureParameter = nil
                     after(.value)
@@ -306,8 +317,16 @@ public enum ShellAnalyzer {
                         }
                         here(.member, next)
                         // Reaching into a value gives another value, and the
-                        // next dot is about that one.
-                        schema = memberType(source, next.span, of: schema)
+                        // next dot is about that one. A method that takes a
+                        // closure waits for it: what it answers depends on
+                        // what the closure says.
+                        if let method = methodDescriptor(source, next.span, of: schema),
+                           method.argument == .closure {
+                            pendingMethod = method
+                            pendingReceiver = schema
+                        } else {
+                            schema = memberType(source, next.span, of: schema)
+                        }
                         after(.value)
                     }
 
@@ -473,6 +492,10 @@ public enum ShellAnalyzer {
 
     /// What reaching into a value gives back, so the next dot can be offered
     /// against it.
+    ///
+    /// A method that takes a closure cannot be answered here: what `map` gives
+    /// back depends on what the closure says, and the closure has not been
+    /// read yet. Those are resolved where they close.
     private static func memberType(
         _ source  : UnsafePointer<UInt8>,
         _ span    : Span,
@@ -484,9 +507,22 @@ public enum ShellAnalyzer {
         }
         for index in 0..<ShellCatalog.methodCount(of: schema) {
             guard let method = ShellCatalog.method(of: schema, at: index) else { continue }
-            if spells(source, span, method.name) { return method.result }
+            if spells(source, span, method.name) { return method.resultType(on: schema) }
         }
         return .none
+    }
+
+    /// The method a name stands for on this type, when it is one.
+    private static func methodDescriptor(
+        _ source  : UnsafePointer<UInt8>,
+        _ span    : Span,
+          of schema: ShellTypeSchema
+    ) -> ShellMethodDescriptor? {
+        for index in 0..<ShellCatalog.methodCount(of: schema) {
+            guard let method = ShellCatalog.method(of: schema, at: index) else { continue }
+            if spells(source, span, method.name) { return method }
+        }
+        return nil
     }
 
     // MARK: Bytes

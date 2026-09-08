@@ -124,7 +124,7 @@ public enum ShellCompletionEngine {
                         kind   : .method,
                         name   : method.name,
                         suffix : template(for: method.argument),
-                        detail : method.result.name,
+                        detail : method.resultName(on: context.schema),
                         summary: method.summary,
                         rank   : 1,
                         caret  : caret(for: method.argument)

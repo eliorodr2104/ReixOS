@@ -232,8 +232,8 @@ private func testObjectsCarryASchema() {
             require(ShellCatalog.memberCount(of: descriptor.schema) > 0)
         }
     }
-    require(ShellCatalog.member(of: .file, at: 0) != nil)
-    require(ShellCatalog.member(of: .file, at: ShellCatalog.memberCount(of: .file)) == nil)
+    require(ShellCatalog.member(of: .entry, at: 0) != nil)
+    require(ShellCatalog.member(of: .entry, at: ShellCatalog.memberCount(of: .entry)) == nil)
 }
 
 private func testSpellingsAreEquivalent() {

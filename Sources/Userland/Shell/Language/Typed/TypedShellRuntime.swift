@@ -327,13 +327,16 @@ public struct TypedShellRuntime {
 
         if case .text(let value) = base {
             if name.equals("isEmpty") { return .success(.boolean(value.count == 0)) }
+            if name.equals("count") { return .success(.number(UInt64(value.count))) }
             return .failure(.unsupportedMember(name))
         }
 
         guard case .record(let object) = base else { return .failure(.type(expected: .record, actual: base.type)) }
         if name.equals("name") || name.equals("path") { return .success(.text(object.name)) }
         if name.equals("isFolder") { return .success(.boolean(object.kind == FSKind.folder.rawValue || object.kind == FSKind.container.rawValue)) }
+        if name.equals("isContainer") { return .success(.boolean(object.kind == FSKind.container.rawValue)) }
         if name.equals("isFile") { return .success(.boolean(object.kind == FSKind.file.rawValue)) }
+        if name.equals("id") { return .success(.number(object.number0)) }
         return .failure(.unsupportedMember(name))
     }
 
@@ -365,11 +368,19 @@ public struct TypedShellRuntime {
                 default: return .failure(.type(expected: .any, actual: base.type))
             }
         }
-        if name.equals("contains") {
-            guard case .text(let haystack) = base, let argument else { return .failure(.wrongArguments(name)) }
+        if name.equals("contains"), case .text(let haystack) = base {
+            guard let argument else { return .failure(.wrongArguments(name)) }
             return evaluate(argument, program, source, count, signatures, nil, nil, invoke).flatMap {
                 guard case .text(let needle) = $0 else { return .failure(.type(expected: .text, actual: $0.type)) }
                 return .success(.boolean(haystack.contains(needle)))
+            }
+        }
+        if name.equals("hasPrefix") || name.equals("hasSuffix"), case .text(let whole) = base {
+            guard let argument else { return .failure(.wrongArguments(name)) }
+            let atFront = name.equals("hasPrefix")
+            return evaluate(argument, program, source, count, signatures, nil, nil, invoke).flatMap {
+                guard case .text(let part) = $0 else { return .failure(.type(expected: .text, actual: $0.type)) }
+                return .success(.boolean(whole.begins(with: part, atFront: atFront)))
             }
         }
         guard let arena = sequenceArena,
@@ -442,6 +453,34 @@ public struct TypedShellRuntime {
                 }
             }
             return store(output)
+        }
+        if name.equals("reversed") {
+            var output = ShellSequence()
+            output.beginBatch()
+            var index = sequence.count
+            while index > 0 {
+                index -= 1
+                guard let object = sequence.value(at: index) else { continue }
+                if case .failure(.materializationLimit(let limit)) = output.append(object) {
+                    return .failure(.materializationLimit(limit))
+                }
+            }
+            return store(output)
+        }
+        if name.equals("allSatisfy") {
+            for index in 0..<sequence.count {
+                guard let object = sequence.value(at: index) else { continue }
+                guard bind(.record(object)) else { return .failure(.programLimit) }
+                switch evaluate(body, program, source, count, signatures, .record(object), nil, invoke) {
+                    case .failure(let failure): return .failure(failure)
+                    case .success(let answer):
+                        guard case .boolean(let holds) = answer else {
+                            return .failure(.type(expected: .boolean, actual: answer.type))
+                        }
+                        if !holds { return .success(.boolean(false)) }
+                }
+            }
+            return .success(.boolean(true))
         }
         if name.equals("contains") {
             for index in 0..<sequence.count {

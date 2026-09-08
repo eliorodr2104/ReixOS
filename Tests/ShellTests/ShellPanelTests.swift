@@ -160,7 +160,7 @@ struct ShellPanelTests {
 
     @Test("And what a value is made of")
     func memberContent() {
-        let drawn = painted(ShellPanel.members(of: .file, title: "File"))
+        let drawn = painted(ShellPanel.members(of: .entry, title: "Entry"))
         let joined = drawn.lines.joined(separator: "\n")
         #expect(joined.contains("name"))
         #expect(joined.contains("isFolder"))

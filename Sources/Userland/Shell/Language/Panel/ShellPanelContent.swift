@@ -94,7 +94,7 @@ public extension ShellPanel {
             guard let method = ShellCatalog.method(of: schema, at: index) else { continue }
             panel.append(ShellPanelRow(
                 name   : method.name,
-                detail : method.result.name,
+                detail : method.resultName(on: schema),
                 summary: method.summary,
                 role   : .member
             ))

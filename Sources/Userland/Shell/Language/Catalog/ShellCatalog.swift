@@ -139,8 +139,8 @@ public struct ShellCatalog {
     /// Members and methods belong to no provider: they are what the evaluator
     /// answers on a value, whoever produced it.
     ///
-    /// They belong to a *type*, though. A list of files answers `count` and
-    /// `filter`; one file answers `name` and `isFolder`; and neither answers
+    /// They belong to a *type*, though. A list of entries answers `count` and
+    /// `filter`; one entry answers `name` and `isFolder`; and neither answers
     /// the other's, which is what the editor was getting wrong.
     public static func memberCount(of schema: ShellTypeSchema) -> Int {
         switch schema.shape {
@@ -148,9 +148,10 @@ public struct ShellCatalog {
             case .list: return 4
             case .one:
                 switch schema.element {
-                    case .file: return 4
-                    case .process: return 1
-                    case .text: return 1
+                    case .entry: return 5
+                    case .process: return 2
+                    case .text: return 2
+                    case .named: return 1
                     default: return 0
                 }
         }
@@ -170,17 +171,24 @@ public struct ShellCatalog {
             }
         }
         switch schema.element {
-            case .file:
+            case .entry:
                 switch index {
                     case 0: return ShellMemberDescriptor("name", type: .text, summary: "what it is called")
                     case 1: return ShellMemberDescriptor("path", type: .text, summary: "the same name, spelled in full")
                     case 2: return ShellMemberDescriptor("isFolder", type: .boolean, summary: "true for a folder or a container")
+                    case 3: return ShellMemberDescriptor("isContainer", type: .boolean, summary: "true for a container, which is a root of its own")
                     default: return ShellMemberDescriptor("isFile", type: .boolean, summary: "true for a file")
                 }
             case .process:
-                return ShellMemberDescriptor("name", type: .text, summary: "the program this process runs")
+                return index == 0
+                    ? ShellMemberDescriptor("name", type: .text, summary: "the program this process runs")
+                    : ShellMemberDescriptor("id", type: .number, summary: "the number the kernel knows it by")
             case .text:
-                return ShellMemberDescriptor("isEmpty", type: .boolean, summary: "true when it says nothing")
+                return index == 0
+                    ? ShellMemberDescriptor("isEmpty", type: .boolean, summary: "true when it says nothing")
+                    : ShellMemberDescriptor("count", type: .number, summary: "how many bytes it is")
+            case .named:
+                return ShellMemberDescriptor("name", type: .text, summary: "what a closure called it")
             default:
                 return nil
         }
@@ -189,12 +197,12 @@ public struct ShellCatalog {
     public static func methodCount(of schema: ShellTypeSchema) -> Int {
         switch schema.shape {
             case .nothing: return 0
-            case .list: return 7
+            case .list: return 9
             case .one:
                 switch schema.element {
-                    case .text: return 2
-                    case .number, .boolean: return 1
-                    default: return 0
+                    case .text: return 4
+                    case .nothing: return 0
+                    default: return 1
                 }
         }
     }
@@ -207,40 +215,50 @@ public struct ShellCatalog {
         if schema.isList {
             switch index {
                 case 0:
-                    return ShellMethodDescriptor("filter", argument: .closure, result: schema,
+                    return ShellMethodDescriptor("filter", argument: .closure, result: .sameAsReceiver,
                                                  summary: "keep the ones the closure says true to")
                 case 1:
-                    // The evaluator wraps whatever a closure answers back into
-                    // an object with a name, so what comes out is a list of
-                    // the same shape as what went in.
-                    return ShellMethodDescriptor("map", argument: .closure, result: schema,
+                    return ShellMethodDescriptor("map", argument: .closure, result: .listOfClosureAnswer,
                                                  summary: "one answer per element")
                 case 2:
-                    return ShellMethodDescriptor("compactMap", argument: .closure, result: schema,
+                    return ShellMethodDescriptor("compactMap", argument: .closure, result: .listOfClosureAnswer,
                                                  summary: "map, dropping the empty answers")
                 case 3:
-                    return ShellMethodDescriptor("flatMap", argument: .closure, result: schema,
+                    return ShellMethodDescriptor("flatMap", argument: .closure, result: .closureAnswer,
                                                  summary: "map to lists and join them")
                 case 4:
-                    return ShellMethodDescriptor("sorted", argument: .closure, result: schema,
+                    return ShellMethodDescriptor("sorted", argument: .closure, result: .sameAsReceiver,
                                                  summary: "order by a closure over $0 and $1")
                 case 5:
-                    return ShellMethodDescriptor("contains", argument: .closure, result: .boolean,
+                    return ShellMethodDescriptor("reversed", argument: .none, result: .sameAsReceiver,
+                                                 summary: "the same ones, back to front")
+                case 6:
+                    return ShellMethodDescriptor("contains", argument: .closure, result: .fixed(.boolean),
                                                  summary: "true when the closure says so of any of them")
+                case 7:
+                    return ShellMethodDescriptor("allSatisfy", argument: .closure, result: .fixed(.boolean),
+                                                 summary: "true when the closure says so of every one")
                 default:
-                    return ShellMethodDescriptor("toString", argument: .none, result: .text,
+                    return ShellMethodDescriptor("toString", argument: .none, result: .fixed(.text),
                                                  summary: "the value, written out")
             }
         }
-        switch schema.element {
-            case .text:
-                return index == 0
-                    ? ShellMethodDescriptor("contains", argument: .text, result: .boolean,
-                                            summary: "true when the text holds the other")
-                    : ShellMethodDescriptor("toString", argument: .none, result: .text,
-                                            summary: "the value, written out")
+        guard schema.element == .text else {
+            return ShellMethodDescriptor("toString", argument: .none, result: .fixed(.text),
+                                         summary: "the value, written out")
+        }
+        switch index {
+            case 0:
+                return ShellMethodDescriptor("contains", argument: .text, result: .fixed(.boolean),
+                                             summary: "true when the text holds the other")
+            case 1:
+                return ShellMethodDescriptor("hasPrefix", argument: .text, result: .fixed(.boolean),
+                                             summary: "true when it starts with the other")
+            case 2:
+                return ShellMethodDescriptor("hasSuffix", argument: .text, result: .fixed(.boolean),
+                                             summary: "true when it ends with the other")
             default:
-                return ShellMethodDescriptor("toString", argument: .none, result: .text,
+                return ShellMethodDescriptor("toString", argument: .none, result: .fixed(.text),
                                              summary: "the value, written out")
         }
     }

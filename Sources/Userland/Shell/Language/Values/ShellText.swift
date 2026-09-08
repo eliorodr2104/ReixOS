@@ -64,6 +64,23 @@ public struct ShellText: Equatable {
         return false
     }
 
+    /// Whether this begins, or ends, with `part`.
+    ///
+    /// One function for both because they are the same walk from opposite
+    /// ends, and two would be two places to get the bounds wrong.
+    public func begins(
+        with part: ShellText,
+        atFront  : Bool
+    ) -> Bool {
+        guard part.count > 0 else { return true }
+        guard part.count <= count else { return false }
+        let start = atFront ? 0 : count - part.count
+        for offset in 0..<part.count where storage[start + offset] != part.storage[offset] {
+            return false
+        }
+        return true
+    }
+
     public static func < (lhs: ShellText, rhs: ShellText) -> Bool {
         let common = lhs.count < rhs.count ? lhs.count : rhs.count
         for index in 0..<common {

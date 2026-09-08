@@ -21,7 +21,7 @@ private enum PanelFiles: ShellCommandProvider {
                     code     : 0,
                     verb     : "list",
                     signature: TypedShellSignature(namespace: "fileSystem", name: "list", result: .sequence),
-                    schema   : .files,
+                    schema   : .entries,
                     summary  : "what is here"
                 )
             case 1:
@@ -219,7 +219,8 @@ struct ShellEditorPanelTests {
         for _ in 0..<10 { _ = press(.down, into: &subject, sequence: &sequence) }
         let later = overlay(&subject)
         #expect(!later.contains("count"), "the window moved with the selection")
-        #expect(later.contains("11 of 11") || later.contains("of 11"))
+        // A list of entries has four members and nine methods.
+        #expect(later.contains("of 13"))
     }
 
     @Test("With nothing to offer, the box does not open")
