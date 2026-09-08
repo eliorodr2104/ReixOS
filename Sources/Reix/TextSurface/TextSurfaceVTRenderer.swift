@@ -512,6 +512,7 @@ public enum TextSurfaceVTRenderer {
               placement.anchorRow == screen.editorAnchorRow,
               descriptor.overlayLength == 0,
               screen.overlayLength == 0,
+              stylesMatch(screen: screen, frame: frame, before: Int(descriptor.patchOffset)),
               descriptor.viewportRow == screen.viewportRow,
               descriptor.viewportRows == screen.viewportRows
         else { return false }
@@ -529,6 +530,39 @@ public enum TextSurfaceVTRenderer {
               position.row >= descriptor.viewportRow
         else { return false }
         return true
+    }
+
+    /// Whether the colours of what is already on screen still hold up to
+    /// `limit`.
+    ///
+    /// A patch repaints from its offset onward, so it is only correct while
+    /// everything before that offset still looks the way it was drawn. It
+    /// often does not: a name becomes a verb on the keystroke that finishes
+    /// it, and the bytes that changed meaning are the ones already painted.
+    private static func stylesMatch(
+        screen: TextSurfaceScreenModel,
+        frame: ReixTextSurfaceFrameView,
+        before limit: Int
+    ) -> Bool {
+        var painted = 0
+        var framed  = 0
+        let paintedCount = screen.styleSpanCount
+        let framedCount  = Int(frame.descriptor.styleSpanCount)
+        while true {
+            let left  = painted < paintedCount ? screen.styleSpan(at: painted) : nil
+            let right = framed < framedCount ? frame.styleSpan(at: framed) : nil
+            let leftInside  = left.map { Int($0.offset) < limit } ?? false
+            let rightInside = right.map { Int($0.offset) < limit } ?? false
+            if !leftInside, !rightInside { return true }
+            guard leftInside, rightInside, let left, let right else { return false }
+            guard left.offset == right.offset,
+                  left.role == right.role,
+                  min(Int(left.offset) + Int(left.length), limit)
+                      == min(Int(right.offset) + Int(right.length), limit)
+            else { return false }
+            painted += 1
+            framed += 1
+        }
     }
 
     private static func stylesMatch(

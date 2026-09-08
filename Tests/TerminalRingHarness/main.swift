@@ -1335,6 +1335,108 @@ proposalPage[12] ^= 0x01
 proposalPage[4] = 1
 check(!ReixTextSurfaceRing.accept(page: proposalPage, token: 11, epoch: 1), "old version refused")
 
+// A patch repaints from its offset. That is only correct while what was drawn
+// before it still looks the way it was drawn, and highlighting is exactly the
+// thing that changes its mind: `lis` is a name being typed, `list` is a verb,
+// and the bytes that changed colour are the ones already on screen.
+check(ReixTextSurfaceRing.initialize(page: page, token: 57), "restyle proposal")
+check(ReixTextSurfaceRing.accept(page: page, token: 57, epoch: 58), "restyle accept")
+producer = ReixTextSurfaceRing(page: page, token: 57, epoch: 58)!
+consumer = ReixTextSurfaceRing(page: page, token: 57, epoch: 58)!
+var restyleModel = TextSurfaceScreenModel()
+var restyleTerminal = TerminalScreenModel(columns: 20, rows: 16)
+
+let typed = Array("lis".utf8)
+check(
+    push(
+        producer,
+        transaction: 1,
+        descriptor: descriptor(
+            textLength: typed.count,
+            styles: 1,
+            columns: 20,
+            rows: 16,
+            cursorColumn: UInt16(typed.count),
+            viewportRows: 1
+        ),
+        text: typed,
+        styles: [ReixTextSurfaceStyleSpan(offset: 0, length: 3, role: .incomplete)!]
+    ),
+    "restyle setup"
+)
+check(
+    consumer.popFrame(transaction: 1) { frame in
+        var bytes: [UInt8] = []
+        _ = TextSurfaceVTRenderer.render(screen: restyleModel, frame: frame, useDiff: false) { bytes.append($0) }
+        check(feed(bytes, into: &restyleTerminal), "restyle setup VT is accepted")
+        check(restyleModel.commit(frame), "restyle setup commit")
+        return .commit
+    } == .committed,
+    "restyle setup consumed"
+)
+
+func restylePatch(
+    _ transaction: UInt32,
+    _ offset     : UInt32,
+    _ length     : UInt16,
+    _ role       : ReixTextSurfaceStyleRole,
+    _ byte       : String
+) -> Bool {
+    push(
+        producer,
+        transaction: transaction,
+        descriptor: descriptor(
+            kind: .patch,
+            correlation: transaction,
+            revision: transaction,
+            baseRevision: transaction - 1,
+            patchOffset: offset,
+            textLength: 1,
+            styles: 1,
+            columns: 20,
+            rows: 16,
+            cursorColumn: UInt16(offset) + 1,
+            viewportRows: 1
+        ),
+        text: Array(byte.utf8),
+        styles: [ReixTextSurfaceStyleSpan(offset: 0, length: length, role: role)!]
+    )
+}
+
+// `lis` was grey while it was a name being typed; `list` is a verb. The bytes
+// that changed colour are the three already on screen, so this is no diff.
+check(restylePatch(2, 3, 4, .command, "t"), "restyle patch pushed")
+check(
+    consumer.popFrame(transaction: 2) { frame in
+        let metrics = TextSurfaceVTRenderer.metrics(screen: restyleModel, frame: frame)
+        check(!metrics.usesDiff, "a patch that repaints what came before it is not a diff")
+        var bytes: [UInt8] = []
+        _ = TextSurfaceVTRenderer.render(screen: restyleModel, frame: frame, useDiff: metrics.usesDiff) {
+            bytes.append($0)
+        }
+        check(feed(bytes, into: &restyleTerminal), "restyled VT is accepted")
+        check(restyleModel.commit(frame), "restyled commit")
+        return .commit
+    } == .committed,
+    "restyle patch consumed"
+)
+check(
+    (0..<16).contains { restyleTerminal.line($0).contains("list") },
+    "the whole word is on screen"
+)
+
+// One more letter, with the verb still a verb behind it: nothing already
+// drawn changed its mind, so the patch stays a patch.
+check(restylePatch(3, 4, 5, .command, "s"), "unchanged-paint patch pushed")
+check(
+    consumer.popFrame(transaction: 3) { frame in
+        let metrics = TextSurfaceVTRenderer.metrics(screen: restyleModel, frame: frame)
+        check(metrics.usesDiff, "a patch that changes nothing behind it stays a diff")
+        return .commit
+    } == .committed,
+    "unchanged-paint patch consumed"
+)
+
 if failures == 0 {
     print("TextSurfaceRingHarness passed \(checks) checks")
 } else {

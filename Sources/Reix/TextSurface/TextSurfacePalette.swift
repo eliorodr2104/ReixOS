@@ -47,7 +47,7 @@ public enum TextSurfacePalette {
             case .selection: return "7"
             case .diagnostic: return "38;5;167"
             case .overlay: return "38;5;175"
-            case .editorChrome: return "38;5;245"
+            case .editorChrome: return "2;38;5;245"
             case .keyword: return "38;5;167"
             case .namespace: return "38;5;108"
             case .command: return "38;5;214"
