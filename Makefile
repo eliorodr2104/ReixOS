@@ -20,7 +20,7 @@
 #   make smoke-4m   the headless version of the above
 #   make clean-image  remove only $(OUT), keep the compiled modules
 #   make clean      remove $(OUT) and the SwiftPM build directory
-#   make prune-dups remove iCloud conflict copies from the build trees
+#   make prune-dups remove iCloud conflict copies from the build and source trees
 
 # Toolchain discovery. Override either on the command line if needed:
 #     make SWIFT=/path/to/swift QEMU=/path/to/qemu-system-aarch64
@@ -125,6 +125,7 @@ build: image
 prune-dups:
 	@find $(OUT) $(BUILD_PATH) -depth -name "* [0-9]" -o -name "* [0-9].*" 2>/dev/null \
 	    | while IFS= read -r dup; do rm -rf "$$dup"; done || true
+	@sh scripts/prune-icloud.sh || true
 	@sh scripts/prune-stale.sh
 
 # Build all modules, then link the image via the plugin.
