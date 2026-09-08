@@ -80,10 +80,4 @@ struct PL011UART: SerialDriver, @unchecked Sendable {
         guard let base = base else { return true }
         return Self.tryWriteByte(base, byte)
     }
-
-    func read() -> UInt8 {
-        return 10
-    }
 }
-
-typealias UARTQemu = PL011UART
