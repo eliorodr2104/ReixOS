@@ -54,8 +54,11 @@ struct ShellPanelTests {
         let drawn = painted(sample())
         #expect(drawn.geometry?.rows == 5)
         #expect(drawn.lines.count == 5)
+        // The box is drawn one column inside what it declares, so a full row
+        // never wraps on its own.
+        #expect(drawn.geometry?.columns == 40)
         for line in drawn.lines {
-            #expect(line.count == 40, "row is not the width of the box: \(line)")
+            #expect(line.count == 39, "row is not the width of the box: \(line)")
         }
         #expect(drawn.lines[0].hasPrefix("┌─ fileSystem "))
         #expect(drawn.lines[0].hasSuffix("┐"))

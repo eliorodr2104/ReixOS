@@ -26,6 +26,7 @@ public enum ShellEditorIntent: Equatable {
     case undo
     case redo
     case complete
+    case completePrevious
     case cancel
     case eof
 }
@@ -56,7 +57,7 @@ public enum ShellEditorKeymap {
             case .pageDown: return .pageDown
             case .undo: return .undo
             case .redo: return .redo
-            case .tab: return .complete
+            case .tab: return selecting ? .completePrevious : .complete
             case .cancel: return .cancel
             case .eof: return .eof
             default: return nil

@@ -213,27 +213,41 @@ public struct TextSurfaceSession: ~Copyable {
 
     /// Builds the revision fence while the caller keeps segmented frame storage alive.
     public mutating func presentNative(
-        kind          : ReixTextSurfaceFrameKind,
-        mode          : ReixTextSurfaceFrameMode = .editor,
-        correlation   : UInt32,
-        patchOffset   : UInt32,
-        replacedLength: UInt32,
-        textLength    : UInt32,
-        text0         : UnsafePointer<UInt8>?,
-        text0Length   : Int,
-        text1         : UnsafePointer<UInt8>?,
-        text1Length   : Int,
-        text2         : UnsafePointer<UInt8>?,
-        text2Length   : Int,
-        styles        : UnsafePointer<ReixTextSurfaceStyleSpan>?,
-        styleCount    : Int,
-        columns       : UInt16,
-        rows          : UInt16,
-        cursorOffset  : UInt32,
-        viewportRow   : UInt16,
-        viewportRows  : UInt16
+        kind             : ReixTextSurfaceFrameKind,
+        mode             : ReixTextSurfaceFrameMode = .editor,
+        correlation      : UInt32,
+        patchOffset      : UInt32,
+        replacedLength   : UInt32,
+        textLength       : UInt32,
+        text0            : UnsafePointer<UInt8>?,
+        text0Length      : Int,
+        text1            : UnsafePointer<UInt8>?,
+        text1Length      : Int,
+        text2            : UnsafePointer<UInt8>?,
+        text2Length      : Int,
+        styles           : UnsafePointer<ReixTextSurfaceStyleSpan>?,
+        styleCount       : Int,
+        columns          : UInt16,
+        rows             : UInt16,
+        cursorOffset     : UInt32,
+        viewportRow      : UInt16,
+        viewportRows     : UInt16,
+        overlay          : UnsafePointer<UInt8>? = nil,
+        overlayLength    : Int = 0,
+        overlayStyles    : UnsafePointer<ReixTextSurfaceStyleSpan>? = nil,
+        overlayStyleCount: Int = 0,
+        overlayRow       : UInt16 = 0,
+        overlayColumn    : UInt16 = 0,
+        overlayRows      : UInt16 = 0,
+        overlayColumns   : UInt16 = 0
     ) -> Bool {
         guard usable,
+              overlayLength >= 0,
+              overlayLength <= ReixTextSurfaceFrameDescriptor.maximumOverlayBytes,
+              overlayStyleCount >= 0,
+              overlayStyleCount <= Int(ReixTextSurfaceFrameDescriptor.maximumOverlayStyleSpans),
+              (overlayLength == 0) == (overlay == nil),
+              (overlayStyleCount == 0) == (overlayStyles == nil),
               mode != .transcript,
               correlation != 0,
               columns > 0,
@@ -346,7 +360,10 @@ public struct TextSurfaceSession: ~Copyable {
         editorStyleCount = styleCount
         for index in 0..<styleCount { editorStyles[index] = styles![index] }
 
+        // An overlay is drawn over rows the editor also owns, so a frame that
+        // carries or drops one repaints rather than patches.
         let snapshot = kind == .snapshot || requiresSnapshot || revision == 0 || resized || modeChanged
+            || overlayLength > 0
         let cursor   : ReixTextLayout.Position?
         if mode == .codeEditor {
             cursor = ReixCodeEditorLayout.position(
@@ -379,13 +396,19 @@ public struct TextSurfaceSession: ~Copyable {
             patchOffset: snapshot ? 0 : UInt32(localOffset),
             replacedLength: snapshot ? 0 : UInt32(removed),
             textLength: UInt32(snapshot ? editorLength : inserted),
+            overlayLength: UInt16(overlayLength),
             styleSpanCount: UInt16(styleCount),
+            overlayStyleSpanCount: UInt16(overlayStyleCount),
             columns: columns,
             rows: rows,
             cursorRow: cursor.row,
             cursorColumn: cursor.column,
             viewportRow: actualViewport,
-            viewportRows: viewportRows
+            viewportRows: viewportRows,
+            overlayRow: overlayRow,
+            overlayColumn: overlayColumn,
+            overlayRows: overlayRows,
+            overlayColumns: overlayColumns
         ) else {
             requiresSnapshot = true
             return false
@@ -402,7 +425,9 @@ public struct TextSurfaceSession: ~Copyable {
                 guard let source = ReixTextSurfaceFrameSource(
                     descriptor: descriptor,
                     text: sourceLength == 0 ? nil : bytes.baseAddress!.advanced(by: sourceOffset),
-                    styles: styleCount == 0 ? nil : UnsafePointer(spans.baseAddress!)
+                    styles: styleCount == 0 ? nil : UnsafePointer(spans.baseAddress!),
+                    overlay: overlay,
+                    overlayStyles: overlayStyles
                 ) else { return false }
                 return sendFrame(source, transaction: nextTransaction)
             }

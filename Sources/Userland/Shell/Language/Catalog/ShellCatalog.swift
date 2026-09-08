@@ -17,9 +17,20 @@ public struct ShellCatalog {
     public static let commandCapacity   = 32
     public static let namespaceCapacity = 8
 
-    private var entries    = InlineArray<32, ShellCommandDescriptor?>(repeating: nil)
-    private var owners     = InlineArray<32, UInt8>(repeating: 0)
-    private var receivers  = InlineArray<8, ShellNamespaceDescriptor?>(repeating: nil)
+    /// One provider, as an index rather than as a copy of what it says.
+    ///
+    /// The catalog used to hold every descriptor it was handed, which made it
+    /// thousands of bytes and made everything that carried one thousands of
+    /// bytes heavier. A provider already knows its own commands; this
+    /// remembers who to ask and where its commands begin.
+    private struct Entry {
+        let receiver: ShellNamespaceDescriptor
+        let count   : Int
+        let first   : Int
+        let command : (Int) -> ShellCommandDescriptor?
+    }
+
+    private var providers = InlineArray<8, Entry?>(repeating: nil)
 
     public private(set) var count          = 0
     public private(set) var namespaceCount = 0
@@ -32,21 +43,26 @@ public struct ShellCatalog {
     /// refused: a half-merged provider would offer commands nothing can name.
     public mutating func merge<Provider: ShellCommandProvider>(_ provider: Provider.Type) -> Bool {
         let receiver = Provider.namespace
-        guard namespaceCount < receivers.count,
+        guard namespaceCount < providers.count,
               Provider.commandCount >= 0,
-              count + Provider.commandCount <= entries.count,
+              count + Provider.commandCount <= Self.commandCapacity,
               namespaceIndex(named: receiver.name) == nil
         else { return false }
 
-        let owner = namespaceCount
+        // Every command is read once here, so a provider that files one under
+        // somebody else's receiver is refused before anything is recorded.
         for index in 0..<Provider.commandCount {
             guard let descriptor = Provider.command(at: index),
                   same(descriptor.signature.namespace, receiver.name)
             else { return false }
-            entries[count + index] = descriptor
-            owners[count + index] = UInt8(owner)
         }
-        receivers[owner] = receiver
+
+        providers[namespaceCount] = Entry(
+            receiver: receiver,
+            count   : Provider.commandCount,
+            first   : count,
+            command : Provider.command(at:)
+        )
         namespaceCount += 1
         count += Provider.commandCount
         return true
@@ -54,33 +70,43 @@ public struct ShellCatalog {
 
     public func command(at index: Int) -> ShellCommandDescriptor? {
         guard index >= 0, index < count else { return nil }
-        return entries[index]
+        for position in 0..<namespaceCount {
+            guard let entry = providers[position] else { continue }
+            if index >= entry.first, index < entry.first + entry.count {
+                return entry.command(index - entry.first)
+            }
+        }
+        return nil
     }
 
     /// The receiver that answers the command at `index`.
     public func receiver(ofCommandAt index: Int) -> ShellNamespaceDescriptor? {
         guard index >= 0, index < count else { return nil }
-        return receivers[Int(owners[index])]
+        for position in 0..<namespaceCount {
+            guard let entry = providers[position] else { continue }
+            if index >= entry.first, index < entry.first + entry.count { return entry.receiver }
+        }
+        return nil
     }
 
     public func namespace(at index: Int) -> ShellNamespaceDescriptor? {
         guard index >= 0, index < namespaceCount else { return nil }
-        return receivers[index]
+        return providers[index]?.receiver
     }
 
     /// The receivers, as the parser needs them: names only, in merge order.
     public func namespaceSet() -> ShellNamespaceSet {
         var set = ShellNamespaceSet()
         for index in 0..<namespaceCount {
-            guard let receiver = receivers[index], set.insert(receiver.name) else { break }
+            guard let entry = providers[index], set.insert(entry.receiver.name) else { break }
         }
         return set
     }
 
     public func namespaceIndex(named name: StaticString) -> Int? {
         for index in 0..<namespaceCount {
-            guard let receiver = receivers[index] else { continue }
-            if same(receiver.name, name) { return index }
+            guard let entry = providers[index] else { continue }
+            if same(entry.receiver.name, name) { return index }
         }
         return nil
     }
@@ -91,7 +117,7 @@ public struct ShellCatalog {
         _ body: (UnsafeBufferPointer<TypedShellSignature?>) -> Result
     ) -> Result {
         var table = InlineArray<32, TypedShellSignature?>(repeating: nil)
-        for index in 0..<count { table[index] = entries[index]?.signature }
+        for index in 0..<count { table[index] = command(at: index)?.signature }
         return table.span.withUnsafeBufferPointer { all in
             body(UnsafeBufferPointer(start: all.baseAddress!, count: count))
         }

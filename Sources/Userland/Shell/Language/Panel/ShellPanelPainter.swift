@@ -9,6 +9,11 @@ import ReixABI
 
 public struct ShellPanelGeometry: Equatable {
     public let rows      : UInt16
+
+    /// The width the overlay is declared to be, which is one more than the box
+    /// is drawn. A row exactly as wide as its box wraps by itself, and then
+    /// the newline that ends it counts a second time: the frame would be
+    /// refused for being twice as tall as it says.
     public let columns   : UInt16
     public let byteCount : Int
     public let spanCount : Int
@@ -104,7 +109,8 @@ public enum ShellPanelPainter {
             spanCount += 1
         }
 
-        let width = min(max(columns, 1), maximumColumns)
+        // One column is left over so a full row never wraps on its own.
+        let width = min(columns > 1 ? columns - 1 : 1, maximumColumns)
 
         // One line, no box: a terminal this small is better served by the
         // names than by the frame around them.
@@ -124,7 +130,7 @@ public enum ShellPanelPainter {
             guard !failed, columnsWritten > 0 else { return nil }
             return ShellPanelGeometry(
                 rows: 1,
-                columns: UInt16(min(columnsWritten, Int(columns))),
+                columns: UInt16(min(columnsWritten + 1, Int(columns))),
                 byteCount: offset,
                 spanCount: spanCount,
                 shownRows: panel.count
@@ -197,7 +203,7 @@ public enum ShellPanelPainter {
         guard !failed else { return nil }
         return ShellPanelGeometry(
             rows: UInt16(shown + 2),
-            columns: width,
+            columns: width + 1,
             byteCount: offset,
             spanCount: spanCount,
             shownRows: shown

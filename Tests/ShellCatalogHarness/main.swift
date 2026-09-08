@@ -388,6 +388,20 @@ private func testReachingIntoValuesStillReads() {
     require(parses("list.map { $0.name }.compactMap { $0 }"), "two methods in a row")
 }
 
+/// What the editor costs to hold, which is a thing worth knowing before a
+/// terminal finds out for you.
+///
+/// The catalog was once carried by value inside the editor, which made an
+/// editor eleven kilobytes and a test that holds six of them a stack
+/// overflow. These ceilings are stated so the next such change is a failing
+/// check rather than a crash.
+private func testNothingOnTheStackIsEnormous() {
+    require(MemoryLayout<ShellCatalog>.size <= 1024, "the catalog indexes its providers, it does not copy them")
+    require(MemoryLayout<ShellLineEditor>.size <= 6144, "one editor stays inside six kilobytes")
+    require(MemoryLayout<ShellAnalysisSnapshot>.size <= 1024, "one reading of a revision stays inside a kilobyte")
+    require(MemoryLayout<ShellTokenStream>.size <= 2048, "and so does the token stream, twice over")
+}
+
 /// What the shell would offer at the cursor, against its own receivers.
 private func testCompletionOffersWhatTheShellHas() {
     let catalog = ShellPipeline.merged()
@@ -509,6 +523,7 @@ testModulesMerge()
 testMergeRefusesWhatItCannotName()
 testAnalysisReadsTheRealCatalog()
 testEveryRoleHasAColour()
+testNothingOnTheStackIsEnormous()
 testCompletionOffersWhatTheShellHas()
 testSignatureTableIsTheCatalog()
 testSpellingsResolveUniquely()
@@ -525,4 +540,4 @@ testWrittenArgumentsMayBeBareWords()
 
 // `print` would reach Reix's freestanding `putchar`, which has no console
 // here. The harness says how it went through the file descriptor instead.
-FileHandle.standardOutput.write(Data("ShellCatalogHarness: 17 checks passed\n".utf8))
+FileHandle.standardOutput.write(Data("ShellCatalogHarness: 18 checks passed\n".utf8))

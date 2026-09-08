@@ -30,16 +30,23 @@ public struct ShellPanelRow {
     /// One line about this row, shown at the foot while it is the selected one.
     public let summary  : StaticString
 
+    /// What to write after the name when this row is accepted, so the line
+    /// reads as it should. The row carries it because the row is what gets
+    /// accepted; nothing else has to be kept alive beside the box.
+    public let suffix   : StaticString
+
     public init?(
         name     : StaticString,
         detail   : StaticString = "",
         summary  : StaticString = "",
+        suffix   : StaticString = "",
         sensitive: Bool = false,
         role     : ReixTextSurfaceStyleRole = .plain
     ) {
         guard name.utf8CodeUnitCount > 0, name.utf8CodeUnitCount <= Self.nameCapacity else { return nil }
         self.detail = detail
         self.summary = summary
+        self.suffix = suffix
         self.sensitive = sensitive
         self.role = role
         for index in 0..<name.utf8CodeUnitCount { self.name[index] = name.utf8Start[index] }
@@ -51,12 +58,14 @@ public struct ShellPanelRow {
         count    : Int,
         detail   : StaticString = "",
         summary  : StaticString = "",
+        suffix   : StaticString = "",
         sensitive: Bool = false,
         role     : ReixTextSurfaceStyleRole = .plain
     ) {
         guard count > 0, count <= Self.nameCapacity else { return nil }
         self.detail = detail
         self.summary = summary
+        self.suffix = suffix
         self.sensitive = sensitive
         self.role = role
         for index in 0..<count { self.name[index] = bytes[index] }

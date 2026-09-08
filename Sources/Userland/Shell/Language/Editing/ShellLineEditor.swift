@@ -90,6 +90,13 @@ public struct ShellLineEditor: ~Copyable {
     private let allocationFault      : ShellEditorAllocationFault?
     private var allocationCounts     = InlineArray<4, Int>(repeating: 0)
 
+    /// The box, when one is open, and the candidates behind it.
+    ///
+    /// Selecting in it changes nothing: the line moves when a candidate is
+    /// accepted and not one keystroke before.
+    private var panel       : ShellPanel?
+    private var panelPrefix = Span(start: 0, count: 0)
+
     /// What tells a receiver or a verb from a plain word. Held here because it
     /// is read on every keystroke and it is the same catalog every time.
     private let catalog: ShellCatalog
@@ -118,12 +125,16 @@ public struct ShellLineEditor: ~Copyable {
     /// Which revision of the scene the next frame is about.
     public var revision: UInt32 { revisionCounter }
 
+    public var isPanelOpen: Bool { panel != nil }
+
     public mutating func apply(_ event: ReixInputRecord) -> ShellEditorUpdate {
         pendingSequence = event.sequence
         if pasteActive { return applyPaste(event) }
         if event.kind == .resize { return resize(event) }
         if event.kind == .pasteBegin { return beginPaste() }
         if event.kind == .insert || event.kind == .textChunk || event.kind == .compositionCommit {
+            // What the box offered was about the line as it was.
+            closePanel()
             return insertEvent(event)
         }
         if event.kind == .focusLost || event.kind == .stateReset { return refused() }
@@ -205,30 +216,63 @@ public struct ShellLineEditor: ~Copyable {
         }
         let snapshot = analysis()
         appendInputSpans(snapshot, selection: selection, spans: &spans, count: &spanCount)
-        let frame = frameMetadata(
-            pending: pending,
-            cursorPosition: cursorPosition,
-            viewportRows: viewportRows
-        )
-        let result = withFrameText(pending: pending) { text in
+
+        // The panel takes the rows the input is not using, and none of the
+        // ones it is.
+        let room = visibleRows > viewportRows ? visibleRows - viewportRows : 0
+        let result = withUnsafeTemporaryAllocation(
+            of: UInt8.self,
+            capacity: ShellPanelPainter.byteCapacity
+        ) { overlayBytes in
             withUnsafeTemporaryAllocation(
                 of: ReixTextSurfaceStyleSpan.self,
-                capacity: spanCount
-            ) { styles in
-                for index in 0..<spanCount { styles[index] = spans[index]! }
-                return body(
-                    ShellEditorFrameSource(
-                        frame: frame,
-                        text0: text.0,
-                        text0Length: text.1,
-                        text1: text.2,
-                        text1Length: text.3,
-                        text2: text.4,
-                        text2Length: text.5,
-                        styles: spanCount == 0 ? nil : UnsafePointer(styles.baseAddress!),
-                        styleCount: spanCount
+                capacity: ShellPanelPainter.spanCapacity
+            ) { overlaySpans in
+                var geometry: ShellPanelGeometry?
+                if let panel, room > 0 {
+                    geometry = ShellPanelPainter.paint(
+                        panel,
+                        columns: columns,
+                        rows: room,
+                        into: overlayBytes.baseAddress!,
+                        spans: overlaySpans.baseAddress!
                     )
+                }
+                let panelRows = geometry?.rows ?? 0
+                let frame = frameMetadata(
+                    pending: pending,
+                    cursorPosition: cursorPosition,
+                    viewportRows: viewportRows + panelRows,
+                    panelRow: panelRows == 0 ? 0 : viewportRows,
+                    panel: geometry
                 )
+                return withFrameText(pending: pending) { text in
+                    withUnsafeTemporaryAllocation(
+                        of: ReixTextSurfaceStyleSpan.self,
+                        capacity: spanCount
+                    ) { styles in
+                        for index in 0..<spanCount { styles[index] = spans[index]! }
+                        return body(
+                            ShellEditorFrameSource(
+                                frame: frame,
+                                text0: text.0,
+                                text0Length: text.1,
+                                text1: text.2,
+                                text1Length: text.3,
+                                text2: text.4,
+                                text2Length: text.5,
+                                styles: spanCount == 0 ? nil : UnsafePointer(styles.baseAddress!),
+                                styleCount: spanCount,
+                                overlay: geometry == nil ? nil : UnsafePointer(overlayBytes.baseAddress!),
+                                overlayLength: geometry?.byteCount ?? 0,
+                                overlayStyles: (geometry?.spanCount ?? 0) == 0
+                                    ? nil
+                                    : UnsafePointer(overlaySpans.baseAddress!),
+                                overlayStyleCount: geometry?.spanCount ?? 0
+                            )
+                        )
+                    }
+                }
             }
         }
         if result { self.pending = nil }
@@ -383,6 +427,39 @@ public struct ShellLineEditor: ~Copyable {
     }
 
     private mutating func apply(_ intent: ShellEditorIntent) -> ShellEditorUpdate {
+        // While the box is open the keys that move a selection belong to it,
+        // and nothing they do reaches the line.
+        if panel != nil {
+            switch intent {
+                case .complete:
+                    panel?.step(1)
+                    pending = .snapshot
+                    return update(.editing, true)
+                case .completePrevious, .moveUp:
+                    panel?.step(-1)
+                    pending = .snapshot
+                    return update(.editing, true)
+                case .moveDown:
+                    panel?.step(1)
+                    pending = .snapshot
+                    return update(.editing, true)
+                case .pageUp:
+                    panel?.step(-ShellPanel.rowCapacity)
+                    pending = .snapshot
+                    return update(.editing, true)
+                case .pageDown:
+                    panel?.step(ShellPanel.rowCapacity)
+                    pending = .snapshot
+                    return update(.editing, true)
+                case .cancel:
+                    closePanel()
+                    return update(.editing, true)
+                case .submit, .submitOrNewline:
+                    return acceptPanel() ? update(.editing, true) : refused()
+                default:
+                    closePanel()
+            }
+        }
         if codeEditing {
             switch intent {
                 case .historyPrevious, .historyNext:
@@ -423,7 +500,14 @@ public struct ShellLineEditor: ~Copyable {
                 return cancel()
             case .eof:
                 return count == 0 ? update(.eof, false) : refused()
-            case .complete:
+            case .complete, .completePrevious:
+                // A Tab with nothing but blanks behind it on its line is an
+                // indent, in a sheet. Anywhere else it is a question about
+                // what would fit.
+                if codeEditing, atLineIndent() {
+                    return insertIndent() ? update(.editing, true) : refused()
+                }
+                if openPanel() { return update(.editing, true) }
                 return codeEditing && insertIndent() ? update(.editing, true) : refused()
             default:
                 break
@@ -494,7 +578,7 @@ public struct ShellLineEditor: ~Copyable {
             case .pageDown: return scroll(up: false)
             case .undo: return undo()
             case .redo: return redo()
-            case .cancel, .eof, .complete: return false
+            case .cancel, .eof, .complete, .completePrevious: return false
         }
     }
 
@@ -1169,7 +1253,9 @@ public struct ShellLineEditor: ~Copyable {
     private func frameMetadata(
         pending: PendingChange,
         cursorPosition: ReixTextLayout.Position,
-        viewportRows: UInt16
+        viewportRows: UInt16,
+        panelRow: UInt16 = 0,
+        panel: ShellPanelGeometry? = nil
     ) -> ShellEditorFrame {
         let prefixBytes = codeEditing ? 0 : Self.promptBytes
         let kind        : ReixTextSurfaceFrameKind
@@ -1206,8 +1292,114 @@ public struct ShellLineEditor: ~Copyable {
             cursorRow: cursorPosition.row,
             cursorColumn: cursorPosition.column,
             viewportRow: viewportRow,
-            viewportRows: viewportRows
+            viewportRows: viewportRows,
+            overlayRow: panelRow,
+            overlayColumn: 0,
+            overlayRows: panel?.rows ?? 0,
+            overlayColumns: panel?.columns ?? 0
         )
+    }
+
+    /// Opens the box on what would fit where the cursor is.
+    ///
+    /// Nothing to offer is not a failure of the box; it is an answer, and the
+    /// caller decides what to do with a Tab that has nothing to complete.
+    private mutating func openPanel() -> Bool {
+        let snapshot = analysis()
+        let offered  = withUnsafePointer(to: catalog) { table in
+            withBytes { source, length in
+                ShellCompletionEngine.complete(
+                    for    : snapshot,
+                    source : source,
+                    count  : length,
+                    catalog: table.pointee
+                )
+            }
+        }
+        guard offered.count > 0 else { return false }
+        panelPrefix = snapshot.context.prefix
+        panel = ShellPanel.candidates(offered, title: Self.title(for: snapshot.context.subject))
+        pending = .snapshot
+        return true
+    }
+
+    /// Whether nothing but blanks stands between the cursor and the start of
+    /// its line.
+    private mutating func atLineIndent() -> Bool {
+        let position = cursor
+        return withBytes { source, _ in
+            var index = position
+            while index > 0 {
+                let byte = source[index - 1]
+                if byte == 0x0A { return true }
+                if byte != 0x20 && byte != 0x09 { return false }
+                index -= 1
+            }
+            return true
+        }
+    }
+
+    private mutating func closePanel() {
+        guard panel != nil else { return }
+        panel = nil
+        panelPrefix = Span(start: 0, count: 0)
+        pending = .snapshot
+    }
+
+    /// Writes the selected candidate over what was typed of it.
+    private mutating func acceptPanel() -> Bool {
+        guard let candidate = panel?.selection else {
+            closePanel()
+            return false
+        }
+        let start = panelPrefix.start
+        guard start >= 0, start <= cursor, cursor <= count else {
+            closePanel()
+            return false
+        }
+        if cursor > start {
+            selectionAnchor = start
+            selectionHead = cursor
+        }
+        var written = candidate.withName { bytes, length in insertRun(bytes, length) }
+        if written, candidate.suffix.utf8CodeUnitCount > 0 {
+            written = insertRun(candidate.suffix.utf8Start, candidate.suffix.utf8CodeUnitCount)
+        }
+        closePanel()
+        return written
+    }
+
+    /// Inserts a run of bytes through the ordinary insertion path, in the
+    /// sixteen-byte pieces an input record carries, so the journal, the patch
+    /// and the selection all behave as if it had been typed.
+    private mutating func insertRun(
+        _ bytes : UnsafePointer<UInt8>,
+        _ length: Int
+    ) -> Bool {
+        var offset = 0
+        while offset < length {
+            let chunk = min(ReixInputProtocol.maximumPayload, length - offset)
+            guard let record = ReixInputRecord(
+                kind    : .insert,
+                sequence: pendingSequence,
+                bytes   : bytes.advanced(by: offset),
+                count   : chunk
+            ) else { return false }
+            guard insertEvent(record).action == .editing else { return false }
+            offset += chunk
+        }
+        return true
+    }
+
+    private static func title(for subject: ShellCompletionSubject) -> StaticString {
+        switch subject {
+            case .none: return "nothing"
+            case .receiverOrCommand: return "receivers and verbs"
+            case .command: return "verbs"
+            case .label: return "labels"
+            case .member: return "members"
+            case .value: return "values"
+        }
     }
 
     /// The analysis of the line as it stands, about this revision.
@@ -1218,15 +1410,18 @@ public struct ShellLineEditor: ~Copyable {
     private mutating func analysis() -> ShellAnalysisSnapshot {
         let position = cursor
         let stamp    = revisionCounter
-        let table    = catalog
-        return withBytes { source, count in
-            ShellAnalyzer.analyze(
-                source,
-                count   : count,
-                cursor  : position,
-                revision: stamp,
-                catalog : table
-            )
+        // By pointer, not by copy: the catalog is thousands of bytes and this
+        // runs on every frame.
+        return withUnsafePointer(to: catalog) { table in
+            withBytes { source, count in
+                ShellAnalyzer.analyze(
+                    source,
+                    count   : count,
+                    cursor  : position,
+                    revision: stamp,
+                    catalog : table.pointee
+                )
+            }
         }
     }
 

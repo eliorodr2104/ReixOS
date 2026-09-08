@@ -22,17 +22,28 @@ public struct ShellEditorFrame {
     public let cursorColumn  : UInt16
     public let viewportRow   : UInt16
     public let viewportRows  : UInt16
+
+    /// Where the panel sits inside the viewport, and how much of it it takes.
+    /// Zero rows is no panel at all.
+    public let overlayRow    : UInt16
+    public let overlayColumn : UInt16
+    public let overlayRows   : UInt16
+    public let overlayColumns: UInt16
 }
 
 /// A scoped view. Its pointers are valid only while the producer closure runs.
 public struct ShellEditorFrameSource {
-    public let frame      : ShellEditorFrame
-    public let text0      : UnsafePointer<UInt8>?
-    public let text0Length: Int
-    public let text1      : UnsafePointer<UInt8>?
-    public let text1Length: Int
-    public let text2      : UnsafePointer<UInt8>?
-    public let text2Length: Int
-    public let styles     : UnsafePointer<ReixTextSurfaceStyleSpan>?
-    public let styleCount : Int
+    public let frame            : ShellEditorFrame
+    public let text0            : UnsafePointer<UInt8>?
+    public let text0Length      : Int
+    public let text1            : UnsafePointer<UInt8>?
+    public let text1Length      : Int
+    public let text2            : UnsafePointer<UInt8>?
+    public let text2Length      : Int
+    public let styles           : UnsafePointer<ReixTextSurfaceStyleSpan>?
+    public let styleCount       : Int
+    public let overlay          : UnsafePointer<UInt8>?
+    public let overlayLength    : Int
+    public let overlayStyles    : UnsafePointer<ReixTextSurfaceStyleSpan>?
+    public let overlayStyleCount: Int
 }

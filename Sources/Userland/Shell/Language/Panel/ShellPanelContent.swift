@@ -27,6 +27,7 @@ public extension ShellPanel {
                     count    : count,
                     detail   : candidate.detail,
                     summary  : candidate.summary,
+                    suffix   : candidate.suffix,
                     sensitive: candidate.sensitive,
                     role     : role(of: candidate.kind)
                 )
