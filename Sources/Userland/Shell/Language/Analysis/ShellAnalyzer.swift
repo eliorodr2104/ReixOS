@@ -83,6 +83,7 @@ public enum ShellAnalyzer {
             guard bindingCount < bindings.count else { return }
             bindings[bindingCount] = token.span
             bindingCount += 1
+            snapshot.remember(ShellSemanticSpan(role: .variable, start: token.start, count: token.count))
         }
 
         func isBinding(_ token: ShellToken) -> Bool {

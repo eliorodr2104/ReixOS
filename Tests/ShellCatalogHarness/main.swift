@@ -388,6 +388,59 @@ private func testReachingIntoValuesStillReads() {
     require(parses("list.map { $0.name }.compactMap { $0 }"), "two methods in a row")
 }
 
+/// What the shell would offer at the cursor, against its own receivers.
+private func testCompletionOffersWhatTheShellHas() {
+    let catalog = ShellPipeline.merged()
+
+    func offered(_ source: String) -> [String] {
+        let bytes = Array(source.utf8)
+        return bytes.withUnsafeBufferPointer { buffer in
+            let snapshot = ShellAnalyzer.analyze(
+                buffer.baseAddress!,
+                count   : buffer.count,
+                cursor  : buffer.count,
+                revision: 1,
+                catalog : catalog
+            )
+            let set = ShellCompletionEngine.complete(
+                for    : snapshot,
+                source : buffer.baseAddress!,
+                count  : buffer.count,
+                catalog: catalog
+            )
+            var names: [String] = []
+            for index in 0..<set.count {
+                guard let candidate = set.candidate(at: index) else { continue }
+                names.append(candidate.withName { bytes, count in
+                    String(decoding: UnsafeBufferPointer(start: bytes, count: count), as: UTF8.self)
+                })
+            }
+            return names
+        }
+    }
+
+    let head = offered("")
+    require(head.contains("fileSystem"), "a receiver is offered at the head of a line")
+    require(head.contains("shell"), "and so is the other one")
+
+    let verbs = offered("fileSystem.c")
+    require(verbs.contains("compact"), "a receiver's verbs are offered after its dot")
+    require(verbs.contains("createFile"), "including the longer ones")
+    require(!verbs.contains("read"), "and only the ones that begin with what was typed")
+
+    let labels = offered("fileSystem.write(")
+    require(labels == ["at", "text"], "a command's labels, in the order it takes them")
+
+    let members = offered("list.")
+    require(members.contains("name"), "a listing's elements have names")
+    require(members.contains("filter"), "and a sequence has methods")
+
+    // `disk.read` insists on its receiver, so the bare `read` on offer is the
+    // file system's and there is only one of it.
+    let bare = offered("read")
+    require(bare == ["read"], "one bare read, the one that answers without a receiver")
+}
+
 /// Every role the shell can emit has to mean something to the backend, in
 /// both profiles. A role nobody painted would be an invisible token.
 private func testEveryRoleHasAColour() {
@@ -456,6 +509,7 @@ testModulesMerge()
 testMergeRefusesWhatItCannotName()
 testAnalysisReadsTheRealCatalog()
 testEveryRoleHasAColour()
+testCompletionOffersWhatTheShellHas()
 testSignatureTableIsTheCatalog()
 testSpellingsResolveUniquely()
 testEveryCommandNamesItsAuthority()
@@ -471,4 +525,4 @@ testWrittenArgumentsMayBeBareWords()
 
 // `print` would reach Reix's freestanding `putchar`, which has no console
 // here. The harness says how it went through the file descriptor instead.
-FileHandle.standardOutput.write(Data("ShellCatalogHarness: 16 checks passed\n".utf8))
+FileHandle.standardOutput.write(Data("ShellCatalogHarness: 17 checks passed\n".utf8))

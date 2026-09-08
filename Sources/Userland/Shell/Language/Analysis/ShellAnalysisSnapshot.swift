@@ -20,6 +20,7 @@ public struct ShellAnalysisSnapshot {
 
     private var spans       = InlineArray<64, ShellSemanticSpan?>(repeating: nil)
     private var findings    = InlineArray<8, ShellDiagnostic?>(repeating: nil)
+    private var bound       = InlineArray<8, ShellSemanticSpan?>(repeating: nil)
 
     public let revision: UInt32
     public internal(set) var completeness: ShellCompleteness = .complete
@@ -33,6 +34,10 @@ public struct ShellAnalysisSnapshot {
     public private(set) var spanCount       = 0
     public private(set) var diagnosticCount = 0
 
+    /// The names `let` gave a value in this revision, in the order they were
+    /// written. What completion offers where a value goes.
+    public private(set) var bindingCount    = 0
+
     public init(revision: UInt32) {
         self.revision = revision
     }
@@ -43,6 +48,11 @@ public struct ShellAnalysisSnapshot {
     public func span(at index: Int) -> ShellSemanticSpan? {
         guard index >= 0, index < spanCount else { return nil }
         return spans[index]
+    }
+
+    public func binding(at index: Int) -> ShellSemanticSpan? {
+        guard index >= 0, index < bindingCount else { return nil }
+        return bound[index]
     }
 
     public func diagnostic(at index: Int) -> ShellDiagnostic? {
@@ -78,6 +88,12 @@ public struct ShellAnalysisSnapshot {
         }
         spans[spanCount] = span
         spanCount += 1
+    }
+
+    internal mutating func remember(_ binding: ShellSemanticSpan) {
+        guard bindingCount < bound.count else { return }
+        bound[bindingCount] = binding
+        bindingCount += 1
     }
 
     internal mutating func append(_ diagnostic: ShellDiagnostic) {
