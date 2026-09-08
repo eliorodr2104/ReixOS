@@ -52,7 +52,9 @@ public extension ShellPanel {
         }
         panel.append(ShellPanelRow(
             name   : "answers",
-            detail : ShellCompletionEngine.typeName(descriptor.signature.result),
+            detail : descriptor.schema.isEmptyType
+                ? ShellCompletionEngine.typeName(descriptor.signature.result)
+                : descriptor.schema.name,
             summary: descriptor.summary,
             role   : .member
         ))
@@ -82,16 +84,16 @@ public extension ShellPanel {
             guard let member = ShellCatalog.member(of: schema, at: index) else { continue }
             panel.append(ShellPanelRow(
                 name   : member.name,
-                detail : ShellCompletionEngine.typeName(member.type),
+                detail : member.type.name,
                 summary: member.summary,
                 role   : .member
             ))
         }
-        for index in 0..<ShellCatalog.methodCount {
-            guard let method = ShellCatalog.method(at: index) else { continue }
+        for index in 0..<ShellCatalog.methodCount(of: schema) {
+            guard let method = ShellCatalog.method(of: schema, at: index) else { continue }
             panel.append(ShellPanelRow(
                 name   : method.name,
-                detail : ShellCompletionEngine.typeName(method.result),
+                detail : method.result.name,
                 summary: method.summary,
                 role   : .member
             ))

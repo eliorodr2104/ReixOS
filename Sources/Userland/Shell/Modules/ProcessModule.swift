@@ -29,7 +29,7 @@ public enum ProcessModule: ShellModule {
                     verb      : "list",
                     signature : TypedShellSignature(namespace: "process", name: "list", result: .sequence, namespaceRequired: true),
                     capability: .profiler,
-                    schema    : .process,
+                    schema    : .processes,
                     summary   : "the live process table"
                 )
             case .processes:
@@ -38,7 +38,7 @@ public enum ProcessModule: ShellModule {
                     verb      : "list",
                     signature : TypedShellSignature(namespace: "process", name: "processes", result: .sequence),
                     capability: .profiler,
-                    schema    : .process,
+                    schema    : .processes,
                     summary   : "the live process table, without naming the receiver"
                 )
             case .spawn:

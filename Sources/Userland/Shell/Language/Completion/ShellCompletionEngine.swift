@@ -111,17 +111,17 @@ public enum ShellCompletionEngine {
                     offer(ShellCompletion(
                         kind   : .member,
                         name   : member.name,
-                        detail : typeName(member.type),
+                        detail : member.type.name,
                         summary: member.summary,
                         rank   : 0
                     ))
                 }
-                for index in 0..<ShellCatalog.methodCount {
-                    guard let method = ShellCatalog.method(at: index) else { continue }
+                for index in 0..<ShellCatalog.methodCount(of: context.schema) {
+                    guard let method = ShellCatalog.method(of: context.schema, at: index) else { continue }
                     offer(ShellCompletion(
                         kind   : .method,
                         name   : method.name,
-                        detail : typeName(method.result),
+                        detail : method.result.name,
                         summary: method.summary,
                         rank   : 1
                     ))
@@ -140,7 +140,11 @@ public enum ShellCompletionEngine {
         ShellCompletion(
             kind     : .command,
             name     : descriptor.signature.name,
-            detail   : typeName(descriptor.signature.result),
+            // What it answers with, spelled the way the language spells it:
+            // `[File]` and not the word `sequence`.
+            detail   : descriptor.schema.isEmptyType
+                ? typeName(descriptor.signature.result)
+                : descriptor.schema.name,
             summary  : descriptor.summary,
             sensitive: descriptor.sensitive,
             rank     : rank

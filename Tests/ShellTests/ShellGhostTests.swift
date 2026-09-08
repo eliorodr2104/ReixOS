@@ -38,7 +38,7 @@ private enum GhostFiles: ShellCommandProvider {
                     code     : 0,
                     verb     : "list",
                     signature: TypedShellSignature(namespace: "fileSystem", name: "list", result: .sequence),
-                    schema   : .file,
+                    schema   : .files,
                     summary  : "what is here"
                 )
             default:

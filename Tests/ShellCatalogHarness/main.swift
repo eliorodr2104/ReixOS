@@ -445,9 +445,16 @@ private func testCompletionOffersWhatTheShellHas() {
     let labels = offered("fileSystem.write(")
     require(labels == ["at", "text"], "a command's labels, in the order it takes them")
 
-    let members = offered("list.")
-    require(members.contains("name"), "a listing's elements have names")
-    require(members.contains("filter"), "and a sequence has methods")
+    // `list` answers with `[File]`, so what it offers is what a list offers.
+    let listing = offered("list.")
+    require(listing.contains("count"), "a list knows how many it holds")
+    require(listing.contains("filter"), "and what can be done to it")
+    require(!listing.contains("isFolder"), "but not what its elements are")
+
+    // One of them, inside a closure over it, is a file.
+    let element = offered("list.filter { $0.")
+    require(element.contains("isFolder"), "an element of a listing is a file")
+    require(element.contains("name"), "and files have names")
 
     // `disk.read` insists on its receiver, so the bare `read` on offer is the
     // file system's and there is only one of it.

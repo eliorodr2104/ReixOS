@@ -43,8 +43,13 @@ public enum ShellAnalyzer {
         // Whether the value just read was a plain word. `memo.txt` in an
         // argument is one name, by the same rule the evaluator resolves by.
         var lastValueWasWord = false
-        var bindings         = InlineArray<8, Span?>(repeating: nil)
-        var bindingCount     = 0
+        // What `$0` stands for while a closure is open, and what the value was
+        // before it opened. One level: a closure inside a closure keeps the
+        // outer element, which is what `sorted` and `filter` ever need.
+        var closureElement = ShellTypeSchema.none
+        var beforeClosure  = ShellTypeSchema.none
+        var bindings       = InlineArray<8, Span?>(repeating: nil)
+        var bindingCount   = 0
 
         // What would be completed if the cursor sat right here, kept current
         // as the walk goes so open space has an answer too.
@@ -193,9 +198,19 @@ public enum ShellAnalyzer {
                     if token.state == .invalid { note(.unbalanced, token) }
                     after(.value)
 
-                case .openBrace, .closeBrace:
+                case .openBrace:
                     mark(token, token.state == .invalid ? .error : .closure)
                     if token.state == .invalid { note(.unbalanced, token) }
+                    // Inside a closure over a list, `$0` is one of them.
+                    closureElement = schema.elementType
+                    beforeClosure = schema
+                    after(.value)
+
+                case .closeBrace:
+                    mark(token, token.state == .invalid ? .error : .closure)
+                    if token.state == .invalid { note(.unbalanced, token) }
+                    schema = beforeClosure
+                    closureElement = .none
                     after(.value)
 
                 case .text:
@@ -227,6 +242,7 @@ public enum ShellAnalyzer {
                 case .placeholder:
                     mark(token, .variable)
                     lastValueWasWord = false
+                    schema = closureElement
                     here(.value, token)
                     after(.value)
 
@@ -276,6 +292,9 @@ public enum ShellAnalyzer {
                             mark(next, unresolved(next, .unknownMember))
                         }
                         here(.member, next)
+                        // Reaching into a value gives another value, and the
+                        // next dot is about that one.
+                        schema = memberType(source, next.span, of: schema)
                         after(.value)
                     }
 
@@ -414,22 +433,44 @@ public enum ShellAnalyzer {
     /// A member of the value, or one of the methods the evaluator answers on
     /// any value. A shape nobody named yet takes whatever it is given: there
     /// is nothing to hold it to.
+    /// A member or a method of this type, and of no other.
+    ///
+    /// A value whose type nobody could work out takes whatever it is given:
+    /// there is nothing to hold it to.
     private static func knowsMember(
         _ catalog : borrowing ShellCatalog,
         _ source  : UnsafePointer<UInt8>,
         _ span    : Span,
           of schema: ShellTypeSchema
     ) -> Bool {
-        for index in 0..<ShellCatalog.methodCount {
-            guard let method = ShellCatalog.method(at: index) else { continue }
-            if spells(source, span, method.name) { return true }
-        }
-        guard schema != .none else { return true }
+        guard !schema.isEmptyType else { return true }
         for index in 0..<ShellCatalog.memberCount(of: schema) {
             guard let member = ShellCatalog.member(of: schema, at: index) else { continue }
             if spells(source, span, member.name) { return true }
         }
+        for index in 0..<ShellCatalog.methodCount(of: schema) {
+            guard let method = ShellCatalog.method(of: schema, at: index) else { continue }
+            if spells(source, span, method.name) { return true }
+        }
         return false
+    }
+
+    /// What reaching into a value gives back, so the next dot can be offered
+    /// against it.
+    private static func memberType(
+        _ source  : UnsafePointer<UInt8>,
+        _ span    : Span,
+          of schema: ShellTypeSchema
+    ) -> ShellTypeSchema {
+        for index in 0..<ShellCatalog.memberCount(of: schema) {
+            guard let member = ShellCatalog.member(of: schema, at: index) else { continue }
+            if spells(source, span, member.name) { return member.type }
+        }
+        for index in 0..<ShellCatalog.methodCount(of: schema) {
+            guard let method = ShellCatalog.method(of: schema, at: index) else { continue }
+            if spells(source, span, method.name) { return method.result }
+        }
+        return .none
     }
 
     // MARK: Bytes

@@ -21,7 +21,7 @@ private enum CompletionFiles: ShellCommandProvider {
                     code     : 0,
                     verb     : "list",
                     signature: TypedShellSignature(namespace: "fileSystem", name: "list", result: .sequence),
-                    schema   : .file,
+                    schema   : .files,
                     summary  : "what is here"
                 )
             case 1:
@@ -163,14 +163,27 @@ struct ShellCompletionTests {
         #expect(labels.kinds == [.label, .label])
     }
 
-    @Test("After a value's dot, what that value is made of")
+    @Test("A list answers about the list, and its elements about themselves")
     func members() {
-        let members = offered("list.")
-        #expect(members.names.contains("name"))
-        #expect(members.names.contains("isFile"))
-        #expect(members.names.contains("map"))
-        #expect(members.kinds.contains(.member))
-        #expect(members.kinds.contains(.method))
+        // `list` is `[File]`. What it answers to is what a list answers to.
+        let list = offered("list.")
+        #expect(list.names.contains("count"))
+        #expect(list.names.contains("isEmpty"))
+        #expect(list.names.contains("first"))
+        #expect(list.names.contains("filter"))
+        #expect(!list.names.contains("isFolder"), "that belongs to what is in it")
+        #expect(list.kinds.contains(.member))
+        #expect(list.kinds.contains(.method))
+
+        // Inside a closure over it, `$0` is one file.
+        let element = offered("list.filter { $0.")
+        #expect(element.names.contains("isFolder"))
+        #expect(element.names.contains("name"))
+        #expect(!element.names.contains("count"))
+
+        // And reaching through a member keeps the type: the first of a list of
+        // files is a file.
+        #expect(offered("list.first.").names.contains("isFolder"))
     }
 
     @Test("A name this line gave a value is offered where a value goes")

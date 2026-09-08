@@ -38,7 +38,7 @@ public enum FileSystemModule: ShellModule {
         switch declared {
             case .list:
                 return descriptor(declared, "list", TypedShellSignature(namespace: "fileSystem", name: "list", result: .sequence),
-                                  schema: .file, summary: "what is here")
+                                  schema: .files, summary: "what is here")
             case .currentDirectory:
                 return descriptor(declared, "where", TypedShellSignature(namespace: "fileSystem", name: "currentDirectory", effect: .session),
                                   summary: "say where this shell is standing")

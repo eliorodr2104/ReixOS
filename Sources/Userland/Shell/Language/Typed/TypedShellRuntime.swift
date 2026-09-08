@@ -303,6 +303,33 @@ public struct TypedShellRuntime {
         _ count : Int
     ) -> Result<ShellValue, TypedShellFailure> {
         guard let name = text(span, source, count) else { return .failure(.syntax(column: span.start)) }
+
+        // What a list is, rather than what is in it. `count` and `isEmpty` are
+        // about the list; `first` and `last` hand back one of its elements.
+        if case .sequence(let handle) = base {
+            guard let arena = sequenceArena, handle >= 0, handle < arena.pointee.count,
+                  let sequence = arena.pointee.sequences[handle]
+            else { return .failure(.type(expected: .sequence, actual: base.type)) }
+            if name.equals("count") { return .success(.number(UInt64(sequence.count))) }
+            if name.equals("isEmpty") { return .success(.boolean(sequence.count == 0)) }
+            if name.equals("first") {
+                guard let value = sequence.value(at: 0) else { return .success(.void) }
+                return .success(.record(value))
+            }
+            if name.equals("last") {
+                guard sequence.count > 0, let value = sequence.value(at: sequence.count - 1) else {
+                    return .success(.void)
+                }
+                return .success(.record(value))
+            }
+            return .failure(.unsupportedMember(name))
+        }
+
+        if case .text(let value) = base {
+            if name.equals("isEmpty") { return .success(.boolean(value.count == 0)) }
+            return .failure(.unsupportedMember(name))
+        }
+
         guard case .record(let object) = base else { return .failure(.type(expected: .record, actual: base.type)) }
         if name.equals("name") || name.equals("path") { return .success(.text(object.name)) }
         if name.equals("isFolder") { return .success(.boolean(object.kind == FSKind.folder.rawValue || object.kind == FSKind.container.rawValue)) }
@@ -400,6 +427,20 @@ public struct TypedShellRuntime {
                 }
             }
             return store(output)
+        }
+        if name.equals("contains") {
+            for index in 0..<sequence.count {
+                guard let object = sequence.value(at: index) else { continue }
+                switch evaluate(body, program, source, count, signatures, .record(object), nil, invoke) {
+                    case .failure(let failure): return .failure(failure)
+                    case .success(let answer):
+                        guard case .boolean(let holds) = answer else {
+                            return .failure(.type(expected: .boolean, actual: answer.type))
+                        }
+                        if holds { return .success(.boolean(true)) }
+                }
+            }
+            return .success(.boolean(false))
         }
         if name.equals("sorted") {
             var output = sequence

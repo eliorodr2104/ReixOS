@@ -16,24 +16,21 @@ public enum ShellMethodArgument: UInt8, Equatable {
 
 /// One method the runtime answers on a value, described rather than guessed.
 ///
-/// The receiver is a value type and not a schema: `filter` belongs to every
-/// sequence, whatever its elements are.
+/// Methods belong to a type: a list has `filter`, a text has `contains`, and
+/// asking a catalog for one asks about the type it is on.
 public struct ShellMethodDescriptor {
     public let name    : StaticString
-    public let receiver: ShellValueType
     public let argument: ShellMethodArgument
-    public let result  : ShellValueType
+    public let result  : ShellTypeSchema
     public let summary : StaticString
 
     public init(
         _ name    : StaticString,
-          receiver: ShellValueType,
           argument: ShellMethodArgument,
-          result  : ShellValueType,
+          result  : ShellTypeSchema,
           summary : StaticString
     ) {
         self.name = name
-        self.receiver = receiver
         self.argument = argument
         self.result = result
         self.summary = summary

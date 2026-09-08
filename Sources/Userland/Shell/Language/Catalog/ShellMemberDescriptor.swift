@@ -7,15 +7,18 @@
 
 import ReixABI
 
-/// One property a value of a given schema answers to.
+/// One property a value of a given type answers to.
 public struct ShellMemberDescriptor {
     public let name   : StaticString
-    public let type   : ShellValueType
+
+    /// What reading it gives back, so reaching further into it can be offered
+    /// as well: the `first` of a list of files is a file.
+    public let type   : ShellTypeSchema
     public let summary: StaticString
 
     public init(
         _ name   : StaticString,
-          type   : ShellValueType,
+          type   : ShellTypeSchema,
           summary: StaticString
     ) {
         self.name = name

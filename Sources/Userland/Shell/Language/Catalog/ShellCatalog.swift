@@ -138,11 +138,21 @@ public struct ShellCatalog {
 
     /// Members and methods belong to no provider: they are what the evaluator
     /// answers on a value, whoever produced it.
+    ///
+    /// They belong to a *type*, though. A list of files answers `count` and
+    /// `filter`; one file answers `name` and `isFolder`; and neither answers
+    /// the other's, which is what the editor was getting wrong.
     public static func memberCount(of schema: ShellTypeSchema) -> Int {
-        switch schema {
-            case .none: return 0
-            case .file: return 4
-            case .process: return 1
+        switch schema.shape {
+            case .nothing: return 0
+            case .list: return 4
+            case .one:
+                switch schema.element {
+                    case .file: return 4
+                    case .process: return 1
+                    case .text: return 1
+                    default: return 0
+                }
         }
     }
 
@@ -151,8 +161,15 @@ public struct ShellCatalog {
         at index : Int
     ) -> ShellMemberDescriptor? {
         guard index >= 0, index < memberCount(of: schema) else { return nil }
-        switch schema {
-            case .none: return nil
+        if schema.isList {
+            switch index {
+                case 0: return ShellMemberDescriptor("count", type: .number, summary: "how many there are")
+                case 1: return ShellMemberDescriptor("isEmpty", type: .boolean, summary: "true when there are none")
+                case 2: return ShellMemberDescriptor("first", type: schema.elementType, summary: "the one at the front")
+                default: return ShellMemberDescriptor("last", type: schema.elementType, summary: "the one at the back")
+            }
+        }
+        switch schema.element {
             case .file:
                 switch index {
                     case 0: return ShellMemberDescriptor("name", type: .text, summary: "what it is called")
@@ -162,21 +179,69 @@ public struct ShellCatalog {
                 }
             case .process:
                 return ShellMemberDescriptor("name", type: .text, summary: "the program this process runs")
+            case .text:
+                return ShellMemberDescriptor("isEmpty", type: .boolean, summary: "true when it says nothing")
+            default:
+                return nil
         }
     }
 
-    public static let methodCount = 7
+    public static func methodCount(of schema: ShellTypeSchema) -> Int {
+        switch schema.shape {
+            case .nothing: return 0
+            case .list: return 7
+            case .one:
+                switch schema.element {
+                    case .text: return 2
+                    case .number, .boolean: return 1
+                    default: return 0
+                }
+        }
+    }
 
-    public static func method(at index: Int) -> ShellMethodDescriptor? {
-        switch index {
-            case 0: return ShellMethodDescriptor("filter", receiver: .sequence, argument: .closure, result: .sequence, summary: "keep the ones the closure says true to")
-            case 1: return ShellMethodDescriptor("map", receiver: .sequence, argument: .closure, result: .sequence, summary: "one answer per element")
-            case 2: return ShellMethodDescriptor("compactMap", receiver: .sequence, argument: .closure, result: .sequence, summary: "map, dropping the empty answers")
-            case 3: return ShellMethodDescriptor("flatMap", receiver: .sequence, argument: .closure, result: .sequence, summary: "map to sequences and join them")
-            case 4: return ShellMethodDescriptor("sorted", receiver: .sequence, argument: .closure, result: .sequence, summary: "order by a closure over $0 and $1")
-            case 5: return ShellMethodDescriptor("contains", receiver: .text, argument: .text, result: .boolean, summary: "true when the text holds the other")
-            case 6: return ShellMethodDescriptor("toString", receiver: .any, argument: .none, result: .text, summary: "the value, written out")
-            default: return nil
+    public static func method(
+        of schema: ShellTypeSchema,
+        at index : Int
+    ) -> ShellMethodDescriptor? {
+        guard index >= 0, index < methodCount(of: schema) else { return nil }
+        if schema.isList {
+            switch index {
+                case 0:
+                    return ShellMethodDescriptor("filter", argument: .closure, result: schema,
+                                                 summary: "keep the ones the closure says true to")
+                case 1:
+                    // The evaluator wraps whatever a closure answers back into
+                    // an object with a name, so what comes out is a list of
+                    // the same shape as what went in.
+                    return ShellMethodDescriptor("map", argument: .closure, result: schema,
+                                                 summary: "one answer per element")
+                case 2:
+                    return ShellMethodDescriptor("compactMap", argument: .closure, result: schema,
+                                                 summary: "map, dropping the empty answers")
+                case 3:
+                    return ShellMethodDescriptor("flatMap", argument: .closure, result: schema,
+                                                 summary: "map to lists and join them")
+                case 4:
+                    return ShellMethodDescriptor("sorted", argument: .closure, result: schema,
+                                                 summary: "order by a closure over $0 and $1")
+                case 5:
+                    return ShellMethodDescriptor("contains", argument: .closure, result: .boolean,
+                                                 summary: "true when the closure says so of any of them")
+                default:
+                    return ShellMethodDescriptor("toString", argument: .none, result: .text,
+                                                 summary: "the value, written out")
+            }
+        }
+        switch schema.element {
+            case .text:
+                return index == 0
+                    ? ShellMethodDescriptor("contains", argument: .text, result: .boolean,
+                                            summary: "true when the text holds the other")
+                    : ShellMethodDescriptor("toString", argument: .none, result: .text,
+                                            summary: "the value, written out")
+            default:
+                return ShellMethodDescriptor("toString", argument: .none, result: .text,
+                                             summary: "the value, written out")
         }
     }
 }

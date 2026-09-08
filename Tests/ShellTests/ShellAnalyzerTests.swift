@@ -23,7 +23,7 @@ private enum FilesProvider: ShellCommandProvider {
                     code     : 0,
                     verb     : "list",
                     signature: TypedShellSignature(namespace: "fileSystem", name: "list", result: .sequence),
-                    schema   : .file,
+                    schema   : .files,
                     summary  : "what is here"
                 )
             case 1:
@@ -183,6 +183,10 @@ struct ShellAnalyzerTests {
         #expect(role(snapshot, source, of: "isFolder") == .member)
         #expect(diagnostics(snapshot).isEmpty)
 
+        // A list is not what is in it: `isFolder` belongs to a file.
+        let onTheList = analyze("list.isFolder ")
+        #expect(role(onTheList, "list.isFolder ", of: "isFolder") == .error)
+
         // Finished, so it is wrong rather than half typed.
         let wrong = analyze("list.isPurple ")
         #expect(role(wrong, "list.isPurple ", of: "isPurple") == .error)
@@ -247,7 +251,12 @@ struct ShellAnalyzerTests {
         // Reaching into a value offers what that value is.
         let member = analyze("list.")
         #expect(member.context.subject == .member)
-        #expect(member.context.schema == .file)
+        #expect(member.context.schema == .files)
+
+        // And inside a closure over it, one of them.
+        let element = analyze("list.filter { $0.")
+        #expect(element.context.subject == .member)
+        #expect(element.context.schema == .file)
 
         // Inside the verb itself, what fits is another verb, and one byte
         // further along it is that verb's first argument.
