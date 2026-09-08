@@ -388,8 +388,47 @@ private func testReachingIntoValuesStillReads() {
     require(parses("list.map { $0.name }.compactMap { $0 }"), "two methods in a row")
 }
 
+/// The analysis, against the receivers the shell is actually built with.
+private func testAnalysisReadsTheRealCatalog() {
+    let catalog = ShellPipeline.merged()
+
+    func snapshot(_ source: String, cursor: Int? = nil) -> ShellAnalysisSnapshot {
+        let bytes = Array(source.utf8)
+        return bytes.withUnsafeBufferPointer { buffer in
+            ShellAnalyzer.analyze(
+                buffer.baseAddress!,
+                count   : buffer.count,
+                cursor  : cursor ?? buffer.count,
+                revision: 1,
+                catalog : catalog
+            )
+        }
+    }
+
+    let written = snapshot("fileSystem.changeDir(at: reix::vault)")
+    require(written.role(at: 0) == .namespace, "fileSystem is a receiver")
+    require(written.role(at: 11) == .command, "changeDir is its command")
+    require(written.role(at: 21) == .label, "at is a label it takes")
+    require(written.role(at: 25) == .path, "reix::vault is a path")
+    require(written.diagnosticCount == 0, "nothing to report about a good line")
+
+    // The receivers only this shell has, resolved through the merged catalog.
+    let processes = snapshot("process.")
+    require(processes.context.subject == .command, "after a receiver, its commands")
+    require(processes.context.receiver >= 0, "and the receiver is named")
+
+    let disk = snapshot("disk.read 0")
+    require(disk.role(at: 5) == .command, "read belongs to disk when disk is written")
+    require(disk.role(at: 10) == .number, "a sector is a number")
+
+    let typo = snapshot("fileSystem.chagne ")
+    require(typo.role(at: 11) == .error, "a finished name nobody answers to is wrong")
+    require(typo.diagnosticCount == 1, "and it is reported once")
+}
+
 testModulesMerge()
 testMergeRefusesWhatItCannotName()
+testAnalysisReadsTheRealCatalog()
 testSignatureTableIsTheCatalog()
 testSpellingsResolveUniquely()
 testEveryCommandNamesItsAuthority()
@@ -405,4 +444,4 @@ testWrittenArgumentsMayBeBareWords()
 
 // `print` would reach Reix's freestanding `putchar`, which has no console
 // here. The harness says how it went through the file descriptor instead.
-FileHandle.standardOutput.write(Data("ShellCatalogHarness: 14 checks passed\n".utf8))
+FileHandle.standardOutput.write(Data("ShellCatalogHarness: 15 checks passed\n".utf8))

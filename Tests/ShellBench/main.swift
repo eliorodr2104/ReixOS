@@ -89,6 +89,62 @@ func seedEditor(
     return editor.count == bytes.count && editor.cursor == bytes.count ? sequence : nil
 }
 
+/// A catalog the analysis can be measured against: two receivers, documented
+/// the way a module documents itself.
+private enum BenchFiles: ShellCommandProvider {
+    static var namespace: ShellNamespaceDescriptor {
+        ShellNamespaceDescriptor("fileSystem", summary: "a container")
+    }
+    static var commandCount: Int { 3 }
+    static func command(at index: Int) -> ShellCommandDescriptor? {
+        switch index {
+            case 0:
+                return ShellCommandDescriptor(
+                    code     : 0,
+                    verb     : "list",
+                    signature: TypedShellSignature(namespace: "fileSystem", name: "list", result: .sequence),
+                    schema   : .file,
+                    summary  : "what is here"
+                )
+            case 1:
+                return ShellCommandDescriptor(
+                    code     : 1,
+                    verb     : "move",
+                    signature: TypedShellSignature(namespace: "fileSystem", name: "changeDir", TypedShellParameter("at")),
+                    summary  : "change this session's directory"
+                )
+            default:
+                return ShellCommandDescriptor(
+                    code     : 2,
+                    verb     : "write",
+                    signature: TypedShellSignature(
+                        namespace: "fileSystem",
+                        name     : "write",
+                        TypedShellParameter("at"),
+                        TypedShellParameter("text")
+                    ),
+                    summary  : "replace what a file says"
+                )
+        }
+    }
+}
+
+private let benchCatalog: ShellCatalog = {
+    var catalog = ShellCatalog()
+    _ = catalog.merge(BenchFiles.self)
+    return catalog
+}()
+
+/// The bound phase 6.5 set for a full reparse: the longest revision the editor
+/// can hold, filled with statements rather than with one long word.
+private let boundedSource: [UInt8] = {
+    var text = ""
+    while text.utf8.count + 64 < ShellLexer.byteLimit {
+        text += "fileSystem.write(at: notes.txt, text: \"a b\"), "
+    }
+    return Array(text.utf8)
+}()
+
 private let complexSource = Array(
     (
         "let folders = list.filter { $0.isFolder }, "
@@ -261,6 +317,36 @@ for position in [0, 50, 99] {
     }
 }
 guard parse64() > 0 else { fatalError("ShellBench preflight: parser64") }
+
+add("analysis/lexer", "tolerant lexer over one line") {
+    complexSource.withUnsafeBufferPointer {
+        Int(ShellLexer.scan($0.baseAddress!, count: $0.count).count)
+    }
+}
+
+add("analysis/snapshot", "analysis of one line, cursor at the end") {
+    complexSource.withUnsafeBufferPointer {
+        ShellAnalyzer.analyze(
+            $0.baseAddress!,
+            count   : $0.count,
+            cursor  : $0.count,
+            revision: 1,
+            catalog : benchCatalog
+        ).spanCount
+    }
+}
+
+add("analysis/snapshot-bounded", "analysis of a full 8 KiB revision") {
+    boundedSource.withUnsafeBufferPointer {
+        ShellAnalyzer.analyze(
+            $0.baseAddress!,
+            count   : $0.count,
+            cursor  : $0.count,
+            revision: 1,
+            catalog : benchCatalog
+        ).spanCount
+    }
+}
 
 add("parser/desugaring", "legacy parser/desugaring") {
     complexSource.withUnsafeBufferPointer {
