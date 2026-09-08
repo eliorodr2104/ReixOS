@@ -14,6 +14,7 @@
 #   make vm-test    only the QEMU scenario matrix
 #   make terminal-baseline-4m  run the instrumented terminal baseline at 4 MiB
 #   make run        build + boot in QEMU
+#   make boot       boot what is already built, compiling nothing
 #   make release    build + boot the optimized image
 #   make smoke      build + boot headless, pass/fail on the serial log
 #   make run-4m     build + boot in 4 MiB of RAM (the project's floor)
@@ -94,7 +95,7 @@ QEMU_INITRD  = $(if $(filter embedded,$(INITRD_MODE)),,-initrd $(OUT)/initrd.tar
 # instead and get working code intelligence.
 export FREESTANDING := 1
 
-.PHONY: all build image release app programs programs-release run run-release run-4m smoke smoke-4m test host-test vm-test terminal-baseline-4m disk prune-dups clean-image clean
+.PHONY: all build image release app programs programs-release run boot run-release run-4m smoke smoke-4m test host-test vm-test terminal-baseline-4m disk prune-dups clean-image clean
 
 all: image
 
@@ -138,6 +139,19 @@ release: prune-dups
 	REIX_BUILD_PATH=$(BUILD_PATH) $(SWIFT) package $(PLUGIN) --release
 
 # Boot in QEMU (Ctrl-A X to quit). qemu runs here, not inside the plugin sandbox.
+# Boot what is already built. No compiler, no plugin, no installer: the loop
+# for changing one userland program is `make app APP=Shell` and then this,
+# which never opens kernel.bin or initrd.tar and so cannot rebuild them.
+#
+# A running guest owns the disk. `make app` refuses while it does, and it is
+# right to: the image under a live QEMU is a file two writers disagree about.
+# Stop the guest (`shell.halt()` inside it, or Ctrl-A X) before installing.
+boot:
+	@test -f $(OUT)/kernel.bin || { echo "no $(OUT)/kernel.bin: run make first" >&2; exit 1; }
+	@live="$(DISK).live"; test ! -e "$$live" || { echo "disk already in use: $$live" >&2; exit 1; }; \
+	  : > "$$live"; trap 'rm -f "$$live"' EXIT HUP INT TERM; \
+	  $(QEMU) $(QEMU_FLAGS) $(QEMU_MEM) $(QEMU_DISK) -kernel $(OUT)/kernel.bin $(QEMU_INITRD)
+
 run: programs
 	@live="$(DISK).live"; test ! -e "$$live" || { echo "disk already in use: $$live" >&2; exit 1; }; \
 	  : > "$$live"; trap 'rm -f "$$live"' EXIT HUP INT TERM; \
