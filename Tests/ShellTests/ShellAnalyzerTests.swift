@@ -157,6 +157,21 @@ struct ShellAnalyzerTests {
         #expect(diagnostics(snapshot) == [.unknownLabel])
     }
 
+    @Test("A dotted word in an argument is one word, not a member of something")
+    func dottedWordsInArguments() {
+        let source   = "fileSystem.write(at: memo.txt, text: \"hi\")"
+        let snapshot = analyze(source)
+        // `memo` and `txt` are the same name to the evaluator, so neither is
+        // painted as reaching into a value.
+        #expect(role(snapshot, source, of: "memo") == .plain)
+        #expect(role(snapshot, source, of: "txt") == .plain)
+        #expect(diagnostics(snapshot).isEmpty)
+
+        // A closure expression has members too.
+        let placeholder = analyze("list.filter { $0.isFolder }")
+        #expect(role(placeholder, "list.filter { $0.isFolder }", of: "isFolder") == .member)
+    }
+
     @Test("A member is read against what the value is")
     func memberRoles() {
         let source   = "list.filter { $0.isFolder }"

@@ -43,11 +43,14 @@ public func main() {
     }
     guard environment.signalReady() else { exit(code: 1) }
 
-    var editor   = ShellLineEditor()
-    var pipeline = ShellPipeline(environment: environment)
+    // One catalog, read by all three: the editor colours with it, the parser
+    // resolves receivers against it, and the pipeline dispatches through it.
+    let catalog  = ShellPipeline.merged()
+    var editor   = ShellLineEditor(catalog: catalog)
+    var pipeline = ShellPipeline(environment: environment, catalog: catalog)
     var engine   = ShellEngine(
         capacity  : ShellLineEditor.capacity,
-        namespaces: pipeline.documentation.namespaceSet()
+        namespaces: catalog.namespaceSet()
     )
 
     while engine.reading {

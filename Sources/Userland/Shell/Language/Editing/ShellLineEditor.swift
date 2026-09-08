@@ -73,6 +73,11 @@ public struct ShellLineEditor: ~Copyable {
     private var viewportPinned  = false
     private var pending         : PendingChange? = .snapshot
     private var pendingSequence : UInt32         = 1
+
+    /// Bumped whenever the scene changes, which is whenever the bytes or the
+    /// cursor move. An analysis is about one of these, and anything holding
+    /// one has to ask whether it still describes the editor in hand.
+    private var revisionCounter : UInt32 = 1
     private var codeEditing     = false
 
     private var pasteActive          = false
@@ -85,7 +90,15 @@ public struct ShellLineEditor: ~Copyable {
     private let allocationFault      : ShellEditorAllocationFault?
     private var allocationCounts     = InlineArray<4, Int>(repeating: 0)
 
-    public init(allocationFault: ShellEditorAllocationFault? = nil) {
+    /// What tells a receiver or a verb from a plain word. Held here because it
+    /// is read on every keystroke and it is the same catalog every time.
+    private let catalog: ShellCatalog
+
+    public init(
+        catalog        : ShellCatalog = ShellCatalog(),
+        allocationFault: ShellEditorAllocationFault? = nil
+    ) {
+        self.catalog = catalog
         self.allocationFault = allocationFault
     }
 
@@ -101,6 +114,9 @@ public struct ShellLineEditor: ~Copyable {
     public var hasSelection : Bool { selectionAnchor != nil && selectionAnchor != selectionHead }
     public var isCodeEditing: Bool { codeEditing }
     public var visibleRows  : UInt16 { ReixTextSurfaceFrameDescriptor.interactiveRows(for: rows) }
+
+    /// Which revision of the scene the next frame is about.
+    public var revision: UInt32 { revisionCounter }
 
     public mutating func apply(_ event: ReixInputRecord) -> ShellEditorUpdate {
         pendingSequence = event.sequence
@@ -149,6 +165,11 @@ public struct ShellLineEditor: ~Copyable {
     }
 
     /// Presents prompt and input as one native frame without materializing 8 KiB.
+    /// Builds one frame of the scene, coloured by what the line means.
+    ///
+    /// An editor built without a catalog draws the line all the same: nothing
+    /// resolves, so nothing is a receiver or a verb, which is the truth about
+    /// a language nobody documented.
     public mutating func withFrame(_ body: (ShellEditorFrameSource) -> Bool) -> Bool {
         guard let pending else { return true }
         guard let cursorPosition = framePosition(at: cursor) else { return false }
@@ -172,7 +193,7 @@ public struct ShellLineEditor: ~Copyable {
             : viewportRows
         followCursor(cursorPosition.row, viewportRows: cursorViewportRows)
         let selection = selectionRange()
-        var spans = InlineArray<4, ReixTextSurfaceStyleSpan?>(repeating: nil)
+        var spans     = InlineArray<64, ReixTextSurfaceStyleSpan?>(repeating: nil)
         var spanCount = 0
         if !codeEditing {
             spans[spanCount] = ReixTextSurfaceStyleSpan(
@@ -182,7 +203,8 @@ public struct ShellLineEditor: ~Copyable {
             )!
             spanCount += 1
         }
-        appendInputSpans(selection: selection, spans: &spans, count: &spanCount)
+        let snapshot = analysis()
+        appendInputSpans(snapshot, selection: selection, spans: &spans, count: &spanCount)
         let frame = frameMetadata(
             pending: pending,
             cursorPosition: cursorPosition,
@@ -1188,28 +1210,94 @@ public struct ShellLineEditor: ~Copyable {
         )
     }
 
+    /// The analysis of the line as it stands, about this revision.
+    ///
+    /// A whole reading every frame. It costs a gap move and one pass over the
+    /// bytes, which is small against what the frame itself costs, and it is
+    /// what keeps the colours from ever describing bytes that have moved.
+    private mutating func analysis() -> ShellAnalysisSnapshot {
+        let position = cursor
+        let stamp    = revisionCounter
+        let table    = catalog
+        return withBytes { source, count in
+            ShellAnalyzer.analyze(
+                source,
+                count   : count,
+                cursor  : position,
+                revision: stamp,
+                catalog : table
+            )
+        }
+    }
+
+    /// Turns what the line means into what the frame carries.
+    ///
+    /// Spans arrive sorted and apart: a selection takes its range and the
+    /// colours are cut around it. What overruns the frame's budget is left
+    /// plain, so the frame stays inside what the transport carries.
     private func appendInputSpans(
-        selection: (Int, Int),
-        spans: inout InlineArray<4, ReixTextSurfaceStyleSpan?>,
+        _ snapshot     : ShellAnalysisSnapshot,
+        selection      : (Int, Int),
+        spans          : inout InlineArray<64, ReixTextSurfaceStyleSpan?>,
         count spanCount: inout Int
     ) {
         let prefixBytes = codeEditing ? 0 : Self.promptBytes
         func append(_ start: Int, _ end: Int, _ role: ReixTextSurfaceStyleRole) {
-            guard end > start else { return }
-            spans[spanCount] = ReixTextSurfaceStyleSpan(
-                offset: UInt32(prefixBytes + start),
-                length: UInt16(end - start),
-                role: role
-            )!
+            guard end > start, spanCount < spans.count,
+                  let span = ReixTextSurfaceStyleSpan(
+                      offset: UInt32(prefixBytes + start),
+                      length: UInt16(end - start),
+                      role: role
+                  )
+            else { return }
+            spans[spanCount] = span
             spanCount += 1
         }
-        if selection.0 == selection.1 {
-            append(0, count, .input)
-            return
+
+        let selectionStart = selection.0
+        let selectionEnd   = selection.1
+        var selectionLeft  = selectionEnd > selectionStart
+
+        for index in 0..<snapshot.spanCount {
+            guard let semantic = snapshot.span(at: index) else { continue }
+            let role = Self.styleRole(for: semantic.role)
+            guard role != .input else { continue }
+            let start = Int(semantic.start)
+            let end   = min(semantic.end, count)
+            guard end > start else { continue }
+
+            if !selectionLeft || end <= selectionStart {
+                append(start, end, role)
+                continue
+            }
+            if start < selectionStart { append(start, selectionStart, role) }
+            if selectionLeft, selectionStart <= start || start < selectionStart {
+                append(selectionStart, selectionEnd, .selection)
+                selectionLeft = false
+            }
+            if end > selectionEnd { append(max(start, selectionEnd), end, role) }
         }
-        append(0, selection.0, .input)
-        append(selection.0, selection.1, .selection)
-        append(selection.1, count, .input)
+        if selectionLeft { append(selectionStart, selectionEnd, .selection) }
+    }
+
+    /// One place where a meaning becomes a role on the wire. A switch, so a
+    /// meaning added to the language cannot arrive here undressed.
+    private static func styleRole(for role: ShellSemanticRole) -> ReixTextSurfaceStyleRole {
+        switch role {
+            case .plain: return .input
+            case .keyword: return .keyword
+            case .namespace: return .namespace
+            case .command: return .command
+            case .label: return .label
+            case .text: return .text
+            case .number: return .number
+            case .path: return .path
+            case .variable: return .variable
+            case .member: return .member
+            case .closure: return .closure
+            case .incomplete: return .incomplete
+            case .error: return .error
+        }
     }
 
     private func withFrameText<R>(
@@ -1343,8 +1431,12 @@ public struct ShellLineEditor: ~Copyable {
         if case nil = pending { pending = .metadata }
     }
 
-    private func update(_ action: ShellEditorAction, _ frame: Bool) -> ShellEditorUpdate {
-        ShellEditorUpdate(action: action, requiresPresentation: frame)
+    private mutating func update(
+        _ action: ShellEditorAction,
+        _ frame : Bool
+    ) -> ShellEditorUpdate {
+        if frame { revisionCounter = revisionCounter &+ 1 }
+        return ShellEditorUpdate(action: action, requiresPresentation: frame)
     }
 
     private func refused() -> ShellEditorUpdate {

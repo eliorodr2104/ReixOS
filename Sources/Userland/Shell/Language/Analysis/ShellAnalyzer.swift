@@ -40,8 +40,11 @@ public enum ShellAnalyzer {
         var argument       = 0
         var schema         = ShellTypeSchema.none
         var parentheses    = 0
-        var bindings       = InlineArray<8, Span?>(repeating: nil)
-        var bindingCount   = 0
+        // Whether the value just read was a plain word. `memo.txt` in an
+        // argument is one name, by the same rule the evaluator resolves by.
+        var lastValueWasWord = false
+        var bindings         = InlineArray<8, Span?>(repeating: nil)
+        var bindingCount     = 0
 
         // What would be completed if the cursor sat right here, kept current
         // as the walk goes so open space has an answer too.
@@ -202,23 +205,27 @@ public enum ShellAnalyzer {
                         mark(token, .text)
                     }
                     argument += 1
+                    lastValueWasWord = false
                     here(.value, token, expected: parameterType(of: command, at: argument - 1))
                     after(.value, expected: parameterType(of: command, at: argument))
 
                 case .number:
                     mark(token, .number)
+                    lastValueWasWord = false
                     argument += 1
                     here(.value, token, expected: parameterType(of: command, at: argument - 1))
                     after(.value, expected: parameterType(of: command, at: argument))
 
                 case .path:
                     mark(token, .path)
+                    lastValueWasWord = false
                     argument += 1
                     here(.value, token, expected: parameterType(of: command, at: argument - 1))
                     after(.value, expected: parameterType(of: command, at: argument))
 
                 case .placeholder:
                     mark(token, .variable)
+                    lastValueWasWord = false
                     here(.value, token)
                     after(.value)
 
@@ -234,6 +241,13 @@ public enum ShellAnalyzer {
 
                 case .dot:
                     mark(token, .plain)
+                    if lastValueWasWord, let next = stream.token(at: index), next.kind == .name {
+                        index += 1
+                        mark(next, .plain)
+                        here(.value, next, expected: parameterType(of: command, at: max(0, argument - 1)))
+                        after(.value, expected: parameterType(of: command, at: argument))
+                        continue
+                    }
                     // What follows a dot is a member of what came before it,
                     // unless what came before it was a receiver.
                     guard let next = stream.token(at: index), next.kind == .name else {
@@ -292,6 +306,7 @@ public enum ShellAnalyzer {
                         if let namespace = namespaceIndex(catalog, source, token.span) {
                             mark(token, .namespace)
                             receiver = namespace
+                            lastValueWasWord = false
                             here(.receiverOrCommand, token)
                             after(.receiverOrCommand)
                             continue
@@ -301,12 +316,14 @@ public enum ShellAnalyzer {
                             command = resolved
                             schema = catalog.command(at: resolved)?.schema ?? .none
                             argument = 0
+                            lastValueWasWord = false
                             here(.receiverOrCommand, token)
                             after(.value, expected: parameterType(of: resolved, at: 0))
                             continue
                         }
                         if isBinding(token) {
                             mark(token, .variable)
+                            lastValueWasWord = false
                             here(.receiverOrCommand, token)
                             after(.value)
                             continue
@@ -319,7 +336,9 @@ public enum ShellAnalyzer {
 
                     // Anywhere else a name is a value: something bound, or a
                     // word, which is what an unquoted argument is.
-                    mark(token, isBinding(token) ? .variable : .plain)
+                    let bound = isBinding(token)
+                    mark(token, bound ? .variable : .plain)
+                    lastValueWasWord = !bound
                     argument += 1
                     here(.value, token, expected: parameterType(of: command, at: argument - 1))
                     after(.value, expected: parameterType(of: command, at: argument))

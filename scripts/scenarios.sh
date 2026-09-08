@@ -651,10 +651,18 @@ do
     detail=
     verdict=passed
     message=
-    if ! check_required "$log" "$required" > "$work/msg.txt"; then
+    # Markers are checked against the log with its escapes taken out. The
+    # shell colours what it echoes, so `shell.help()` reaches the wire as
+    # `shell` and `.` and `help()` with an SGR between them: the characters a
+    # row asserts are all there, and only the paint sits between them.
+    plain_log="$work/plain-$id.txt"
+    LC_ALL=C sed -E 's/'"$(printf '\033')"'\[[0-9;?]*[a-zA-Z]//g' "$log" > "$plain_log" 2>/dev/null \
+        || cp "$log" "$plain_log"
+
+    if ! check_required "$plain_log" "$required" > "$work/msg.txt"; then
         verdict=failed
         message="missing required marker '$(cat "$work/msg.txt")' (engine rc $engine_rc)"
-    elif ! check_forbidden "$log" "$forbidden" > "$work/msg.txt"; then
+    elif ! check_forbidden "$plain_log" "$forbidden" > "$work/msg.txt"; then
         verdict=failed
         message="forbidden marker '$(cat "$work/msg.txt")' present"
     elif ! run_post "$post" "$log" "$post_out" > "$work/msg.txt"; then

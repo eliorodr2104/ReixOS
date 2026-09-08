@@ -19,6 +19,8 @@ public enum ReixTextSurfaceFrameMode: UInt16, Equatable {
     case codeTranscript = 4
 }
 
+/// What a run of cells means. A backend turns it into a colour, and one that
+/// cannot colour at all still knows what it was handed.
 public enum ReixTextSurfaceStyleRole: UInt8, Equatable {
     case plain        = 0
     case prompt       = 1
@@ -27,6 +29,24 @@ public enum ReixTextSurfaceStyleRole: UInt8, Equatable {
     case diagnostic   = 4
     case overlay      = 5
     case editorChrome = 6
+
+    // What the shell's own language is made of, as its analysis reads it.
+    case keyword   = 7
+    case namespace = 8
+    case command   = 9
+    case label     = 10
+    case text      = 11
+    case number    = 12
+    case path      = 13
+    case variable  = 14
+    case member    = 15
+    case closure   = 16
+
+    /// What is being typed right now, before it can be run or refused.
+    case incomplete = 17
+
+    /// Wrong, and finished enough to say so.
+    case error = 18
 }
 
 /// One semantic style over a UTF-8 byte range.
@@ -50,10 +70,14 @@ public struct ReixTextSurfaceFrameDescriptor: Equatable {
     public static let wireBytes = 64
     public static let maximumTextBytes = 8200
     public static let maximumOverlayBytes = 1024
-    public static let maximumStyleSpans: UInt16 = 32
+    /// Enough for a line of ordinary length to be coloured piece by piece.
+    /// Sixty-four spans and the ring's records still fit its three pages. Past
+    /// that a line renders plain, so the frame stays inside what the transport
+    /// carries.
+    public static let maximumStyleSpans       : UInt16 = 64
     public static let maximumOverlayStyleSpans: UInt16 = 16
-    public static let maximumColumns: UInt16 = 240
-    public static let maximumRows: UInt16 = 120
+    public static let maximumColumns          : UInt16 = 240
+    public static let maximumRows             : UInt16 = 120
 
     public let kind                 : ReixTextSurfaceFrameKind
     public let mode                 : ReixTextSurfaceFrameMode

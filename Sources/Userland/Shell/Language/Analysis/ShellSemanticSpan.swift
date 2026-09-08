@@ -25,7 +25,7 @@ public enum ShellSemanticRole: UInt8, Equatable {
     case member
     case closure
 
-    /// Not finished, and not wrong either: what is being typed right now.
+    /// What is being typed right now, before it can be run or refused.
     case incomplete
 
     /// Wrong, and finished enough to say so.

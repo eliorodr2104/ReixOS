@@ -1407,6 +1407,10 @@ public enum TextSurfaceVTRenderer {
         return .overlay
     }
 
+    /// Paints one role, by asking the palette what it is worth in SGR.
+    ///
+    /// The renderer knows escapes and the palette knows colours; nothing here
+    /// knows what a `command` is, which is the whole point of the roles.
     private static func style(
         _ role    : ReixTextSurfaceStyleRole,
         background: Bool = false,
@@ -1415,33 +1419,21 @@ public enum TextSurfaceVTRenderer {
     ) {
         emitted(escape, count: &count, emit: emit)
         emitted(openBracket, count: &count, emit: emit)
+        let plain = role == .plain || role == .input
         if background {
             let code = StaticString("0;48;5;236")
             for index in 0..<code.utf8CodeUnitCount {
                 emitted(code.utf8Start[index], count: &count, emit: emit)
             }
-            if role != .plain && role != .input {
+            if !plain {
                 emitted(UInt8(ascii: ";"), count: &count, emit: emit)
             }
         }
-        switch role {
-            case .plain, .input:
-                if !background { emitted(UInt8(ascii: "0"), count: &count, emit: emit) }
-            case .prompt:
-                emitted(UInt8(ascii: "1"), count: &count, emit: emit)
-                emitted(UInt8(ascii: ";"), count: &count, emit: emit)
-                emitted(UInt8(ascii: "3"), count: &count, emit: emit)
-                emitted(UInt8(ascii: "6"), count: &count, emit: emit)
-            case .selection:
-                emitted(UInt8(ascii: "7"), count: &count, emit: emit)
-            case .diagnostic:
-                emitted(UInt8(ascii: "3"), count: &count, emit: emit)
-                emitted(UInt8(ascii: "1"), count: &count, emit: emit)
-            case .overlay:
-                emitted(UInt8(ascii: "3"), count: &count, emit: emit)
-                emitted(UInt8(ascii: "5"), count: &count, emit: emit)
-            case .editorChrome:
-                emitted(UInt8(ascii: "2"), count: &count, emit: emit)
+        if !background || !plain {
+            let parameters = TextSurfacePalette.parameters(for: role)
+            for index in 0..<parameters.utf8CodeUnitCount {
+                emitted(parameters.utf8Start[index], count: &count, emit: emit)
+            }
         }
         emitted(UInt8(ascii: "m"), count: &count, emit: emit)
     }

@@ -403,11 +403,13 @@ struct ShellEditorTests {
         sequence += 1
         #expect(newline.action == .editing)
         #expect(bytes(of: &editor).last == 0x0A)
+        // A code sheet carries no prompt, so the first thing coloured is the
+        // first thing written: the indent stays plain and `shell` begins at 4.
         #expect(editor.withFrame {
             $0.frame.mode == .codeEditor
                 && $0.frame.viewportRows == 3
-                && $0.styleCount == 1
-                && $0.styles?[0].offset == 0
+                && $0.styleCount >= 1
+                && $0.styles?[0].offset == 4
         })
 
         let submit = editor.apply(key(.enter, sequence: sequence, modifiers: [.control]))

@@ -91,9 +91,9 @@ public struct TextSurfaceScreenModel {
     public private(set) var styleSpanCount = 0
     public private(set) var overlayStyleSpanCount = 0
 
-    private var text = InlineArray<8200, UInt8>(repeating: 0)
+    private var text    = InlineArray<8200, UInt8>(repeating: 0)
     private var overlay = InlineArray<1024, UInt8>(repeating: 0)
-    private var styles = InlineArray<32, ReixTextSurfaceStyleSpan>(
+    private var styles  = InlineArray<64, ReixTextSurfaceStyleSpan>(
         repeating: ReixTextSurfaceStyleSpan(offset: 0, length: 1, role: .plain)!
     )
     private var overlayStyles = InlineArray<16, ReixTextSurfaceStyleSpan>(

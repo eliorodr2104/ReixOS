@@ -388,6 +388,32 @@ private func testReachingIntoValuesStillReads() {
     require(parses("list.map { $0.name }.compactMap { $0 }"), "two methods in a row")
 }
 
+/// Every role the shell can emit has to mean something to the backend, in
+/// both profiles. A role nobody painted would be an invisible token.
+private func testEveryRoleHasAColour() {
+    let roles: [ReixTextSurfaceStyleRole] = [
+        .plain, .prompt, .input, .selection, .diagnostic, .overlay, .editorChrome,
+        .keyword, .namespace, .command, .label, .text, .number, .path,
+        .variable, .member, .closure, .incomplete, .error,
+    ]
+    for profile in [ReixTerminalColorProfile.indexed256, .ansi16] {
+        TextSurfacePalette.profile = profile
+        for role in roles {
+            require(TextSurfacePalette.parameters(for: role).utf8CodeUnitCount > 0, "a role with no colour")
+        }
+        // The distinctions the eye is meant to make.
+        let namespace = spelling(TextSurfacePalette.parameters(for: .namespace))
+        let command   = spelling(TextSurfacePalette.parameters(for: .command))
+        let text      = spelling(TextSurfacePalette.parameters(for: .text))
+        let error     = spelling(TextSurfacePalette.parameters(for: .error))
+        require(namespace != command, "a receiver looks like its verb")
+        require(command != text, "a verb looks like a string")
+        require(error != command, "a mistake looks like a verb")
+    }
+    TextSurfacePalette.profile = .indexed256
+    require(spelling(TextSurfacePalette.parameters(for: .command)) == "38;5;214", "gruvbox yellow for a verb")
+}
+
 /// The analysis, against the receivers the shell is actually built with.
 private func testAnalysisReadsTheRealCatalog() {
     let catalog = ShellPipeline.merged()
@@ -429,6 +455,7 @@ private func testAnalysisReadsTheRealCatalog() {
 testModulesMerge()
 testMergeRefusesWhatItCannotName()
 testAnalysisReadsTheRealCatalog()
+testEveryRoleHasAColour()
 testSignatureTableIsTheCatalog()
 testSpellingsResolveUniquely()
 testEveryCommandNamesItsAuthority()
@@ -444,4 +471,4 @@ testWrittenArgumentsMayBeBareWords()
 
 // `print` would reach Reix's freestanding `putchar`, which has no console
 // here. The harness says how it went through the file descriptor instead.
-FileHandle.standardOutput.write(Data("ShellCatalogHarness: 15 checks passed\n".utf8))
+FileHandle.standardOutput.write(Data("ShellCatalogHarness: 16 checks passed\n".utf8))

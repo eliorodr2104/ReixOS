@@ -19,9 +19,12 @@ struct ShellPipeline {
     private var lastSequence : ShellSequence?
     private(set) var outcome: ShellOutcome = .handled
 
-    init(environment: Environment) {
+    init(
+        environment: Environment,
+        catalog    : ShellCatalog = Self.merged()
+    ) {
         self.environment = environment
-        self.catalog = Self.merged()
+        self.catalog = catalog
     }
 
     /// Every module the shell was built with, in one catalog.
