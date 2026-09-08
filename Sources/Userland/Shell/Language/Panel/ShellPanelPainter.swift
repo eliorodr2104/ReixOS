@@ -171,6 +171,10 @@ public enum ShellPanelPainter {
         let shown    = min(panel.count, max(1, Int(rows) - 2))
         let nameStop = min(inner - 12, 20)
 
+        // The window follows the selection instead of the list following the
+        // window: a row selected below what fits scrolls the box down to it.
+        let first = max(0, min(panel.selected - shown + 1, panel.count - shown))
+
         // ┌─ title ─────────┐
         beginRow()
         cell("┌")
@@ -185,7 +189,8 @@ public enum ShellPanelPainter {
         cell("┐")
         put(0x0A)
 
-        for index in 0..<shown {
+        for offsetRow in 0..<shown {
+            let index = first + offsetRow
             guard let row = panel.row(at: index) else { continue }
             beginRow()
             cell("│")
@@ -221,10 +226,14 @@ public enum ShellPanelPainter {
             put(selection.summary)
             columnsWritten += selection.summary.utf8CodeUnitCount
         }
-        if panel.truncated {
-            put(" · more")
-            columnsWritten += 7
-        }
+        // Where the selection is in the whole list, which is the only honest
+        // way to say that there is more above or below.
+        put(" · ")
+        columnsWritten += 3
+        Self.decimal(panel.selected + 1, put: { put($0) }, columns: &columnsWritten)
+        put(" of ")
+        columnsWritten += 4
+        Self.decimal(panel.available, put: { put($0) }, columns: &columnsWritten)
         mark(.editorChrome, from: footerStart, to: offset)
         if columnsWritten < Int(width) - 1 { ascii(0x20) }
         while columnsWritten < Int(width) - 1 { cell("─") }
@@ -238,5 +247,24 @@ public enum ShellPanelPainter {
             spanCount: spanCount,
             shownRows: shown
         )
+    }
+
+    /// A number, written out, counting the cells it took.
+    private static func decimal(
+        _ value  : Int,
+          put    : (UInt8) -> Void,
+          columns: inout Int
+    ) {
+        var digits  = 1
+        var divisor = 1
+        while value / divisor >= 10 {
+            divisor *= 10
+            digits += 1
+        }
+        while divisor > 0 {
+            put(UInt8(value / divisor % 10) + 0x30)
+            divisor /= 10
+        }
+        columns += digits
     }
 }

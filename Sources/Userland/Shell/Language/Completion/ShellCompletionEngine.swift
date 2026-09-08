@@ -118,12 +118,16 @@ public enum ShellCompletionEngine {
                 }
                 for index in 0..<ShellCatalog.methodCount(of: context.schema) {
                     guard let method = ShellCatalog.method(of: context.schema, at: index) else { continue }
+                    // A method arrives with what it takes: braces for a
+                    // closure, quotes for a text, and the cursor inside them.
                     offer(ShellCompletion(
                         kind   : .method,
                         name   : method.name,
+                        suffix : template(for: method.argument),
                         detail : method.result.name,
                         summary: method.summary,
-                        rank   : 1
+                        rank   : 1,
+                        caret  : caret(for: method.argument)
                     ))
                 }
 
@@ -149,6 +153,26 @@ public enum ShellCompletionEngine {
             sensitive: descriptor.sensitive,
             rank     : rank
         )
+    }
+
+    /// What a method's argument looks like once it is written out.
+    private static func template(for argument: ShellMethodArgument) -> StaticString {
+        switch argument {
+            case .none: return "()"
+            // Two spaces, so what is written between them ends up with one on
+            // each side: `{ $0.isFolder }`.
+            case .closure: return " {  }"
+            case .text: return "(\"\")"
+        }
+    }
+
+    /// Where the cursor belongs inside that, counted back from the end.
+    private static func caret(for argument: ShellMethodArgument) -> Int {
+        switch argument {
+            case .none: return 0
+            case .closure: return 2
+            case .text: return 2
+        }
     }
 
     /// The shape of a value, for the column beside a name.

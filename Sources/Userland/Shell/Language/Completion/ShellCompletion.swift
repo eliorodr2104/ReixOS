@@ -32,8 +32,13 @@ public struct ShellCompletion {
     public private(set) var count = 0
 
     /// What to write after the name so the line reads as it should: `.` after
-    /// a receiver, `: ` after a label, nothing otherwise.
+    /// a receiver, `: ` after a label, ` { }` after a method that takes a
+    /// closure, nothing otherwise.
     public let suffix : StaticString
+
+    /// How far back from the end of what was written the cursor belongs, so
+    /// accepting `filter` leaves it inside the braces rather than after them.
+    public let caret  : Int
 
     /// The shape of the thing, for the column beside the name.
     public let detail : StaticString
@@ -56,11 +61,13 @@ public struct ShellCompletion {
         detail   : StaticString = "",
         summary  : StaticString = "",
         sensitive: Bool = false,
-        rank     : UInt8 = 1
+        rank     : UInt8 = 1,
+        caret    : Int = 0
     ) {
         guard name.utf8CodeUnitCount > 0, name.utf8CodeUnitCount <= Self.nameCapacity else { return nil }
         self.kind = kind
         self.suffix = suffix
+        self.caret = caret
         self.detail = detail
         self.summary = summary
         self.sensitive = sensitive
@@ -78,11 +85,13 @@ public struct ShellCompletion {
         detail   : StaticString = "",
         summary  : StaticString = "",
         sensitive: Bool = false,
-        rank     : UInt8 = 1
+        rank     : UInt8 = 1,
+        caret    : Int = 0
     ) {
         guard count > 0, count <= Self.nameCapacity else { return nil }
         self.kind = kind
         self.suffix = suffix
+        self.caret = caret
         self.detail = detail
         self.summary = summary
         self.sensitive = sensitive

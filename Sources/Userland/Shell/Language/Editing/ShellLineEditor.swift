@@ -1383,6 +1383,7 @@ public struct ShellLineEditor: ~Copyable {
         if written, best.suffix.utf8CodeUnitCount > 0 {
             written = insertRun(best.suffix.utf8Start, best.suffix.utf8CodeUnitCount)
         }
+        if written { stepBack(best.caret) }
         return written
     }
 
@@ -1428,8 +1429,16 @@ public struct ShellLineEditor: ~Copyable {
         if written, candidate.suffix.utf8CodeUnitCount > 0 {
             written = insertRun(candidate.suffix.utf8Start, candidate.suffix.utf8CodeUnitCount)
         }
+        if written { stepBack(candidate.caret) }
         closePanel()
         return written
+    }
+
+    /// Puts the cursor back inside what was just written, which is where
+    /// somebody accepting `filter { }` wants to be.
+    private mutating func stepBack(_ places: Int) {
+        guard places > 0 else { return }
+        for _ in 0..<places where !applyOnce(.moveLeft(false)) { return }
     }
 
     /// Inserts a run of bytes through the ordinary insertion path, in the

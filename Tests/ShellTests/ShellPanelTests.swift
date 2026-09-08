@@ -110,7 +110,10 @@ struct ShellPanelTests {
     @Test("Rows that do not fit are counted, and the foot says so")
     func truncation() {
         var panel = ShellPanel(title: "many")
-        for name in ["one", "two", "three", "four", "five", "six", "seven", "eight"] {
+        for name in [
+            "one", "two", "three", "four", "five", "six", "seven", "eight",
+            "nine", "ten", "eleven", "twelve", "thirteen", "fourteen",
+        ] {
             name.withCString { pointer in
                 pointer.withMemoryRebound(to: UInt8.self, capacity: name.utf8.count) { bytes in
                     panel.append(ShellPanelRow(bytes: bytes, count: name.utf8.count, detail: "Void"))
@@ -119,7 +122,9 @@ struct ShellPanelTests {
         }
         #expect(panel.count == ShellPanel.rowCapacity)
         #expect(panel.truncated)
-        #expect(painted(panel).lines.last?.contains("more") == true)
+        // The foot says where the selection is in the whole list, which is
+        // how it says there is more of it than the box shows.
+        #expect(painted(panel).lines.last?.contains("1 of 14") == true)
     }
 
     @Test("A terminal with no room for a box still gets the names")

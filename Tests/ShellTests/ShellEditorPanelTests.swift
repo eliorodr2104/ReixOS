@@ -189,6 +189,39 @@ struct ShellEditorPanelTests {
         #expect(line(&subject) == "fileSystem.l")
     }
 
+    @Test("A method arrives with its braces, and the cursor inside them")
+    func closureTemplate() {
+        var sequence: UInt32 = 1
+        var subject = editor()
+        type("list.fil", into: &subject, sequence: &sequence)
+        // `fil` has one answer, so Tab takes the grey word rather than opening
+        // the box, and it still brings the braces.
+        _ = press(.tab, into: &subject, sequence: &sequence)
+        // Two spaces: one lands on each side of whatever is written between.
+        #expect(line(&subject) == "list.filter {  }")
+
+        // Typing now lands between the braces.
+        type("$0.isFolder", into: &subject, sequence: &sequence)
+        #expect(line(&subject) == "list.filter { $0.isFolder }")
+    }
+
+    @Test("The box scrolls to keep the selection in view")
+    func panelScrolls() {
+        var sequence: UInt32 = 1
+        var subject = editor()
+        type("list.", into: &subject, sequence: &sequence)
+        _ = press(.tab, into: &subject, sequence: &sequence)
+
+        let first = overlay(&subject)
+        #expect(first.contains("count"))
+
+        // Ten steps down is past what the box shows at once.
+        for _ in 0..<10 { _ = press(.down, into: &subject, sequence: &sequence) }
+        let later = overlay(&subject)
+        #expect(!later.contains("count"), "the window moved with the selection")
+        #expect(later.contains("11 of 11") || later.contains("of 11"))
+    }
+
     @Test("With nothing to offer, the box does not open")
     func nothingToOffer() {
         var sequence: UInt32 = 1

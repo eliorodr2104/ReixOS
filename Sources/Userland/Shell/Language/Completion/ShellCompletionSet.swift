@@ -13,9 +13,9 @@ import ReixABI
 /// list that grows with the catalog is a list somebody has to allocate. What
 /// did not fit is counted, not forgotten, so the popup can say there is more.
 public struct ShellCompletionSet {
-    public static let capacity = 8
+    public static let capacity = 16
 
-    private var entries = InlineArray<8, ShellCompletion?>(repeating: nil)
+    private var entries = InlineArray<16, ShellCompletion?>(repeating: nil)
 
     public private(set) var count   = 0
 
@@ -33,10 +33,13 @@ public struct ShellCompletionSet {
 
     /// Places a candidate in rank order, dropping the worst when full.
     ///
+    /// Public because the static side is not the only side: a provider that
+    /// answers with paths adds to the same bounded, ordered list.
+    ///
     /// Band first, then shorter, then alphabetical. Nothing here consults
     /// time, memory addresses or insertion order, so the same line always
     /// offers the same list in the same order.
-    internal mutating func insert(_ candidate: ShellCompletion) {
+    public mutating func insert(_ candidate: ShellCompletion) {
         matched += 1
         var position = count
         while position > 0, let existing = entries[position - 1],

@@ -207,8 +207,17 @@ struct ShellCompletionTests {
     func boundedList() {
         let all = offered("")
         #expect(all.names.count <= ShellCompletionSet.capacity)
-        #expect(all.matched > all.names.count)
-        #expect(all.truncated)
+        #expect(all.matched == all.names.count, "this catalog fits inside the bound")
+
+        // The bound itself, without needing a catalog large enough to reach it.
+        var set = ShellCompletionSet()
+        for index in 0..<(ShellCompletionSet.capacity + 4) {
+            let name: StaticString = index % 2 == 0 ? "alpha" : "beta"
+            set.insert(ShellCompletion(kind: .command, name: name)!)
+        }
+        #expect(set.count == ShellCompletionSet.capacity)
+        #expect(set.matched == ShellCompletionSet.capacity + 4)
+        #expect(set.truncated)
     }
 
     @Test("Where nothing static fits, nothing is offered")

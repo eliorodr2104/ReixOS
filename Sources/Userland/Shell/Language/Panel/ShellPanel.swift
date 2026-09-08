@@ -35,11 +35,16 @@ public struct ShellPanelRow {
     /// accepted; nothing else has to be kept alive beside the box.
     public let suffix   : StaticString
 
+    /// How far back the cursor belongs after writing it: inside the braces of
+    /// a closure, inside the quotes of a text.
+    public let caret    : Int
+
     public init?(
         name     : StaticString,
         detail   : StaticString = "",
         summary  : StaticString = "",
         suffix   : StaticString = "",
+        caret    : Int = 0,
         sensitive: Bool = false,
         role     : ReixTextSurfaceStyleRole = .plain
     ) {
@@ -47,6 +52,7 @@ public struct ShellPanelRow {
         self.detail = detail
         self.summary = summary
         self.suffix = suffix
+        self.caret = caret
         self.sensitive = sensitive
         self.role = role
         for index in 0..<name.utf8CodeUnitCount { self.name[index] = name.utf8Start[index] }
@@ -59,6 +65,7 @@ public struct ShellPanelRow {
         detail   : StaticString = "",
         summary  : StaticString = "",
         suffix   : StaticString = "",
+        caret    : Int = 0,
         sensitive: Bool = false,
         role     : ReixTextSurfaceStyleRole = .plain
     ) {
@@ -66,6 +73,7 @@ public struct ShellPanelRow {
         self.detail = detail
         self.summary = summary
         self.suffix = suffix
+        self.caret = caret
         self.sensitive = sensitive
         self.role = role
         for index in 0..<count { self.name[index] = bytes[index] }
@@ -85,9 +93,9 @@ public struct ShellPanelRow {
 /// knows how to be a list with a title and a line at the foot, and nothing
 /// about where its rows came from.
 public struct ShellPanel {
-    public static let rowCapacity = 6
+    public static let rowCapacity = 12
 
-    private var entries = InlineArray<6, ShellPanelRow?>(repeating: nil)
+    private var entries = InlineArray<12, ShellPanelRow?>(repeating: nil)
 
     /// What the box is showing, drawn in its top edge.
     public let title: StaticString
