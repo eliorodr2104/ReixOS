@@ -302,6 +302,12 @@ public struct TextSurfaceScreenModel {
             retireEditor()
         }
         switch descriptor.mode {
+            case .reset:
+                // Nothing on the screen and the flow at the top, which is what
+                // the terminal is about to be told to do.
+                retireEditor()
+                flowRow = 1
+                flowColumn = 0
             case .transcript:
                 retireEditor()
                 advanceFlow(frame)

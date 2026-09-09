@@ -223,6 +223,35 @@ struct ShellEditorPanelTests {
         #expect(later.contains("of 13"))
     }
 
+    @Test("Inside a closure, the box knows what the element is")
+    func panelInsideAClosure() {
+        var sequence: UInt32 = 1
+        var subject = editor()
+        type("list.filter { $0.", into: &subject, sequence: &sequence)
+        _ = press(.tab, into: &subject, sequence: &sequence)
+        let opened = subject.isPanelOpen
+        #expect(opened)
+
+        // Three rows of six fit; what matters is that they are an entry's.
+        let drawn = overlay(&subject)
+        #expect(drawn.contains("isFile"), "what one entry is")
+        #expect(drawn.contains("of 6"), "six of them, not the list's thirteen")
+        #expect(!drawn.contains("count"), "and not what the list is")
+    }
+
+    @Test("And when the closure named it, the name answers the same way")
+    func panelAfterANamedParameter() {
+        var sequence: UInt32 = 1
+        var subject = editor()
+        type("list.filter { palle in palle.", into: &subject, sequence: &sequence)
+        _ = press(.tab, into: &subject, sequence: &sequence)
+        let opened = subject.isPanelOpen
+        #expect(opened)
+        let named = overlay(&subject)
+        #expect(named.contains("isFile"))
+        #expect(named.contains("of 6"))
+    }
+
     @Test("With nothing to offer, the box does not open")
     func nothingToOffer() {
         var sequence: UInt32 = 1

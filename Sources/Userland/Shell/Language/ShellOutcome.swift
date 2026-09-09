@@ -31,6 +31,12 @@ public enum ShellOutcome {
     /// Carried out, and the shell should stop reading lines.
     case exitRequested
 
+    /// Carried out, and the screen should be started again from the top.
+    ///
+    /// A module cannot clear a terminal and should not be able to: what it can
+    /// do is say that it asked, and let whoever holds the terminal do it.
+    case clearRequested
+
 
     /// Whether a shell that saw this outcome stops reading lines.
     ///
@@ -40,8 +46,8 @@ public enum ShellOutcome {
     /// as `running = !stops` would let the next command undo it.
     public var stopsTheShell: Bool {
         switch self {
-            case .notHandled, .handled: false
-            case .exitRequested       : true
+            case .notHandled, .handled, .clearRequested: false
+            case .exitRequested                        : true
         }
     }
 }

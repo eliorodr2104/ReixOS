@@ -50,14 +50,14 @@ private struct Run {
 /// A receiver that claims a name another provider already holds.
 private enum Twin: ShellCommandProvider {
     static var namespace: ShellNamespaceDescriptor {
-        ShellNamespaceDescriptor("shell", summary: "a second claim on a taken name")
+        ShellNamespaceDescriptor("Shell", summary: "a second claim on a taken name")
     }
     static var commandCount: Int { 1 }
     static func command(at index: Int) -> ShellCommandDescriptor? {
         ShellCommandDescriptor(
             code     : 0,
             verb     : "help",
-            signature: TypedShellSignature(namespace: "shell", name: "help"),
+            signature: TypedShellSignature(namespace: "Shell", name: "help"),
             summary  : "the same receiver, again"
         )
     }
@@ -73,7 +73,7 @@ private enum Impostor: ShellCommandProvider {
         ShellCommandDescriptor(
             code     : 0,
             verb     : "read",
-            signature: TypedShellSignature(namespace: "fileSystem", name: "borrowed"),
+            signature: TypedShellSignature(namespace: "FileManager", name: "borrowed"),
             summary  : "a command filed under somebody else's receiver"
         )
     }
@@ -218,7 +218,8 @@ private func testEveryCommandNamesItsAuthority() {
     for index in 0..<catalog.count {
         guard let descriptor = catalog.command(at: index) else { continue }
         let name = spelling(descriptor.signature.name)
-        if name == "help" || name == "exit" { continue }
+        // The shell's own three need no authority: they are about the shell.
+        if name == "help" || name == "exit" || name == "clear" { continue }
         require(descriptor.capability != nil, "\(name) claims no capability")
     }
 }
@@ -237,10 +238,10 @@ private func testObjectsCarryASchema() {
 }
 
 private func testSpellingsAreEquivalent() {
-    let expected = [RecordedCall(command: "fileSystem.changeDir", arguments: ["vault"])]
+    let expected = [RecordedCall(command: "FileManager.changeDir", arguments: ["vault"])]
     for source in [
-        "fileSystem.changeDir vault",
-        "fileSystem.changeDir(at: \"vault\")",
+        "FileManager.changeDir vault",
+        "FileManager.changeDir(at: \"vault\")",
         "changeDir vault",
         "changeDir(at: \"vault\")",
     ] {
@@ -251,10 +252,10 @@ private func testSpellingsAreEquivalent() {
 }
 
 private func testLabelsAndOrderAgree() {
-    let expected = [RecordedCall(command: "fileSystem.move", arguments: ["draft", "archive"])]
+    let expected = [RecordedCall(command: "FileManager.move", arguments: ["draft", "archive"])]
     for source in [
-        "fileSystem.move(from: \"draft\", to: \"archive\")",
-        "fileSystem.move(to: \"archive\", from: \"draft\")",
+        "FileManager.move(from: \"draft\", to: \"archive\")",
+        "FileManager.move(to: \"archive\", from: \"draft\")",
         "move from draft to archive",
         "move draft archive",
     ] {
@@ -265,30 +266,30 @@ private func testLabelsAndOrderAgree() {
 }
 
 private func testCommaIsSequentialAndFailsClosed() {
-    let carried = run("fileSystem.currentDirectory(), fileSystem.free(), fileSystem.scrub()")
+    let carried = run("FileManager.currentDirectory(), FileManager.free(), FileManager.scrub()")
     require(carried.failure == nil)
     require(carried.calls.map(\.command) == [
-        "fileSystem.currentDirectory",
-        "fileSystem.free",
-        "fileSystem.scrub",
+        "FileManager.currentDirectory",
+        "FileManager.free",
+        "FileManager.scrub",
     ])
 
     let stopped = run(
-        "fileSystem.currentDirectory(), fileSystem.free(), fileSystem.scrub()",
-        refuse: "fileSystem.free"
+        "FileManager.currentDirectory(), FileManager.free(), FileManager.scrub()",
+        refuse: "FileManager.free"
     )
     require(stopped.failure == .service(7))
-    require(stopped.calls.map(\.command) == ["fileSystem.currentDirectory", "fileSystem.free"])
+    require(stopped.calls.map(\.command) == ["FileManager.currentDirectory", "FileManager.free"])
 }
 
 private func testOmissionNeedsAUniqueAnswer() {
-    require(run("list").calls.map(\.command) == ["fileSystem.list"])
-    require(run("process.list").calls.map(\.command) == ["process.list"])
+    require(run("list").calls.map(\.command) == ["FileManager.list"])
+    require(run("ProcessManager.list").calls.map(\.command) == ["ProcessManager.list"])
 
     // `read` is spelled by two receivers. The bare form belongs to the one
     // that does not insist on being named.
-    require(run("read a.txt").calls == [RecordedCall(command: "fileSystem.read", arguments: ["a.txt"])])
-    require(run("disk.read 0").calls.map(\.command) == ["disk.read"])
+    require(run("read a.txt").calls == [RecordedCall(command: "FileManager.read", arguments: ["a.txt"])])
+    require(run("Disk.read 0").calls.map(\.command) == ["Disk.read"])
 
     let unknown = run("readd a.txt")
     require(unknown.calls.isEmpty)
@@ -339,7 +340,7 @@ private func testAmbiguityIsRefused() {
 
 private func testQuotesMayBeLeftOffOneWord() {
     require(run("write draft \"two words\"").calls == [
-        RecordedCall(command: "fileSystem.write", arguments: ["draft", "two words"]),
+        RecordedCall(command: "FileManager.write", arguments: ["draft", "two words"]),
     ])
 
     // Without them the phrase is a third argument, and a command that takes
@@ -352,14 +353,14 @@ private func testQuotesMayBeLeftOffOneWord() {
 /// The written form of a compact call has to mean the same thing, which is
 /// what the help has always claimed and what the live shell refused.
 private func testWrittenArgumentsMayBeBareWords() {
-    require(run("fileSystem.createDirectory(at: vault)").calls == [
-        RecordedCall(command: "fileSystem.createDirectory", arguments: ["vault"]),
+    require(run("FileManager.createDirectory(at: vault)").calls == [
+        RecordedCall(command: "FileManager.createDirectory", arguments: ["vault"]),
     ])
-    require(run("fileSystem.changeDir(at: reix::app/doc)").calls == [
-        RecordedCall(command: "fileSystem.changeDir", arguments: ["reix::app/doc"]),
+    require(run("FileManager.changeDir(at: reix::app/doc)").calls == [
+        RecordedCall(command: "FileManager.changeDir", arguments: ["reix::app/doc"]),
     ])
     require(run("info(at: a.txt)").calls == [
-        RecordedCall(command: "fileSystem.info", arguments: ["a.txt"]),
+        RecordedCall(command: "FileManager.info", arguments: ["a.txt"]),
     ])
 
     // The word rule is for arguments, not for the verb: a misspelled command
@@ -369,7 +370,7 @@ private func testWrittenArgumentsMayBeBareWords() {
     require(unknown.failure != nil)
 
     // `$0` outside a closure is a name the evaluator owes, not a word.
-    let orphan = run("fileSystem.read(at: $0)")
+    let orphan = run("FileManager.read(at: $0)")
     require(orphan.calls.isEmpty)
     guard case .unknownSymbol? = orphan.failure else {
         require(false, "an unsupplied $0 became its own spelling")
@@ -395,10 +396,10 @@ private func testClosuresMayNameTheirElement() {
 /// had. A verb is not a receiver, and a value named like one is still a value.
 private func testReachingIntoValuesStillReads() {
     require(parses("list.filter { $0.isFolder }"), "a bare verb still takes a method")
-    require(parses("fileSystem.list().filter { $0.name.contains(\"a\") }"), "a written call still chains")
-    require(parses("fileSystem.list.filter { $0.isFolder }"), "a receiver, its verb, and a method")
+    require(parses("FileManager.list().filter { $0.name.contains(\"a\") }"), "a written call still chains")
+    require(parses("FileManager.list.filter { $0.isFolder }"), "a receiver, its verb, and a method")
     require(parses("let folders = list\n    .filter { $0.isFolder }"), "a chain continued on the next line")
-    require(parses("let fileSystem = list, fileSystem.filter { $0.isFolder }"), "a binding named like a receiver")
+    require(parses("let FileManager = list, FileManager.filter { $0.isFolder }"), "a binding named like a receiver")
     require(parses("list.map { $0.name }.compactMap { $0 }"), "two methods in a row")
 }
 
@@ -448,18 +449,18 @@ private func testCompletionOffersWhatTheShellHas() {
     }
 
     let head = offered("")
-    require(head.contains("fileSystem"), "a receiver is offered at the head of a line")
-    require(head.contains("shell"), "and so is the other one")
+    require(head.contains("FileManager"), "a receiver is offered at the head of a line")
+    require(head.contains("Shell"), "and so is the other one")
 
-    let verbs = offered("fileSystem.c")
+    let verbs = offered("FileManager.c")
     require(verbs.contains("compact"), "a receiver's verbs are offered after its dot")
     require(verbs.contains("createFile"), "including the longer ones")
     require(!verbs.contains("read"), "and only the ones that begin with what was typed")
 
-    let labels = offered("fileSystem.write(")
+    let labels = offered("FileManager.write(")
     require(labels == ["at", "text"], "a command's labels, in the order it takes them")
 
-    // `list` answers with `[File]`, so what it offers is what a list offers.
+    // `list` answers with `[Entry]`, so what it offers is what a list offers.
     let listing = offered("list.")
     require(listing.contains("count"), "a list knows how many it holds")
     require(listing.contains("filter"), "and what can be done to it")
@@ -467,8 +468,8 @@ private func testCompletionOffersWhatTheShellHas() {
 
     // One of them, inside a closure over it, is a file.
     let element = offered("list.filter { $0.")
-    require(element.contains("isFolder"), "an element of a listing is a file")
-    require(element.contains("name"), "and files have names")
+    require(element.contains("isFolder"), "an element of a listing is an entry")
+    require(element.contains("name"), "and entries have names")
 
     // `disk.read` insists on its receiver, so the bare `read` on offer is the
     // file system's and there is only one of it.
@@ -521,24 +522,26 @@ private func testAnalysisReadsTheRealCatalog() {
         }
     }
 
-    let written = snapshot("fileSystem.changeDir(at: reix::vault)")
-    require(written.role(at: 0) == .namespace, "fileSystem is a receiver")
-    require(written.role(at: 11) == .command, "changeDir is its command")
-    require(written.role(at: 21) == .label, "at is a label it takes")
-    require(written.role(at: 25) == .path, "reix::vault is a path")
+    // FileManager.changeDir(at: reix::vault)
+    // 0          12         23  27
+    let written = snapshot("FileManager.changeDir(at: reix::vault)")
+    require(written.role(at: 0) == .namespace, "FileManager is a receiver")
+    require(written.role(at: 12) == .command, "changeDir is its command")
+    require(written.role(at: 22) == .label, "at is a label it takes")
+    require(written.role(at: 26) == .path, "reix::vault is a path")
     require(written.diagnosticCount == 0, "nothing to report about a good line")
 
     // The receivers only this shell has, resolved through the merged catalog.
-    let processes = snapshot("process.")
+    let processes = snapshot("ProcessManager.")
     require(processes.context.subject == .command, "after a receiver, its commands")
     require(processes.context.receiver >= 0, "and the receiver is named")
 
-    let disk = snapshot("disk.read 0")
+    let disk = snapshot("Disk.read 0")
     require(disk.role(at: 5) == .command, "read belongs to disk when disk is written")
     require(disk.role(at: 10) == .number, "a sector is a number")
 
-    let typo = snapshot("fileSystem.chagne ")
-    require(typo.role(at: 11) == .error, "a finished name nobody answers to is wrong")
+    let typo = snapshot("FileManager.chagne ")
+    require(typo.role(at: 12) == .error, "a finished name nobody answers to is wrong")
     require(typo.diagnosticCount == 1, "and it is reported once")
 }
 

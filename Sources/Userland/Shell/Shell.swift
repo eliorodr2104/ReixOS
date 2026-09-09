@@ -36,7 +36,7 @@ public func main() {
 
     ShellOutput.begin()
     print("")
-    print("ReixOS shell. Type shell.help() to see what this understands.")
+    print("ReixOS shell. Type Shell.help() to see what this understands.")
     print("")
     guard ShellOutput.flush(to: &terminal) else {
         exit(code: 1)
@@ -225,6 +225,13 @@ public func main() {
 
             case .blank, .carriedOut, .finished, .closed:
                 break
+        }
+
+        // A module cannot clear a terminal; it can say that it asked. This is
+        // the one place that holds one.
+        if pipeline.outcome == .clearRequested {
+            _ = terminal.clear(sequence: ShellOutput.nextSequence())
+            editor.requireSnapshot()
         }
 
         if count >= 0 { editor.reset() }

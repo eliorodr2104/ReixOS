@@ -28,7 +28,7 @@ public enum FileSystemModule: ShellModule {
     }
 
     public static var namespace: ShellNamespaceDescriptor {
-        ShellNamespaceDescriptor("fileSystem", capability: .container, summary: "this shell's container")
+        ShellNamespaceDescriptor("FileManager", capability: .container, summary: "this shell's container")
     }
 
     public static var commandCount: Int { Int(Declared.scrub.rawValue) + 1 }
@@ -37,52 +37,52 @@ public enum FileSystemModule: ShellModule {
         guard let declared = Declared(rawValue: UInt16(index)) else { return nil }
         switch declared {
             case .list:
-                return descriptor(declared, "list", TypedShellSignature(namespace: "fileSystem", name: "list", result: .sequence),
+                return descriptor(declared, "list", TypedShellSignature(namespace: "FileManager", name: "list", result: .sequence),
                                   schema: .entries, summary: "what is here")
             case .currentDirectory:
-                return descriptor(declared, "where", TypedShellSignature(namespace: "fileSystem", name: "currentDirectory", effect: .session),
+                return descriptor(declared, "where", TypedShellSignature(namespace: "FileManager", name: "currentDirectory", effect: .session),
                                   summary: "say where this shell is standing")
             case .changeDir:
-                return descriptor(declared, "move", TypedShellSignature(namespace: "fileSystem", name: "changeDir", TypedShellParameter("at"), effect: .session),
+                return descriptor(declared, "move", TypedShellSignature(namespace: "FileManager", name: "changeDir", TypedShellParameter("at"), effect: .session),
                                   summary: "change this session's directory")
             case .move:
-                return descriptor(declared, "rename", TypedShellSignature(namespace: "fileSystem", name: "move", TypedShellParameter("from"), TypedShellParameter("to")),
+                return descriptor(declared, "rename", TypedShellSignature(namespace: "FileManager", name: "move", TypedShellParameter("from"), TypedShellParameter("to")),
                                   sensitive: true, summary: "rename it, or move it")
             case .free:
-                return descriptor(declared, "free", TypedShellSignature(namespace: "fileSystem", name: "free"),
+                return descriptor(declared, "free", TypedShellSignature(namespace: "FileManager", name: "free"),
                                   summary: "how much room is left")
             case .info:
-                return descriptor(declared, "info", TypedShellSignature(namespace: "fileSystem", name: "info", TypedShellParameter("at")),
+                return descriptor(declared, "info", TypedShellSignature(namespace: "FileManager", name: "info", TypedShellParameter("at")),
                                   summary: "what something is, and when")
             case .read:
-                return descriptor(declared, "read", TypedShellSignature(namespace: "fileSystem", name: "read", TypedShellParameter("at")),
+                return descriptor(declared, "read", TypedShellSignature(namespace: "FileManager", name: "read", TypedShellParameter("at")),
                                   summary: "the first bytes of a file")
             case .write:
-                return descriptor(declared, "write", TypedShellSignature(namespace: "fileSystem", name: "write", TypedShellParameter("at"), TypedShellParameter("text")),
+                return descriptor(declared, "write", TypedShellSignature(namespace: "FileManager", name: "write", TypedShellParameter("at"), TypedShellParameter("text")),
                                   sensitive: true, summary: "replace what a file says")
             case .createDirectory:
-                return descriptor(declared, "folder", TypedShellSignature(namespace: "fileSystem", name: "createDirectory", TypedShellParameter("at")),
+                return descriptor(declared, "folder", TypedShellSignature(namespace: "FileManager", name: "createDirectory", TypedShellParameter("at")),
                                   summary: "make a folder")
             case .createFile:
-                return descriptor(declared, "write", TypedShellSignature(namespace: "fileSystem", name: "createFile", TypedShellParameter("at")),
+                return descriptor(declared, "write", TypedShellSignature(namespace: "FileManager", name: "createFile", TypedShellParameter("at")),
                                   sensitive: true, summary: "make an empty file")
             case .createContainer:
-                return descriptor(declared, "container", TypedShellSignature(namespace: "fileSystem", name: "createContainer", TypedShellParameter("name"), TypedShellParameter("blocks")),
+                return descriptor(declared, "container", TypedShellSignature(namespace: "FileManager", name: "createContainer", TypedShellParameter("name"), TypedShellParameter("blocks")),
                                   sensitive: true, summary: "cut a container out of this one")
             case .remove:
-                return descriptor(declared, "remove", TypedShellSignature(namespace: "fileSystem", name: "remove", TypedShellParameter("at")),
+                return descriptor(declared, "remove", TypedShellSignature(namespace: "FileManager", name: "remove", TypedShellParameter("at")),
                                   sensitive: true, summary: "take it away")
             case .name:
-                return descriptor(declared, "name", TypedShellSignature(namespace: "fileSystem", name: "name", TypedShellParameter("name")),
+                return descriptor(declared, "name", TypedShellSignature(namespace: "FileManager", name: "name", TypedShellParameter("name")),
                                   sensitive: true, summary: "rename the machine")
             case .unmount:
-                return descriptor(declared, "unmount", TypedShellSignature(namespace: "fileSystem", name: "unmount"),
+                return descriptor(declared, "unmount", TypedShellSignature(namespace: "FileManager", name: "unmount"),
                                   sensitive: true, summary: "mark the disk clean before stopping")
             case .compact:
-                return descriptor(declared, "compact", TypedShellSignature(namespace: "fileSystem", name: "compact", TypedShellParameter("at")),
+                return descriptor(declared, "compact", TypedShellSignature(namespace: "FileManager", name: "compact", TypedShellParameter("at")),
                                   summary: "put a scattered file back in one piece")
             case .scrub:
-                return descriptor(declared, "scrub", TypedShellSignature(namespace: "fileSystem", name: "scrub"),
+                return descriptor(declared, "scrub", TypedShellSignature(namespace: "FileManager", name: "scrub"),
                                   summary: "read the whole disk and say what is wrong")
         }
     }

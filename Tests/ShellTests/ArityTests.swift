@@ -24,7 +24,10 @@ struct ArityTests {
 
     /// The whole vocabulary, with what the plan says each verb takes.
     private static let table: [(name: String, arity: Arity, least: Int, most: Int)] = [
-        ("shell.help"    , Verbs.shellHelp    , 0, 0),
+        // Help is the second verb with a choice: with nothing it says what the
+        // shell is, with a name it says what that receiver or command is.
+        ("Shell.help"    , Verbs.shellHelp    , 0, 1),  // usage names it twice
+        ("Shell.clear"   , Verbs.shellClear   , 0, 0),
         ("shell.halt"    , Verbs.shellHalt    , 0, 0),
         ("shell.exit"    , Verbs.shellExit    , 0, 0),
 
@@ -64,9 +67,9 @@ struct ArityTests {
             #expect(entry.arity.most  == entry.most,  "\(entry.name) most")
         }
 
-        // Twenty-two verbs, so a verb added without a signature or a signature
-        // added without a verb shows up here rather than in a boot.
-        #expect(Self.table.count == 22)
+        // Twenty-three verbs, so a verb added without a signature or a
+        // signature added without a verb shows up here rather than in a boot.
+        #expect(Self.table.count == 23)
     }
 
 

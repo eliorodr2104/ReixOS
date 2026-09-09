@@ -171,6 +171,22 @@ struct ShellGhostTests {
         #expect(line(&after) == "pippo")
     }
 
+    @Test("The grey word works inside a closure too, named or not")
+    func ghostsInsideAClosure() {
+        var sequence: UInt32 = 1
+        var subject = editor()
+        type("list.filter { $0.isFol", into: &subject, sequence: &sequence)
+        #expect(ghost(&subject).text == "der")
+
+        _ = tab(into: &subject, sequence: &sequence)
+        #expect(line(&subject) == "list.filter { $0.isFolder")
+
+        sequence = 1
+        var named = editor()
+        type("list.filter { palle in palle.isCont", into: &named, sequence: &sequence)
+        #expect(ghost(&named).text == "ainer")
+    }
+
     @Test("Nothing typed, nothing suggested")
     func silenceOnAnEmptyLine() {
         var sequence: UInt32 = 1

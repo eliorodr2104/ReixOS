@@ -15,7 +15,7 @@ public enum DiskModule: ShellModule {
     }
 
     public static var namespace: ShellNamespaceDescriptor {
-        ShellNamespaceDescriptor("disk", capability: .block, summary: "the disk, sector by sector")
+        ShellNamespaceDescriptor("Disk", capability: .block, summary: "the disk, sector by sector")
     }
 
     public static var commandCount: Int { 2 }
@@ -26,7 +26,7 @@ public enum DiskModule: ShellModule {
                 return ShellCommandDescriptor(
                     code      : Verb.info.rawValue,
                     verb      : "info",
-                    signature : TypedShellSignature(namespace: "disk", name: "info", namespaceRequired: true),
+                    signature : TypedShellSignature(namespace: "Disk", name: "info", namespaceRequired: true),
                     capability: .block,
                     summary   : "what the disk is"
                 )
@@ -35,7 +35,7 @@ public enum DiskModule: ShellModule {
                     code      : Verb.read.rawValue,
                     verb      : "read",
                     signature : TypedShellSignature(
-                        namespace        : "disk",
+                        namespace        : "Disk",
                         name             : "read",
                         TypedShellParameter("sector"),
                         namespaceRequired: true

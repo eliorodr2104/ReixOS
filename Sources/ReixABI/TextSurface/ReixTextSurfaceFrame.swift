@@ -17,6 +17,11 @@ public enum ReixTextSurfaceFrameMode: UInt16, Equatable {
     case editor         = 2
     case codeEditor     = 3
     case codeTranscript = 4
+
+    /// Carries nothing and means one thing: the screen starts again, empty,
+    /// from the top. A frame rather than an escape, because the shell does not
+    /// know what an escape is.
+    case reset = 5
 }
 
 /// What a run of cells means. A backend turns it into a colour, and one that
@@ -157,7 +162,7 @@ public struct ReixTextSurfaceFrameDescriptor: Equatable {
               overlayLength == 0 ? overlayRows == 0 && overlayColumns == 0 : overlayRows > 0 && overlayColumns > 0,
               overlayRows == 0 || overlayRow <= viewportRows - overlayRows,
               overlayColumns == 0 || overlayColumn <= columns - overlayColumns,
-              (mode != .transcript && mode != .codeTranscript) || (
+              (mode != .transcript && mode != .codeTranscript && mode != .reset) || (
                   patchOffset == 0
                       && replacedLength == 0
                       && overlayLength == 0
@@ -165,7 +170,8 @@ public struct ReixTextSurfaceFrameDescriptor: Equatable {
                       && cursorColumn == 0
                       && viewportRow == 0
                       && viewportRows == 1
-              )
+              ),
+              mode != .reset || (textLength == 0 && styleSpanCount == 0)
         else { return nil }
 
         switch kind {

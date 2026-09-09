@@ -162,6 +162,38 @@ public struct TextSurfaceSession: ~Copyable {
     ///
     /// What was typed belongs in the scrollback, so its text is appended where it
     /// already stood and the screen stays where it is.
+    /// Starts the screen again: nothing on it, and the flow at the top.
+    ///
+    /// The editor block goes with it. What was typed before is scrollback the
+    /// terminal owns, and this is the shell saying it would like none of it.
+    public mutating func clear(sequence: UInt32) -> Bool {
+        guard usable, sequence != 0 else { return false }
+        _ = finishEditor(sequence: sequence)
+        guard let nextRevision = ReixTextSurfaceFrameDescriptor.nextRevision(after: revision),
+              let descriptor = ReixTextSurfaceFrameDescriptor(
+                  kind: .snapshot,
+                  mode: .reset,
+                  source: source,
+                  correlation: sequence,
+                  revision: nextRevision,
+                  baseRevision: 0,
+                  textLength: 0,
+                  columns: columns,
+                  rows: rows,
+                  cursorRow: 0,
+                  cursorColumn: 0,
+                  viewportRows: 1
+              ),
+              let frame = ReixTextSurfaceFrameSource(descriptor: descriptor, text: nil)
+        else {
+            requiresSnapshot = true
+            return false
+        }
+        let presented = sendFrame(frame, transaction: advanceTransaction())
+        requiresSnapshot = true
+        return settle(presented, revision: nextRevision)
+    }
+
     public mutating func finishEditor(sequence: UInt32) -> Bool {
         guard editorActive else { return true }
         let promotedMode: ReixTextSurfaceFrameMode = editorMode == .codeEditor

@@ -13,14 +13,14 @@ public enum CoreModule: ShellModule {
 
     /// This module's private name for each verb it declares.
     enum Verb: UInt16 {
-        case help, exit, halt
+        case help, exit, halt, clear
     }
 
     public static var namespace: ShellNamespaceDescriptor {
-        ShellNamespaceDescriptor("shell", summary: "this shell itself")
+        ShellNamespaceDescriptor("Shell", summary: "this shell itself")
     }
 
-    public static var commandCount: Int { 3 }
+    public static var commandCount: Int { 4 }
 
     public static func command(at index: Int) -> ShellCommandDescriptor? {
         switch Verb(rawValue: UInt16(index)) {
@@ -28,21 +28,33 @@ public enum CoreModule: ShellModule {
                 return ShellCommandDescriptor(
                     code     : Verb.help.rawValue,
                     verb     : "help",
-                    signature: TypedShellSignature(namespace: "shell", name: "help", effect: .pure),
-                    summary  : "what this shell understands"
+                    signature: TypedShellSignature(
+                        namespace: "Shell",
+                        name     : "help",
+                        TypedShellParameter("of", required: false),
+                        effect   : .pure
+                    ),
+                    summary  : "what this shell understands, or what one receiver does"
+                )
+            case .clear:
+                return ShellCommandDescriptor(
+                    code     : Verb.clear.rawValue,
+                    verb     : "clear",
+                    signature: TypedShellSignature(namespace: "Shell", name: "clear", effect: .session),
+                    summary  : "start the screen again, empty"
                 )
             case .exit:
                 return ShellCommandDescriptor(
                     code     : Verb.exit.rawValue,
                     verb     : "exit",
-                    signature: TypedShellSignature(namespace: "shell", name: "exit", effect: .session),
+                    signature: TypedShellSignature(namespace: "Shell", name: "exit", effect: .session),
                     summary  : "stop this shell, leave the machine up"
                 )
             case .halt:
                 return ShellCommandDescriptor(
                     code      : Verb.halt.rawValue,
                     verb      : "halt",
-                    signature : TypedShellSignature(namespace: "shell", name: "halt", effect: .machine),
+                    signature : TypedShellSignature(namespace: "Shell", name: "halt", effect: .machine),
                     capability: .sessionControl,
                     sensitive : true,
                     summary   : "request a coordinated shutdown"
@@ -67,11 +79,23 @@ public enum CoreModule: ShellModule {
 
         if session.spells(command.verb, "help") {
             guard Verbs.shellHelp.accepts(command.argumentCount) else {
-                _ = records.appendPresentation("  shell.help takes no arguments\n")
+                _ = records.appendPresentation("  Shell.help() or Shell.help(of: FileManager)\n")
                 return ShellCommandResult(outcome: .handled, status: .refused, records: records)
             }
-            help(into: &records)
+            if command.argumentCount == 1, let asked = session.bytes(of: command.arguments[0]) {
+                help(about: asked.bytes, count: asked.count, in: session, into: &records)
+            } else {
+                help(in: session, into: &records)
+            }
             return ShellCommandResult(outcome: .handled, records: records)
+        }
+
+        if session.spells(command.verb, "clear") {
+            guard Verbs.shellClear.accepts(command.argumentCount) else {
+                _ = records.appendPresentation("  Shell.clear takes no arguments\n")
+                return ShellCommandResult(outcome: .handled, status: .refused, records: records)
+            }
+            return ShellCommandResult(outcome: .clearRequested, records: records)
         }
 
         if session.spells(command.verb, "exit") {
@@ -119,49 +143,213 @@ private func halt(
     _ = records.appendPower(1)
 }
 
-private func help(into records: inout ShellResult) {
+/// The whole of what this shell is, in the order somebody meeting it needs.
+///
+/// A banner, then what it holds, then what it does not, then how to write to
+/// it. Every name and every line about a receiver comes out of the catalog, so
+/// this says what the modules say and cannot drift from it.
+private func help(
+      in session: ShellSession,
+      into records: inout ShellResult
+) {
     _ = records.appendPresentation("\n")
-    _ = records.appendPresentation("  shell.help                this text\n")
-    _ = records.appendPresentation("  shell.exit                stop this shell, leave the machine up\n")
-    _ = records.appendPresentation("  shell.halt                request a coordinated shutdown\n")
-    _ = records.appendPresentation("  process.list              the live process table\n")
-    _ = records.appendPresentation("  process.spawn \"Name.elf\"  run an image and wait for it\n")
-    _ = records.appendPresentation("  disk.info                 what the disk is\n")
-    _ = records.appendPresentation("  disk.read 0               the first bytes of one sector\n")
-    _ = records.appendPresentation("  fileSystem.currentDirectory()             say where this shell is standing\n")
-    _ = records.appendPresentation("  fileSystem.changeDir(at: reix::app/doc)   change this session's directory\n")
-    _ = records.appendPresentation("  fileSystem.list()                         what is here\n")
-    _ = records.appendPresentation("  fileSystem.free()                         how much room is left\n")
-    _ = records.appendPresentation("  fileSystem.info(at: a.txt)                what something is, and when\n")
-    _ = records.appendPresentation("  fileSystem.read(at: a.txt)                 the first bytes of a file\n")
-    _ = records.appendPresentation("  fileSystem.write(at: a.txt, text: \"hi\")   replace what a file says\n")
-    _ = records.appendPresentation("  fileSystem.createDirectory(at: docs)       make a folder\n")
-    _ = records.appendPresentation("  fileSystem.createFile(at: draft.txt)       make an empty file\n")
-    _ = records.appendPresentation("  fileSystem.createContainer(name: app, blocks: 64)\n")
-    _ = records.appendPresentation("                                             cut a container out of this one\n")
-    _ = records.appendPresentation("  fileSystem.move(from: a.txt, to: b/c.txt)  rename it, or move it\n")
-    _ = records.appendPresentation("  fileSystem.remove(at: a.txt)               take it away\n")
-    _ = records.appendPresentation("  fileSystem.name(name: laboratorio)        rename the machine\n")
-    _ = records.appendPresentation("  fileSystem.compact(at: a.bin)              put a scattered file back in one piece\n")
-    _ = records.appendPresentation("  fileSystem.unmount()                       mark the disk clean before stopping\n")
-    _ = records.appendPresentation("  fileSystem.scrub()                         read the whole disk and say what is wrong\n")
+    _ = records.appendPresentation("  ReixOS shell 0.1\n")
+    _ = records.appendPresentation("  a terminal that says what it is allowed to do\n")
     _ = records.appendPresentation("\n")
-    _ = records.appendPresentation("  Editor: Shift+Enter opens another line; Ctrl+Enter runs it now.\n")
-    _ = records.appendPresentation("  Plain Enter runs complete input and continues incomplete input.\n")
-    _ = records.appendPresentation("  Arrow keys, Home/End and Shift-selection work across lines.\n")
+
+    let catalog = session.catalog
+    var held    = 0
+    var withheld = 0
+    for index in 0..<catalog.namespaceCount {
+        guard let receiver = catalog.namespace(at: index) else { continue }
+        if holds(receiver.capability, session.environment) { held += 1 } else { withheld += 1 }
+    }
+
+    if held > 0 {
+        _ = records.appendPresentation("  This shell holds:\n")
+        for index in 0..<catalog.namespaceCount {
+            guard let receiver = catalog.namespace(at: index),
+                  holds(receiver.capability, session.environment)
+            else { continue }
+            line(receiver, in: catalog, into: &records)
+        }
+    }
+    if withheld > 0 {
+        _ = records.appendPresentation("\n")
+        _ = records.appendPresentation("  It was given no authority for:\n")
+        for index in 0..<catalog.namespaceCount {
+            guard let receiver = catalog.namespace(at: index),
+                  !holds(receiver.capability, session.environment)
+            else { continue }
+            line(receiver, in: catalog, into: &records)
+        }
+    }
+
     _ = records.appendPresentation("\n")
-    _ = records.appendPresentation("  Parentheses and labels may be left off: fileSystem.read(at: a.txt),\n")
-    _ = records.appendPresentation("  read a.txt and fileSystem.read(\"a.txt\") are the same request.\n")
-    _ = records.appendPresentation("  a space in it. The receiver may be left off when the verb names\n")
-    _ = records.appendPresentation("  only one thing.\n")
+    _ = records.appendPresentation("  Writing  receiver.verb(label: value). Parentheses, labels, quotes and\n")
+    _ = records.appendPresentation("           the receiver may be left off where one thing answers, so\n")
+    _ = records.appendPresentation("           `read a.txt` is `FileManager.read(at: \"a.txt\")`.\n")
+    _ = records.appendPresentation("  Paths    reix::app/doc/x.txt crosses into a container with :: and\n")
+    _ = records.appendPresentation("           walks folders with /. `..` goes up, and stops at the edge.\n")
+    _ = records.appendPresentation("  Values   list.filter { $0.isFolder } or { entry in entry.isFolder }.\n")
+    _ = records.appendPresentation("  Typing   Tab takes the grey word, or opens the box on what fits.\n")
+    _ = records.appendPresentation("           Arrows move in it, Enter takes one, Esc closes it.\n")
+    _ = records.appendPresentation("  Lines    Shift+Enter opens another line, Ctrl+Enter runs it now.\n")
     _ = records.appendPresentation("\n")
-    _ = records.appendPresentation("  A path crosses into a container with :: and walks folders with /,\n")
-    _ = records.appendPresentation("  so reix::app::child/doc/x.txt reads as what it is. `..` goes up,\n")
-    _ = records.appendPresentation("  and stops at the edge of what this shell was given.\n")
+    _ = records.appendPresentation("  help FileManager  what one receiver can do\n")
+    _ = records.appendPresentation("  help read         what one command takes and changes\n")
     _ = records.appendPresentation("\n")
-    _ = records.appendPresentation("  A spawned program is given the console and the authority to read\n")
-    _ = records.appendPresentation("  the process table, and nothing else. It cannot spawn children of\n")
-    _ = records.appendPresentation("  its own: the kernel refuses, because this shell does not pass on\n")
-    _ = records.appendPresentation("  the capability that would let it.\n")
+}
+
+/// One receiver, and how many commands of it this shell could actually run.
+private func line(
+    _ receiver: ShellNamespaceDescriptor,
+      in catalog: ShellCatalog,
+      into records: inout ShellResult
+) {
+    withUnsafeTemporaryAllocation(of: UInt8.self, capacity: 128) { row in
+        var cursor = 0
+        func put(_ text: StaticString) {
+            for index in 0..<text.utf8CodeUnitCount where cursor < row.count {
+                row[cursor] = text.utf8Start[index]
+                cursor += 1
+            }
+        }
+        func pad(to column: Int) {
+            while cursor < column, cursor < row.count {
+                row[cursor] = 0x20
+                cursor += 1
+            }
+        }
+        put("    ")
+        put(receiver.name)
+        pad(to: 20)
+        put(receiver.summary)
+        pad(to: 62)
+        put("\n")
+        _ = records.appendPresentation(bytes: row.baseAddress!, count: cursor)
+    }
+}
+
+/// What one receiver can do, or what one command is.
+private func help(
+      about bytes: UnsafePointer<UInt8>,
+      count      : Int,
+      in session : ShellSession,
+      into records: inout ShellResult
+) {
+    let catalog = session.catalog
     _ = records.appendPresentation("\n")
+
+    // A receiver: everything it answers to, with what each one is for.
+    for index in 0..<catalog.namespaceCount {
+        guard let receiver = catalog.namespace(at: index),
+              spells(bytes, count, receiver.name)
+        else { continue }
+        _ = records.appendPresentation("  ")
+        _ = records.appendPresentation(receiver.name)
+        _ = records.appendPresentation("\n")
+        _ = records.appendPresentation("  ")
+        _ = records.appendPresentation(receiver.summary)
+        _ = records.appendPresentation("\n")
+        if !holds(receiver.capability, session.environment) {
+            _ = records.appendPresentation("  this shell was given no authority for it, so none of this runs\n")
+        }
+        _ = records.appendPresentation("\n")
+        for position in 0..<catalog.count {
+            guard let descriptor = catalog.command(at: position),
+                  let owner = catalog.receiver(ofCommandAt: position),
+                  spells(bytes, count, owner.name)
+            else { continue }
+            entry(descriptor, into: &records)
+        }
+        _ = records.appendPresentation("\n")
+        return
+    }
+
+    // A command: what it takes, what it answers, what it changes.
+    for index in 0..<catalog.count {
+        guard let descriptor = catalog.command(at: index),
+              spells(bytes, count, descriptor.signature.name)
+        else { continue }
+        _ = records.appendPresentation("  ")
+        _ = records.appendPresentation(descriptor.signature.namespace)
+        _ = records.appendPresentation(".")
+        _ = records.appendPresentation(descriptor.signature.name)
+        _ = records.appendPresentation("\n")
+        _ = records.appendPresentation("  ")
+        _ = records.appendPresentation(descriptor.summary)
+        _ = records.appendPresentation("\n")
+        for position in 0..<descriptor.signature.parameterCount {
+            guard let parameter = descriptor.signature.parameters[position] else { continue }
+            _ = records.appendPresentation("    takes    ")
+            _ = records.appendPresentation(parameter.label)
+            _ = records.appendPresentation("\n")
+        }
+        _ = records.appendPresentation("    answers  ")
+        _ = records.appendPresentation(descriptor.schema.isEmptyType ? "nothing to carry on with" : descriptor.schema.name)
+        _ = records.appendPresentation("\n")
+        if descriptor.sensitive {
+            _ = records.appendPresentation("    changes  something a later command cannot put back\n")
+        }
+        _ = records.appendPresentation("\n")
+        return
+    }
+
+    _ = records.appendPresentation("  no receiver and no command answers to that name\n")
+    _ = records.appendPresentation("\n")
+}
+
+/// One command's line inside a receiver's help.
+private func entry(
+    _ descriptor: ShellCommandDescriptor,
+      into records: inout ShellResult
+) {
+    withUnsafeTemporaryAllocation(of: UInt8.self, capacity: 128) { row in
+        var cursor = 0
+        func put(_ text: StaticString) {
+            for index in 0..<text.utf8CodeUnitCount where cursor < row.count {
+                row[cursor] = text.utf8Start[index]
+                cursor += 1
+            }
+        }
+        func pad(to column: Int) {
+            while cursor < column, cursor < row.count {
+                row[cursor] = 0x20
+                cursor += 1
+            }
+        }
+        put("    ")
+        put(descriptor.signature.name)
+        for position in 0..<descriptor.signature.parameterCount {
+            guard let parameter = descriptor.signature.parameters[position] else { continue }
+            put(position == 0 ? "(" : ", ")
+            put(parameter.label)
+            put(":")
+        }
+        if descriptor.signature.parameterCount > 0 { put(")") }
+        pad(to: 30)
+        put(descriptor.summary)
+        if descriptor.sensitive { pad(to: 74); put(" !") }
+        put("\n")
+        _ = records.appendPresentation(bytes: row.baseAddress!, count: cursor)
+    }
+}
+
+private func holds(
+    _ capability: BootCap?,
+    _ environment: Environment
+) -> Bool {
+    guard let capability else { return true }
+    return environment.handle(capability) != nil
+}
+
+private func spells(
+    _ bytes: UnsafePointer<UInt8>,
+    _ count: Int,
+    _ name : StaticString
+) -> Bool {
+    guard count == name.utf8CodeUnitCount else { return false }
+    for index in 0..<count where bytes[index] != name.utf8Start[index] { return false }
+    return true
 }

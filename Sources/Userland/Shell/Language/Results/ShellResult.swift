@@ -19,6 +19,17 @@ public struct ShellResult {
         return records[index]
     }
 
+    public mutating func appendPresentation(
+        bytes: UnsafePointer<UInt8>,
+        count: Int
+    ) -> Bool {
+        guard let record = ShellResultRecord.presentation(bytes: bytes, count: count) else {
+            truncated = true
+            return false
+        }
+        return append(record)
+    }
+
     public mutating func appendPresentation(_ text: StaticString) -> Bool {
         guard let record = ShellResultRecord.presentation(text) else {
             truncated = true

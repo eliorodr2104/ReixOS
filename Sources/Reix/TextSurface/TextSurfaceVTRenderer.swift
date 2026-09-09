@@ -117,6 +117,8 @@ public enum TextSurfaceVTRenderer {
         emit: (UInt8) -> Void
     ) -> UInt32 {
         switch frame.descriptor.mode {
+            case .reset:
+                return renderResetPlan(count: 0, emit: emit)
             case .transcript:
                 return renderTranscriptPlan(screen: screen, frame: frame, emit: emit)
             case .codeTranscript:
@@ -136,6 +138,22 @@ public enum TextSurfaceVTRenderer {
                     emit: emit
                 )
         }
+    }
+
+    /// Erases everything and puts the cursor at the top. The only frame whose
+    /// whole meaning is what it removes.
+    private static func renderResetPlan(
+        count: UInt32,
+        emit: (UInt8) -> Void
+    ) -> UInt32 {
+        var written = count
+        style(.plain, count: &written, emit: emit)
+        emitted(escape, count: &written, emit: emit)
+        emitted(openBracket, count: &written, emit: emit)
+        emitted(UInt8(ascii: "2"), count: &written, emit: emit)
+        emitted(UInt8(ascii: "J"), count: &written, emit: emit)
+        cup(row: 1, column: 1, count: &written, emit: emit)
+        return written
     }
 
     /// Appended output goes where the transcript left off. If the editor is on

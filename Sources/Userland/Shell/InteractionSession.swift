@@ -93,6 +93,13 @@ public struct InteractionSession: ~Copyable {
         )
     }
 
+    /// Starts the screen again, empty. What the shell asks for when a command
+    /// said `clear`.
+    @discardableResult
+    public mutating func clear(sequence: UInt32) -> Bool {
+        textSurface.clear(sequence: sequence)
+    }
+
     @discardableResult
     public mutating func finishEditor(sequence: UInt32) -> Bool {
         textSurface.finishEditor(sequence: sequence)

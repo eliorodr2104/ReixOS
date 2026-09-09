@@ -46,14 +46,20 @@ public struct ShellSession {
     public var container: UInt32 = 0
     public var folder   : UInt32 = 0
 
+    /// What this shell understands, which is what `help` is about. Handed in
+    /// rather than reachable: a module reads the catalog, it does not own one.
+    public let catalog: ShellCatalog
+
     public init(
           environment: Environment,
           line       : UnsafePointer<UInt8>,
-          count      : Int
+          count      : Int,
+          catalog    : ShellCatalog = ShellCatalog()
     ) {
         self.environment = environment
         self.buffer      = line
         self.lineCount   = count
+        self.catalog     = catalog
     }
 
 

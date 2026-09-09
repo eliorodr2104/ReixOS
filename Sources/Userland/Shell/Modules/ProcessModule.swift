@@ -16,7 +16,7 @@ public enum ProcessModule: ShellModule {
     }
 
     public static var namespace: ShellNamespaceDescriptor {
-        ShellNamespaceDescriptor("process", capability: .profiler, summary: "what is running")
+        ShellNamespaceDescriptor("ProcessManager", capability: .profiler, summary: "what is running")
     }
 
     public static var commandCount: Int { 3 }
@@ -27,7 +27,7 @@ public enum ProcessModule: ShellModule {
                 return ShellCommandDescriptor(
                     code      : Verb.list.rawValue,
                     verb      : "list",
-                    signature : TypedShellSignature(namespace: "process", name: "list", result: .sequence, namespaceRequired: true),
+                    signature : TypedShellSignature(namespace: "ProcessManager", name: "list", result: .sequence, namespaceRequired: true),
                     capability: .profiler,
                     schema    : .processes,
                     summary   : "the live process table"
@@ -36,7 +36,7 @@ public enum ProcessModule: ShellModule {
                 return ShellCommandDescriptor(
                     code      : Verb.processes.rawValue,
                     verb      : "list",
-                    signature : TypedShellSignature(namespace: "process", name: "processes", result: .sequence),
+                    signature : TypedShellSignature(namespace: "ProcessManager", name: "processes", result: .sequence),
                     capability: .profiler,
                     schema    : .processes,
                     summary   : "the live process table, without naming the receiver"
@@ -45,7 +45,7 @@ public enum ProcessModule: ShellModule {
                 return ShellCommandDescriptor(
                     code      : Verb.spawn.rawValue,
                     verb      : "spawn",
-                    signature : TypedShellSignature(namespace: "process", name: "spawn", TypedShellParameter("name")),
+                    signature : TypedShellSignature(namespace: "ProcessManager", name: "spawn", TypedShellParameter("name")),
                     capability: .processServer,
                     summary   : "run an image and wait for it"
                 )

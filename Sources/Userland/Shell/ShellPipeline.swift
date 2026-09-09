@@ -182,7 +182,7 @@ struct ShellPipeline {
           count : Int,
         _ body: (inout ShellSession) -> Result
     ) -> Result {
-        var session = ShellSession(environment: environment, line: line, count: count)
+        var session = ShellSession(environment: environment, line: line, count: count, catalog: catalog)
         session.container = container
         session.folder = folder
         let result = body(&session)

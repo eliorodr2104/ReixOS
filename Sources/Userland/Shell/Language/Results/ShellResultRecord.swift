@@ -40,6 +40,23 @@ public struct ShellResultRecord {
         self.textCount = textCount
     }
 
+    /// A line composed at runtime, for text that is not a literal: a name out
+    /// of the catalog padded into a column beside what it is.
+    static func presentation(
+        bytes: UnsafePointer<UInt8>,
+        count: Int
+    ) -> ShellResultRecord? {
+        var text = InlineArray<128, UInt8>(repeating: 0)
+        guard count > 0, count <= text.count else { return nil }
+        for index in 0..<count { text[index] = bytes[index] }
+        return ShellResultRecord(
+            kind     : .presentation,
+            field0   : .text,
+            text     : text,
+            textCount: count
+        )
+    }
+
     static func presentation(_ text: StaticString) -> ShellResultRecord? {
         var bytes = InlineArray<128, UInt8>(repeating: 0)
         guard text.utf8CodeUnitCount <= bytes.count else { return nil }
