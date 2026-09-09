@@ -111,6 +111,7 @@ uint64_t read_virtual_counter(void) { return 0; }
 uint64_t read_virtual_counter_unordered(void) { return 0; }
 void set_current_process(uint64_t process) { current_process = process; }
 void switch_user_address_space(uint64_t rootTable, uint16_t asid) { (void)rootTable; (void)asid; }
+uint64_t asid_bits(void) { return 16; }
 void trigger_trap(void) {}
 void wait_for_interrupt(void) {}
 

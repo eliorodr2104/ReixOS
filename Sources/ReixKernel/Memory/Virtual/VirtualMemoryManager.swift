@@ -50,10 +50,7 @@ public struct VirtualMemoryManager: Loggable {
     /// report it: a bad base folds the machine silently instead of saying why.
     static let maxPhysicalAddress: UInt64 = UInt64.max - physicalOffset
 
-    /// Monotonically increasing ASID source for newly created address spaces.
-    /// Wraps to `1` (skipping `0`, reserved for the kernel TTBR1 space) and
-    /// flushes the TLB on wrap to avoid stale tagged entries.
-    private var asidCounter         : ASID = 1
+    private var asids = ASIDAllocator(bits: Arch.MMU.asidBits())
     
     
     #if !hasFeature(Embedded)
@@ -308,21 +305,27 @@ public struct VirtualMemoryManager: Loggable {
 
 
     public mutating func createAddressSpace() throws(PPMError) -> AddressSpace {
-        let page = try ppmPtr.pointee.alloc(4096, flag: .kernel)
+        let pageManager = ppmPtr
+        guard let asid = asids.allocate(expand: {
+            guard let bitmap = try? pageManager.pointee.alloc(8192, flag: .kernel) else { return nil }
+            let offset = Arch.MMU.isMMUEnabled() ? Self.physicalOffset : 0
+            return UnsafeMutablePointer<UInt64>(bitPattern: UInt(bitmap.address + offset))
+        }) else {
+            throw .allocationFailed(reason: .fullMemory)
+        }
+        let page: PhysicalPage
+        do {
+            page = try ppmPtr.pointee.alloc(4096, flag: .kernel)
+        } catch {
+            asids.release(asid)
+            throw error
+        }
         let rootTable: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(page.address)
         rootTable.initialize(repeating: Arch.PageTableEntry(rawValue: 0), count: 512)
 
         let kernelMaster: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(self.identityTableAddress)
         for index in 0..<512 where kernelMaster[index].isPresent {
             rootTable[index] = kernelMaster[index]
-        }
-
-        let asid = self.asidCounter
-
-        self.asidCounter = self.asidCounter &+ 1
-        if self.asidCounter == 0 {
-            self.asidCounter = 1
-            Arch.MMU.flushTLB()
         }
 
         return AddressSpace(
@@ -333,7 +336,7 @@ public struct VirtualMemoryManager: Loggable {
     }
 
 
-    public func destroyAddressSpace(addressSpace: consuming AddressSpace) throws(PPMError) {
+    public mutating func destroyAddressSpace(addressSpace: consuming AddressSpace) throws(PPMError) {
         
         Arch.MMU.switchUserAddressSpace(self.identityTableAddress, asid: 0)
         Arch.MMU.flushTLB()
@@ -345,6 +348,7 @@ public struct VirtualMemoryManager: Loggable {
         )
 
         Arch.MMU.flushTLB()
+        asids.release(addressSpace.asid)
     }
 
 

@@ -17,7 +17,10 @@ public struct AArch64MMU {
     
     @_silgen_name("is_mmu_enabled")
     public static func isMMUEnabled() -> Bool
-    
+
+    @_silgen_name("asid_bits")
+    public static func asidBits() -> UInt64
+
     @_silgen_name("flush_tlb")
     public static func flushTLB()
 

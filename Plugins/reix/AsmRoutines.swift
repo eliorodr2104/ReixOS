@@ -67,9 +67,7 @@ private func mmuHandlers() -> [AsmRoutine] {
     let shareability: UInt64 = (3  << 12) | (3  << 28)
     let cacheability: UInt64 = (1  << 8)  | (1  << 10) | (1 << 24) | (1 << 26)
     let granuleSizes: UInt64 = (0  << 14) | (2  << 30)
-    let asidSize    : UInt64 = (1  << 36)
-
-    let tcr: UInt64 = addressSizes | shareability | cacheability | granuleSizes | asidSize
+    let tcr: UInt64 = addressSizes | shareability | cacheability | granuleSizes
 
     return [
         fn("enable_mmu") {
@@ -80,6 +78,12 @@ private func mmuHandlers() -> [AsmRoutine] {
             ldrImm("x2", 0x4404FF)
             msr("mair_el1", "x2")
             ldrImm("x2", tcr)
+            mrs("x3", "id_aa64mmfr0_el1")
+            raw("    ubfx x3, x3, #4, #4")
+            raw("    cmp x3, #2")
+            raw("    b.ne .L_tcr_asid_ready")
+            raw("    orr x2, x2, #0x1000000000")
+            label(".L_tcr_asid_ready")
             msr("tcr_el1", "x2")
             msr("ttbr0_el1", "x0")
             msr("ttbr1_el1", "x1")
@@ -99,6 +103,16 @@ private func mmuHandlers() -> [AsmRoutine] {
             and("x0", "x0", 1)
             ret()
         },
+        fn("asid_bits") {
+            mrs("x1", "id_aa64mmfr0_el1")
+            raw("    ubfx x1, x1, #4, #4")
+            raw("    cmp x1, #2")
+            mov("x0", 8)
+            mov("x1", 16)
+            raw("    csel x0, x1, x0, eq")
+            ret()
+        },
+
         fn("flush_tlb") {
             dsb("ishst")
             tlbi("vmalle1is")

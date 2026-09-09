@@ -19,7 +19,7 @@ public struct AArch64PageTableEntry {
     var rawValue: VirtualAddress
     
     private static let addressMask: UInt64 = 0x0000_FFFF_FFFF_F000
-    private static let flagsMask  : UInt64 = 0x0060_0000_0000_04C3 // 0, 1, 6, 7, 10, 53, 54 bits
+    private static let flagsMask  : UInt64 = 0x0060_0000_0000_0CC3 // 0, 1, 6, 7, 10, 11 (nG), 53, 54
     private static let mairMask   : UInt64 = 0x7
     private static let shareMask  : UInt64 = 0x03
     
