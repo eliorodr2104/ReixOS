@@ -163,11 +163,8 @@ public struct TextSurfaceSession: ~Copyable {
         return settle(sendFrame(frame, transaction: nextTransaction), revision: descriptor.revision)
     }
 
-    /// Hands the finished line to the transcript and gives the block's rows back.
-    ///
-    /// What was typed belongs in the scrollback, so its text is appended where it
-    /// already stood and the screen stays where it is.
-    /// Starts the screen again: nothing on it, and the flow at the top.
+    /// Starts the screen again: nothing on it, and the flow at the last row, so
+    /// the block that comes next opens where the input always lives.
     ///
     /// The editor block goes with it. What was typed before is scrollback the
     /// terminal owns, and this is the shell saying it would like none of it.

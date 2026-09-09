@@ -966,6 +966,68 @@ check(bottomTerminal.line(15).hasPrefix("d"), "the block stops at the viewport, 
 check(bottomTerminal.cursorRow == 12, "the cursor is on the block's first row")
 check(bottomTerminal.cursorColumn == 1, "the cursor is after the first grapheme")
 
+// A clear takes the screen but not the place the input lives: the flow goes to
+// the last row, so the block that follows opens at the bottom of a blank screen.
+let clearedDescriptor = descriptor(
+    mode: .reset,
+    correlation: 3,
+    revision: 3,
+    textLength: 0,
+    columns: 20,
+    rows: 16,
+    viewportRows: 1
+)
+check(
+    push(producer, transaction: 3, descriptor: clearedDescriptor, text: []),
+    "cleared screen setup"
+)
+check(
+    consumer.popFrame(transaction: 3) { frame in
+        var bytes: [UInt8] = []
+        _ = TextSurfaceVTRenderer.render(screen: bottomModel, frame: frame, useDiff: false) {
+            bytes.append($0)
+        }
+        check(feed(bytes, into: &bottomTerminal), "cleared screen VT is accepted")
+        check(bottomModel.commit(frame), "cleared screen commit")
+        return .commit
+    } == .committed,
+    "cleared screen consumed"
+)
+check(bottomModel.flowRow == 16, "a clear leaves the flow on the last row")
+check(
+    (0..<16).allSatisfy { bottomTerminal.line($0).allSatisfy { $0 == " " } },
+    "a clear leaves nothing on the screen"
+)
+
+let promptAfterClear = Array("reix>".utf8)
+let promptAfterClearDescriptor = descriptor(
+    correlation: 4,
+    revision: 4,
+    textLength: promptAfterClear.count,
+    columns: 20,
+    rows: 16,
+    viewportRows: 1
+)
+check(
+    push(producer, transaction: 4, descriptor: promptAfterClearDescriptor, text: promptAfterClear),
+    "prompt after clear setup"
+)
+check(
+    consumer.popFrame(transaction: 4) { frame in
+        var bytes: [UInt8] = []
+        _ = TextSurfaceVTRenderer.render(screen: bottomModel, frame: frame, useDiff: false) {
+            bytes.append($0)
+        }
+        check(feed(bytes, into: &bottomTerminal), "prompt after clear VT is accepted")
+        check(bottomModel.commit(frame), "prompt after clear commit")
+        return .commit
+    } == .committed,
+    "prompt after clear consumed"
+)
+check(bottomModel.editorAnchorRow == 16, "the input opens on the last row after a clear")
+check(bottomTerminal.line(15).hasPrefix("reix>"), "the prompt is at the bottom, not at the top")
+check(bottomTerminal.line(0).allSatisfy { $0 == " " }, "and the top of the screen stays empty")
+
 check(ReixTextSurfaceRing.initialize(page: page, token: 25), "Unicode model proposal")
 check(ReixTextSurfaceRing.accept(page: page, token: 25, epoch: 26), "Unicode model accept")
 producer = ReixTextSurfaceRing(page: page, token: 25, epoch: 26)!

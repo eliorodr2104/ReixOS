@@ -303,10 +303,10 @@ public struct TextSurfaceScreenModel {
         }
         switch descriptor.mode {
             case .reset:
-                // Nothing on the screen and the flow at the top, which is what
-                // the terminal is about to be told to do.
+                // Nothing on the screen and the flow at the last row, which is
+                // what the terminal is about to be told to do.
                 retireEditor()
-                flowRow = 1
+                flowRow = rows
                 flowColumn = 0
             case .transcript:
                 retireEditor()

@@ -140,8 +140,9 @@ public enum TextSurfaceVTRenderer {
         }
     }
 
-    /// Erases everything and puts the cursor at the top. The only frame whose
-    /// whole meaning is what it removes.
+    /// Erases everything and leaves the flow at the last row. The only frame whose
+    /// whole meaning is what it removes, and the input belongs at the bottom
+    /// whether the screen above it is full or empty.
     private static func renderResetPlan(
         count: UInt32,
         emit: (UInt8) -> Void
@@ -152,7 +153,7 @@ public enum TextSurfaceVTRenderer {
         emitted(openBracket, count: &written, emit: emit)
         emitted(UInt8(ascii: "2"), count: &written, emit: emit)
         emitted(UInt8(ascii: "J"), count: &written, emit: emit)
-        cup(row: 1, column: 1, count: &written, emit: emit)
+        cup(row: bottomRow, column: 1, count: &written, emit: emit)
         return written
     }
 
