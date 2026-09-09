@@ -417,6 +417,56 @@ private func testNothingOnTheStackIsEnormous() {
     require(MemoryLayout<ShellTokenStream>.size <= 2048, "and so does the token stream, twice over")
 }
 
+/// Help is generated now, not written out, so what it says is worth asking.
+private func testHelpSaysWhatThisShellHolds() {
+    let catalog = ShellPipeline.merged()
+
+    func helpText(_ asked: String) -> String {
+        let line = Array(asked.utf8)
+        return line.withUnsafeBufferPointer { bytes in
+            var session = ShellSession(
+                environment: Environment(console: 1, nameServer: 2, spawn: 3),
+                line       : bytes.baseAddress ?? UnsafePointer(bitPattern: 1)!,
+                count      : bytes.count,
+                catalog    : catalog
+            )
+            var command = Command(receiver: Span(start: 0, count: 0), verb: Span(start: 0, count: 0))
+            if !asked.isEmpty {
+                command.arguments[0] = Span(start: 0, count: bytes.count)
+                command.argumentCount = 1
+            }
+            let result = CoreModule.help(command, in: &session)
+            var text = ""
+            for index in 0..<result.count {
+                guard let record = result.record(at: index), record.kind == .presentation else { continue }
+                var storage = record.text
+                text += storage.span.withUnsafeBufferPointer {
+                    String(decoding: UnsafeBufferPointer(start: $0.baseAddress!, count: record.textCount), as: UTF8.self)
+                }
+            }
+            return text
+        }
+    }
+
+    let overview = helpText("")
+    require(overview.contains("ReixOS shell"), "it says what it is")
+    require(overview.contains("Shell"), "and names the receiver it always has")
+    // This environment holds no container, no profiler and no block, so the
+    // three receivers that need them are listed as withheld.
+    require(overview.contains("It was given no authority for:"), "and says what it cannot do")
+    require(overview.contains("FileManager"), "naming the receiver it cannot use")
+
+    let receiver = helpText("FileManager")
+    require(receiver.contains("changeDir"), "a receiver's help lists its commands")
+    require(receiver.contains("no authority"), "and says when none of them would run")
+
+    let command = helpText("read")
+    require(command.contains("FileManager.read"), "a command's help names it in full")
+    require(command.contains("answers"), "and says what it answers with")
+
+    require(helpText("nonsense").contains("no receiver and no command"), "and says so when nothing answers")
+}
+
 /// What the shell would offer at the cursor, against its own receivers.
 private func testCompletionOffersWhatTheShellHas() {
     let catalog = ShellPipeline.merged()
@@ -551,6 +601,7 @@ testAnalysisReadsTheRealCatalog()
 testEveryRoleHasAColour()
 testNothingOnTheStackIsEnormous()
 testCompletionOffersWhatTheShellHas()
+testHelpSaysWhatThisShellHolds()
 testSignatureTableIsTheCatalog()
 testSpellingsResolveUniquely()
 testEveryCommandNamesItsAuthority()
@@ -567,4 +618,4 @@ testWrittenArgumentsMayBeBareWords()
 
 // `print` would reach Reix's freestanding `putchar`, which has no console
 // here. The harness says how it went through the file descriptor instead.
-FileHandle.standardOutput.write(Data("ShellCatalogHarness: 19 checks passed\n".utf8))
+FileHandle.standardOutput.write(Data("ShellCatalogHarness: 20 checks passed\n".utf8))

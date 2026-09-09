@@ -64,6 +64,24 @@ public enum CoreModule: ShellModule {
         }
     }
 
+    /// What `help` answers, as records.
+    ///
+    /// Its own entry point because it is generated from the catalog now rather
+    /// than written out, and a thing that is generated is a thing worth asking
+    /// questions of from a harness.
+    public static func help(
+        _ command   : Command,
+          in session: inout ShellSession
+    ) -> ShellResult {
+        var records = ShellResult()
+        if command.argumentCount == 1, let asked = session.bytes(of: command.arguments[0]) {
+            about(asked.bytes, count: asked.count, in: session, into: &records)
+        } else {
+            overview(in: session, into: &records)
+        }
+        return records
+    }
+
     public static func handle(
         _ command   : Command,
           in session: inout ShellSession
@@ -82,12 +100,7 @@ public enum CoreModule: ShellModule {
                 _ = records.appendPresentation("  Shell.help() or Shell.help(of: FileManager)\n")
                 return ShellCommandResult(outcome: .handled, status: .refused, records: records)
             }
-            if command.argumentCount == 1, let asked = session.bytes(of: command.arguments[0]) {
-                help(about: asked.bytes, count: asked.count, in: session, into: &records)
-            } else {
-                help(in: session, into: &records)
-            }
-            return ShellCommandResult(outcome: .handled, records: records)
+            return ShellCommandResult(outcome: .handled, records: help(command, in: &session))
         }
 
         if session.spells(command.verb, "clear") {
@@ -148,7 +161,7 @@ private func halt(
 /// A banner, then what it holds, then what it does not, then how to write to
 /// it. Every name and every line about a receiver comes out of the catalog, so
 /// this says what the modules say and cannot drift from it.
-private func help(
+private func overview(
       in session: ShellSession,
       into records: inout ShellResult
 ) {
@@ -232,8 +245,8 @@ private func line(
 }
 
 /// What one receiver can do, or what one command is.
-private func help(
-      about bytes: UnsafePointer<UInt8>,
+private func about(
+      _ bytes: UnsafePointer<UInt8>,
       count      : Int,
       in session : ShellSession,
       into records: inout ShellResult
@@ -267,7 +280,10 @@ private func help(
         return
     }
 
-    // A command: what it takes, what it answers, what it changes.
+    // A command: what it takes, what it answers, what it changes. Every
+    // command with that name, because two receivers may spell one alike and
+    // answering about one of them would be answering about the wrong one.
+    var found = false
     for index in 0..<catalog.count {
         guard let descriptor = catalog.command(at: index),
               spells(bytes, count, descriptor.signature.name)
@@ -293,8 +309,9 @@ private func help(
             _ = records.appendPresentation("    changes  something a later command cannot put back\n")
         }
         _ = records.appendPresentation("\n")
-        return
+        found = true
     }
+    guard !found else { return }
 
     _ = records.appendPresentation("  no receiver and no command answers to that name\n")
     _ = records.appendPresentation("\n")
