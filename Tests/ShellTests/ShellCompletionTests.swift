@@ -79,7 +79,12 @@ private enum CompletionMachine: ShellCommandProvider {
         ShellCommandDescriptor(
             code     : 0,
             verb     : "help",
-            signature: TypedShellSignature(namespace: "shell", name: "help", effect: .pure),
+            signature: TypedShellSignature(
+                namespace: "shell",
+                name     : "help",
+                TypedShellParameter("of", subject: .symbol, required: false),
+                effect   : .pure
+            ),
             summary  : "what this shell understands"
         )
     }
@@ -218,6 +223,18 @@ struct ShellCompletionTests {
         #expect(set.count == ShellCompletionSet.capacity)
         #expect(set.matched == ShellCompletionSet.capacity + 4)
         #expect(set.truncated)
+    }
+
+    @Test("A parameter that names something is offered that something")
+    func symbolArguments() {
+        // `help` takes the name of a receiver or a command, so that is what is
+        // offered where its argument goes.
+        let asked = offered("help fileS")
+        #expect(asked.names == ["fileSystem"])
+
+        let all = offered("help ")
+        #expect(all.names.contains("fileSystem"))
+        #expect(all.names.contains("list"))
     }
 
     @Test("Where nothing static fits, nothing is offered")

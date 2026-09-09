@@ -44,6 +44,9 @@ public struct ShellCompletionContext: Equatable {
     /// The command whose call the cursor is inside, as a catalog index, or -1.
     public let command : Int
 
+    /// Which of that command's arguments is being written.
+    public let argument: Int
+
     /// The type that would fit here, when the command says so.
     public let expected: ShellValueType
 
@@ -56,6 +59,7 @@ public struct ShellCompletionContext: Equatable {
         count   : UInt16 = 0,
         receiver: Int = -1,
         command : Int = -1,
+        argument: Int = 0,
         expected: ShellValueType = .any,
         schema  : ShellTypeSchema = .none
     ) {
@@ -64,6 +68,7 @@ public struct ShellCompletionContext: Equatable {
         self.count = count
         self.receiver = receiver
         self.command = command
+        self.argument = argument
         self.expected = expected
         self.schema = schema
     }

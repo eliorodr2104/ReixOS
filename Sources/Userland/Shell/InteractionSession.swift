@@ -33,11 +33,19 @@ public struct InteractionSession: ~Copyable {
     }
 
     public mutating func append(
-        _ bytes   : UnsafePointer<UInt8>,
-          count   : Int,
-          sequence: UInt32
+        _ bytes     : UnsafePointer<UInt8>,
+          count     : Int,
+          sequence  : UInt32,
+          styles    : UnsafePointer<ReixTextSurfaceStyleSpan>? = nil,
+          styleCount: Int = 0
     ) -> Bool {
-        textSurface.append(bytes, count: count, sequence: sequence)
+        textSurface.append(
+            bytes,
+            count: count,
+            sequence: sequence,
+            styles: styles,
+            styleCount: styleCount
+        )
     }
 
     public mutating func appendDiagnostic(

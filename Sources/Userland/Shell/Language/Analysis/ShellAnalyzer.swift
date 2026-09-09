@@ -43,14 +43,21 @@ public enum ShellAnalyzer {
         // Whether the value just read was a plain word. `memo.txt` in an
         // argument is one name, by the same rule the evaluator resolves by.
         var lastValueWasWord = false
-        // What `$0` stands for while a closure is open, and what the value was
-        // before it opened. One level: a closure inside a closure keeps the
-        // outer element, which is what `sorted` and `filter` ever need.
-        var closureElement   = ShellTypeSchema.none
-        var beforeClosure    = ShellTypeSchema.none
-        var closureParameter : Span?
-        var pendingMethod    : ShellMethodDescriptor?
-        var pendingReceiver  = ShellTypeSchema.none
+        // One frame per open closure: what `$0` stands for inside it, what the
+        // value was before it opened, and which method is waiting for what it
+        // answers. A stack rather than a slot, so a closure inside a closure
+        // is read the same way as the first one.
+        var closures      = InlineArray<4, ShellClosureFrame?>(repeating: nil)
+        var closureDepth  = 0
+        var pendingMethod : ShellMethodDescriptor?
+        var pendingReceiver = ShellTypeSchema.none
+
+        var closureElement: ShellTypeSchema {
+            closureDepth > 0 ? (closures[closureDepth - 1]?.element ?? .none) : .none
+        }
+        var closureParameter: Span? {
+            closureDepth > 0 ? closures[closureDepth - 1]?.parameter : nil
+        }
         var bindings       = InlineArray<8, Span?>(repeating: nil)
         var bindingCount   = 0
 
@@ -128,6 +135,7 @@ public enum ShellAnalyzer {
                 count   : token.count,
                 receiver: receiver,
                 command : command,
+                argument: max(0, argument - 1),
                 expected: expected,
                 schema  : schema
             )
@@ -145,6 +153,7 @@ public enum ShellAnalyzer {
                 count   : 0,
                 receiver: receiver,
                 command : command,
+                argument: argument,
                 expected: expected,
                 schema  : schema
             )
@@ -204,20 +213,30 @@ public enum ShellAnalyzer {
                 case .openBrace:
                     mark(token, token.state == .invalid ? .error : .closure)
                     if token.state == .invalid { note(.unbalanced, token) }
-                    // Inside a closure over a list, `$0` is one of them.
-                    closureElement = schema.elementType
-                    beforeClosure = schema
-                    // `{ entry in ... }` names that one, and the name is a
+                    // `{ entry in ... }` names the element, and the name is a
                     // value everywhere in the body.
+                    var parameter: Span?
                     if let named = stream.token(at: index), named.kind == .name,
                        let keyword = stream.token(at: index + 1), keyword.kind == .name,
                        spells(source, keyword.span, "in") {
                         index += 2
                         mark(named, .variable)
                         remember(named)
-                        closureParameter = named.span
+                        parameter = named.span
                         mark(keyword, .keyword)
                     }
+                    if closureDepth < closures.count {
+                        closures[closureDepth] = ShellClosureFrame(
+                            element  : schema.elementType,
+                            outer    : schema,
+                            method   : pendingMethod,
+                            receiver : pendingReceiver,
+                            parameter: parameter
+                        )
+                        closureDepth += 1
+                    }
+                    pendingMethod = nil
+                    pendingReceiver = .none
                     after(.value)
 
                 case .closeBrace:
@@ -226,15 +245,11 @@ public enum ShellAnalyzer {
                     // What the closure answered is the last thing in it, and
                     // that is what tells `map` what it is a list of.
                     let answered = schema
-                    if let method = pendingMethod {
-                        schema = method.resultType(on: pendingReceiver, closure: answered)
-                        pendingMethod = nil
-                        pendingReceiver = .none
-                    } else {
-                        schema = beforeClosure
+                    if closureDepth > 0, let frame = closures[closureDepth - 1] {
+                        closureDepth -= 1
+                        schema = frame.method?.resultType(on: frame.receiver, closure: answered)
+                            ?? frame.outer
                     }
-                    closureElement = .none
-                    closureParameter = nil
                     after(.value)
 
                 case .text:
@@ -563,4 +578,17 @@ public enum ShellAnalyzer {
         }
         return true
     }
+}
+
+/// One open closure, while a revision is being read.
+///
+/// Held on a stack so nesting reads like the first level: what one element is,
+/// what the value was outside, and the method waiting to hear what the body
+/// answers.
+internal struct ShellClosureFrame {
+    let element  : ShellTypeSchema
+    let outer    : ShellTypeSchema
+    let method   : ShellMethodDescriptor?
+    let receiver : ShellTypeSchema
+    let parameter: Span?
 }

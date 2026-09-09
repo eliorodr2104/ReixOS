@@ -24,14 +24,14 @@ public enum FileSystemModule: ShellModule {
     enum Declared: UInt16 {
         case list, currentDirectory, changeDir, move, free, info, read, write
         case createDirectory, createFile, createContainer, remove, name
-        case unmount, compact, scrub
+        case unmount, compact, scrub, exists
     }
 
     public static var namespace: ShellNamespaceDescriptor {
         ShellNamespaceDescriptor("FileManager", capability: .container, summary: "this shell's container")
     }
 
-    public static var commandCount: Int { Int(Declared.scrub.rawValue) + 1 }
+    public static var commandCount: Int { Int(Declared.exists.rawValue) + 1 }
 
     public static func command(at index: Int) -> ShellCommandDescriptor? {
         guard let declared = Declared(rawValue: UInt16(index)) else { return nil }
@@ -43,34 +43,34 @@ public enum FileSystemModule: ShellModule {
                 return descriptor(declared, "where", TypedShellSignature(namespace: "FileManager", name: "currentDirectory", effect: .session),
                                   summary: "say where this shell is standing")
             case .changeDir:
-                return descriptor(declared, "move", TypedShellSignature(namespace: "FileManager", name: "changeDir", TypedShellParameter("at"), effect: .session),
+                return descriptor(declared, "move", TypedShellSignature(namespace: "FileManager", name: "changeDir", TypedShellParameter("at", subject: .path), effect: .session),
                                   summary: "change this session's directory")
             case .move:
-                return descriptor(declared, "rename", TypedShellSignature(namespace: "FileManager", name: "move", TypedShellParameter("from"), TypedShellParameter("to")),
+                return descriptor(declared, "rename", TypedShellSignature(namespace: "FileManager", name: "move", TypedShellParameter("from", subject: .path), TypedShellParameter("to", subject: .path)),
                                   sensitive: true, summary: "rename it, or move it")
             case .free:
                 return descriptor(declared, "free", TypedShellSignature(namespace: "FileManager", name: "free"),
                                   summary: "how much room is left")
             case .info:
-                return descriptor(declared, "info", TypedShellSignature(namespace: "FileManager", name: "info", TypedShellParameter("at")),
+                return descriptor(declared, "info", TypedShellSignature(namespace: "FileManager", name: "info", TypedShellParameter("at", subject: .path)),
                                   summary: "what something is, and when")
             case .read:
-                return descriptor(declared, "read", TypedShellSignature(namespace: "FileManager", name: "read", TypedShellParameter("at")),
+                return descriptor(declared, "read", TypedShellSignature(namespace: "FileManager", name: "read", TypedShellParameter("at", subject: .path)),
                                   summary: "the first bytes of a file")
             case .write:
-                return descriptor(declared, "write", TypedShellSignature(namespace: "FileManager", name: "write", TypedShellParameter("at"), TypedShellParameter("text")),
+                return descriptor(declared, "write", TypedShellSignature(namespace: "FileManager", name: "write", TypedShellParameter("at", subject: .path), TypedShellParameter("text")),
                                   sensitive: true, summary: "replace what a file says")
             case .createDirectory:
-                return descriptor(declared, "folder", TypedShellSignature(namespace: "FileManager", name: "createDirectory", TypedShellParameter("at")),
+                return descriptor(declared, "folder", TypedShellSignature(namespace: "FileManager", name: "createDirectory", TypedShellParameter("at", subject: .path)),
                                   summary: "make a folder")
             case .createFile:
-                return descriptor(declared, "write", TypedShellSignature(namespace: "FileManager", name: "createFile", TypedShellParameter("at")),
+                return descriptor(declared, "write", TypedShellSignature(namespace: "FileManager", name: "createFile", TypedShellParameter("at", subject: .path)),
                                   sensitive: true, summary: "make an empty file")
             case .createContainer:
                 return descriptor(declared, "container", TypedShellSignature(namespace: "FileManager", name: "createContainer", TypedShellParameter("name"), TypedShellParameter("blocks")),
                                   sensitive: true, summary: "cut a container out of this one")
             case .remove:
-                return descriptor(declared, "remove", TypedShellSignature(namespace: "FileManager", name: "remove", TypedShellParameter("at")),
+                return descriptor(declared, "remove", TypedShellSignature(namespace: "FileManager", name: "remove", TypedShellParameter("at", subject: .path)),
                                   sensitive: true, summary: "take it away")
             case .name:
                 return descriptor(declared, "name", TypedShellSignature(namespace: "FileManager", name: "name", TypedShellParameter("name")),
@@ -79,11 +79,14 @@ public enum FileSystemModule: ShellModule {
                 return descriptor(declared, "unmount", TypedShellSignature(namespace: "FileManager", name: "unmount"),
                                   sensitive: true, summary: "mark the disk clean before stopping")
             case .compact:
-                return descriptor(declared, "compact", TypedShellSignature(namespace: "FileManager", name: "compact", TypedShellParameter("at")),
+                return descriptor(declared, "compact", TypedShellSignature(namespace: "FileManager", name: "compact", TypedShellParameter("at", subject: .path)),
                                   summary: "put a scattered file back in one piece")
             case .scrub:
                 return descriptor(declared, "scrub", TypedShellSignature(namespace: "FileManager", name: "scrub"),
                                   summary: "read the whole disk and say what is wrong")
+            case .exists:
+                return descriptor(declared, "exists", TypedShellSignature(namespace: "FileManager", name: "exists", TypedShellParameter("at", subject: .path), result: .boolean),
+                                  schema: .boolean, summary: "whether anything is there")
         }
     }
 
@@ -250,6 +253,7 @@ public enum FileSystemModule: ShellModule {
             case .unmount  : Verbs.fsUnmount
             case .compact  : Verbs.fsCompact
             case .scrub    : Verbs.fsScrub
+            case .exists   : Verbs.fsExists
         }
     }
 
@@ -260,7 +264,7 @@ public enum FileSystemModule: ShellModule {
     /// is a case and forgetting to handle it is a compile error.
     private enum Verb {
         case where_, move, list, free, info, read, write
-        case folder, container, rename, remove, name, unmount, compact, scrub
+        case folder, container, rename, remove, name, unmount, compact, scrub, exists
 
         init?(
             _ command: Command,
@@ -282,6 +286,7 @@ public enum FileSystemModule: ShellModule {
                 case session.spells(command.verb, "unmount")  : self = .unmount
                 case session.spells(command.verb, "compact")  : self = .compact
                 case session.spells(command.verb, "scrub")    : self = .scrub
+                case session.spells(command.verb, "exists")   : self = .exists
                 default: return nil
             }
         }
@@ -364,6 +369,12 @@ public enum FileSystemModule: ShellModule {
 
             case .info:
                 explain(files, name: name, length: length, in: folder)
+
+            case .exists:
+                // A name that is not there is an answer, not a failure: this
+                // is the one verb whose whole point is asking.
+                let opened = files.open(name, length: length, in: folder)
+                FileSystemOutput.literal(opened.status == .ok ? "  yes\n" : "  no\n")
 
             case .compact:
                 let opened = files.open(name, length: length, in: folder)

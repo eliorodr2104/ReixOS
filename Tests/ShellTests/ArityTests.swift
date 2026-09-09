@@ -53,6 +53,7 @@ struct ArityTests {
         ("fs.remove"     , Verbs.fsRemove     , 1, 1),
         ("fs.name"       , Verbs.fsName       , 1, 1),
         ("fs.compact"    , Verbs.fsCompact    , 1, 1),
+        ("FileManager.exists", Verbs.fsExists  , 1, 1),
 
         ("fs.write"      , Verbs.fsWrite      , 2, 2),
         ("fs.container"  , Verbs.fsContainer  , 2, 2),
@@ -69,7 +70,7 @@ struct ArityTests {
 
         // Twenty-three verbs, so a verb added without a signature or a
         // signature added without a verb shows up here rather than in a boot.
-        #expect(Self.table.count == 23)
+        #expect(Self.table.count == 24)
     }
 
 

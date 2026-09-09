@@ -17,6 +17,7 @@ struct ShellPipeline {
     private var container    : UInt32 = 0
     private var folder       : UInt32 = 0
     private var lastSequence : ShellSequence?
+    private var lastSchema   = ShellTypeSchema.none
     private(set) var outcome: ShellOutcome = .handled
 
     init(
@@ -104,6 +105,8 @@ struct ShellPipeline {
         if let value = withSession(line: UnsafePointer(Self.empty.utf8Start), count: 0, {
             Module.value(for: descriptor.code, in: &$0)
         }) {
+            // What the answer is made of, so printing it can say so.
+            if case .sequence = value { lastSchema = descriptor.schema }
             return value
         }
 
@@ -219,11 +222,48 @@ struct ShellPipeline {
                 guard let values = lastSequence else { return false }
                 for index in 0..<values.count {
                     guard let object = values.value(at: index) else { continue }
-                    object.name.withBytes { printPadded($0, count: $1, width: 0) }
-                    print("")
+                    present(object, as: lastSchema)
                 }
         }
         return !ShellOutput.overflowed
+    }
+
+    /// One element of an answer, drawn as what it is.
+    ///
+    /// A container is a place you cross into and wears the `::` that crosses
+    /// into it; a folder wears the `/` that walks into it; a file wears
+    /// nothing. The colours are roles, so a terminal that has none still gets
+    /// the marks.
+    private func present(
+        _ object: ShellObject,
+          as schema: ShellTypeSchema
+    ) {
+        guard schema.element == .entry else {
+            if schema.element == .process {
+                ShellOutput.styled(.number) { printDecPadded(object.number0, width: 6) }
+                print(" ", terminator: "")
+            }
+            object.name.withBytes { bytes, count in
+                ShellOutput.styled(.plain) { printPadded(bytes, count: count, width: 0) }
+            }
+            print("")
+            return
+        }
+
+        let kind = FSKind(rawValue: UInt8(truncatingIfNeeded: object.kind))
+        let role : ReixTextSurfaceStyleRole
+        let mark : StaticString
+        switch kind {
+            case .container?: role = .namespace; mark = "::"
+            case .folder?   : role = .path;      mark = "/"
+            default         : role = .plain;     mark = ""
+        }
+        print("  ", terminator: "")
+        ShellOutput.styled(role) {
+            object.name.withBytes { bytes, count in printPadded(bytes, count: count, width: 0) }
+            if mark.utf8CodeUnitCount > 0 { print(mark, terminator: "") }
+        }
+        print("")
     }
 
     private static let empty: StaticString = ""

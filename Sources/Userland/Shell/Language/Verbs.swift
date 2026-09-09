@@ -18,6 +18,7 @@ public enum Verbs {
 
     // The shell talking about itself.
     public static let shellHelp = Arity(0, 1, "Shell.help() or Shell.help(of: FileManager)")
+    public static let fsExists = Arity(1, 1, "FileManager.exists(at: a.txt)")
     public static let shellClear = Arity.none("Shell.clear takes no arguments")
     public static let shellHalt = Arity.none("shell.halt takes no arguments")
     public static let shellExit = Arity.none("shell.exit takes no arguments")

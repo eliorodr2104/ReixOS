@@ -19,6 +19,19 @@ enum ShellOutput {
 
     static func begin() { buffer.reset() }
 
+    /// Says what the bytes written inside the body mean.
+    ///
+    /// The shell never picks a colour: it says `path` or `namespace` and the
+    /// backend paints it, the same vocabulary the editor's own line uses.
+    static func styled(
+        _ role: ReixTextSurfaceStyleRole,
+        _ body: () -> Void
+    ) {
+        let start = buffer.offset
+        body()
+        buffer.mark(role, from: start, to: buffer.offset)
+    }
+
     @discardableResult
     static func append(_ byte: UInt8) -> Bool {
         buffer.append(byte)
@@ -70,7 +83,7 @@ enum ShellOutput {
     }
 
     static func flush(
-        _ send: (UnsafePointer<UInt8>, Int) -> Bool
+        _ send: (UnsafePointer<UInt8>, Int, UnsafePointer<ReixTextSurfaceStyleSpan>?, Int) -> Bool
     ) -> Bool { buffer.flush(send) }
 
     /// The next correlation for output the shell emits on its own account.
@@ -84,13 +97,19 @@ enum ShellOutput {
 
     static func flush(to terminal: inout InteractionSession) -> Bool {
 
-        flush { source, amount in
-            terminal.append(source, count: amount, sequence: nextSequence())
+        flush { source, amount, styles, styleCount in
+            terminal.append(
+                source,
+                count: amount,
+                sequence: nextSequence(),
+                styles: styles,
+                styleCount: styleCount
+            )
         }
     }
 
     static func flushDiagnostic(to terminal: inout InteractionSession) -> Bool {
-        flush { source, amount in
+        flush { source, amount, _, _ in
             terminal.appendDiagnostic(source, count: amount, sequence: nextSequence())
         }
     }

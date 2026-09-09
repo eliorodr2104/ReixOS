@@ -103,13 +103,18 @@ public struct TextSurfaceSession: ~Copyable {
 
     /// Appends finished output at the flow cursor.
     public mutating func append(
-        _ bytes : UnsafePointer<UInt8>,
-        count   : Int,
-        sequence: UInt32,
-        severity: ReixTextOutputSeverity = .info,
-        kind    : ReixTextOutputKind = .application
+        _ bytes   : UnsafePointer<UInt8>,
+        count     : Int,
+        sequence  : UInt32,
+        severity  : ReixTextOutputSeverity = .info,
+        kind      : ReixTextOutputKind = .application,
+        styles    : UnsafePointer<ReixTextSurfaceStyleSpan>? = nil,
+        styleCount: Int = 0
     ) -> Bool {
         guard usable,
+              styleCount >= 0,
+              styleCount <= Int(ReixTextSurfaceFrameDescriptor.maximumStyleSpans),
+              (styleCount == 0) == (styles == nil),
               !editorActive,
               sequence != 0,
               count > 0,
@@ -121,10 +126,10 @@ public struct TextSurfaceSession: ~Copyable {
             outputKind: kind,
             correlation: sequence,
             textLength: UInt32(count),
-            styleSpanCount: 0
+            styleSpanCount: UInt16(styleCount)
         ) else { return false }
         let nextTransaction = advanceTransaction()
-        guard let frame = ReixTextSurfaceFrameSource(descriptor: descriptor, text: bytes) else {
+        guard let frame = ReixTextSurfaceFrameSource(descriptor: descriptor, text: bytes, styles: styles) else {
             requiresSnapshot = true
             return false
         }

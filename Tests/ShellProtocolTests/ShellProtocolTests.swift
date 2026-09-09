@@ -196,14 +196,14 @@ struct ShellProtocolTests {
         for value in 0..<300 { output.append(UInt8(value & 0x7F)) }
 
         var calls = 0
-        #expect(!output.flush { _, _ in
+        #expect(!output.flush { _, _, _, _ in
             calls += 1
             return false
         })
         #expect(calls == 1)
 
         var remaining: [UInt8] = []
-        #expect(output.flush { bytes, count in
+        #expect(output.flush { bytes, count, _, _ in
             for index in 0..<count { remaining.append(bytes[index]) }
             return true
         })
@@ -218,7 +218,7 @@ struct ShellProtocolTests {
         for _ in 0..<254 { _ = output.append(UInt8(ascii: "x")) }
         for byte in [UInt8(0xF0), 0x9F, 0x98, 0x80, UInt8(ascii: "y")] { _ = output.append(byte) }
         var chunks: [[UInt8]] = []
-        #expect(output.flush { bytes, count in
+        #expect(output.flush { bytes, count, _, _ in
             chunks.append(Array(UnsafeBufferPointer(start: bytes, count: count)))
             return true
         })
@@ -228,7 +228,7 @@ struct ShellProtocolTests {
         _ = malformed.append(0xF0)
         _ = malformed.append(0x80)
         var calls = 0
-        #expect(!malformed.flush { bytes, count in
+        #expect(!malformed.flush { bytes, count, _, _ in
             calls += 1
             return ReixTextSurfaceProtocol.validText(bytes, count: count)
         })
@@ -244,7 +244,7 @@ struct ShellProtocolTests {
         }
         #expect(!exact.overflowed)
         var exactCount = 0
-        #expect(exact.flush { _, count in
+        #expect(exact.flush { _, count, _, _ in
             exactCount += count
             return true
         })
@@ -256,7 +256,7 @@ struct ShellProtocolTests {
         #expect(!refused)
         #expect(overflowed.overflowed)
         var sends = 0
-        #expect(!overflowed.flush { _, _ in
+        #expect(!overflowed.flush { _, _, _, _ in
             sends += 1
             return true
         })
@@ -267,7 +267,7 @@ struct ShellProtocolTests {
         let retriedAppend = overflowed.append(UInt8(ascii: "z"))
         #expect(retriedAppend)
         var retried: [UInt8] = []
-        #expect(overflowed.flush { bytes, count in
+        #expect(overflowed.flush { bytes, count, _, _ in
             for index in 0..<count { retried.append(bytes[index]) }
             return true
         })
@@ -282,13 +282,13 @@ struct ShellProtocolTests {
         output.invalidate()
         #expect(output.failed)
         var calls = 0
-        #expect(!output.flush { _, _ in calls += 1; return true })
+        #expect(!output.flush { _, _, _, _ in calls += 1; return true })
         #expect(calls == 0)
         output.reset()
         #expect(!output.failed)
         let retry = output.append(UInt8(ascii: "y"))
         #expect(retry)
-        #expect(output.flush { _, _ in true })
+        #expect(output.flush { _, _, _, _ in true })
     }
 
     @Test("a large mapped window remains bounded by protocol payload not rejected")

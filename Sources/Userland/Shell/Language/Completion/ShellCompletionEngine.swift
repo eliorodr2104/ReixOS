@@ -133,8 +133,39 @@ public enum ShellCompletionEngine {
 
             case .value:
                 offerBindings()
+                // A parameter that names something in the catalog is offered
+                // the catalog, which is what makes `help Fi` finish itself.
+                if parameterSubject(catalog, context) == .symbol {
+                    for index in 0..<catalog.namespaceCount {
+                        guard let receiver = catalog.namespace(at: index) else { continue }
+                        offer(ShellCompletion(
+                            kind   : .namespace,
+                            name   : receiver.name,
+                            detail : "receiver",
+                            summary: receiver.summary,
+                            rank   : 0
+                        ))
+                    }
+                    for index in 0..<catalog.count {
+                        guard let descriptor = catalog.command(at: index) else { continue }
+                        offer(command(descriptor, rank: 1))
+                    }
+                }
         }
         return set
+    }
+
+    /// What the argument being written is meant to name, when the command says.
+    private static func parameterSubject(
+        _ catalog: borrowing ShellCatalog,
+        _ context: ShellCompletionContext
+    ) -> ShellParameterSubject {
+        guard let descriptor = catalog.command(at: context.command) else { return .value }
+        let position = descriptor.signature.parameterCount == 1 ? 0 : context.argument
+        guard position >= 0, position < descriptor.signature.parameterCount,
+              let parameter = descriptor.signature.parameters[position]
+        else { return .value }
+        return parameter.subject
     }
 
     private static func command(

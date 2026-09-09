@@ -31,7 +31,7 @@ public enum CoreModule: ShellModule {
                     signature: TypedShellSignature(
                         namespace: "Shell",
                         name     : "help",
-                        TypedShellParameter("of", required: false),
+                        TypedShellParameter("of", subject: .symbol, required: false),
                         effect   : .pure
                     ),
                     summary  : "what this shell understands, or what one receiver does"

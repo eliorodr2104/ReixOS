@@ -401,6 +401,16 @@ private func testReachingIntoValuesStillReads() {
     require(parses("let folders = list\n    .filter { $0.isFolder }"), "a chain continued on the next line")
     require(parses("let FileManager = list, FileManager.filter { $0.isFolder }"), "a binding named like a receiver")
     require(parses("list.map { $0.name }.compactMap { $0 }"), "two methods in a row")
+
+    // Parentheses do not make a receiver: `list.reversed()` is a method on
+    // what `list` answers with, and was being read as a call to a receiver
+    // called `list`.
+    let reversed = run("list.reversed()")
+    require(reversed.calls.map(\.command) == ["FileManager.list"], "the list is asked for")
+    guard case .type? = reversed.failure else {
+        require(reversed.failure == nil, "reversed is a method, not a symbol: \(String(describing: reversed.failure))")
+        return
+    }
 }
 
 /// What the editor costs to hold, which is a thing worth knowing before a
@@ -515,6 +525,21 @@ private func testCompletionOffersWhatTheShellHas() {
     require(listing.contains("count"), "a list knows how many it holds")
     require(listing.contains("filter"), "and what can be done to it")
     require(!listing.contains("isFolder"), "but not what its elements are")
+
+    // The same for every receiver, not only the file manager: a process list
+    // is a list of processes and one of them is a process.
+    let processes = offered("ProcessManager.list().filter { $0.")
+    require(processes.contains("name"), "a process has a name")
+    require(processes.contains("id"), "and the number the kernel knows it by")
+    require(!processes.contains("isFolder"), "and nothing that belongs to an entry")
+
+    let nested = offered("list.filter { $0.name.")
+    require(nested.contains("hasPrefix"), "a name is a text, two dots deep")
+
+    // A closure inside a closure reads like the first one, and closing the
+    // inner one gives the outer element back.
+    let inner = offered("list.filter { $0.name.contains(\"a\") }.map { $0.")
+    require(inner.contains("isFolder"), "the outer element is an entry again")
 
     // One of them, inside a closure over it, is a file.
     let element = offered("list.filter { $0.")

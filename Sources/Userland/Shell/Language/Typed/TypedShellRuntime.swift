@@ -164,7 +164,32 @@ public struct TypedShellRuntime {
         }
         let resolution = resolve(call, values, source, sourceCount, signatures)
         switch resolution {
-            case .failure(let failure): return .failure(failure)
+            case .failure(let failure):
+                // `list.reversed()` looks exactly like `Disk.read(0)`, and only
+                // the catalog can tell them apart. No receiver answers to the
+                // left side, so it is a value, and this is a method on it.
+                if case .unknownSymbol = failure, call.namespace.count > 0 {
+                    var base = TypedShellCallSyntax(
+                        namespace: Span(start: call.namespace.start, count: 0),
+                        name     : call.namespace
+                    )
+                    base.count = 0
+                    if case .success(let receiver) = evaluateCall(
+                        base, program, source, sourceCount, signatures, zero, one, invoke
+                    ) {
+                        return method(
+                            receiver,
+                            call.name,
+                            call.count == 1 ? call.values[0] : nil,
+                            program,
+                            source,
+                            sourceCount,
+                            signatures,
+                            invoke
+                        )
+                    }
+                }
+                return .failure(failure)
             case .success(let signatureIndex):
                 guard let signature = signatures[signatureIndex],
                       let ordered = ordered(values, count: call.count, for: signature)
@@ -355,6 +380,9 @@ public struct TypedShellRuntime {
             guard argument == nil else { return .failure(.wrongArguments(name)) }
             switch base {
                 case .text: return .success(base)
+                // A thing out of a listing is written as what it is called,
+                // which is the only text it has.
+                case .record(let object): return .success(.text(object.name))
                 case .number(let value):
                     var bytes  = InlineArray<128, UInt8>(repeating: 0)
                     var number = value
