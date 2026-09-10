@@ -785,8 +785,14 @@ public struct FileSystemServer: Service {
             return
         }
 
-        let length    = Int(request.message.words[1])
-        let newLength = Int(request.message.words[3])
+        guard let length = Int(exactly: request.message.words[1]),
+              let newLength = Int(exactly: request.message.words[3]),
+              length > 0, length <= FSLayout.nameLimit,
+              newLength > 0, newLength <= FSLayout.nameLimit
+        else {
+            _ = reply(message: FileOperation.answer(.badName))
+            return
+        }
 
         guard let folder = resolve(request.message.words[0]),
               let target = resolve(request.message.words[2])
@@ -807,10 +813,35 @@ public struct FileSystemServer: Service {
             return
         }
 
+        guard let oldName = FSEntry(object: 0, name: UnsafeRawPointer(window), length: length),
+              let newName = FSEntry(object: 0, name: UnsafeRawPointer(window.advanced(by: length)), length: newLength)
+        else {
+            _ = reply(message: FileOperation.answer(.badName))
+            return
+        }
+        withUnsafePointer(to: oldName.name) { oldBytes in
+            withUnsafePointer(to: newName.name) { newBytes in
+                performRelocate(request: request, folder: folder, target: target,
+                                name: UnsafeRawPointer(oldBytes), length: length,
+                                newName: UnsafeRawPointer(newBytes), newLength: newLength)
+            }
+        }
+    }
+
+
+    private mutating func performRelocate(
+        request: ReceivedMessage,
+        folder: UInt32,
+        target: UInt32,
+        name: UnsafeRawPointer,
+        length: Int,
+        newName: UnsafeRawPointer,
+        newLength: Int
+    ) {
         // Three things change: the folder the name leaves, the folder it joins,
         // and the object, whose `parent` moves. A claim on any of them is a
         // claim against this.
-        let moving = disk.lookup(UnsafeRawPointer(window), length: length, in: folder).object
+        let moving = disk.lookup(name, length: length, in: folder).object
 
         guard mayChangeAll(folder, target, moving, by: request.identity) else {
             _ = reply(message: FileOperation.answer(.busy))
@@ -818,11 +849,11 @@ public struct FileSystemServer: Service {
         }
 
         _ = reply(message: FileOperation.answer(disk.relocate(
-            UnsafeRawPointer(window),
+            name,
             length: length,
             from  : folder,
             to    : target,
-            as    : UnsafeRawPointer(window.advanced(by: length)),
+            as    : newName,
             length: newLength
         )))
     }
@@ -841,16 +872,19 @@ public struct FileSystemServer: Service {
             return
         }
 
-        let length = Int(request.message.words[0])
-
-        guard length > 0, UInt64(length) <= extent(slot) else {
+        guard let length = Int(exactly: request.message.words[0]),
+              length > 0, length <= FSLayout.machineNameLimit,
+              UInt64(length) <= extent(slot) else {
             _ = reply(message: FileOperation.answer(.badName))
             return
         }
 
-        _ = reply(message: FileOperation.answer(
-            disk.setMachineName(UnsafeRawPointer(window), length: length)
-        ))
+        withUnsafeTemporaryAllocation(of: UInt8.self, capacity: FSLayout.machineNameLimit) { snapshot in
+            snapshot.baseAddress!.initialize(from: window.assumingMemoryBound(to: UInt8.self), count: length)
+            _ = reply(message: FileOperation.answer(
+                disk.setMachineName(UnsafeRawPointer(snapshot.baseAddress!), length: length)
+            ))
+        }
     }
 
 
@@ -936,16 +970,38 @@ public struct FileSystemServer: Service {
             _ = reply(message: FileOperation.answer(.notFound))
             return
         }
-        let length = Int(request.message.words[1])
-        let kind   = FSKind(rawValue: UInt8(truncatingIfNeeded: request.message.words[2])) ?? .file
+        let kind = FSKind(rawValue: UInt8(truncatingIfNeeded: request.message.words[2])) ?? .file
 
-        guard length > 0, UInt64(length) <= extent(slot) else {
+        guard let length = Int(exactly: request.message.words[1]),
+              length > 0, length <= FSLayout.nameLimit,
+              UInt64(length) <= extent(slot) else {
             _ = reply(message: FileOperation.answer(.badName))
             return
         }
 
-        let name = UnsafeRawPointer(window)
+        // The peer can change its shared window while disk I/O yields. Copy
+        // and validate once so lookup, lease checks and mutation use one name.
+        guard let snapshot = FSEntry(object: 0, name: UnsafeRawPointer(window), length: length) else {
+            _ = reply(message: FileOperation.answer(.badName))
+            return
+        }
 
+        withUnsafePointer(to: snapshot.name) { bytes in
+            performNamed(operation, request: request, root: root, folder: folder,
+                         name: UnsafeRawPointer(bytes), length: length, kind: kind)
+        }
+    }
+
+
+    private mutating func performNamed(
+        _ operation: FileOperation,
+        request: ReceivedMessage,
+        root: UInt32,
+        folder: UInt32,
+        name: UnsafeRawPointer,
+        length: Int,
+        kind: FSKind
+    ) {
         switch operation {
             case .open:
                 // Contained, again, on what came back: the folder being the
