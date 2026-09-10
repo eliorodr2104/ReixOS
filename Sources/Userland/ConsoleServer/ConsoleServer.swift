@@ -112,7 +112,7 @@ public struct ConsoleServer: Service {
             return
         }
 
-        let mapped = shmMap(handle: grantedCap)
+        let mapped = shmMap(handle: grantedCap, writable: true)
         guard let ringBase = UnsafeMutableRawPointer(bitPattern: UInt(mapped)) else {
             print("[ SERVE ] Console register refused: cannot map the ring")
             return

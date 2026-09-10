@@ -70,7 +70,7 @@ public struct SerialServer: Service {
               let offered = request.grantedCap,
               shmPages(handle: offered) == 1,
               let page = UnsafeMutableRawPointer(
-                bitPattern: UInt(shmMap(handle: offered))
+                bitPattern: UInt(shmMap(handle: offered, writable: true))
               )?.assumingMemoryBound(to: UInt8.self)
         else {
             replyStatus(role == .reader ? .registerReader : .registerWriter, .malformed)

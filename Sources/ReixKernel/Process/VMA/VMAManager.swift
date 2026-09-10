@@ -152,13 +152,14 @@ public struct VMAManager: RXAllocatable {
     /// ever injected into `ProcessManager` and here, so it is reached through the
     /// VMA manager, which already owns both the handle and the root table the
     /// probe must be relative to.
-    public func isPageMapped(at virtual: VirtualAddress) -> Bool {
+    public func isPageMapped(at virtual: VirtualAddress, writable: Bool = false) -> Bool {
         guard let leafTable = context.vmm.pointee.leafTable(
             rootTable: context.rootTablePhysical,
             virtual  : virtual
         ) else { return false }
 
-        return leafTable[virtual.l3].isPresent
+        let entry = leafTable[virtual.l3]
+        return entry.isPresent && (!writable || !entry.flags.contains(.readOnly))
     }
 
 

@@ -928,7 +928,7 @@ public struct BlockServer: Service {
 
         guard let slot = existing ?? freeSlot() else { return }
 
-        let address = shmMap(handle: granted)
+        let address = shmMap(handle: granted, writable: true)
         guard UnsafeMutableRawPointer(bitPattern: UInt(address)) != nil else { return }
 
         let extent = UInt64(pages) * Self.pageSize

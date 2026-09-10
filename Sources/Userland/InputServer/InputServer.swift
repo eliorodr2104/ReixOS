@@ -78,7 +78,7 @@ public struct InputServer: Service {
               request.message.words[0] != 0,
               request.message.words[1] != 0,
               shmPages(handle: offered) == 1,
-              let page = UnsafeMutableRawPointer(bitPattern: UInt(shmMap(handle: offered)))?
+              let page = UnsafeMutableRawPointer(bitPattern: UInt(shmMap(handle: offered, writable: true)))?
                 .assumingMemoryBound(to: UInt8.self)
         else {
             return
@@ -132,7 +132,7 @@ public struct InputServer: Service {
               request.message.words[0] != 0,
               request.message.words[1] != 0,
               shmPages(handle: offered) == 1,
-              let page = UnsafeMutableRawPointer(bitPattern: UInt(shmMap(handle: offered)))?
+              let page = UnsafeMutableRawPointer(bitPattern: UInt(shmMap(handle: offered, writable: true)))?
                 .assumingMemoryBound(to: UInt8.self)
         else {
             return

@@ -102,8 +102,8 @@ public func shmCreate(pageCount: UInt64) -> SharedMemory {
 }
 
 @inline(__always)
-public func shmMap(handle: UInt32) -> UInt64 {
-    _syscall(.shmMap, UInt64(handle))
+public func shmMap(handle: UInt32, writable: Bool = false) -> UInt64 {
+    _syscall(.shmMap, UInt64(handle), writable ? 1 : 0)
 }
 
 

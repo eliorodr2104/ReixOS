@@ -61,7 +61,7 @@ public struct PipeConsumer: ~Copyable {
             return
         }
 
-        let address = shmMap(handle: granted)
+        let address = shmMap(handle: granted, writable: true)
         guard address != 0 else {
             _ = capDrop(granted)
             return

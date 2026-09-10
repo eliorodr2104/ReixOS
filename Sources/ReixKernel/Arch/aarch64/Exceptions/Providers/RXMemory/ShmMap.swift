@@ -7,7 +7,9 @@
 
 import ReixABI
 
-/// `shmMap(handle)` syscall provider.
+/// `shmMap(handle, writable)` syscall provider. A writable request is refused
+/// before mapping unless the capability carries write authority. Zero keeps
+/// the original behavior of deriving permissions from the capability.
 ///
 /// The window this hands back is only as strong as the capability asked for it:
 /// a region capability without `.write` is mapped read-only, one without
@@ -39,7 +41,9 @@ public struct ShmMap: SyscallProvider {
             return
         }
 
-        guard let permissions = VMAPermissions(mapping: cap.rights) else {
+        guard frame.pointee.x1 <= 1,
+              frame.pointee.x1 == 0 || cap.rights.contains(.write),
+              let permissions = VMAPermissions(mapping: cap.rights) else {
             frame.pointee.x0 = 0
             return
         }

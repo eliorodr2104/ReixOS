@@ -229,7 +229,7 @@ public struct VTAdapter: Service {
             releaseCompatibility(slot: stale)
         }
         guard let slot = freeCompatibilitySlot() else { return }
-        let address = shmMap(handle: granted)
+        let address = shmMap(handle: granted, writable: true)
         guard let base = UnsafeMutableRawPointer(bitPattern: UInt(address)),
               let owned = request.takeGrant()
         else { return }
@@ -396,7 +396,7 @@ public struct VTAdapter: Service {
         else {
             return
         }
-        let address = shmMap(handle: granted)
+        let address = shmMap(handle: granted, writable: true)
         guard let page = UnsafeMutableRawPointer(bitPattern: UInt(address))?.assumingMemoryBound(to: UInt8.self) else {
             return
         }
