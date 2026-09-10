@@ -202,7 +202,11 @@ func handleExceptionType(
                     Arch.CPU.panic("Kernel Space Abort", fp: frame)
                     
                 case 0x3C: // BRK
-                    Arch.CPU.panic("Breakpoint", exc: .breakpoint, fp: frame)
+                    if frame.spsr & 0xF == 0 {
+                        Kernel.syscallHandler.pointee.killCurrent(frame: framePointer, reason: .illegalInstruction)
+                    } else {
+                        Arch.CPU.panic("Breakpoint", exc: .breakpoint, fp: frame)
+                    }
                     
                 case 0x00: // UDF
                     if frame.spsr & 0xF == 0 {
@@ -211,7 +215,11 @@ func handleExceptionType(
                     } else { Arch.CPU.panic(exc: .unknown, fp: frame) }
                     
                 default:
-                    Arch.CPU.panic("EXC Unknown, Exception Class: ", fp: frame)
+                    if frame.spsr & 0xF == 0 {
+                        Kernel.syscallHandler.pointee.killCurrent(frame: framePointer, reason: .illegalInstruction)
+                    } else {
+                        Arch.CPU.panic("EXC Unknown, Exception Class: ", fp: frame)
+                    }
             }
     }
 }
