@@ -54,6 +54,7 @@ public struct UserMemory {
         return materializeRange(
             start     : range.start,
             end       : range.end,
+            writable  : permissions.contains(.write),
             vmaManager: vmaManager
         )
     }
@@ -77,6 +78,7 @@ public struct UserMemory {
     private static func materializeRange(
         start     : VirtualAddress,
         end       : VirtualAddress,
+        writable  : Bool,
         vmaManager: UnsafeMutablePointer<VMAManager>
     ) -> Bool {
         var cursor = start
@@ -87,6 +89,14 @@ public struct UserMemory {
                     at   : cursor,
                     cause: .translation
                 ) else { return false }
+            }
+
+            // A present COW page is still read-only in hardware. Resolve it
+            // before an EL1 store, where a permission fault cannot be retried.
+            if writable, !vmaManager.pointee.isPageMapped(at: cursor, writable: true) {
+                guard vmaManager.pointee.handlePageFault(at: cursor, cause: .permission),
+                      vmaManager.pointee.isPageMapped(at: cursor, writable: true)
+                else { return false }
             }
 
             cursor = (cursor & ~(UserSpaceLayout.pageSize - 1)) + UserSpaceLayout.pageSize

@@ -53,5 +53,41 @@ struct UserBufferIsolationTests {
             #expect(caller.pointee.addressSpace.vmaManager?.pointee.isPageMapped(at: write.x0, writable: true) == true)
         }
     }
+
+    @Test("kernel output validation resolves COW without altering the sibling")
+    func copyOnWriteOutput() {
+        withProcessManager(pages: 128) { ram, _, manager in
+            guard let parent = try? manager.pointee.spawnProcess(),
+                  let child = try? manager.pointee.spawnProcess(),
+                  let parentVMA = parent.pointee.addressSpace.vmaManager,
+                  let childVMA = child.pointee.addressSpace.vmaManager,
+                  let address = try? parentVMA.pointee.mmapAnonymous(
+                    size: 4096, permissions: [.read, .write, .user]
+                  )
+            else { Issue.record("could not create COW fixture"); return }
+            Arch.CPU.setCurrentProcess(UInt64(UInt(bitPattern: parent)))
+            defer { Arch.CPU.setCurrentProcess(0) }
+            #expect(UserMemory.validateRegion(addr: address, size: 4096, permissions: [.read, .write, .user]))
+            guard let original = ram.vmm.pointee.physicalAddressOf(
+                rootTable: parent.pointee.addressSpace.rootTablePhysical, virtual: address
+            ) else { Issue.record("missing parent page"); return }
+            let bytes: UnsafeMutablePointer<UInt8> = ram.vmm.pointee.physToVirt(original)
+            bytes[0] = 0x5A
+            do { try childVMA.pointee.cloneRegions(from: parentVMA.pointee) }
+            catch { Issue.record("clone failed: \(error)"); return }
+            #expect(!childVMA.pointee.isPageMapped(at: address, writable: true))
+            Arch.CPU.setCurrentProcess(UInt64(UInt(bitPattern: child)))
+            #expect(UserMemory.validateRegion(addr: address, size: 1, permissions: [.read, .write, .user]))
+            #expect(childVMA.pointee.isPageMapped(at: address, writable: true))
+            guard let copied = ram.vmm.pointee.physicalAddressOf(
+                rootTable: child.pointee.addressSpace.rootTablePhysical, virtual: address
+            ) else { Issue.record("missing child page"); return }
+            #expect(copied != original)
+            let childBytes: UnsafeMutablePointer<UInt8> = ram.vmm.pointee.physToVirt(copied)
+            #expect(childBytes[0] == 0x5A)
+            childBytes[0] = 0xA5
+            #expect(bytes[0] == 0x5A)
+        }
+    }
 }
 }
