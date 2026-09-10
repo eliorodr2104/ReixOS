@@ -37,6 +37,7 @@ public struct DmaPhysical: SyscallProvider {
             return
         }
 
+        region.pointee.deviceVisible = true
         frame.pointee.x0 = region.pointee.physicalPage.address
     }
 }

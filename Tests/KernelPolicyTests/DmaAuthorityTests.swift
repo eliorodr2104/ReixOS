@@ -315,6 +315,29 @@ struct DmaAuthorityTests {
             #expect(dcache_clean_calls() == 0)
         }
     }
+
+    @Test("published DMA survives its last owner until device quiescence can be proved")
+    func publishedDMACannotBeRecycled() {
+        for publish in [false, true] {
+            withCaller { ram, caller, ipc, context in
+                guard let page = try? ram.ppm.pointee.alloc(4096) else {
+                    Issue.record("could not allocate DMA page"); return
+                }
+                let physical = page.address
+                guard case .success(let created) = ipc.pointee.createShared(
+                    for: caller, page: page, pageCount: 1, forDevice: true
+                ) else { Issue.record("could not create DMA capability"); return }
+                if publish {
+                    var query = Arch.TrapFrame()
+                    query.x0 = UInt64(created.handle)
+                    DmaPhysical.handle(frame: &query, context: context)
+                    #expect(query.x0 == physical)
+                }
+                _ = ipc.pointee.releaseCapability(created.handle, of: caller)
+                #expect(ram.ppm.pointee.refCount(of: physical) == (publish ? 1 : 0))
+            }
+        }
+    }
 }
 
 

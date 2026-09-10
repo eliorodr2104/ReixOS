@@ -13,6 +13,12 @@ public struct SharedRegion: RXObject, ~Copyable {
     public var references  : UInt32
     public var pageCount   : UInt32
 
+    /// A device may retain a physical address after its driver dies. Until a
+    /// device supervisor can prove reset completion, published DMA frames must
+    /// stay allocated for the rest of the boot, even after every CPU mapping
+    /// and capability has gone. Ordinary SHM and unpublished DMA remain reclaimable.
+    var deviceVisible = false
+
     public init(
         physicalPage: consuming PhysicalPage,
         references  : UInt32,
@@ -23,12 +29,14 @@ public struct SharedRegion: RXObject, ~Copyable {
         self.pageCount    = pageCount
     }
 
-    /// Releases the owned frame back to the PPM, consuming the region, and hands
-    /// back the PPM's refusal if there was one. Called once the last owner drops
-    /// it; the caller frees the slab storage afterwards.
+    /// Consumes the region after its last owner drops it. Reclaimable frames go
+    /// back to the PPM; device-visible frames remain quarantined. The caller
+    /// frees the region's slab storage in either case.
     public consuming func releaseFrame(
         ppm: UnsafeMutablePointer<KernelPPM>
     ) -> PPMError? {
+
+        guard !deviceVisible else { return nil }
 
         do {
             try ppm.pointee.free(physicalPage)
