@@ -16,10 +16,52 @@ public struct TaskCreateSyscall: SyscallProvider {
     ) {
         guard let current = Arch.CPU.getCurrentProcess(),
               let metadata = current.pointee.metadata,
-              metadata.pointee.capsTable.findFirst(for: .spawn) != nil,
-              metadata.pointee.capsTable.hasFreeSlots(2),
+              metadata.pointee.capsTable.findFirst(for: .spawn) != nil
+        else {
+            fail(frame)
+            return
+        }
+
+        var requestedName: InlineArray<16, UInt8>? = nil
+        var nameLength = 0
+
+        if frame.pointee.x0 != 0 || frame.pointee.x1 != 0 {
+            guard frame.pointee.x0 != 0,
+                  frame.pointee.x1 > 0,
+                  frame.pointee.x1 <= UInt64(TaskCreation.maximumNameBytes)
+            else {
+                fail(frame)
+                return
+            }
+
+            nameLength = Int(frame.pointee.x1)
+            var name = InlineArray<16, UInt8>(repeating: 0)
+            let copied = withUnsafeMutableBytes(of: &name) { bytes in
+                UserMemory.copyFromUser(
+                    kernelDest: bytes.baseAddress!,
+                    userSrc   : frame.pointee.x0,
+                    count     : nameLength
+                )
+            }
+            guard copied else {
+                fail(frame)
+                return
+            }
+
+            for index in 0..<nameLength {
+                guard name[index] >= 0x20, name[index] <= 0x7E else {
+                    fail(frame)
+                    return
+                }
+            }
+            requestedName = name
+        }
+
+        guard metadata.pointee.capsTable.hasFreeSlots(2),
               let created = context.processManager.pointee.createSuspendedTask(
-                ownedBy: current
+                ownedBy   : current,
+                name      : requestedName,
+                nameLength: nameLength
               )
         else {
             fail(frame)

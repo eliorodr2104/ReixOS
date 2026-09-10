@@ -427,6 +427,44 @@ post_terminal_baseline() {
     return 0
 }
 
+# post=profile-authority: prove the instrumented Shell reached Ready with both
+# profiler shares and with its creation identity. Process statistics exercise
+# the `.profileStats` binding; an interaction mark attributed to the Shell pid
+# exercises the separate marker binding. Requiring one Shell and one real
+# ProcessServer catches the old taskCreate identity, where both rows had the
+# server name.
+post_profile_authority() {
+    ppa_log=$1
+    ppa_out=$2
+
+    ppa_shell_count=$(grep -Ec '^\[ TERMINAL BASELINE \] process status=measured pid=[0-9]+ name=Shell\.elf ' "$ppa_log" 2>/dev/null || true)
+    ppa_server_count=$(grep -Ec '^\[ TERMINAL BASELINE \] process status=measured pid=[0-9]+ name=ProcessServer\.el ' "$ppa_log" 2>/dev/null || true)
+    ppa_shell_pid=$(sed -n 's/^\[ TERMINAL BASELINE \] process status=measured pid=\([0-9][0-9]*\) name=Shell\.elf .*/\1/p' "$ppa_log" | tail -n 1)
+
+    {
+        printf 'shell_identity_count=%s\n' "$ppa_shell_count"
+        printf 'process_server_identity_count=%s\n' "$ppa_server_count"
+        printf 'shell_pid=%s\n' "${ppa_shell_pid:-unavailable}"
+    } > "$ppa_out"
+
+    if [ "$ppa_shell_count" -ne 1 ] || [ "$ppa_server_count" -ne 1 ]; then
+        printf 'profiled process identities are not one Shell and one ProcessServer'
+        return 1
+    fi
+
+    if ! grep -qF -- '[ TERMINAL BASELINE ] system status=measured' "$ppa_log"; then
+        printf 'Shell could not use its process-statistics authority'
+        return 1
+    fi
+
+    if ! grep -Eq "^\[TRACE\] t=[0-9]+ ev=interactionMark pid=${ppa_shell_pid} " "$ppa_log"; then
+        printf 'Shell emitted no authorized interaction mark'
+        return 1
+    fi
+
+    return 0
+}
+
 # Runs every post-check named in $1, which is `-`, one name, or several separated
 # by commas. Each writes its own artifact so a later failure does not overwrite
 # what an earlier check read.
@@ -447,7 +485,8 @@ run_post() {
             dma-barriers) post_dma_barriers "$2" "$rp_out" || return 1 ;;
             queue-depth)  post_queue_depth "$2" "$rp_out" || return 1 ;;
             shell-closed) post_shell_closed "$2" "$rp_out" || return 1 ;;
-            terminal-baseline) post_terminal_baseline "$2" "$rp_out" || return 1 ;;
+            terminal-baseline)  post_terminal_baseline "$2" "$rp_out" || return 1 ;;
+            profile-authority)  post_profile_authority "$2" "$rp_out" || return 1 ;;
             *)            setup_error "unknown post-check '$rp_name'" ;;
         esac
     done

@@ -42,4 +42,16 @@ public enum ProfileAuthorityGrant {
         if console { rights.insert(.profileConsole) }
         return CapGrant(source: source, slot: BootCap.profileMarker.rawValue, rights: rights)
     }
+
+
+    /// The marker share held by the one process that launches the measured
+    /// workload. The launcher may hand the authority on, but the child receives
+    /// `marker`, which removes `grant` and ends the delegation chain.
+    public static func markerLauncher(source: UInt32) -> CapGrant {
+        CapGrant(
+            source: source,
+            slot  : BootCap.profileMarker.rawValue,
+            rights: [.profileMark, .profileConsole, .grant]
+        )
+    }
 }

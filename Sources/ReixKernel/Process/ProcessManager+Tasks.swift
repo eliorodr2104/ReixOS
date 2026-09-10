@@ -10,9 +10,14 @@ extension ProcessManager {
     /// Allocate an empty address space and publish only a stable task token.
     /// The returned process is unscheduled and cannot execute until `startTask`.
     mutating func createSuspendedTask(
-        ownedBy owner: UnsafeMutablePointer<Process>
+        ownedBy owner: UnsafeMutablePointer<Process>,
+        name         : InlineArray<16, UInt8>? = nil,
+        nameLength   : Int = 0
     ) -> (control: TaskControl, process: UnsafeMutablePointer<Process>)? {
-        guard let process = try? spawnProcess() else { return nil }
+        guard let process = try? spawnProcess(
+            name      : name,
+            nameLength: nameLength
+        ) else { return nil }
 
         guard let control = TaskRegistry.create(
             owner  : owner.pointee.identity,

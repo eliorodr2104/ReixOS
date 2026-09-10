@@ -127,7 +127,13 @@ public struct ProcessServer: Service {
             return
         }
 
-        let created = taskCreate()
+        var taskName = requested.bytes
+        let created = withUnsafeBytes(of: &taskName) { bytes in
+            taskCreate(
+                name  : bytes.baseAddress!.assumingMemoryBound(to: UInt8.self),
+                length: requested.length
+            )
+        }
         guard created.succeeded else {
             _ = reply(message: ProcessServerStatus.taskFailure.response)
             return

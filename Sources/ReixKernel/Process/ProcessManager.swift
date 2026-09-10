@@ -252,7 +252,10 @@ public struct ProcessManager: RXAllocatable, Loggable {
     }
     
     
-    public mutating func spawnProcess() throws(ProcessManagerError) -> UnsafeMutablePointer<Process> {
+    public mutating func spawnProcess(
+        name      : InlineArray<16, UInt8>? = nil,
+        nameLength: Int = 0
+    ) throws(ProcessManagerError) -> UnsafeMutablePointer<Process> {
         
         var addressSpace: AddressSpace
         do {
@@ -289,6 +292,18 @@ public struct ProcessManager: RXAllocatable, Loggable {
             heap.pointee.kfree(trapFramePtr)
             destroyPartialAddressSpace(&addressSpace)
             throw .heapAllocationFailed
+        }
+
+        // A suspended task may carry a launcher-chosen diagnostic identity.
+        // Apply it before registration and trace emission; ordinary split-like
+        // creation passes no name and keeps the inherited metadata above.
+        if var name {
+            withUnsafeBytes(of: &name) { bytes in
+                metadataPtr.pointee.setName(
+                    from : bytes.baseAddress!.assumingMemoryBound(to: UInt8.self),
+                    count: nameLength
+                )
+            }
         }
 
         guard let processPtr = makeProcess(

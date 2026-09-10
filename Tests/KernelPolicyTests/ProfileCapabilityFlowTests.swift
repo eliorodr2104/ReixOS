@@ -9,6 +9,7 @@ import Testing
 import Foundation
 @testable import Kernel
 import ReixABI
+import KernelTestSupport
 
 extension KernelPolicyTestRoot {
 @Suite("Profile capability flow")
@@ -101,6 +102,132 @@ struct ProfileCapabilityFlowTests {
         let console = ProfileAuthorityGrant.marker(source: 12, console: true)
         #expect(console.rights == UInt32(CapRights([.profileMark, .profileConsole]).rawValue))
         #expect(console.rights & UInt32(CapRights.grant.rawValue) == 0)
+
+        let launcher = ProfileAuthorityGrant.markerLauncher(source: 12)
+        #expect(launcher.targetSlot == BootCap.profileMarker.rawValue)
+        #expect(launcher.rights == UInt32(CapRights([.profileMark, .profileConsole, .grant]).rawValue))
+
+        let forwarded = RendezvousIPC.attenuatedRights(
+            source   : CapRights(rawValue: UInt16(launcher.rights)),
+            requested: CapRights(rawValue: UInt16(console.rights))
+        )
+        #expect(forwarded == [.profileMark, .profileConsole])
+        #expect(!forwarded.contains(.grant))
+    }
+
+    @Test("marker authority crosses one rendezvous and cannot cross the next")
+    func interactionMarkerDeliveryStopsAtWorkload() {
+        withKernelTestGlobals {
+            let ppm       = allocateZeroedStorage(KernelPPM.self)
+            let scheduler = allocateZeroedStorage(KernelScheduler.self)
+            let heap      = allocateZeroedStorage(KernelHeap.self)
+            defer {
+                UnsafeMutableRawPointer(ppm).deallocate()
+                UnsafeMutableRawPointer(scheduler).deallocate()
+                UnsafeMutableRawPointer(heap).deallocate()
+            }
+
+            let ipc = UnsafeMutablePointer<KernelIPC>.allocate(capacity: 1)
+            ipc.initialize(to: KernelIPC(ppm: ppm, scheduler: scheduler, heap: heap))
+            defer { ipc.deinitialize(count: 1); ipc.deallocate() }
+
+            let endpoint = UnsafeMutablePointer<Endpoint>.allocate(capacity: 1)
+            endpoint.initialize(to: Endpoint(queue: LinkedList(head: nil, tail: nil)))
+            defer { endpoint.deinitialize(count: 1); endpoint.deallocate() }
+
+            let launcher = makeProcess(pid: 1)
+            let workload = makeProcess(pid: 2)
+            let consumer = makeProcess(pid: 3)
+            for process in [launcher, workload, consumer] { attachMetadata(to: process) }
+            defer {
+                for process in [launcher, workload, consumer] {
+                    destroyMetadata(of: process)
+                    destroyProcess(process)
+                }
+                Arch.CPU.setCurrentProcess(0)
+            }
+
+            let receiveWorkload = Capability(
+                target: .endpoint(endpoint), badge: 0, rights: [.receive]
+            )
+            let sendLauncher = Capability(
+                target: .endpoint(endpoint), badge: 0, rights: [.send]
+            )
+            let launcherMarker = Capability(
+                target: .profileControl,
+                badge : 0,
+                rights: [.profileMark, .profileConsole, .grant]
+            )
+            _ = workload.pointee.metadata.pointee.capsTable.install(receiveWorkload)
+            ipc.pointee.retain(receiveWorkload)
+            _ = launcher.pointee.metadata.pointee.capsTable.install(sendLauncher)
+            ipc.pointee.retain(sendLauncher)
+            let launcherMarkerHandle = launcher.pointee.metadata.pointee.capsTable.install(
+                launcherMarker
+            )!
+            ipc.pointee.retain(launcherMarker)
+
+            let workloadFrame = UnsafeMutablePointer<Arch.TrapFrame>.allocate(capacity: 1)
+            workloadFrame.initialize(to: Arch.TrapFrame())
+            defer { workloadFrame.deinitialize(count: 1); workloadFrame.deallocate() }
+            Arch.CPU.setCurrentProcess(VirtualAddress(UInt(bitPattern: workload)))
+            _ = ipc.pointee.receive(capability: receiveWorkload, frame: workloadFrame)
+            workload.pointee.context = workloadFrame
+
+            var firstDelivery = Arch.TrapFrame()
+            firstDelivery.x2 = 0xA11CE
+            firstDelivery.x6 = UInt64(launcherMarkerHandle) |
+                (UInt64(CapRights([.profileMark, .profileConsole]).rawValue) << 32)
+            Arch.CPU.setCurrentProcess(VirtualAddress(UInt(bitPattern: launcher)))
+            let first = ipc.pointee.send(capability: sendLauncher, frame: firstDelivery)
+            guard case .success(.sended(let firstRejected)) = first,
+                  let workloadMarkerHandle = IPCDelivery.grant(of: workloadFrame.pointee.x7),
+                  let workloadMarker = workload.pointee.metadata.pointee.capsTable.resolve(
+                    workloadMarkerHandle
+                  )
+            else {
+                Issue.record("launcher marker did not cross the rendezvous")
+                return
+            }
+            #expect(!firstRejected)
+            #expect(workloadFrame.pointee.x2 == 0xA11CE)
+            #expect(workloadMarker.target == .profileControl)
+            #expect(workloadMarker.rights == [.profileMark, .profileConsole])
+            #expect(!workloadMarker.rights.contains(.grant))
+
+            let receiveConsumer = Capability(
+                target: .endpoint(endpoint), badge: 0, rights: [.receive]
+            )
+            let sendWorkload = Capability(
+                target: .endpoint(endpoint), badge: 0, rights: [.send]
+            )
+            _ = consumer.pointee.metadata.pointee.capsTable.install(receiveConsumer)
+            ipc.pointee.retain(receiveConsumer)
+            _ = workload.pointee.metadata.pointee.capsTable.install(sendWorkload)
+            ipc.pointee.retain(sendWorkload)
+
+            let consumerFrame = UnsafeMutablePointer<Arch.TrapFrame>.allocate(capacity: 1)
+            consumerFrame.initialize(to: Arch.TrapFrame())
+            defer { consumerFrame.deinitialize(count: 1); consumerFrame.deallocate() }
+            Arch.CPU.setCurrentProcess(VirtualAddress(UInt(bitPattern: consumer)))
+            _ = ipc.pointee.receive(capability: receiveConsumer, frame: consumerFrame)
+            consumer.pointee.context = consumerFrame
+
+            var secondDelivery = Arch.TrapFrame()
+            secondDelivery.x2 = 0xC105ED
+            secondDelivery.x6 = UInt64(workloadMarkerHandle) |
+                (UInt64(CapRights.profileMark.rawValue) << 32)
+            Arch.CPU.setCurrentProcess(VirtualAddress(UInt(bitPattern: workload)))
+            let second = ipc.pointee.send(capability: sendWorkload, frame: secondDelivery)
+            guard case .success(.sended(let secondRejected)) = second else {
+                Issue.record("the message carrying the refused grant was not delivered")
+                return
+            }
+            #expect(secondRejected)
+            #expect(consumerFrame.pointee.x2 == 0xC105ED)
+            #expect(IPCDelivery.grant(of: consumerFrame.pointee.x7) == nil)
+            #expect(consumer.pointee.metadata.pointee.capsTable.findFirst(for: .profileMark) == nil)
+        }
     }
 
     @Test("interaction trace packing fails closed")
@@ -146,8 +273,10 @@ struct ProfileCapabilityFlowTests {
         let terminal = try #require(source.components(separatedBy: "let terminal =").dropFirst().first?.components(separatedBy: "guard let terminalEndpoint").first)
         #expect(terminal.contains("ProfileAuthorityGrant.marker(source: profiler, console: false)"))
         #expect(!terminal.contains("console: true"))
-        #expect(source.contains("ProfileAuthorityGrant.marker(source: profiler, console: true)"))
-        #expect(source.components(separatedBy: "ProfileAuthorityGrant.marker(").count == 3)
+        #expect(source.contains("ProfileAuthorityGrant.markerLauncher(source: profiler)"))
+        #expect(!source.contains("ProfileAuthorityGrant.marker(source: profiler, console: true)"))
+        #expect(source.components(separatedBy: "ProfileAuthorityGrant.marker(").count == 2)
+        #expect(source.components(separatedBy: "ProfileAuthorityGrant.markerLauncher(").count == 2)
     }
 
     @Test("Init reserves every possible Shell capability grant")

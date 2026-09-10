@@ -237,3 +237,10 @@ terminal-help-burst	-	qemu	-	typed:Shell.help()\nShell.help()\nShell.help()\nShe
 # storage-4m remains the full storage-stack proof, while the instrumented image
 # starts Shell without conflating terminal capacity with the file system footprint.
 terminal-profile-4m	4M	embedded	-	typed:Shell.exit()\n	30	[ SERVE ] VT Adapter running|ReixOS shell. Type Shell.help() to see what this understands.|reix❯|[ TERMINAL BASELINE ] system status=measured|[TRACE] begin v=2|[TRACE] end|[ SHELL ] this shell is done	[ PANIC ]|REIX-PANIC|[ ERROR ]|the terminal refused to register this reader	terminal-baseline	skip-if:no-terminal-profile
+
+# T06's end-to-end authority and identity probe stays separate from the metric
+# baseline above. It uses the disk-backed ProcessServer path in the roomy
+# profile configuration, leaving the independent 4 MiB capacity gate to its
+# dedicated scenario. Like vm-test, it requires QEMU_FLAGS to attach a ReixFS
+# disk whose /programs contains Shell.elf and Top.elf.
+profile-authority	128M	qemu	-	typed:Shell.exit()\n	30	[ INIT  ] ProcessServer endpoint ready|[ INIT  ] Shell.elf reached Ready|[ TERMINAL BASELINE ] system status=measured|name=Shell.elf resident_pages=|ev=interactionMark|[ SHELL ] this shell is done	[ PANIC ]|REIX-PANIC|[ ERROR ]|the terminal refused to register this reader|status=unavailable	profile-authority	skip-if:no-terminal-profile

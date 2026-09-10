@@ -277,6 +277,30 @@ public func taskCreate() -> TaskCreation {
     )
 }
 
+
+/// Create an empty task with a bounded printable-ASCII diagnostic identity
+/// chosen by its launcher. The bytes never select or load a program; they are
+/// copied only into process metadata for tracing and process statistics.
+@inline(__always)
+public func taskCreate(
+    name  : UnsafePointer<UInt8>,
+    length: Int
+) -> TaskCreation {
+    guard length > 0, length <= TaskCreation.maximumNameBytes else {
+        return TaskCreation(task: UInt32.max, bootstrap: UInt32.max)
+    }
+
+    let raw = twoWordSyscall(
+        .taskCreate,
+        UInt64(UInt(bitPattern: name)),
+        UInt64(length)
+    )
+    return TaskCreation(
+        task     : UInt32(truncatingIfNeeded: raw.first),
+        bootstrap: UInt32(truncatingIfNeeded: raw.second)
+    )
+}
+
 @inline(__always)
 public func taskMapAnonymous(
     _ task    : UInt32,

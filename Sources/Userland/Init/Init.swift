@@ -481,7 +481,9 @@ public func main() {
             }
 
             #if REIX_TERMINAL_PROFILE
-            give(ProfileAuthorityGrant.marker(source: profiler, console: true))
+            // ProcessServer may pass the measured workload its marker share;
+            // the program profile removes `grant` again before Shell sees it.
+            give(ProfileAuthorityGrant.markerLauncher(source: profiler))
             #endif
 
             return spawnProcess(

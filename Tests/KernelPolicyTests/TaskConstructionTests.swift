@@ -38,6 +38,14 @@ struct TaskConstructionTests {
                 Capability(target: .power, badge: 0, rights: [.spawn])
             )
 
+            let parentName = Array("ProcessServer.elf".utf8)
+            parentName.withUnsafeBufferPointer {
+                parent.pointee.metadata.pointee.setName(
+                    from : $0.baseAddress!,
+                    count: $0.count
+                )
+            }
+
             Arch.CPU.setCurrentProcess(VirtualAddress(UInt(bitPattern: parent)))
             defer { Arch.CPU.setCurrentProcess(0) }
 
@@ -48,8 +56,19 @@ struct TaskConstructionTests {
                 ppm           : ram.ppm
             )
 
+            let childName = Array("Shell.elf".utf8)
+            TraceRing.reset()
             var create = Arch.TrapFrame()
-            TaskCreateSyscall.handle(frame: &create, context: context)
+            childName.withUnsafeBufferPointer { bytes in
+                UserMemory.validationOverride = { address, size, permissions in
+                    address == UInt64(UInt(bitPattern: bytes.baseAddress!)) &&
+                    size == bytes.count && permissions == [.read, .user]
+                }
+                create.x0 = UInt64(UInt(bitPattern: bytes.baseAddress!))
+                create.x1 = UInt64(bytes.count)
+                TaskCreateSyscall.handle(frame: &create, context: context)
+            }
+            UserMemory.validationOverride = nil
 
             let taskHandle = UInt32(truncatingIfNeeded: create.x0)
             #expect(taskHandle != UInt32.max)
@@ -61,6 +80,31 @@ struct TaskConstructionTests {
             else {
                 Issue.record("taskCreate did not publish a task capability")
                 return
+            }
+
+            #expect(child.pointee.metadata.pointee.nameLength == UInt8(childName.count))
+            for index in 0..<childName.count {
+                #expect(child.pointee.metadata.pointee.name[index] == childName[index])
+            }
+            for index in childName.count..<TaskCreation.maximumNameBytes {
+                #expect(child.pointee.metadata.pointee.name[index] == 0)
+            }
+            #expect(child.pointee.metadata.pointee.capsTable.resolve(BootCap.profiler.rawValue) == nil)
+
+            var tracedName: TraceEvent?
+            TraceRing.forEachEvent { event in
+                if event.code == TraceCode.procName,
+                   event.pid == UInt32(truncatingIfNeeded: child.pointee.pid) {
+                    tracedName = event
+                }
+            }
+            #expect(tracedName?.info == UInt16(childName.count))
+            for index in 0..<TaskCreation.maximumNameBytes {
+                let word  = index < 8 ? tracedName?.a : tracedName?.b
+                let shift = UInt64(8 * (index & 7))
+                let byte  = UInt8(truncatingIfNeeded: (word ?? UInt64.max) >> shift)
+                let expected = index < childName.count ? childName[index] : 0
+                #expect(byte == expected)
             }
 
             let text  = UserSpaceLayout.elfBaseTypical
@@ -181,6 +225,176 @@ struct TaskConstructionTests {
 
             #expect(context.ipc.pointee.releaseCapability(taskHandle, of: parent).isSuccess)
             #expect(TaskRegistry.record(control) == nil)
+        }
+    }
+
+
+    @Test("malformed task identity is refused before allocation and unnamed creation still inherits")
+    func taskIdentityValidationAndCompatibility() {
+        withProcessManager(pages: 160) { ram, heap, manager in
+            TaskRegistry.resetForTesting()
+            defer {
+                UserMemory.validationOverride = nil
+                TaskRegistry.resetForTesting()
+            }
+
+            let scheduler = allocateZeroedStorage(KernelScheduler.self)
+            defer { UnsafeMutableRawPointer(scheduler).deallocate() }
+
+            let ipc = UnsafeMutablePointer<KernelIPC>.allocate(capacity: 1)
+            ipc.initialize(to: KernelIPC(ppm: ram.ppm, scheduler: scheduler, heap: heap))
+            defer { ipc.deinitialize(count: 1); ipc.deallocate() }
+
+            guard let parent = try? manager.pointee.spawnProcess() else {
+                Issue.record("could not create task owner")
+                return
+            }
+
+            _ = parent.pointee.metadata.pointee.capsTable.install(
+                Capability(target: .power, badge: 0, rights: [.spawn])
+            )
+            let parentName = Array("ProcessServer.elf".utf8)
+            parentName.withUnsafeBufferPointer {
+                parent.pointee.metadata.pointee.setName(
+                    from : $0.baseAddress!,
+                    count: $0.count
+                )
+            }
+
+            Arch.CPU.setCurrentProcess(VirtualAddress(UInt(bitPattern: parent)))
+            defer { Arch.CPU.setCurrentProcess(0) }
+
+            let context = SyscallContext(
+                processManager: manager,
+                scheduler     : scheduler,
+                ipc           : ipc,
+                ppm           : ram.ppm
+            )
+            let pagesBefore = ram.ppm.pointee.allocatedPages
+            let capsBefore = (0..<Int(CapsTable.slotCount)).map {
+                parent.pointee.metadata.pointee.capsTable.resolve(UInt32($0))
+            }
+
+            var nullName = Arch.TrapFrame()
+            nullName.x1 = 1
+            TaskCreateSyscall.handle(frame: &nullName, context: context)
+            #expect(UInt32(truncatingIfNeeded: nullName.x0) == UInt32.max)
+
+            var emptyName = Arch.TrapFrame()
+            emptyName.x0 = 1
+            TaskCreateSyscall.handle(frame: &emptyName, context: context)
+            #expect(UInt32(truncatingIfNeeded: emptyName.x0) == UInt32.max)
+
+            var oversized = Arch.TrapFrame()
+            oversized.x0 = 1
+            oversized.x1 = UInt64(TaskCreation.maximumNameBytes + 1)
+            TaskCreateSyscall.handle(frame: &oversized, context: context)
+            #expect(UInt32(truncatingIfNeeded: oversized.x0) == UInt32.max)
+
+            var unrepresentable = Arch.TrapFrame()
+            unrepresentable.x0 = 1
+            unrepresentable.x1 = UInt64.max
+            TaskCreateSyscall.handle(frame: &unrepresentable, context: context)
+            #expect(UInt32(truncatingIfNeeded: unrepresentable.x0) == UInt32.max)
+
+            let unreadable = Array("Shell.elf".utf8)
+            unreadable.withUnsafeBufferPointer { bytes in
+                UserMemory.validationOverride = { _, _, _ in false }
+                var request = Arch.TrapFrame()
+                request.x0 = UInt64(UInt(bitPattern: bytes.baseAddress!))
+                request.x1 = UInt64(bytes.count)
+                TaskCreateSyscall.handle(frame: &request, context: context)
+                #expect(UInt32(truncatingIfNeeded: request.x0) == UInt32.max)
+            }
+            UserMemory.validationOverride = nil
+
+            for rejectedName: [UInt8] in [[0], [0x1B], [0x0A], [0x7F]] {
+                rejectedName.withUnsafeBufferPointer { bytes in
+                    UserMemory.validationOverride = { address, size, permissions in
+                        address == UInt64(UInt(bitPattern: bytes.baseAddress!)) &&
+                        size == bytes.count && permissions == [.read, .user]
+                    }
+                    var request = Arch.TrapFrame()
+                    request.x0 = UInt64(UInt(bitPattern: bytes.baseAddress!))
+                    request.x1 = UInt64(bytes.count)
+                    TaskCreateSyscall.handle(frame: &request, context: context)
+                    #expect(UInt32(truncatingIfNeeded: request.x0) == UInt32.max)
+                }
+            }
+            UserMemory.validationOverride = nil
+
+            #expect(ram.ppm.pointee.allocatedPages == pagesBefore)
+            let controls = TaskRegistry.controls(ownedBy: parent.pointee.identity)
+            for index in 0..<controls.count { #expect(controls[index] == nil) }
+            for index in 0..<Int(CapsTable.slotCount) {
+                #expect(
+                    parent.pointee.metadata.pointee.capsTable.resolve(UInt32(index)) ==
+                    capsBefore[index]
+                )
+            }
+
+            let exactName = Array("ProfileAuthority".utf8)
+            #expect(exactName.count == TaskCreation.maximumNameBytes)
+            var named = Arch.TrapFrame()
+            exactName.withUnsafeBufferPointer { bytes in
+                UserMemory.validationOverride = { address, size, permissions in
+                    address == UInt64(UInt(bitPattern: bytes.baseAddress!)) &&
+                    size == bytes.count && permissions == [.read, .user]
+                }
+                named.x0 = UInt64(UInt(bitPattern: bytes.baseAddress!))
+                named.x1 = UInt64(bytes.count)
+                TaskCreateSyscall.handle(frame: &named, context: context)
+            }
+            UserMemory.validationOverride = nil
+
+            let namedTask = UInt32(truncatingIfNeeded: named.x0)
+            let namedBootstrap = UInt32(truncatingIfNeeded: named.x1)
+            guard namedTask != UInt32.max,
+                  let namedCapability = parent.pointee.metadata.pointee.capsTable.resolve(namedTask),
+                  case .task(let namedControl) = namedCapability.target,
+                  let namedChild = TaskRegistry.record(namedControl)?.process
+            else {
+                Issue.record("exact-width task identity was refused")
+                return
+            }
+
+            #expect(namedChild.pointee.metadata.pointee.nameLength == UInt8(exactName.count))
+            for index in 0..<exactName.count {
+                #expect(namedChild.pointee.metadata.pointee.name[index] == exactName[index])
+            }
+            #expect(namedChild.pointee.metadata.pointee.capsTable.resolve(BootCap.profiler.rawValue) == nil)
+
+            var abortNamed = Arch.TrapFrame()
+            abortNamed.x0 = UInt64(namedTask)
+            TaskAbortSyscall.handle(frame: &abortNamed, context: context)
+            #expect(abortNamed.x0 == TaskResult.ok.rawValue)
+            #expect(context.ipc.pointee.releaseCapability(namedTask, of: parent).isSuccess)
+            #expect(context.ipc.pointee.releaseCapability(namedBootstrap, of: parent).isSuccess)
+
+            var legacy = Arch.TrapFrame()
+            TaskCreateSyscall.handle(frame: &legacy, context: context)
+            let taskHandle = UInt32(truncatingIfNeeded: legacy.x0)
+            guard taskHandle != UInt32.max,
+                  let capability = parent.pointee.metadata.pointee.capsTable.resolve(taskHandle),
+                  case .task(let control) = capability.target,
+                  let child = TaskRegistry.record(control)?.process
+            else {
+                Issue.record("unnamed taskCreate compatibility path failed")
+                return
+            }
+
+            let inheritedLength = min(parentName.count, TaskCreation.maximumNameBytes)
+            #expect(child.pointee.metadata.pointee.nameLength == UInt8(inheritedLength))
+            for index in 0..<inheritedLength {
+                #expect(child.pointee.metadata.pointee.name[index] == parentName[index])
+            }
+
+            var abort = Arch.TrapFrame()
+            abort.x0 = UInt64(taskHandle)
+            TaskAbortSyscall.handle(frame: &abort, context: context)
+            #expect(abort.x0 == TaskResult.ok.rawValue)
+            #expect(context.ipc.pointee.releaseCapability(taskHandle, of: parent).isSuccess)
+            #expect(context.ipc.pointee.releaseCapability(UInt32(truncatingIfNeeded: legacy.x1), of: parent).isSuccess)
         }
     }
 
