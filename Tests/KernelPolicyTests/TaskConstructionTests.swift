@@ -7,6 +7,7 @@ import Testing
 @testable import Kernel
 import ReixABI
 import KernelTestSupport
+import KernelHostShims
 
 extension KernelPolicyTestRoot {
 @Suite("Suspended task construction", .serialized)
@@ -104,12 +105,18 @@ struct TaskConstructionTests {
             #expect(wx.x0 == TaskResult.permissionConflict.rawValue)
 
             var sealText = Arch.TrapFrame()
+            reset_instruction_cache_sync_record()
             sealText.x0 = UInt64(taskHandle)
             sealText.x1 = text
             sealText.x2 = 1
             sealText.x3 = UInt64(TaskMemoryPermissions([.read, .execute]).rawValue)
             TaskSealAndProtectSyscall.handle(frame: &sealText, context: context)
             #expect(sealText.x0 == TaskResult.ok.rawValue)
+            #expect(instruction_cache_sync_calls() == 1)
+            #expect(instruction_cache_synced_size() == UserSpaceLayout.pageSize)
+            #expect(instruction_cache_synced_base() == ram.vmm.pointee.physicalAddressOf(
+                rootTable: child.pointee.addressSpace.rootTablePhysical, virtual: text
+            ))
 
             var sealStack = Arch.TrapFrame()
             sealStack.x0 = UInt64(taskHandle)
@@ -118,6 +125,7 @@ struct TaskConstructionTests {
             sealStack.x3 = UInt64(TaskMemoryPermissions([.read, .write]).rawValue)
             TaskSealAndProtectSyscall.handle(frame: &sealStack, context: context)
             #expect(sealStack.x0 == TaskResult.ok.rawValue)
+            #expect(instruction_cache_sync_calls() == 1)
 
             var setContext = Arch.TrapFrame()
             setContext.x0 = UInt64(taskHandle)

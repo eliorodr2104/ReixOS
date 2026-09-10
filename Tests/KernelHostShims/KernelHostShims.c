@@ -112,6 +112,18 @@ uint64_t read_virtual_counter_unordered(void) { return 0; }
 void set_current_process(uint64_t process) { current_process = process; }
 void switch_user_address_space(uint64_t rootTable, uint16_t asid) { (void)rootTable; (void)asid; }
 uint64_t asid_bits(void) { return 16; }
+static uint64_t instruction_cache_sync_count = 0;
+static uint64_t instruction_cache_sync_base = 0;
+static uint64_t instruction_cache_sync_size = 0;
+void synchronize_instruction_cache(void *base, uint64_t size) {
+    instruction_cache_sync_count += 1;
+    instruction_cache_sync_base = (uint64_t)base;
+    instruction_cache_sync_size = size;
+}
+uint64_t instruction_cache_sync_calls(void) { return instruction_cache_sync_count; }
+uint64_t instruction_cache_synced_base(void) { return instruction_cache_sync_base; }
+uint64_t instruction_cache_synced_size(void) { return instruction_cache_sync_size; }
+void reset_instruction_cache_sync_record(void) { instruction_cache_sync_count = 0; }
 void trigger_trap(void) {}
 void wait_for_interrupt(void) {}
 

@@ -407,6 +407,11 @@ public struct VirtualMemoryManager: Loggable {
         type     : MemoryType        = .normal
     ) throws(PPMError) {
         let tablePointer: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable)
+
+        if !flags.contains(.uxn) {
+            let bytes: UnsafeMutablePointer<UInt8> = physToVirt(physical)
+            Arch.MMU.synchronizeInstructionCache(UnsafeMutableRawPointer(bytes), size: Self.pageSize)
+        }
         
         try map(
             table   : tablePointer,
@@ -443,15 +448,11 @@ public struct VirtualMemoryManager: Loggable {
         physical    : PhysicalAddress,
         flags       : VirtualPageFlags
     ) throws(PPMError) {
-        let rootTable = addressSpace.rootTablePhysical
-        let tablePointer: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable)
-
-        try map(
-            table   : tablePointer,
-            virtual : virtual,
-            physical: physical,
-            type    : .normal,
-            flags   : flags.union([.notGlobal])
+        try mapUserPage(
+            rootTable: addressSpace.rootTablePhysical,
+            virtual  : virtual,
+            physical : physical,
+            flags    : flags
         )
     }
     

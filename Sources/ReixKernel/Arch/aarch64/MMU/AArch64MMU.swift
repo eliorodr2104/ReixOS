@@ -21,6 +21,14 @@ public struct AArch64MMU {
     @_silgen_name("asid_bits")
     public static func asidBits() -> UInt64
 
+    /// Publish freshly written code through the kernel's cached alias. The
+    /// target user root need not be active; invalidation covers every alias.
+    @_silgen_name("synchronize_instruction_cache")
+    public static func synchronizeInstructionCache(
+        _ base: UnsafeMutableRawPointer,
+        size: UInt64
+    )
+    
     @_silgen_name("flush_tlb")
     public static func flushTLB()
 
@@ -49,11 +57,8 @@ public struct AArch64MMU {
     /// Writes back and drops every cache line over `[base, base + size)`, then
     /// waits for it to have happened.
     ///
-    /// The one place the kernel does cache maintenance, and it is here because
-    /// this is the one place it writes bytes through its own cached mapping that
-    /// somebody else is about to read through a non-cacheable one. Everywhere
-    /// else the two ends of a shared region agree on cacheability and the caches
-    /// sort themselves out.
+    /// Used before handing bytes written through the cached kernel mapping to
+    /// a device through a non-cacheable mapping.
     @_silgen_name("clean_dcache_range")
     public static func cleanDataCacheRange(
         _ base: UnsafeMutableRawPointer,

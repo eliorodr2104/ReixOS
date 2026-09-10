@@ -113,6 +113,29 @@ private func mmuHandlers() -> [AsmRoutine] {
             ret()
         },
 
+        fn("synchronize_instruction_cache") {
+            raw("    cbz x1, .L_code_cache_done")
+            mrs("x2", "ctr_el0")
+            raw("    ubfx x2, x2, #16, #4")
+            mov("x3", 4)
+            raw("    lsl x3, x3, x2")
+            add("x1", "x0", "x1")
+            raw("    sub x2, x3, #1")
+            raw("    bic x0, x0, x2")
+            label(".L_code_cache_loop")
+            raw("    dc cvau, x0")
+            add("x0", "x0", "x3")
+            raw("    cmp x0, x1")
+            raw("    b.lo .L_code_cache_loop")
+            dsb("ish")
+            // The code's user VA may belong to an inactive root, and differs
+            // from the kernel alias just cleaned. Cover all instruction aliases.
+            ic("ialluis")
+            dsb("ish")
+            isb()
+            label(".L_code_cache_done")
+            ret()
+        },
         fn("flush_tlb") {
             dsb("ishst")
             tlbi("vmalle1is")
