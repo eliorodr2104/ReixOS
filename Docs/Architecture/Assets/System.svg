@@ -1,0 +1,129 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1140" viewBox="0 0 1600 1140" role="img" aria-labelledby="title desc">
+<title id="title">ReixOS architecture</title>
+<desc id="desc">EL0 applications and services use the Reix SDK to call the EL1 kernel. RAM contains the kernel image and initrd, stacks, kernel allocations, user pages and shared or DMA buffers. The userland storage services access a persistent RxFS disk through virtio. Arrows show syscall entry, physical memory management, privileged hardware access and the block-device path. Memory groups are schematic and not to scale.</desc>
+<defs>
+<marker id="arrow-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="#242522"/></marker>
+<marker id="arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="#BE442D"/></marker>
+</defs>
+<style>
+text {font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;fill:#242522}
+.title {font-size:38px;font-weight:700;letter-spacing:-1.4px}
+.section {font-size:22px;font-weight:600;letter-spacing:-.4px}
+.label {font-family:Menlo,Consolas,monospace;font-size:12px;letter-spacing:1.3px}
+.heading {font-size:18px;font-weight:600;letter-spacing:-.15px}
+.body {font-size:15px}
+.note {font-size:13px;fill:#696B63}
+.mono {font-family:Menlo,Consolas,monospace;font-size:13px}
+.light {fill:#EDEDE5}
+.dim {fill:#B6B8AE}
+</style>
+<rect width="1600" height="1140" fill="#F3F1EB"/>
+<rect x="54" y="39" width="7" height="35" fill="#BE442D"/>
+<text x="76" y="69" class="title">ReixOS</text>
+<text x="1550" y="66" class="label" text-anchor="end">SYSTEM ARCHITECTURE</text>
+<path d="M54 91H1546" fill="none" stroke="#242522"/>
+<text x="70" y="136" class="section">Userland</text>
+<text x="1096" y="134" class="label" text-anchor="end" style="fill:#BE442D">EL0</text>
+<rect x="70" y="158" width="1026" height="59" fill="#FCFBF7" stroke="#C9C9BF" rx="12"/>
+<text x="88" y="194" class="heading">Shell   /   Top   /   StorageCheck</text>
+<text x="1076" y="194" class="label" text-anchor="end" style="fill:#696B63">APPLICATIONS</text>
+<rect x="70" y="233" width="251" height="152" fill="#FCFBF7" stroke="#C9C9BF" rx="12"/>
+<text x="87" y="262" class="heading" style="fill:#242522">Storage</text>
+<text x="87" y="289" class="body" style="fill:#696B63">VirtioBus · BlockServer</text>
+<text x="87" y="312" class="body" style="fill:#696B63">FileSystemServer / ReixFS</text>
+<rect x="335" y="233" width="238" height="152" fill="#FCFBF7" stroke="#C9C9BF" rx="12"/>
+<text x="352" y="262" class="heading" style="fill:#242522">Process launch</text>
+<text x="352" y="289" class="body" style="fill:#696B63">Init</text>
+<text x="352" y="312" class="body" style="fill:#696B63">ProcessServer</text>
+<rect x="587" y="233" width="278" height="152" fill="#FCFBF7" stroke="#C9C9BF" rx="12"/>
+<text x="604" y="262" class="heading" style="fill:#242522">Terminal</text>
+<text x="604" y="289" class="body" style="fill:#696B63">SerialServer · ConsoleServer</text>
+<text x="604" y="312" class="body" style="fill:#696B63">VTAdapter · InputServer</text>
+<rect x="879" y="233" width="217" height="152" fill="#FCFBF7" stroke="#C9C9BF" rx="12"/>
+<text x="896" y="262" class="heading" style="fill:#242522">Service names</text>
+<text x="896" y="289" class="body" style="fill:#696B63">NameServer</text>
+<rect x="70" y="407" width="1026" height="63" fill="#E5E4DB" stroke="#C9C9BF" rx="12"/>
+<text x="88" y="435" class="heading">Reix SDK</text>
+<text x="88" y="456" class="body" style="fill:#696B63">Syscalls · service clients · runtime</text>
+<text x="1076" y="435" class="heading" text-anchor="end">ReixABI</text>
+<text x="1076" y="456" class="body" text-anchor="end" style="fill:#696B63">Shared types and protocols</text>
+<rect x="54" y="540" width="1058" height="351" fill="#242522" rx="18"/>
+<text x="70" y="572" class="section" style="fill:#EDEDE5">Microkernel</text>
+<text x="1096" y="572" class="label" text-anchor="end" style="fill:#D6745A">EL1</text>
+<rect x="70" y="597" width="242" height="124" fill="#242522" stroke="#50514B" rx="12"/>
+<text x="87" y="626" class="heading" style="fill:#EDEDE5">Boot</text>
+<text x="87" y="653" class="body" style="fill:#BFC1B7">Device tree · initrd</text>
+<text x="87" y="676" class="body" style="fill:#BFC1B7">Bootstrap ELF</text>
+<rect x="326" y="597" width="242" height="124" fill="#242522" stroke="#50514B" rx="12"/>
+<text x="343" y="626" class="heading" style="fill:#EDEDE5">Syscalls</text>
+<text x="343" y="653" class="body" style="fill:#BFC1B7">SVC · trap frame</text>
+<text x="343" y="676" class="body" style="fill:#BFC1B7">57 operations</text>
+<rect x="582" y="597" width="242" height="124" fill="#242522" stroke="#50514B" rx="12"/>
+<text x="599" y="626" class="heading" style="fill:#EDEDE5">Processes</text>
+<text x="599" y="653" class="body" style="fill:#BFC1B7">CPU context · address space</text>
+<text x="599" y="676" class="body" style="fill:#BFC1B7">Task / job state</text>
+<rect x="838" y="597" width="258" height="124" fill="#242522" stroke="#50514B" rx="12"/>
+<text x="855" y="626" class="heading" style="fill:#EDEDE5">Memory</text>
+<text x="855" y="653" class="body" style="fill:#BFC1B7">Frames · heap</text>
+<text x="855" y="676" class="body" style="fill:#BFC1B7">Page tables · VMAs</text>
+<rect x="70" y="739" width="242" height="126" fill="#242522" stroke="#50514B" rx="12"/>
+<text x="87" y="768" class="heading" style="fill:#EDEDE5">Interrupts</text>
+<text x="87" y="795" class="body" style="fill:#BFC1B7">GICv2 · timer</text>
+<text x="87" y="818" class="body" style="fill:#BFC1B7">IRQ delivery</text>
+<rect x="326" y="739" width="242" height="126" fill="#242522" stroke="#50514B" rx="12"/>
+<text x="343" y="768" class="heading" style="fill:#EDEDE5">IPC &amp; capabilities</text>
+<text x="343" y="795" class="body" style="fill:#BFC1B7">Endpoints · call / reply</text>
+<text x="343" y="818" class="body" style="fill:#BFC1B7">32 capability slots / process</text>
+<rect x="582" y="739" width="242" height="126" fill="#242522" stroke="#50514B" rx="12"/>
+<text x="599" y="768" class="heading" style="fill:#EDEDE5">Scheduler</text>
+<text x="599" y="795" class="body" style="fill:#BFC1B7">Round robin · 7 ticks</text>
+<text x="599" y="818" class="body" style="fill:#BFC1B7">Deadlines · checkpoints</text>
+<rect x="838" y="739" width="258" height="126" fill="#242522" stroke="#50514B" rx="12"/>
+<text x="855" y="768" class="heading" style="fill:#EDEDE5">Diagnostics</text>
+<text x="855" y="795" class="body" style="fill:#BFC1B7">Log · panic · trace</text>
+<text x="855" y="818" class="body" style="fill:#BFC1B7">Stack / FP probes</text>
+<path d="M447 470V540" fill="none" stroke="#242522" stroke-width="1.8"/>
+<path d="M447 540V592" fill="none" stroke="#EDEDE5" stroke-width="1.8"/><path d="M442 586L447 594L452 586" fill="none" stroke="#EDEDE5" stroke-width="1.8"/>
+<text x="463" y="513" class="mono">svc</text>
+<text x="1192" y="136" class="section">RAM</text>
+<text x="1192" y="161" class="note">Capacity from the device tree</text>
+<rect x="1192" y="183" width="354" height="708" fill="#FCFBF7" stroke="#C9C9BF" rx="18"/>
+<text x="1209" y="212" class="heading">Kernel image</text>
+<text x="1209" y="239" class="body" style="fill:#696B63">.text · .rodata · .data · .bss</text>
+<text x="1209" y="262" class="body" style="fill:#696B63">Embedded initrd tar</text>
+<text x="1209" y="285" class="body" style="fill:#696B63">Base 0x40080000</text>
+<path d="M1209 304H1529" fill="none" stroke="#C9C9BF"/>
+<text x="1209" y="331" class="heading">Kernel stacks</text>
+<text x="1209" y="358" class="body" style="fill:#696B63">24 KiB stack · 4 KiB guard</text>
+<text x="1209" y="381" class="body" style="fill:#696B63">16 KiB exception stack</text>
+<path d="M1209 423H1529" fill="none" stroke="#C9C9BF"/>
+<text x="1209" y="450" class="heading">Kernel allocations</text>
+<text x="1209" y="477" class="body" style="fill:#696B63">Frame metadata · page tables</text>
+<text x="1209" y="500" class="body" style="fill:#696B63">Heap · process state</text>
+<path d="M1209 542H1529" fill="none" stroke="#C9C9BF"/>
+<text x="1209" y="569" class="heading">User pages</text>
+<text x="1209" y="596" class="body" style="fill:#696B63">Program image · heap · stack</text>
+<path d="M1209 661H1529" fill="none" stroke="#C9C9BF"/>
+<text x="1209" y="688" class="heading">Shared / DMA</text>
+<text x="1209" y="715" class="body" style="fill:#696B63">IPC rings · transfer buffers</text>
+<path d="M1209 780H1529" fill="none" stroke="#C9C9BF"/>
+<text x="1209" y="807" class="heading">Free frames</text>
+<text x="1209" y="834" class="body" style="fill:#696B63">Buddy allocator</text>
+<path d="M1096 666H1112" fill="none" stroke="#EDEDE5" stroke-width="1.8"/>
+<path d="M1112 666H1187" fill="none" stroke="#242522" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#arrow-ink)"><title>Physical frame allocation and mapping</title></path>
+<text x="1139" y="654" class="mono" text-anchor="middle" style="fill:#696B63">frames</text>
+<text x="70" y="942" class="section">Hardware</text>
+<rect x="70" y="963" width="242" height="91" fill="#FCFBF7" stroke="#C9C9BF" rx="12"/>
+<text x="87" y="992" class="heading" style="fill:#242522">AArch64</text>
+<text x="87" y="1019" class="body" style="fill:#696B63">MMU · GIC · timer</text>
+<rect x="326" y="963" width="242" height="91" fill="#FCFBF7" stroke="#C9C9BF" rx="12"/>
+<text x="343" y="992" class="heading" style="fill:#242522">PL011 UART</text>
+<text x="343" y="1019" class="body" style="fill:#696B63">Serial I/O</text>
+<rect x="582" y="963" width="514" height="91" fill="#FCFBF7" stroke="#C9C9BF" rx="12"/>
+<text x="599" y="992" class="heading" style="fill:#242522">Virtio block → RxFS disk</text>
+<text x="599" y="1019" class="body" style="fill:#696B63">512-byte sectors · 4 KiB filesystem blocks</text>
+<path d="M191 865V891" fill="none" stroke="#EDEDE5" stroke-width="1.8"/>
+<path d="M191 891V957" fill="none" stroke="#242522" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#arrow-ink)"><title>Privileged interrupt and timer access</title></path>
+<path d="M70 309H28V1096H839V1060" fill="none" stroke="#BE442D" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#arrow-red)"><title>Userland block driver to virtio disk</title></path>
+<text x="808" y="1080" class="mono" text-anchor="end" style="fill:#BE442D">block I/O</text>
+</svg>
