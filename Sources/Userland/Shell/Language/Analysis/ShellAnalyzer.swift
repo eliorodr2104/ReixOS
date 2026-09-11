@@ -40,6 +40,8 @@ public enum ShellAnalyzer {
         var argument       = 0
         var schema         = ShellTypeSchema.none
         var parentheses    = 0
+        var expectsOperand = false
+        var expectedOperand = ShellValueType.any
         // Whether the value just read was a plain word. `memo.txt` in an
         // argument is one name, by the same rule the evaluator resolves by.
         var lastValueWasWord = false
@@ -58,8 +60,17 @@ public enum ShellAnalyzer {
         var closureParameter: Span? {
             closureDepth > 0 ? closures[closureDepth - 1]?.parameter : nil
         }
-        var bindings       = InlineArray<8, Span?>(repeating: nil)
-        var bindingCount   = 0
+        var closureParameterCount: UInt8 {
+            closureDepth > 0 ? (closures[closureDepth - 1]?.parameterCount ?? 0) : 0
+        }
+        var closureExpected: ShellValueType {
+            closureDepth > 0 ? (closures[closureDepth - 1]?.method?.closureResult ?? .any) : .any
+        }
+        var bindings              = InlineArray<8, Span?>(repeating: nil)
+        var bindingTypes          = InlineArray<8, ShellTypeSchema>(repeating: .none)
+        var bindingSnapshotIndices = InlineArray<8, Int>(repeating: -1)
+        var bindingCount          = 0
+        var pendingBinding       : Int?
 
         // What would be completed if the cursor sat right here, kept current
         // as the walk goes so open space has an answer too.
@@ -94,19 +105,46 @@ public enum ShellAnalyzer {
             return .error
         }
 
-        func remember(_ token: ShellToken) {
-            guard bindingCount < bindings.count else { return }
-            bindings[bindingCount] = token.span
+        @discardableResult
+        func remember(
+            _ token: ShellToken,
+              type : ShellTypeSchema
+        ) -> Int? {
+            guard bindingCount < bindings.count else { return nil }
+            let local = bindingCount
+            bindings[local] = token.span
+            bindingTypes[local] = type
+            bindingSnapshotIndices[local] = snapshot.remember(ShellBindingInfo(
+                start      : token.start,
+                count      : token.count,
+                type       : type,
+                visibleFrom: UInt16(clamping: token.end)
+            )) ?? -1
             bindingCount += 1
-            snapshot.remember(ShellSemanticSpan(role: .variable, start: token.start, count: token.count))
+            return local
         }
 
-        func isBinding(_ token: ShellToken) -> Bool {
+        func bindingIndex(_ token: ShellToken) -> Int? {
             for index in 0..<bindingCount {
                 guard let binding = bindings[index] else { continue }
-                if same(source, token.span, source, binding) { return true }
+                if same(source, token.span, source, binding) { return index }
             }
-            return false
+            return nil
+        }
+
+        func finishPendingBinding() {
+            guard let local = pendingBinding else { return }
+            bindingTypes[local] = schema
+            let snapshotIndex = bindingSnapshotIndices[local]
+            if snapshotIndex >= 0 { snapshot.updateBinding(at: snapshotIndex, type: schema) }
+            pendingBinding = nil
+        }
+
+        func commandSchema(at index: Int) -> ShellTypeSchema {
+            guard let descriptor = catalog.command(at: index) else { return .none }
+            return descriptor.schema.isEmptyType
+                ? ShellTypeSchema(valueType: descriptor.signature.result)
+                : descriptor.schema
         }
 
         func parameterType(of command: Int, at position: Int) -> ShellValueType {
@@ -115,6 +153,14 @@ public enum ShellAnalyzer {
                   let parameter = descriptor.signature.parameters[position]
             else { return .any }
             return parameter.type
+        }
+
+        func parameterSubject(of command: Int, at position: Int) -> ShellParameterSubject {
+            guard let descriptor = catalog.command(at: command),
+                  position >= 0, position < descriptor.signature.parameterCount,
+                  let parameter = descriptor.signature.parameters[position]
+            else { return .value }
+            return parameter.subject
         }
 
         /// What the cursor would be completing if it sat inside this token.
@@ -137,7 +183,10 @@ public enum ShellAnalyzer {
                 command : command,
                 argument: max(0, argument - 1),
                 expected: expected,
-                schema  : schema
+                schema  : schema,
+                scope   : closureElement,
+                scopeCount: closureParameterCount,
+                scopeName: closureParameter
             )
             found = true
         }
@@ -155,7 +204,10 @@ public enum ShellAnalyzer {
                 command : command,
                 argument: argument,
                 expected: expected,
-                schema  : schema
+                schema  : schema,
+                scope   : closureElement,
+                scopeCount: closureParameterCount,
+                scopeName: closureParameter
             )
         }
 
@@ -166,6 +218,15 @@ public enum ShellAnalyzer {
             switch token.kind {
                 case .newline:
                     mark(token, .plain)
+                    if closureDepth > 0 || parentheses > 0 || expectsOperand {
+                        // A physical line break inside an unfinished
+                        // expression is whitespace, not a new shell
+                        // statement. This keeps closure scope and receiver
+                        // types alive in editor mode.
+                        after(.value, expected: expectsOperand ? expectedOperand : closureExpected)
+                        continue
+                    }
+                    finishPendingBinding()
                     statementStart = true
                     expectBinding = false
                     command = -1
@@ -177,6 +238,7 @@ public enum ShellAnalyzer {
                 case .comma:
                     mark(token, .plain)
                     if parentheses == 0 {
+                        finishPendingBinding()
                         statementStart = true
                         command = -1
                         receiver = -1
@@ -197,6 +259,7 @@ public enum ShellAnalyzer {
                 case .assign:
                     mark(token, .plain)
                     statementStart = true
+                    schema = .none
                     after(.receiverOrCommand)
 
                 case .openParenthesis:
@@ -211,35 +274,47 @@ public enum ShellAnalyzer {
                     after(.value)
 
                 case .openBrace:
+                    expectsOperand = false
                     mark(token, token.state == .invalid ? .error : .closure)
                     if token.state == .invalid { note(.unbalanced, token) }
                     // `{ entry in ... }` names the element, and the name is a
                     // value everywhere in the body.
+                    let outerBindingCount = bindingCount
+                    let element = schema.elementType
                     var parameter: Span?
+                    var parameterBinding = -1
                     if let named = stream.token(at: index), named.kind == .name,
                        let keyword = stream.token(at: index + 1), keyword.kind == .name,
                        spells(source, keyword.span, "in") {
                         index += 2
                         mark(named, .variable)
-                        remember(named)
+                        if let local = remember(named, type: element) {
+                            parameterBinding = bindingSnapshotIndices[local]
+                        }
                         parameter = named.span
                         mark(keyword, .keyword)
                     }
+                    let requiredType = pendingMethod?.closureResult ?? .any
                     if closureDepth < closures.count {
                         closures[closureDepth] = ShellClosureFrame(
-                            element  : schema.elementType,
+                            element  : element,
                             outer    : schema,
                             method   : pendingMethod,
                             receiver : pendingReceiver,
-                            parameter: parameter
+                            parameter: parameter,
+                            parameterCount: pendingMethod?.closureParameters ?? 0,
+                            outerBindingCount: outerBindingCount,
+                            parameterBinding: parameterBinding
                         )
                         closureDepth += 1
                     }
                     pendingMethod = nil
                     pendingReceiver = .none
-                    after(.value)
+                    schema = .none
+                    after(.value, expected: requiredType)
 
                 case .closeBrace:
+                    expectsOperand = false
                     mark(token, token.state == .invalid ? .error : .closure)
                     if token.state == .invalid { note(.unbalanced, token) }
                     // What the closure answered is the last thing in it, and
@@ -247,42 +322,58 @@ public enum ShellAnalyzer {
                     let answered = schema
                     if closureDepth > 0, let frame = closures[closureDepth - 1] {
                         closureDepth -= 1
+                        bindingCount = frame.outerBindingCount
+                        if frame.parameterBinding >= 0 {
+                            snapshot.closeBinding(at: frame.parameterBinding, before: Int(token.start))
+                        }
                         schema = frame.method?.resultType(on: frame.receiver, closure: answered)
                             ?? frame.outer
+                        closures[closureDepth] = nil
                     }
                     after(.value)
 
                 case .text:
+                    let valueExpected = expectsOperand ? expectedOperand : parameterType(of: command, at: argument)
+                    expectsOperand = false
                     if token.state == .unterminated {
-                        mark(token, .incomplete)
+                        mark(token, parameterSubject(of: command, at: argument) == .path ? .path : .incomplete)
                         note(.unterminatedText, token)
                     } else {
-                        mark(token, .text)
+                        mark(token, parameterSubject(of: command, at: argument) == .path ? .path : .text)
                     }
                     argument += 1
                     lastValueWasWord = false
-                    here(.value, token, expected: parameterType(of: command, at: argument - 1))
+                    if command < 0 { schema = .text }
+                    here(.value, token, expected: valueExpected)
                     after(.value, expected: parameterType(of: command, at: argument))
 
                 case .number:
+                    let valueExpected = expectsOperand ? expectedOperand : parameterType(of: command, at: argument)
+                    expectsOperand = false
                     mark(token, .number)
                     lastValueWasWord = false
+                    if command < 0 { schema = .number }
                     argument += 1
-                    here(.value, token, expected: parameterType(of: command, at: argument - 1))
+                    here(.value, token, expected: valueExpected)
                     after(.value, expected: parameterType(of: command, at: argument))
 
                 case .path:
+                    let valueExpected = expectsOperand ? expectedOperand : parameterType(of: command, at: argument)
+                    expectsOperand = false
                     mark(token, .path)
                     lastValueWasWord = false
+                    if command < 0 { schema = .text }
                     argument += 1
-                    here(.value, token, expected: parameterType(of: command, at: argument - 1))
+                    here(.value, token, expected: valueExpected)
                     after(.value, expected: parameterType(of: command, at: argument))
 
                 case .placeholder:
+                    let valueExpected = expectsOperand ? expectedOperand : .any
+                    expectsOperand = false
                     mark(token, .variable)
                     lastValueWasWord = false
                     schema = closureElement
-                    here(.value, token)
+                    here(.value, token, expected: valueExpected)
                     after(.value)
 
                 case .unknown:
@@ -291,7 +382,34 @@ public enum ShellAnalyzer {
                     here(.none, token)
                     after(.none)
 
-                case .operatorSymbol, .colon:
+                case .operatorSymbol:
+                    mark(token, .keyword)
+                    if spells(source, token.span, "&&") || spells(source, token.span, "||")
+                        || spells(source, token.span, "&") || spells(source, token.span, "|") {
+                        here(.value, token, expected: .boolean)
+                        expectsOperand = true
+                        expectedOperand = .boolean
+                        statementStart = true
+                        schema = .none
+                        after(.value, expected: .boolean)
+                    } else if spells(source, token.span, "!") {
+                        here(.value, token, expected: .boolean)
+                        expectsOperand = true
+                        expectedOperand = .boolean
+                        statementStart = true
+                        schema = .none
+                        after(.value, expected: .boolean)
+                    } else {
+                        let operand = schema.valueType
+                        here(.value, token, expected: operand)
+                        expectsOperand = true
+                        expectedOperand = operand
+                        statementStart = true
+                        schema = .none
+                        after(.value, expected: operand)
+                    }
+
+                case .colon:
                     mark(token, .plain)
                     after(.value, expected: parameterType(of: command, at: argument))
 
@@ -307,20 +425,25 @@ public enum ShellAnalyzer {
                     // What follows a dot is a member of what came before it,
                     // unless what came before it was a receiver.
                     guard let next = stream.token(at: index), next.kind == .name else {
-                        after(receiver >= 0 ? .command : .member)
+                        after(
+                            receiver >= 0 ? .command : .member,
+                            expected: expectsOperand ? expectedOperand : .any
+                        )
                         continue
                     }
                     index += 1
                     if receiver >= 0 {
+                        let commandExpected = expectsOperand ? expectedOperand : .any
                         if let resolved = commandIndex(catalog, source, next.span, in: receiver) {
+                            expectsOperand = false
                             mark(next, .command)
                             command = resolved
-                            schema = catalog.command(at: resolved)?.schema ?? .none
+                            schema = commandSchema(at: resolved)
                             argument = 0
                         } else {
                             mark(next, unresolved(next, .unknownCommand))
                         }
-                        here(.command, next)
+                        here(.command, next, expected: commandExpected)
                         after(command >= 0 && parentheses == 0 ? .value : .label, expected: parameterType(of: command, at: 0))
                         receiver = -1
                         statementStart = false
@@ -348,7 +471,7 @@ public enum ShellAnalyzer {
                 case .name:
                     if expectBinding {
                         mark(token, .variable)
-                        remember(token)
+                        pendingBinding = remember(token, type: .none)
                         expectBinding = false
                         here(.none, token)
                         after(.none)
@@ -368,52 +491,85 @@ public enum ShellAnalyzer {
                         continue
                     }
 
+                    let expressionExpected = expectsOperand
+                        ? expectedOperand
+                        : parameterType(of: command, at: argument)
+
+                    if spells(source, token.span, "true") || spells(source, token.span, "false")
+                        || spells(source, token.span, "nil") {
+                        expectsOperand = false
+                        mark(token, .keyword)
+                        schema = spells(source, token.span, "nil") ? .none : .boolean
+                        statementStart = false
+                        lastValueWasWord = false
+                        argument += 1
+                        here(.value, token, expected: expressionExpected)
+                        after(.value, expected: parameterType(of: command, at: argument))
+                        continue
+                    }
+
                     if statementStart {
                         statementStart = false
                         if let namespace = namespaceIndex(catalog, source, token.span) {
                             mark(token, .namespace)
                             receiver = namespace
                             lastValueWasWord = false
-                            here(.receiverOrCommand, token)
+                            here(.receiverOrCommand, token, expected: expressionExpected)
                             after(.receiverOrCommand)
                             continue
                         }
                         if let resolved = commandIndex(catalog, source, token.span, in: nil) {
+                            expectsOperand = false
                             mark(token, .command)
                             command = resolved
-                            schema = catalog.command(at: resolved)?.schema ?? .none
+                            schema = commandSchema(at: resolved)
                             argument = 0
                             lastValueWasWord = false
-                            here(.receiverOrCommand, token)
+                            here(.receiverOrCommand, token, expected: expressionExpected)
                             after(.value, expected: parameterType(of: resolved, at: 0))
                             continue
                         }
-                        if isBinding(token) {
+                        if let binding = bindingIndex(token) {
+                            expectsOperand = false
                             mark(token, .variable)
+                            schema = bindingTypes[binding]
                             lastValueWasWord = false
-                            here(.receiverOrCommand, token)
+                            here(.receiverOrCommand, token, expected: expressionExpected)
                             after(.value)
                             continue
                         }
                         mark(token, unresolved(token, .unknownCommand))
-                        here(.receiverOrCommand, token)
+                        here(.receiverOrCommand, token, expected: expressionExpected)
                         after(.receiverOrCommand)
                         continue
                     }
 
                     // Anywhere else a name is a value: something bound, or a
                     // word, which is what an unquoted argument is.
-                    let bound = isBinding(token)
-                    mark(token, bound ? .variable : .plain)
+                    let binding = bindingIndex(token)
+                    expectsOperand = false
+                    let role: ShellSemanticRole
+                    if binding != nil {
+                        role = .variable
+                    } else if parameterSubject(of: command, at: argument) == .path {
+                        role = .path
+                    } else {
+                        role = .plain
+                    }
+                    mark(token, role)
                     if let closureParameter, same(source, token.span, source, closureParameter) {
                         schema = closureElement
+                    } else if let binding {
+                        schema = bindingTypes[binding]
                     }
-                    lastValueWasWord = !bound
+                    lastValueWasWord = binding == nil
                     argument += 1
                     here(.value, token, expected: parameterType(of: command, at: argument - 1))
                     after(.value, expected: parameterType(of: command, at: argument))
             }
         }
+
+        finishPendingBinding()
 
         if !found {
             snapshot.context = trailing
@@ -591,4 +747,7 @@ internal struct ShellClosureFrame {
     let method   : ShellMethodDescriptor?
     let receiver : ShellTypeSchema
     let parameter: Span?
+    let parameterCount: UInt8
+    let outerBindingCount: Int
+    let parameterBinding: Int
 }

@@ -53,6 +53,22 @@ public struct ShellCompletionContext: Equatable {
     /// The shape of the value the cursor is reaching into, for `.member`.
     public let schema  : ShellTypeSchema
 
+    /// What `$0` is in the closure surrounding the cursor, or nothing outside
+    /// one. Kept separate from `schema`: before a closure has an answer, its
+    /// element is still known even though its result is not.
+    public let scope   : ShellTypeSchema
+    public let scopeCount: UInt8
+    private let scopeNameStart: UInt16
+    private let scopeNameCount: UInt16
+
+    /// The name a closure gave its first value, when it did. Stored compactly
+    /// so one analysis snapshot stays inside its freestanding stack budget.
+    public var scopeName: Span? {
+        scopeNameCount == 0
+            ? nil
+            : Span(start: Int(scopeNameStart), count: Int(scopeNameCount))
+    }
+
     public init(
         subject : ShellCompletionSubject = .none,
         start   : UInt16 = 0,
@@ -61,7 +77,10 @@ public struct ShellCompletionContext: Equatable {
         command : Int = -1,
         argument: Int = 0,
         expected: ShellValueType = .any,
-        schema  : ShellTypeSchema = .none
+        schema  : ShellTypeSchema = .none,
+        scope   : ShellTypeSchema = .none,
+        scopeCount: UInt8 = 0,
+        scopeName: Span? = nil
     ) {
         self.subject = subject
         self.start = start
@@ -71,6 +90,10 @@ public struct ShellCompletionContext: Equatable {
         self.argument = argument
         self.expected = expected
         self.schema = schema
+        self.scope = scope
+        self.scopeCount = scopeCount
+        self.scopeNameStart = UInt16(clamping: scopeName?.start ?? 0)
+        self.scopeNameCount = UInt16(clamping: scopeName?.count ?? 0)
     }
 
     public var prefix: Span { Span(start: Int(start), count: Int(count)) }

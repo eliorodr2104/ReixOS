@@ -100,6 +100,19 @@ struct ShellLexerTests {
         #expect(stream.completeness == .incomplete(indent: 1))
     }
 
+    @Test("Boolean operators are tokens, including a growing half operator")
+    func booleanOperators() {
+        let source = "true && !false || true"
+        let stream = scan(source)
+        #expect(kinds(stream) == [.name, .operatorSymbol, .operatorSymbol, .name, .operatorSymbol, .name])
+
+        let growing = scan("true &")
+        #expect(growing.token(at: growing.count - 1)?.kind == .operatorSymbol)
+        #expect(growing.token(at: growing.count - 1)?.state == .growing)
+        #expect(growing.completeness == .incomplete(indent: 0))
+        #expect(scan("true &&\n").completeness == .incomplete(indent: 0))
+    }
+
     @Test("A closure still open is tokens, not a refusal")
     func openClosure() {
         let stream = scan("list.filter { $0.isFolder")

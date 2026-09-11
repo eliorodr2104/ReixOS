@@ -101,6 +101,9 @@ public enum ShellLexer {
                 if cursor + 1 < end, isDigit(source[cursor + 1]) {
                     cursor += 2
                     emit(.placeholder, settled(start, cursor), from: start, to: cursor)
+                } else if cursor + 1 == end {
+                    cursor += 1
+                    emit(.placeholder, .growing, from: start, to: cursor)
                 } else {
                     cursor += 1
                     emit(.unknown, .invalid, from: start, to: cursor)
@@ -180,6 +183,14 @@ public enum ShellLexer {
                     cursor += 1
                     if cursor < end, source[cursor] == equalsByte { cursor += 1 }
                     emit(.operatorSymbol, .valid, from: start, to: cursor)
+                case ampersand, verticalBar:
+                    cursor += 1
+                    if cursor < end, source[cursor] == byte {
+                        cursor += 1
+                        emit(.operatorSymbol, .valid, from: start, to: cursor)
+                    } else {
+                        emit(.operatorSymbol, cursor == end ? .growing : .invalid, from: start, to: cursor)
+                    }
                 case less, greater:
                     cursor += 1
                     emit(.operatorSymbol, .valid, from: start, to: cursor)
@@ -189,9 +200,18 @@ public enum ShellLexer {
             }
         }
 
+        var trailingOperator = false
+        var trailingIndex = stream.count
+        while trailingIndex > 0 {
+            trailingIndex -= 1
+            guard let trailing = stream.token(at: trailingIndex) else { continue }
+            if trailing.kind == .newline { continue }
+            trailingOperator = trailing.kind == .operatorSymbol
+            break
+        }
         if unbalanced >= 0 {
             stream.completeness = .invalid(column: unbalanced)
-        } else if openQuote || parentheses > 0 || braces > 0 {
+        } else if openQuote || parentheses > 0 || braces > 0 || trailingOperator {
             stream.completeness = .incomplete(indent: parentheses + braces)
         } else {
             stream.completeness = .complete
@@ -250,6 +270,7 @@ public enum ShellLexer {
     private static let exclamation     : UInt8 = 0x21
     private static let quote           : UInt8 = 0x22
     private static let dollar          : UInt8 = 0x24
+    private static let ampersand       : UInt8 = 0x26
     private static let openParenthesis : UInt8 = 0x28
     private static let closeParenthesis: UInt8 = 0x29
     private static let comma           : UInt8 = 0x2C
@@ -268,5 +289,6 @@ public enum ShellLexer {
     private static let lowerA          : UInt8 = 0x61
     private static let lowerZ          : UInt8 = 0x7A
     private static let openBrace       : UInt8 = 0x7B
+    private static let verticalBar     : UInt8 = 0x7C
     private static let closeBrace      : UInt8 = 0x7D
 }

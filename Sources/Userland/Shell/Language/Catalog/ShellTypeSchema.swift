@@ -63,8 +63,41 @@ public struct ShellTypeSchema: Equatable {
     public static let processes = ShellTypeSchema(shape: .list, element: .process)
     public static let texts     = ShellTypeSchema(shape: .list, element: .text)
 
+    /// The most precise schema available when a module only declares the
+    /// runtime value kind in its signature. Modules may still provide a
+    /// richer schema (for example `[Entry]`) without teaching the editor their
+    /// command names.
+    public init(valueType: ShellValueType) {
+        switch valueType {
+            case .void: self = .none
+            case .boolean: self = .boolean
+            case .number: self = .number
+            case .text: self = .text
+            case .record: self = .named
+            case .sequence: self = ShellTypeSchema(shape: .list, element: .named)
+            case .any: self = .none
+        }
+    }
+
     public var isList : Bool { shape == .list }
     public var isEmptyType: Bool { shape == .nothing }
+
+    /// The evaluator's broad value type for this schema. Completion uses the
+    /// same answer to put expressions of the closure's required type first.
+    public var valueType: ShellValueType {
+        switch shape {
+            case .nothing: return .void
+            case .list: return .sequence
+            case .one:
+                switch element {
+                    case .nothing: return .void
+                    case .text: return .text
+                    case .number: return .number
+                    case .boolean: return .boolean
+                    case .entry, .process, .named: return .record
+                }
+        }
+    }
 
     /// What one element of a list is, which is what `$0` stands for inside a
     /// closure over it.
@@ -85,20 +118,20 @@ public struct ShellTypeSchema: Equatable {
                 switch element {
                     case .nothing: return "Void"
                     case .entry: return "Entry"
-                    case .named: return "Named"
+                    case .named: return "Record"
                     case .process: return "Process"
-                    case .text: return "Text"
-                    case .number: return "Number"
+                    case .text: return "String"
+                    case .number: return "UInt64"
                     case .boolean: return "Bool"
                 }
             case .list:
                 switch element {
                     case .nothing: return "[]"
                     case .entry: return "[Entry]"
-                    case .named: return "[Named]"
+                    case .named: return "[Record]"
                     case .process: return "[Process]"
-                    case .text: return "[Text]"
-                    case .number: return "[Number]"
+                    case .text: return "[String]"
+                    case .number: return "[UInt64]"
                     case .boolean: return "[Bool]"
                 }
         }

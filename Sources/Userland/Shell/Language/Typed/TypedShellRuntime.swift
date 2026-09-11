@@ -85,6 +85,8 @@ public struct TypedShellRuntime {
             case .identifier(let span):
                 if matches(span, source, "$0") { return zero.map(Result.success) ?? .failure(.unknownSymbol(ShellText("$0")!)) }
                 if matches(span, source, "$1") { return one.map(Result.success) ?? .failure(.unknownSymbol(ShellText("$1")!)) }
+                if matches(span, source, "true") { return .success(.boolean(true)) }
+                if matches(span, source, "false") { return .success(.boolean(false)) }
                 guard let name = text(span, source, sourceCount) else { return .failure(.syntax(column: span.start)) }
                 if name.equals("nil") { return .success(.void) }
                 if let value = binding(named: name) { return .success(value) }
@@ -107,6 +109,21 @@ public struct TypedShellRuntime {
                     return .success(.boolean(!flag))
                 }
             case .binary(let operation, let lhs, let rhs):
+                if operation == .logicalAnd || operation == .logicalOr {
+                    return evaluate(lhs, program, source, sourceCount, signatures, zero, one, invoke).flatMap { left in
+                        guard case .boolean(let flag) = left else {
+                            return .failure(.type(expected: .boolean, actual: left.type))
+                        }
+                        if operation == .logicalAnd, !flag { return .success(.boolean(false)) }
+                        if operation == .logicalOr, flag { return .success(.boolean(true)) }
+                        return self.evaluate(rhs, program, source, sourceCount, signatures, zero, one, invoke).flatMap { right in
+                            guard case .boolean = right else {
+                                return .failure(.type(expected: .boolean, actual: right.type))
+                            }
+                            return .success(right)
+                        }
+                    }
+                }
                 return evaluate(lhs, program, source, sourceCount, signatures, zero, one, invoke).flatMap { left in
                     self.evaluate(rhs, program, source, sourceCount, signatures, zero, one, invoke).flatMap { right in
                         self.compare(operation, left, right)
@@ -411,6 +428,24 @@ public struct TypedShellRuntime {
                 return .success(.boolean(whole.begins(with: part, atFront: atFront)))
             }
         }
+        if name.equals("appending"), case .text(let whole) = base {
+            guard let argument else { return .failure(.wrongArguments(name)) }
+            return evaluate(argument, program, source, count, signatures, nil, nil, invoke).flatMap {
+                guard case .text(let other) = $0 else {
+                    return .failure(.type(expected: .text, actual: $0.type))
+                }
+                guard let joined = whole.appending(other) else {
+                    return .failure(.materializationLimit(ShellText.capacity))
+                }
+                return .success(.text(joined))
+            }
+        }
+        if case .text(let whole) = base,
+           name.equals("lowercased") || name.equals("uppercased") || name.equals("trimmed") {
+            guard argument == nil else { return .failure(.wrongArguments(name)) }
+            if name.equals("trimmed") { return .success(.text(whole.trimmingASCIIWhitespace())) }
+            return .success(.text(whole.changingASCIICase(uppercased: name.equals("uppercased"))))
+        }
         guard let arena = sequenceArena,
               case .sequence(let handle) = base, handle >= 0, handle < arena.pointee.count,
               let sequence = arena.pointee.sequences[handle], let argument,
@@ -558,6 +593,7 @@ public struct TypedShellRuntime {
         switch (lhs, rhs) {
             case (.text(let left), .text(let right)):
                 switch operation {
+                    case .logicalOr, .logicalAnd: return .failure(.type(expected: .boolean, actual: .text))
                     case .equal: return .success(.boolean(left == right))
                     case .notEqual: return .success(.boolean(left != right))
                     case .less: return .success(.boolean(left < right))
@@ -565,12 +601,15 @@ public struct TypedShellRuntime {
                 }
             case (.number(let left), .number(let right)):
                 switch operation {
+                    case .logicalOr, .logicalAnd: return .failure(.type(expected: .boolean, actual: .number))
                     case .equal: return .success(.boolean(left == right))
                     case .notEqual: return .success(.boolean(left != right))
                     case .less: return .success(.boolean(left < right))
                     case .greater: return .success(.boolean(left > right))
                 }
             case (.boolean(let left), .boolean(let right)):
+                if operation == .logicalAnd { return .success(.boolean(left && right)) }
+                if operation == .logicalOr { return .success(.boolean(left || right)) }
                 guard operation == .equal || operation == .notEqual else { return .failure(.type(expected: .number, actual: .boolean)) }
                 return .success(.boolean(operation == .equal ? left == right : left != right))
             default: return .failure(.type(expected: lhs.type, actual: rhs.type))

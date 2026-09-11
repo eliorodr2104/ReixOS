@@ -94,7 +94,7 @@ public extension ShellPanel {
             guard let method = ShellCatalog.method(of: schema, at: index) else { continue }
             panel.append(ShellPanelRow(
                 name   : method.name,
-                detail : method.resultName(on: schema),
+                detail : method.completionDetail(on: schema),
                 summary: method.summary,
                 role   : .member
             ))
@@ -110,6 +110,7 @@ public extension ShellPanel {
             case .member, .method: return .member
             case .variable: return .variable
             case .keyword: return .keyword
+            case .operatorSymbol: return .keyword
             case .path: return .path
         }
     }

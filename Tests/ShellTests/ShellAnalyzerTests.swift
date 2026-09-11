@@ -293,6 +293,16 @@ struct ShellAnalyzerTests {
         #expect(element.context.subject == .member)
         #expect(element.context.schema == .entry)
 
+        let closure = analyze("list.filter { ")
+        #expect(closure.context.subject == .value)
+        #expect(closure.context.scope == .entry)
+        #expect(closure.context.scopeCount == 1)
+        #expect(closure.context.expected == .boolean)
+
+        let sorting = analyze("list.sorted { ")
+        #expect(sorting.context.scope == .entry)
+        #expect(sorting.context.scopeCount == 2)
+
         // Inside the verb itself, what fits is another verb, and one byte
         // further along it is that verb's first argument.
         let insideVerb = analyze("changeDir vault", cursor: 5)

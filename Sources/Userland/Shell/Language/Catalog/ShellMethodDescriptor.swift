@@ -40,17 +40,26 @@ public struct ShellMethodDescriptor {
     public let name    : StaticString
     public let argument: ShellMethodArgument
     public let result  : ShellMethodResult
+    public let closureResult: ShellValueType
+    public let closureParameters: UInt8
+    public let completionSignature: StaticString
     public let summary : StaticString
 
     public init(
         _ name    : StaticString,
           argument: ShellMethodArgument,
           result  : ShellMethodResult,
+          closureResult: ShellValueType = .any,
+          closureParameters: UInt8 = 1,
+          signature: StaticString = "",
           summary : StaticString
     ) {
         self.name = name
         self.argument = argument
         self.result = result
+        self.closureResult = closureResult
+        self.closureParameters = closureParameters
+        self.completionSignature = signature
         self.summary = summary
     }
 
@@ -80,5 +89,9 @@ public struct ShellMethodDescriptor {
             case .fixed(let type): return type.name
             case .closureAnswer, .listOfClosureAnswer: return "[?]"
         }
+    }
+
+    public func completionDetail(on receiver: ShellTypeSchema) -> StaticString {
+        completionSignature.utf8CodeUnitCount == 0 ? resultName(on: receiver) : completionSignature
     }
 }

@@ -80,6 +80,8 @@ struct TypedShellRuntimeTests {
             "fileSystem.write(at: draft, text: \"hello\")",
             "let folders = list.filter { $0.isFolder }, "
                 + "folders.filter { !$0.name.contains(\"1\") }.sorted { $0.name < $1.name }",
+            "list.filter { $0.isFolder && !$0.isFile || $0.isContainer }",
+            "true &&\n    false || true",
             "list.map { $0.name }.compactMap { $0 }.flatMap { list }",
         ]
         for source in examples {
@@ -127,6 +129,89 @@ struct TypedShellRuntimeTests {
             }
             #expect(program.count == 1)
         }
+    }
+
+    @Test("Bool literals and operators use Swift precedence and short circuit")
+    func booleanOperators() {
+        let probe = TypedExecutionProbe()
+        let worker = Thread {
+            let examples: [(String, ShellValue)] = [
+                ("true || missing", .boolean(true)),
+                ("false && missing", .boolean(false)),
+                ("true || false && false", .boolean(true)),
+                ("!false && true", .boolean(true)),
+                ("true &&\n false", .boolean(false)),
+                ("\"a\" == \"a\" && \"b\" != \"c\"", .boolean(true)),
+            ]
+            for (source, expected) in examples {
+                let bytes = Array(source.utf8)
+                let accepted = bytes.withUnsafeBufferPointer { input -> Bool in
+                    guard case .success(let program) = TypedShellParser.parse(
+                        input.baseAddress!, count: input.count
+                    ) else { return false }
+                    var runtime = TypedShellRuntime()
+                    var arena = TypedShellSequenceArena()
+                    let signatures = InlineArray<1, TypedShellSignature?>(repeating: nil)
+                    return signatures.span.withUnsafeBufferPointer { table in
+                        runtime.execute(
+                            program,
+                            source: input.baseAddress!,
+                            count: input.count,
+                            signatures: UnsafeBufferPointer(start: table.baseAddress!, count: 0),
+                            arena: &arena
+                        ) { _ in
+                            probe.invocations += 1
+                            return .failure(UInt32.max)
+                        }
+                    } == .success(expected)
+                }
+                guard accepted else { return }
+            }
+            probe.passed = true
+        }
+        worker.stackSize = 8 * 1024 * 1024
+        worker.start()
+        while !worker.isFinished { Thread.sleep(forTimeInterval: 0.001) }
+        #expect(probe.passed)
+        #expect(probe.invocations == 0, "short-circuited identifiers are never resolved as calls")
+    }
+
+    @Test("String methods compose as typed values")
+    func stringMethods() {
+        let probe = TypedExecutionProbe()
+        let worker = Thread {
+            let examples: [(String, ShellValue)] = [
+                ("\" ReIx \".trimmed().lowercased().appending(\"os\")", .text(ShellText("reixos")!)),
+                ("\"Reix\".uppercased()", .text(ShellText("REIX")!)),
+                ("\"ReixOS\".hasPrefix(\"Reix\") && \"ReixOS\".hasSuffix(\"OS\")", .boolean(true)),
+            ]
+            for (source, expected) in examples {
+                let bytes = Array(source.utf8)
+                let accepted = bytes.withUnsafeBufferPointer { input -> Bool in
+                    guard case .success(let program) = TypedShellParser.parse(
+                        input.baseAddress!, count: input.count
+                    ) else { return false }
+                    var runtime = TypedShellRuntime()
+                    var arena = TypedShellSequenceArena()
+                    let signatures = InlineArray<1, TypedShellSignature?>(repeating: nil)
+                    return signatures.span.withUnsafeBufferPointer { table in
+                        runtime.execute(
+                            program,
+                            source: input.baseAddress!,
+                            count: input.count,
+                            signatures: UnsafeBufferPointer(start: table.baseAddress!, count: 0),
+                            arena: &arena
+                        ) { _ in .failure(UInt32.max) }
+                    } == .success(expected)
+                }
+                guard accepted else { return }
+            }
+            probe.passed = true
+        }
+        worker.stackSize = 8 * 1024 * 1024
+        worker.start()
+        while !worker.isFinished { Thread.sleep(forTimeInterval: 0.001) }
+        #expect(probe.passed)
     }
 
     @Test("newline-separated scripts execute every statement")

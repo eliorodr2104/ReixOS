@@ -126,6 +126,37 @@ private func offered(
     }
 }
 
+private func detail(
+    of name: String,
+    in source: String
+) -> String? {
+    var catalog = ShellCatalog()
+    _ = catalog.merge(CompletionMachine.self)
+    _ = catalog.merge(CompletionFiles.self)
+    let bytes = Array(source.utf8)
+    return bytes.withUnsafeBufferPointer { buffer in
+        guard let base = buffer.baseAddress else { return nil }
+        let snapshot = ShellAnalyzer.analyze(
+            base, count: buffer.count, cursor: buffer.count, revision: 1, catalog: catalog
+        )
+        let set = ShellCompletionEngine.complete(
+            for: snapshot, source: base, count: buffer.count, catalog: catalog
+        )
+        for index in 0..<set.count {
+            guard let candidate = set.candidate(at: index) else { continue }
+            let candidateName = candidate.withName { nameBytes, count in
+                String(decoding: UnsafeBufferPointer(start: nameBytes, count: count), as: UTF8.self)
+            }
+            guard candidateName == name else { continue }
+            return String(decoding: UnsafeBufferPointer(
+                start: candidate.detail.utf8Start,
+                count: candidate.detail.utf8CodeUnitCount
+            ), as: UTF8.self)
+        }
+        return nil
+    }
+}
+
 @Suite("Shell completion")
 struct ShellCompletionTests {
 
@@ -191,11 +222,66 @@ struct ShellCompletionTests {
         #expect(offered("list.first.").names.contains("isFolder"))
     }
 
+    @Test("A closure offers complete expressions before its placeholder is written")
+    func closureScope() {
+        let filtered = offered("list.filter { ")
+        #expect(filtered.names.contains("$0.isFolder"))
+        #expect(filtered.names.contains("$0.isContainer"))
+        #expect(filtered.names.contains("$0.isFile"))
+        #expect(!filtered.names.contains("$0.count"), "the scope is one entry, not its list")
+
+        let narrowed = offered("list.filter { $")
+        #expect(narrowed.names.contains("$0.isFolder"))
+        #expect(narrowed.names.allSatisfy { $0.hasPrefix("$") })
+
+        let sorted = offered("list.sorted { ")
+        #expect(sorted.names.contains("$0.name"))
+        #expect(sorted.names.contains("$1.name"), "a two-element closure exposes its second value too")
+
+        let named = offered("list.filter { file in ")
+        #expect(named.names.contains("file.isFile"))
+        #expect(!named.names.contains("$0.isFile"), "the closure uses the name it declared")
+
+        let multiline = offered("list.filter {\n    ")
+        #expect(multiline.names.contains("$0.isFile"), "editor-mode newlines preserve closure scope")
+        #expect(multiline.names.contains("true"))
+        #expect(multiline.names.contains("false"))
+    }
+
     @Test("A name this line gave a value is offered where a value goes")
     func bindings() {
         let bound = offered("let folders = list, changeDir fold")
         #expect(bound.names == ["folders"])
         #expect(bound.kinds == [.variable])
+
+        #expect(detail(of: "folders", in: "let folders = list, folders") == "[Entry]")
+        #expect(detail(of: "greeting", in: "let greeting = \"hello\", greeting") == "String")
+        #expect(offered("let greeting = \"hello\", greeting.").names.contains("uppercased"))
+
+        let outside = offered("list.filter { file in file.isFile }, changeDir fi")
+        #expect(!outside.names.contains("file"), "a closure parameter is not visible after its brace")
+    }
+
+    @Test("Bool operators complete in expressions and String methods show Swift types")
+    func typedExpressions() {
+        let halfAnd = offered("list.filter { $0.isFolder &")
+        #expect(halfAnd.names == ["&&"])
+        #expect(halfAnd.kinds == [.operatorSymbol])
+
+        let afterBool = offered("list.filter { $0.isFolder ")
+        #expect(afterBool.names.contains("&&"))
+        #expect(afterBool.names.contains("||"))
+
+        let continued = offered("true &&\n    f")
+        #expect(continued.names == ["false"])
+
+        let strings = offered("\"hello\".")
+        #expect(strings.names.contains("appending"))
+        #expect(strings.names.contains("lowercased"))
+        #expect(strings.names.contains("uppercased"))
+        #expect(strings.names.contains("trimmed"))
+        #expect(detail(of: "appending", in: "\"hello\".") == "(String) -> String")
+        #expect(detail(of: "lowercased", in: "\"hello\".") == "() -> String")
     }
 
     @Test("The order does not depend on the weather")

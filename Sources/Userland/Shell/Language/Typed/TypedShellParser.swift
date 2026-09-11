@@ -83,6 +83,70 @@ public enum TypedShellParser {
         }
 
         mutating func expression(compactRoot: Bool) -> Int? {
+            logicalOr(compactRoot: compactRoot)
+        }
+
+        /// Swift-like precedence: `!`, comparisons, `&&`, then `||`.
+        mutating func logicalOr(compactRoot: Bool) -> Int? {
+            guard var lhs = logicalAnd(compactRoot: compactRoot) else { return nil }
+            while true {
+                expressionSpaces()
+                guard takePair(verticalBar, verticalBar) else { break }
+                continuationSpaces()
+                guard let rhs = logicalAnd(compactRoot: false),
+                      let node = result.append(.binary(.logicalOr, lhs, rhs))
+                else { return nil }
+                lhs = node
+            }
+            return lhs
+        }
+
+        mutating func logicalAnd(compactRoot: Bool) -> Int? {
+            guard var lhs = comparison(compactRoot: compactRoot) else { return nil }
+            while true {
+                expressionSpaces()
+                guard takePair(ampersand, ampersand) else { break }
+                continuationSpaces()
+                guard let rhs = comparison(compactRoot: false),
+                      let node = result.append(.binary(.logicalAnd, lhs, rhs))
+                else { return nil }
+                lhs = node
+            }
+            return lhs
+        }
+
+        mutating func comparison(compactRoot: Bool) -> Int? {
+            guard let lhs = unary(compactRoot: compactRoot) else { return nil }
+            expressionSpaces()
+            let operation: TypedShellBinaryOperator
+            if takePair(exclamation, equalsByte) {
+                operation = .notEqual
+            } else if takePair(equalsByte, equalsByte) {
+                operation = .equal
+            } else if take(less) {
+                operation = .less
+            } else if take(greater) {
+                operation = .greater
+            } else {
+                return lhs
+            }
+            continuationSpaces()
+            guard let rhs = unary(compactRoot: false),
+                  let node = result.append(.binary(operation, lhs, rhs))
+            else { return nil }
+            return node
+        }
+
+        mutating func unary(compactRoot: Bool) -> Int? {
+            spaces()
+            if take(exclamation) {
+                guard let value = unary(compactRoot: false) else { return nil }
+                return result.append(.unaryNot(value))
+            }
+            return postfix(compactRoot: compactRoot)
+        }
+
+        mutating func postfix(compactRoot: Bool) -> Int? {
             guard var lhs = primary(compactRoot: compactRoot) else { return nil }
             while true {
                 expressionSpaces()
@@ -103,22 +167,6 @@ public enum TypedShellParser {
                     }
                     continue
                 }
-                if takePair(exclamation, equalsByte) {
-                    guard let rhs = expression(compactRoot: false), let node = result.append(.binary(.notEqual, lhs, rhs)) else { return nil }
-                    return node
-                }
-                if takePair(equalsByte, equalsByte) {
-                    guard let rhs = expression(compactRoot: false), let node = result.append(.binary(.equal, lhs, rhs)) else { return nil }
-                    return node
-                }
-                if take(less) {
-                    guard let rhs = expression(compactRoot: false), let node = result.append(.binary(.less, lhs, rhs)) else { return nil }
-                    return node
-                }
-                if take(greater) {
-                    guard let rhs = expression(compactRoot: false), let node = result.append(.binary(.greater, lhs, rhs)) else { return nil }
-                    return node
-                }
                 break
             }
             return lhs
@@ -126,10 +174,6 @@ public enum TypedShellParser {
 
         mutating func primary(compactRoot: Bool) -> Int? {
             spaces()
-            if take(exclamation) {
-                guard let value = expression(compactRoot: false) else { return nil }
-                return result.append(.unaryNot(value))
-            }
             if cursor < end, source[cursor] == quote {
                 guard let span = quoted() else { return nil }
                 return result.append(.literal(span))
@@ -207,7 +251,12 @@ public enum TypedShellParser {
                         || source[cursor] == lineFeed || source[cursor] == carriageReturn {
                         break
                     }
-                    if source[cursor] == dot || source[cursor] == less || source[cursor] == greater { break }
+                    let byte = source[cursor]
+                    let pairedOperator = cursor + 1 < end && source[cursor + 1] == byte
+                        && (byte == ampersand || byte == verticalBar)
+                    let comparison = cursor + 1 < end && source[cursor + 1] == equalsByte
+                        && (byte == exclamation || byte == equalsByte)
+                    if byte == dot || byte == less || byte == greater || pairedOperator || comparison { break }
                     var label : Span?
                     let saved = cursor
                     if let candidate = self.name() {
@@ -348,6 +397,21 @@ public enum TypedShellParser {
             }
         }
 
+        /// Once an operator has been read, a physical newline cannot end the
+        /// statement: the right-hand value is still required. This is what
+        /// lets editor-mode Boolean expressions be laid out over several
+        /// lines without needing parentheses solely for formatting.
+        mutating func continuationSpaces() {
+            while cursor < end {
+                let byte = source[cursor]
+                if byte == space || byte == lineFeed || byte == carriageReturn {
+                    cursor += 1
+                } else {
+                    break
+                }
+            }
+        }
+
         /// A top-level newline ends a statement unless the next significant
         /// token can only continue the expression on the previous line.
         mutating func expressionSpaces() {
@@ -374,9 +438,10 @@ public enum TypedShellParser {
             }
             guard crossedLine, probe < end else { return }
             let next           = source[probe]
-            let pairedOperator = probe + 1 < end
-                && source[probe + 1] == equalsByte
-                && (next == exclamation || next == equalsByte)
+            let pairedOperator = probe + 1 < end && (
+                source[probe + 1] == equalsByte && (next == exclamation || next == equalsByte)
+                || source[probe + 1] == next && (next == ampersand || next == verticalBar)
+            )
             if next == dot || next == less || next == greater || pairedOperator {
                 cursor = probe
             } else {
@@ -459,6 +524,7 @@ public enum TypedShellParser {
     private static let colon         : UInt8 = 0x3A
     private static let equalsByte    : UInt8 = 0x3D
     private static let exclamation   : UInt8 = 0x21
+    private static let ampersand     : UInt8 = 0x26
     private static let less          : UInt8 = 0x3C
     private static let greater       : UInt8 = 0x3E
     private static let quote         : UInt8 = 0x22
@@ -466,6 +532,7 @@ public enum TypedShellParser {
     private static let close         : UInt8 = 0x29
     private static let openBrace     : UInt8 = 0x7B
     private static let closeBrace    : UInt8 = 0x7D
+    private static let verticalBar   : UInt8 = 0x7C
     private static let dollar        : UInt8 = 0x24
     private static let slash         : UInt8 = 0x2F
     private static let underscore    : UInt8 = 0x5F

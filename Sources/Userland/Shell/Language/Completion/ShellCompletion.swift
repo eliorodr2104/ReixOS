@@ -16,6 +16,7 @@ public enum ShellCompletionKind: UInt8, Equatable {
     case method
     case variable
     case keyword
+    case operatorSymbol
     case path
 }
 

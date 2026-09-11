@@ -95,6 +95,14 @@ struct ShellHighlightTests {
         #expect(spans.contains { $0.role == .command })
     }
 
+    @Test("Bool literals and operators share the language keyword style")
+    func booleanRoles() {
+        let spans = highlighted("true && !false")
+        let language = spans.filter { $0.role == .keyword }
+        #expect(language.count == 3, "adjacent !false is one paint run")
+        #expect(!spans.contains { $0.role == .error })
+    }
+
     @Test("What is still being typed is not painted as an error")
     func growingName() {
         let typing = highlighted("fileSystem.chan")

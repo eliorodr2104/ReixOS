@@ -7,6 +7,36 @@
 
 import ReixABI
 
+/// One value name visible to completion, with the type inferred from the
+/// expression that introduced it and the byte range where it is in scope.
+public struct ShellBindingInfo: Equatable {
+    public let start         : UInt16
+    public let count         : UInt16
+    public let type          : ShellTypeSchema
+    public let visibleFrom   : UInt16
+    public let visibleThrough: UInt16
+
+    public init(
+        start         : UInt16,
+        count         : UInt16,
+        type          : ShellTypeSchema,
+        visibleFrom   : UInt16,
+        visibleThrough: UInt16 = .max
+    ) {
+        self.start = start
+        self.count = count
+        self.type = type
+        self.visibleFrom = visibleFrom
+        self.visibleThrough = visibleThrough
+    }
+
+    public var span: Span { Span(start: Int(start), count: Int(count)) }
+
+    public func isVisible(at offset: Int) -> Bool {
+        offset >= Int(visibleFrom) && offset < Int(visibleThrough)
+    }
+}
+
 /// One reading of one revision, and the only thing the editor's colours,
 /// completions and diagnostics are allowed to be built from.
 ///
@@ -20,7 +50,7 @@ public struct ShellAnalysisSnapshot {
 
     private var spans       = InlineArray<64, ShellSemanticSpan?>(repeating: nil)
     private var findings    = InlineArray<8, ShellDiagnostic?>(repeating: nil)
-    private var bound       = InlineArray<8, ShellSemanticSpan?>(repeating: nil)
+    private var bound       = InlineArray<8, ShellBindingInfo?>(repeating: nil)
 
     public let revision: UInt32
     public internal(set) var completeness: ShellCompleteness = .complete
@@ -50,7 +80,7 @@ public struct ShellAnalysisSnapshot {
         return spans[index]
     }
 
-    public func binding(at index: Int) -> ShellSemanticSpan? {
+    public func binding(at index: Int) -> ShellBindingInfo? {
         guard index >= 0, index < bindingCount else { return nil }
         return bound[index]
     }
@@ -90,10 +120,35 @@ public struct ShellAnalysisSnapshot {
         spanCount += 1
     }
 
-    internal mutating func remember(_ binding: ShellSemanticSpan) {
-        guard bindingCount < bound.count else { return }
-        bound[bindingCount] = binding
+    @discardableResult
+    internal mutating func remember(_ binding: ShellBindingInfo) -> Int? {
+        guard bindingCount < bound.count else { return nil }
+        let index = bindingCount
+        bound[index] = binding
         bindingCount += 1
+        return index
+    }
+
+    internal mutating func updateBinding(at index: Int, type: ShellTypeSchema) {
+        guard index >= 0, index < bindingCount, let binding = bound[index] else { return }
+        bound[index] = ShellBindingInfo(
+            start         : binding.start,
+            count         : binding.count,
+            type          : type,
+            visibleFrom   : binding.visibleFrom,
+            visibleThrough: binding.visibleThrough
+        )
+    }
+
+    internal mutating func closeBinding(at index: Int, before offset: Int) {
+        guard index >= 0, index < bindingCount, let binding = bound[index] else { return }
+        bound[index] = ShellBindingInfo(
+            start         : binding.start,
+            count         : binding.count,
+            type          : binding.type,
+            visibleFrom   : binding.visibleFrom,
+            visibleThrough: UInt16(clamping: offset)
+        )
     }
 
     internal mutating func append(_ diagnostic: ShellDiagnostic) {

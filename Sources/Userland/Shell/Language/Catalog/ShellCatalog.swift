@@ -79,6 +79,17 @@ public struct ShellCatalog {
         return nil
     }
 
+    /// The parameter whose value is being written in this context.
+    ///
+    /// Analyzer, static completion and a module's dynamic completion all ask
+    /// this one rule, so labels and positional arguments cannot drift apart.
+    public func parameter(for context: ShellCompletionContext) -> TypedShellParameter? {
+        guard let descriptor = command(at: context.command) else { return nil }
+        let position = descriptor.signature.parameterCount == 1 ? 0 : context.argument
+        guard position >= 0, position < descriptor.signature.parameterCount else { return nil }
+        return descriptor.signature.parameters[position]
+    }
+
     /// The receiver that answers the command at `index`.
     public func receiver(ofCommandAt index: Int) -> ShellNamespaceDescriptor? {
         guard index >= 0, index < count else { return nil }
@@ -200,7 +211,7 @@ public struct ShellCatalog {
             case .list: return 9
             case .one:
                 switch schema.element {
-                    case .text: return 4
+                    case .text: return 8
                     case .nothing: return 0
                     default: return 1
                 }
@@ -216,49 +227,85 @@ public struct ShellCatalog {
             switch index {
                 case 0:
                     return ShellMethodDescriptor("filter", argument: .closure, result: .sameAsReceiver,
+                                                 closureResult: .boolean,
+                                                 signature: "((Element) -> Bool) -> [Element]",
                                                  summary: "keep the ones the closure says true to")
                 case 1:
                     return ShellMethodDescriptor("map", argument: .closure, result: .listOfClosureAnswer,
+                                                 signature: "((Element) -> T) -> [T]",
                                                  summary: "one answer per element")
                 case 2:
                     return ShellMethodDescriptor("compactMap", argument: .closure, result: .listOfClosureAnswer,
+                                                 signature: "((Element) -> T?) -> [T]",
                                                  summary: "map, dropping the empty answers")
                 case 3:
                     return ShellMethodDescriptor("flatMap", argument: .closure, result: .closureAnswer,
+                                                 closureResult: .sequence,
+                                                 signature: "((Element) -> [T]) -> [T]",
                                                  summary: "map to lists and join them")
                 case 4:
                     return ShellMethodDescriptor("sorted", argument: .closure, result: .sameAsReceiver,
+                                                 closureResult: .boolean,
+                                                 closureParameters: 2,
+                                                 signature: "((Element, Element) -> Bool) -> [Element]",
                                                  summary: "order by a closure over $0 and $1")
                 case 5:
                     return ShellMethodDescriptor("reversed", argument: .none, result: .sameAsReceiver,
+                                                 signature: "() -> [Element]",
                                                  summary: "the same ones, back to front")
                 case 6:
                     return ShellMethodDescriptor("contains", argument: .closure, result: .fixed(.boolean),
+                                                 closureResult: .boolean,
+                                                 signature: "((Element) -> Bool) -> Bool",
                                                  summary: "true when the closure says so of any of them")
                 case 7:
                     return ShellMethodDescriptor("allSatisfy", argument: .closure, result: .fixed(.boolean),
+                                                 closureResult: .boolean,
+                                                 signature: "((Element) -> Bool) -> Bool",
                                                  summary: "true when the closure says so of every one")
                 default:
                     return ShellMethodDescriptor("toString", argument: .none, result: .fixed(.text),
+                                                 signature: "() -> String",
                                                  summary: "the value, written out")
             }
         }
         guard schema.element == .text else {
             return ShellMethodDescriptor("toString", argument: .none, result: .fixed(.text),
+                                         signature: "() -> String",
                                          summary: "the value, written out")
         }
         switch index {
             case 0:
                 return ShellMethodDescriptor("contains", argument: .text, result: .fixed(.boolean),
-                                             summary: "true when the text holds the other")
+                                             signature: "(String) -> Bool",
+                                             summary: "true when the string holds the other")
             case 1:
                 return ShellMethodDescriptor("hasPrefix", argument: .text, result: .fixed(.boolean),
+                                             signature: "(String) -> Bool",
                                              summary: "true when it starts with the other")
             case 2:
                 return ShellMethodDescriptor("hasSuffix", argument: .text, result: .fixed(.boolean),
+                                             signature: "(String) -> Bool",
                                              summary: "true when it ends with the other")
+            case 3:
+                return ShellMethodDescriptor("appending", argument: .text, result: .fixed(.text),
+                                             signature: "(String) -> String",
+                                             summary: "return a string with the other appended")
+            case 4:
+                return ShellMethodDescriptor("lowercased", argument: .none, result: .fixed(.text),
+                                             signature: "() -> String",
+                                             summary: "lowercase ASCII letters, preserving other UTF-8")
+            case 5:
+                return ShellMethodDescriptor("uppercased", argument: .none, result: .fixed(.text),
+                                             signature: "() -> String",
+                                             summary: "uppercase ASCII letters, preserving other UTF-8")
+            case 6:
+                return ShellMethodDescriptor("trimmed", argument: .none, result: .fixed(.text),
+                                             signature: "() -> String",
+                                             summary: "remove ASCII whitespace at both ends")
             default:
                 return ShellMethodDescriptor("toString", argument: .none, result: .fixed(.text),
+                                             signature: "() -> String",
                                              summary: "the value, written out")
         }
     }
