@@ -50,6 +50,7 @@ func refusal(_ body: () throws -> Void) -> String {
             case .invalidLayout           : "invalidLayout"
             case .notImplementedBacking   : "notImplementedBacking"
             case .unownedBacking          : "unownedBacking"
+            case .invalidAttributes       : "invalidAttributes"
             case .allocationFailed        : "allocationFailed"
             case .mappingFailed           : "mappingFailed"
             case .heapAllocationFailed    : "heapAllocationFailed"

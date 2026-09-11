@@ -32,7 +32,8 @@ extension VMAManager {
                 try context.vmm.pointee.protectUserPage(
                     rootTable: context.rootTablePhysical,
                     virtual  : cursor,
-                    flags    : permissions.toPageFlags()
+                    flags    : permissions.toPageFlags(),
+                    type     : region.pointee.memoryType
                 )
                 Arch.MMU.flushTLBPage(cursor)
 
@@ -42,7 +43,8 @@ extension VMAManager {
                     try? context.vmm.pointee.protectUserPage(
                         rootTable: context.rootTablePhysical,
                         virtual  : rollback,
-                        flags    : previous.toPageFlags()
+                        flags    : previous.toPageFlags(),
+                        type     : region.pointee.memoryType
                     )
                     Arch.MMU.flushTLBPage(rollback)
                     rollback += UserSpaceLayout.pageSize

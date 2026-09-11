@@ -212,6 +212,7 @@ public struct VMAList: VMAStructure {
                 permissions : region.pointee.permissions,
                 backingType : region.pointee.backingType,
                 mappingFlags: region.pointee.mappingFlags,
+                memoryType  : region.pointee.memoryType,
                 sharedRegion: region.pointee.sharedRegion
             )
         )
@@ -228,6 +229,7 @@ public struct VMAList: VMAStructure {
             next        : region.pointee.next,
             backingType : region.pointee.backingType,
             mappingFlags: region.pointee.mappingFlags,
+            memoryType  : region.pointee.memoryType,
             sharedRegion: region.pointee.sharedRegion
         )
         region.pointee = truncated
@@ -261,6 +263,7 @@ public struct VMAList: VMAStructure {
             next        : first.pointee.next,
             backingType : first.pointee.backingType,
             mappingFlags: first.pointee.mappingFlags,
+            memoryType  : first.pointee.memoryType,
             sharedRegion: first.pointee.sharedRegion
         )
         first.pointee = merged

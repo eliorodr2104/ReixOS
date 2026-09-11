@@ -236,7 +236,8 @@ struct VMAListTests {
                 endAddress  : Self.base + (spec.firstPage + spec.pages) * Self.pageSize,
                 permissions : spec.permissions,
                 backingType : spec.backing,
-                mappingFlags: spec.flags
+                mappingFlags: spec.flags,
+                memoryType  : spec.backing == .device ? .device : .normal
             ))
 
             list.insert(node)
@@ -259,7 +260,8 @@ struct VMAListTests {
             endAddress  : end,
             permissions : [.read, .write, .user],
             backingType : .anonymous,
-            mappingFlags: .none
+            mappingFlags: .none,
+            memoryType  : .normal
         ))
 
         return node

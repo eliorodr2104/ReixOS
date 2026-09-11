@@ -166,7 +166,8 @@ struct EL0PageZeroingTests {
                     size       : UserSpaceLayout.pageSize,
                     permissions: [.read, .write, .user],
                     backing    : .anonymous,
-                    flags      : .growDown
+                    flags      : .growDown,
+                    memoryType : .normal
                 )
             } catch {
                 Issue.record("could not register the grow-down fixture: \(error)")

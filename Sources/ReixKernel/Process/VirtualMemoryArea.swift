@@ -24,6 +24,15 @@ public struct VirtualMemoryArea: RXEntry {
     
     public var backingType : BackingType         // 1 Byte
     public var mappingFlags: MappingFlags        // 1 Byte
+
+    /// MAIR index and shareability every page of this region is mapped with.
+    ///
+    /// Stored rather than derived from `backingType`, which cannot tell a DMA
+    /// buffer from an SHM window: both are `.shared`. Whatever maps a page of
+    /// this region reads it from here, so a clone reproduces the parent's
+    /// attributes instead of defaulting to normal cacheable.
+    public var memoryType: MemoryType            // 1 Byte
+
     var sharedRegion: UnsafeMutablePointer<SharedRegion>?
     
     
@@ -42,6 +51,7 @@ public struct VirtualMemoryArea: RXEntry {
         next        : UnsafeMutablePointer<Self>? = nil,
         backingType : BackingType,
         mappingFlags: MappingFlags,
+        memoryType  : MemoryType,
         sharedRegion: UnsafeMutablePointer<SharedRegion>? = nil
     ) {
         self.startAddress = startAddress
@@ -51,6 +61,7 @@ public struct VirtualMemoryArea: RXEntry {
         self.next         = next
         self.backingType  = backingType
         self.mappingFlags = mappingFlags
+        self.memoryType   = memoryType
         self.sharedRegion = sharedRegion
     }
 }

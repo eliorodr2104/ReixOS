@@ -12,6 +12,11 @@
 /// everything else: only anonymous frames were issued to this address space and
 /// are therefore this address space's to hand back. Every other case is
 /// unmap-only on retirement, and `mergeAdjacent` and `decommit` refuse it.
+///
+/// It says who owns the frames, never how they are mapped. The MAIR index and
+/// the shareability live in `VirtualMemoryArea.memoryType`, which is what
+/// `RegionClone` reads to give the child the parent's attributes, and what
+/// separates a DMA buffer from an SHM window: both are `.shared` here.
 public enum BackingType {
 
     /// Frames this address space owns: allocated on first touch, zero filled, and

@@ -20,6 +20,10 @@ public enum VMAError: KernelDiagnostic {
     case notImplementedBacking
     case unownedBacking
 
+    /// The (backing, memory type, permissions) triple of a registration is one
+    /// no region may have. See `VMAManager.validAttributes`.
+    case invalidAttributes
+
     case allocationFailed     (PPMError)
     case mappingFailed        (PPMError)
     case heapAllocationFailed (PPMError)
@@ -46,6 +50,9 @@ public enum VMAError: KernelDiagnostic {
 
             case .unownedBacking:
                 "VMA Error: the frames behind this region are not owned by the caller."
+
+            case .invalidAttributes:
+                "VMA Error: backing, memory type and permissions do not describe a region that can exist."
 
             case .allocationFailed(let inner):
                 switch inner.reportedCause {

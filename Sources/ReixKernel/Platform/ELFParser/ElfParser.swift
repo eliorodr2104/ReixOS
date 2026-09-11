@@ -253,7 +253,8 @@ public struct ElfParser {
                         addressSpace: addressSpace,
                         virtual     : cursor,
                         physical    : base + offset,
-                        flags       : permissions.toPageFlags()
+                        flags       : permissions.toPageFlags(),
+                        type        : .normal
                     )
                 } catch { throw .mappingFailed(error) }
 
@@ -417,7 +418,8 @@ public struct ElfParser {
                 size       : end - start,
                 permissions: permissions,
                 backing    : backing,
-                flags      : .none
+                flags      : .none,
+                memoryType : .normal
             )
         } catch {
 
@@ -455,7 +457,8 @@ public struct ElfParser {
                 addressSpace: addressSpace,
                 virtual     : page,
                 physical    : frame.address,
-                flags       : permissions.toPageFlags()
+                flags       : permissions.toPageFlags(),
+                type        : .normal
             )
         } catch {
             try? ppm.pointee.release(frame.address)

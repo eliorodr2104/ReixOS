@@ -59,7 +59,8 @@ extension ProcessManager {
                 size       : byteCount,
                 permissions: [.read, .write, .user],
                 backing    : .anonymous,
-                flags      : .taskConstruction
+                flags      : .taskConstruction,
+                memoryType : .normal
             )
         } catch {
             return .invalidRange
@@ -86,7 +87,8 @@ extension ProcessManager {
                     addressSpace: process.pointee.addressSpace,
                     virtual     : cursor,
                     physical    : page.address,
-                    flags       : VMAPermissions([.read, .write, .user]).toPageFlags()
+                    flags       : VMAPermissions([.read, .write, .user]).toPageFlags(),
+                    type        : .normal
                 )
             } catch {
                 try? ppm.pointee.free(page)

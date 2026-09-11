@@ -129,7 +129,8 @@ struct VMAMetricsBenchmark {
             endAddress: start + UInt64(pages) * Self.pageSize,
             permissions: [.read, .write, .user],
             backingType: .anonymous,
-            mappingFlags: flags
+            mappingFlags: flags,
+            memoryType: .normal
         ))
         return node
     }

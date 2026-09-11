@@ -399,12 +399,15 @@ public struct VirtualMemoryManager: Loggable {
     }
 
 
+    /// `type` has no default on purpose. It decides the MAIR index and the
+    /// shareability of the descriptor, and getting it wrong is silent: a caller
+    /// that forgets it is a compile error, not a device window turned cacheable.
     public func mapUserPage(
         rootTable: PhysicalAddress,
         virtual  : VirtualAddress,
         physical : PhysicalAddress,
         flags    : VirtualPageFlags,
-        type     : MemoryType        = .normal
+        type     : MemoryType
     ) throws(PPMError) {
         let tablePointer: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable)
 
@@ -423,21 +426,27 @@ public struct VirtualMemoryManager: Loggable {
     }
     
     
+    /// Rewrite the flags of a page that is already mapped, keeping its frame.
+    ///
+    /// `type` is the region's, same rule as `mapUserPage`: this rewrites the
+    /// whole descriptor, so an omitted type would rewrite the attributes too.
     public func protectUserPage(
         rootTable: PhysicalAddress,
         virtual  : VirtualAddress,
-        flags    : VirtualPageFlags
+        flags    : VirtualPageFlags,
+        type     : MemoryType
     ) throws(PPMError) {
         guard let phys = physicalAddressOf(
             rootTable: rootTable,
             virtual  : virtual
         ) else { return }
-        
+
         try mapUserPage(
             rootTable: rootTable,
             virtual  : virtual,
             physical : phys,
-            flags    : flags
+            flags    : flags,
+            type     : type
         )
     }
 
@@ -446,13 +455,15 @@ public struct VirtualMemoryManager: Loggable {
         addressSpace: borrowing AddressSpace,
         virtual     : VirtualAddress,
         physical    : PhysicalAddress,
-        flags       : VirtualPageFlags
+        flags       : VirtualPageFlags,
+        type        : MemoryType
     ) throws(PPMError) {
         try mapUserPage(
             rootTable: addressSpace.rootTablePhysical,
             virtual  : virtual,
             physical : physical,
-            flags    : flags
+            flags    : flags,
+            type     : type
         )
     }
     

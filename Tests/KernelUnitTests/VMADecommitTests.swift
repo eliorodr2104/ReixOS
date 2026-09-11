@@ -250,7 +250,8 @@ struct VMADecommitTests {
             endAddress  : start + pages * Self.pageSize,
             permissions : [.read, .write, .user],
             backingType : backing,
-            mappingFlags: flags
+            mappingFlags: flags,
+            memoryType  : backing == .device ? .device : .normal
         ))
 
         manager.pointee.vmaList.insert(node)

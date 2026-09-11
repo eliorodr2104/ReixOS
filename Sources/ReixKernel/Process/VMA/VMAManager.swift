@@ -334,6 +334,7 @@ public struct VMAManager: RXAllocatable {
             permissions: vma.permissions,
             backing    : vma.backingType,
             flags      : flags,
+            memoryType : vma.memoryType,
             sharedRegion: vma.sharedRegion
         )
 

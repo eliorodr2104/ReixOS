@@ -167,7 +167,8 @@ public struct ProcessManager: RXAllocatable, Loggable {
                         addressSpace: addressSpace,
                         virtual     : firstStackPage,
                         physical    : stackPage.address,
-                        flags       : [.present, .userAccess, .pxn, .uxn]
+                        flags       : [.present, .userAccess, .pxn, .uxn],
+                        type        : .normal
                     )
                 } catch {
                     try? ppm.pointee.release(stackPage.address)
@@ -181,7 +182,8 @@ public struct ProcessManager: RXAllocatable, Loggable {
                         size       : UserSpaceLayout.pageSize,
                         permissions: [.read, .write, .user],
                         backing    : .anonymous,
-                        flags      : .growDown
+                        flags      : .growDown,
+                        memoryType : .normal
                     )
                 } catch {
                     try? ppm.pointee.release(stackPage.address)

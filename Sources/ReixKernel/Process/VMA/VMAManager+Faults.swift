@@ -106,7 +106,8 @@ extension VMAManager {
                 try context.vmm.pointee.protectUserPage(
                     rootTable: context.rootTablePhysical,
                     virtual  : aligned,
-                    flags    : flags
+                    flags    : flags,
+                    type     : vma.memoryType
                 )
 
             } catch { return false }
@@ -116,7 +117,8 @@ extension VMAManager {
             guard copyPage(
                 from : phys,
                 onto : aligned,
-                flags: flags
+                flags: flags,
+                type : vma.memoryType
             ) else { return false }
         }
 
@@ -135,7 +137,8 @@ extension VMAManager {
     private func copyPage(
         from source : PhysicalAddress,
         onto aligned: VirtualAddress,
-        flags       : VirtualPageFlags
+        flags       : VirtualPageFlags,
+        type        : MemoryType
     ) -> Bool {
 
         let page: PhysicalPage
@@ -154,7 +157,8 @@ extension VMAManager {
                 rootTable: context.rootTablePhysical,
                 virtual  : aligned,
                 physical : page.address,
-                flags    : flags
+                flags    : flags,
+                type     : type
             )
 
         } catch {
@@ -209,7 +213,8 @@ extension VMAManager {
             prev        : vmaPtr.pointee.prev,
             next        : vmaPtr.pointee.next,
             backingType : vmaPtr.pointee.backingType,
-            mappingFlags: vmaPtr.pointee.mappingFlags
+            mappingFlags: vmaPtr.pointee.mappingFlags,
+            memoryType  : vmaPtr.pointee.memoryType
         )
         vmaPtr.pointee = extended
 
@@ -248,7 +253,8 @@ extension VMAManager {
                 rootTable: context.rootTablePhysical,
                 virtual  : aligned,
                 physical : page.address,
-                flags    : flags
+                flags    : flags,
+                type     : vma.memoryType
             )
 
         } catch {

@@ -11,16 +11,27 @@ extension VMAManager {
     /// tables. Used by the spawn path to declare ELF segments and the user stack
     /// region: the actual PTE mapping is done by the caller (eager) or deferred to
     /// the first page-fault (lazy).
+    ///
+    /// `memoryType` is always explicit, with no default: `.shared` covers both an
+    /// SHM window and a DMA buffer, so a type the gate would accept is not one it
+    /// can infer. `validAttributes` below refuses the pairs no kind produces.
     public mutating func registerRegion(
         start       : VirtualAddress,
         size        : UInt64,
         permissions : VMAPermissions,
         backing     : BackingType,
         flags       : MappingFlags,
+        memoryType  : MemoryType,
         sharedRegion: UnsafeMutablePointer<SharedRegion>? = nil
     ) throws(VMAError) {
         guard size > 0 else { throw .invalidLayout }
         guard (backing == .shared) == (sharedRegion != nil) else { throw .invalidLayout }
+
+        guard Self.validAttributes(
+            backing    : backing,
+            memoryType : memoryType,
+            permissions: permissions
+        ) else { throw .invalidAttributes }
 
         let end = start + size
         guard start >= UserSpaceLayout.userMin,
@@ -42,6 +53,7 @@ extension VMAManager {
                 permissions : permissions,
                 backingType : backing,
                 mappingFlags: flags,
+                memoryType  : memoryType,
                 sharedRegion: sharedRegion
             )
         )
@@ -62,6 +74,44 @@ extension VMAManager {
             if removed == brkVMA { brkVMA = survivor }
             heap.pointee.kfree(removed)
         }
+    }
+
+
+    /// Whether a region may exist at all with this backing, memory type and
+    /// permission set.
+    ///
+    /// The legal pairs are exactly the ones something can produce: `RegionKind`
+    /// covers shared/normal, shared/dma and device/device, and everything the
+    /// address space owns itself is normal. Anything else is a caller that
+    /// assembled a region by hand, and a wrong MAIR index is silent on the
+    /// machine, so it is refused here rather than mapped.
+    ///
+    /// Execute on memory that is not normal would be a device register or a DMA
+    /// ring fetched as instructions, and a file-backed page is read straight from
+    /// the initrd frames every process shares, so writing through it is refused
+    /// too. See `BackingType.fileBacked`.
+    static func validAttributes(
+        backing    : BackingType,
+        memoryType : MemoryType,
+        permissions: VMAPermissions
+    ) -> Bool {
+
+        let pairIsProducible = switch (backing, memoryType) {
+            case (.anonymous , .normal): true
+            case (.fileBacked, .normal): true
+            case (.shared    , .normal): true
+            case (.shared    , .dma)   : true
+            case (.device    , .device): true
+            default                    : false
+        }
+
+        guard pairIsProducible else { return false }
+
+        if memoryType != .normal, permissions.contains(.execute) { return false }
+
+        if backing == .fileBacked, permissions.contains(.write) { return false }
+
+        return true
     }
 
 
@@ -102,6 +152,7 @@ extension VMAManager {
             permissions: permissions,
             backing    : kind.backing,
             flags      : .none,
+            memoryType : kind.memoryType,
             sharedRegion: sharedRegion
         )
 
@@ -159,7 +210,8 @@ extension VMAManager {
             size       : alignedSize,
             permissions: permissions,
             backing    : .anonymous,
-            flags      : .noReserve
+            flags      : .noReserve,
+            memoryType : .normal
         )
 
         return start
@@ -201,7 +253,8 @@ extension VMAManager {
                 prev        : existing.pointee.prev,
                 next        : existing.pointee.next,
                 backingType : existing.pointee.backingType,
-                mappingFlags: existing.pointee.mappingFlags
+                mappingFlags: existing.pointee.mappingFlags,
+                memoryType  : existing.pointee.memoryType
             )
             existing.pointee = grown
 
@@ -211,7 +264,8 @@ extension VMAManager {
                 size       : aligned - currentBreak,
                 permissions: [.read, .write, .user],
                 backing    : .anonymous,
-                flags      : .noReserve
+                flags      : .noReserve,
+                memoryType : .normal
             )
             brkVMA = vmaList.search(at: currentBreak)
         }

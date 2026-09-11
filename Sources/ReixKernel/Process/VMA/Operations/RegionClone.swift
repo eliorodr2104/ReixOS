@@ -173,6 +173,13 @@ struct RegionClone: ResumableOperation {
     /// their own permissions, because their frames belong to the `SharedRegion`
     /// behind the capability or to MMIO the PPM never owned.
     ///
+    /// ## The child's descriptor is the parent's
+    ///
+    /// Physical address, access bits, MAIR index and shareability all come from
+    /// the parent, the last two through `vma.memoryType`. Letting the mapping
+    /// default to normal cacheable turned a device window inner-shareable and a
+    /// DMA ring cacheable in the child, which no fault ever reports.
+    ///
     /// ## Only an anonymous frame is retained here
     ///
     /// Every reference taken here has to be given back by the child's `teardown`,
@@ -235,6 +242,13 @@ struct RegionClone: ResumableOperation {
                 downgradeParentPermissions = false
 
             } else if isWritable {
+                // The only mapping this operation rewrites in the parent, and it
+                // stays confined to anonymous normal memory. See `register`.
+                precondition(
+                    vma.memoryType == .normal,
+                    "the copy-on-write downgrade may only touch normal memory"
+                )
+
                 var permissionsNotWritable = vma.permissions
 
                 permissionsNotWritable.remove(.write)
@@ -260,7 +274,8 @@ struct RegionClone: ResumableOperation {
                     rootTable: context.rootTablePhysical,
                     virtual  : va,
                     physical : parentPhys,
-                    flags    : pageFlags
+                    flags    : pageFlags,
+                    type     : vma.memoryType
                 )
 
                 manager.pointee.noteMapped(1)
@@ -272,7 +287,8 @@ struct RegionClone: ResumableOperation {
                         rootTable: parentRoot,
                         virtual  : va,
                         physical : parentPhys,
-                        flags    : pageFlags
+                        flags    : pageFlags,
+                        type     : vma.memoryType
                     )
                 }
 
