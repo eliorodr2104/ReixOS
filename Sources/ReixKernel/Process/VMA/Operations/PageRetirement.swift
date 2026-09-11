@@ -67,16 +67,18 @@ enum PageRetirement {
     /// lives on the stack: two callers are rollbacks running under memory
     /// pressure and must not need the heap.
     ///
-    /// The addresses are read from the user page tables, which `mapUserPage`
+    /// The addresses are read from the user page tables, which `installUserPage`
     /// only ever fills at L3. `physicalAddressOf` terminates on whichever
     /// descriptor maps the address, so a 2 MiB block mapping would yield an
     /// interior frame address and the allocator would be asked to free a block
     /// it never issued, which `PPMError.frameNotBlockHead` refuses.
     ///
-    /// Only resident pages are invalidated, which relies on the invariant this
-    /// function establishes: a cleared descriptor never keeps a cached
-    /// translation, so an absent one has nothing to retire. `materialize`
-    /// depends on the same invariant when it maps a fresh page.
+    /// Only resident pages are invalidated, and `removeUserPage` reports which
+    /// those were. That is the other half of the contract it states: a cleared
+    /// descriptor keeps no cached translation because this function invalidates
+    /// every address it cleared before returning, so an absent descriptor has
+    /// nothing to retire and `installUserPage` may write one without a TLB
+    /// invalidation of its own.
     ///
     /// Every page that had a translation is added to `retiredPages`, whatever
     /// the backing: the count is of mappings dropped and not of frames freed.
@@ -106,16 +108,12 @@ enum PageRetirement {
         guard backing == .anonymous else {
             var va = start
             while va < end {
-                
-                if context.vmm.pointee.physicalAddressOf(
-                    rootTable: context.rootTablePhysical,
-                    virtual  : va
-                ) != nil { retiredPages &+= 1 }
 
-                try? context.vmm.pointee.unmapUserPage(
+                if context.vmm.pointee.removeUserPage(
                     rootTable: context.rootTablePhysical,
                     virtual  : va
-                )
+                ) { retiredPages &+= 1 }
+
                 va += UserSpaceLayout.pageSize
             }
 
@@ -138,7 +136,7 @@ enum PageRetirement {
                     rootTable: context.rootTablePhysical,
                     virtual  : va
                 ) {
-                    try? context.vmm.pointee.unmapUserPage(
+                    context.vmm.pointee.removeUserPage(
                         rootTable: context.rootTablePhysical,
                         virtual  : va
                     )

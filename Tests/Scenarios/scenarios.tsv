@@ -55,7 +55,7 @@
 # subsystems in bring-up order, the handoff to EL0, init, and finally the
 # VT adapter, which is the last thing init starts that announces itself and
 # so the latest single-writer line every configuration here prints.
-default	-	qemu	-	verdict	30	[ reix ] ReixOS|[PPM ] Physical Page Manager ready.|[VMM ] Virtual Memory Manager ready.|[HEAP] Kernel heap ready.|[SCHD] Scheduler ready.|[SYS ] Syscall Handler ready.|[KERN] Kernel is running.|Handing control to user space.|[ INIT  ] Hi, this is init process!|[ SERVE ] VT Adapter running	[ PANIC ]|REIX-PANIC|[ ERROR ]|the terminal refused to register this reader|[ SHELL ] this shell is done	-	pass
+default	-	qemu	-	verdict	30	[ reix ] ReixOS|[PPM ] Physical Page Manager ready.|[VMM ] Virtual Memory Manager ready.|[HEAP] Kernel heap ready.|[SCHD] Scheduler ready.|[SYS ] Syscall Handler ready.|[KERN] Kernel is running.|Handing control to user space.|[ INIT  ] Hi, this is init process!|[ SERVE ] VT Adapter running	[ PANIC ]|REIX-PANIC|[ ERROR ]|the terminal refused to register this reader|[ SHELL ] this shell is done	pte-bbm	pass
 
 # The 4 MiB floor the project targets, i.e. `make smoke-4m`. `embedded` is not a
 # preference here: see dtb-squeeze below. The reclaim line is required only on

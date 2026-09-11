@@ -35,6 +35,7 @@
 #   OBJDUMP     disassembler used by the post-checks (default: llvm-objdump)
 #   DISK        disk image whose pre-run digest enters mixed-workload manifests
 #   KERNEL      kernel image actually handed to smoke.sh (default: $OUT/kernel.bin)
+#   KERNEL_ELF  unstripped kernel the machine-code post-check reads (default: $OUT/kernel.elf)
 #   INITRD      qemu initrd image actually handed to smoke.sh (default: $OUT/initrd.tar)
 #   TERMINAL_PROFILE  profile-only terminal scenarios require the value `1`
 #
@@ -56,6 +57,7 @@ PACKAGE_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 QEMU_FLAGS="${QEMU_FLAGS:--machine virt,gic-version=2 -cpu cortex-a53,pmu=on -nographic}"
 DISK="${DISK:-$OUT/disk.img}"
 KERNEL="${KERNEL:-$OUT/kernel.bin}"
+KERNEL_ELF="${KERNEL_ELF:-$OUT/kernel.elf}"
 INITRD="${INITRD:-$OUT/initrd.tar}"
 
 # Ceiling on the kernel stack high-water figure the trace dump reports, in
@@ -318,6 +320,95 @@ dma_barriers_in() {
     ' "$1"
 }
 
+# post=pte-bbm: the kernel's break-before-make sequence, read out of the linked
+# image rather than out of the source.
+#
+# Changing the output address of a *valid* descriptor is the one page-table
+# change the architecture refuses to define without break-before-make, and the
+# copy-on-write fault does exactly that. Getting the order wrong is invisible
+# here: QEMU's soft TLB does not keep two translations for one address, so every
+# scenario in this matrix would still pass on a kernel that published the new
+# frame before invalidating the old one, and the machine that would not is the
+# one nobody in this project owns.
+#
+# So the proof is the instruction order. `VirtualMemoryManager.breakBeforeMake`
+# is `@inline(never)` to keep a symbol here; if the optimizer ever loses it the
+# check fails loudly rather than passing on an empty region.
+post_pte_bbm() {
+    pb_out=$2
+    pb_elf=$KERNEL_ELF
+
+    if [ ! -f "$pb_elf" ]; then
+        printf 'no %s to read the sequence out of' "$pb_elf"
+        return 1
+    fi
+
+    "$OBJDUMP" -d "$pb_elf" > "$pb_out" 2>&1 || {
+        printf 'could not disassemble %s' "$pb_elf"
+        return 1
+    }
+
+    if ! grep -q 'breakBeforeMake' "$pb_out"; then
+        printf 'no breakBeforeMake symbol in %s' "$pb_elf"
+        return 1
+    fi
+
+    # The sequence as a word: S a descriptor store, B a `dsb ishst`, T the TLB
+    # invalidation, Y the `dsb ish` that completes it. Stack traffic is not a
+    # descriptor store, so anything addressing `sp` is left out.
+    pb_seq=$(
+        awk '
+            /^[0-9a-f]+ <.*>:$/ { inside = index($0, "breakBeforeMake") > 0; next }
+            !inside                                 { next }
+            index($0, "<page_table_barrier>")       { seq = seq "B"; next }
+            index($0, "<flush_tlb_page_nosync>")    { seq = seq "T"; next }
+            index($0, "<flush_tlb_page>")           { seq = seq "T"; next }
+            index($0, "<flush_tlb_sync>")           { seq = seq "Y"; next }
+            /[ \t](str|stur|stp)[ \t]/ {
+                if (index($0, "sp") == 0) seq = seq "S"
+                next
+            }
+            END { print seq }
+        ' "$pb_out"
+    )
+
+    case $pb_seq in
+        SBTYSB*) ;;
+        *)
+            printf 'break-before-make is out of order: read "%s", wanted "SBTYSB..."' \
+                   "$pb_seq"
+            return 1
+            ;;
+    esac
+
+    # And that each letter still is the instruction it stands for. The three
+    # shims are generated assembly, so this is what ties the calls to barriers.
+    if ! pte_body "$pb_out" 'page_table_barrier' | grep -qE 'dsb[[:space:]]+ishst'; then
+        printf 'page_table_barrier is not a dsb ishst'
+        return 1
+    fi
+
+    if ! pte_body "$pb_out" 'flush_tlb_page_nosync' | grep -qE 'tlbi[[:space:]]+vaae1is'; then
+        printf 'flush_tlb_page_nosync does not invalidate the address'
+        return 1
+    fi
+
+    if ! pte_body "$pb_out" 'flush_tlb_sync' | grep -qE 'dsb[[:space:]]+ish'; then
+        printf 'flush_tlb_sync does not complete the invalidation'
+        return 1
+    fi
+
+    return 0
+}
+
+# Prints the disassembly of the one function whose symbol line matches $2.
+pte_body() {
+    awk -v want="$2" '
+        /^[0-9a-f]+ <.*>:$/ { inside = index($0, want) > 0; next }
+        inside { print }
+    ' "$1"
+}
+
 # post=queue-depth: how many requests one client ever had accepted and not yet
 # collected, read out of the block server's own log lines.
 #
@@ -513,6 +604,7 @@ run_post() {
         case $rp_name in
             trace-boot)   post_trace_boot "$2" "$rp_out" || return 1 ;;
             dma-barriers) post_dma_barriers "$2" "$rp_out" || return 1 ;;
+            pte-bbm)      post_pte_bbm "$2" "$rp_out" || return 1 ;;
             queue-depth)  post_queue_depth "$2" "$rp_out" || return 1 ;;
             shell-closed) post_shell_closed "$2" "$rp_out" || return 1 ;;
             terminal-baseline)  post_terminal_baseline "$2" "$rp_out" || return 1 ;;

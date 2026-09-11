@@ -29,6 +29,34 @@ public enum PPMError: KernelFatal {
     /// block. No payload is needed because the caller already owns the request.
     case frameNotBlockHead
 
+    /// The four refusals of the leaf-descriptor operations in
+    /// `VirtualMemoryManager`, one per precondition those operations state.
+    ///
+    /// They live here and not in an enum of their own because the whole mapping
+    /// surface already throws `PPMError`, and every caller of it already routes
+    /// a failure the same way. What matters is that each refusal is its own
+    /// case: an operation handed an entry in the wrong state must not quietly
+    /// become one of the other three, which is exactly what the single writer
+    /// these replaced used to do.
+
+    /// `installUserPage` found a valid descriptor. Replacing the frame is
+    /// `replaceUserPage`, changing the permissions is `protectUserPage`.
+    case pageAlreadyMapped
+
+    /// `protectUserPage` or `replaceUserPage` found no valid descriptor. There
+    /// is nothing to change the permissions or the frame of.
+    case pageNotMapped
+
+    /// `protectUserPage` was given a memory type other than the one the
+    /// descriptor carries. Changing the MAIR index or the shareability of a
+    /// valid descriptor needs break-before-make, which a protect does not do.
+    case pageAttributesImmutable
+
+    /// `replaceUserPage` was given the frame the descriptor already names.
+    /// Breaking a translation to put back what was there is a permission
+    /// change at most, so the caller wanted `protectUserPage`.
+    case pageReplaceWithoutChange
+
     /// Every case is a plain literal, and `.allocationFailed` spells the
     /// reason out instead of composing it.
     ///
@@ -87,6 +115,18 @@ public enum PPMError: KernelFatal {
 
             case .referenceCountOverflow:
                 "PPM Error: frame reference count is saturated."
+
+            case .pageAlreadyMapped:
+                "PPM Error: install found a valid descriptor already mapping that page."
+
+            case .pageNotMapped:
+                "PPM Error: protect or replace found no valid descriptor for that page."
+
+            case .pageAttributesImmutable:
+                "PPM Error: protect cannot change the memory type of a valid descriptor."
+
+            case .pageReplaceWithoutChange:
+                "PPM Error: replace was given the frame the descriptor already names."
         }
     }
 }

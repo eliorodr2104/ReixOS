@@ -249,7 +249,7 @@ public struct ElfParser {
             var offset = phdr.p_offset
             while cursor < sharedEnd {
                 do {
-                    try vmm.pointee.mapUserPage(
+                    try vmm.pointee.installUserPage(
                         addressSpace: addressSpace,
                         virtual     : cursor,
                         physical    : base + offset,
@@ -453,7 +453,7 @@ public struct ElfParser {
         dst.initialize(repeating: 0, count: Int(Self.pageSize))
 
         do {
-            try vmm.pointee.mapUserPage(
+            try vmm.pointee.installUserPage(
                 addressSpace: addressSpace,
                 virtual     : page,
                 physical    : frame.address,

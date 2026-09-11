@@ -160,7 +160,7 @@ extension VMAManager {
             let currentVirtualPage: UInt64 = UInt64(i) * UserSpaceLayout.pageSize
 
             do {
-                try context.vmm.pointee.mapUserPage(
+                try context.vmm.pointee.installUserPage(
                     rootTable: context.rootTablePhysical,
                     virtual  : start        + currentVirtualPage,
                     physical : physicalBase + currentVirtualPage,

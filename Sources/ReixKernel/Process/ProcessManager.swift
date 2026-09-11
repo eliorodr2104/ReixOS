@@ -163,7 +163,7 @@ public struct ProcessManager: RXAllocatable, Loggable {
                 )
 
                 do {
-                    try vmm.pointee.mapUserPage(
+                    try vmm.pointee.installUserPage(
                         addressSpace: addressSpace,
                         virtual     : firstStackPage,
                         physical    : stackPage.address,

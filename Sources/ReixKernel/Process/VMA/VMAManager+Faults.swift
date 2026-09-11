@@ -78,6 +78,11 @@ extension VMAManager {
     /// A frame nobody else holds needs no copy at all: the region is writable and
     /// only the descriptor is still read-only, so the permission is restored in
     /// place. That is also the path a parent lands on after its child is gone.
+    ///
+    /// The two branches are two different operations on the same descriptor and
+    /// each carries its own invalidation: a permission change is a protect and
+    /// needs a TLB invalidation, a new frame is a replace and needs
+    /// break-before-make. Neither is invalidated here.
     private mutating func serviceCopyOnWrite(
         vma    : VirtualMemoryArea,
         address: VirtualAddress
@@ -122,7 +127,6 @@ extension VMAManager {
             ) else { return false }
         }
 
-        Arch.MMU.flushTLBPage(aligned)
         return true
     }
 
@@ -134,6 +138,10 @@ extension VMAManager {
     ///
     /// Nothing is counted here: the page was resident before the write fault and
     /// is resident after it, only behind a different frame.
+    ///
+    /// That difference is the whole reason this is `replaceUserPage` and not an
+    /// install: the descriptor is valid and its output address changes under
+    /// it, which is the case the architecture requires break-before-make for.
     private func copyPage(
         from source : PhysicalAddress,
         onto aligned: VirtualAddress,
@@ -153,7 +161,7 @@ extension VMAManager {
         dst.update(from: src, count: Int(UserSpaceLayout.pageSize))
 
         do {
-            try context.vmm.pointee.mapUserPage(
+            try context.vmm.pointee.replaceUserPage(
                 rootTable: context.rootTablePhysical,
                 virtual  : aligned,
                 physical : page.address,
@@ -229,6 +237,9 @@ extension VMAManager {
     ///
     /// The one place a lazily backed page becomes resident, which is why the
     /// count is taken here and not at the two callers that route faults to it.
+    ///
+    /// An install and not a replace: both callers arrive from a translation
+    /// fault, so the leaf descriptor is invalid and nothing needs breaking.
     private mutating func materialize(
         vma    : VirtualMemoryArea,
         address: VirtualAddress
@@ -249,7 +260,7 @@ extension VMAManager {
         )
 
         do {
-            try context.vmm.pointee.mapUserPage(
+            try context.vmm.pointee.installUserPage(
                 rootTable: context.rootTablePhysical,
                 virtual  : aligned,
                 physical : page.address,

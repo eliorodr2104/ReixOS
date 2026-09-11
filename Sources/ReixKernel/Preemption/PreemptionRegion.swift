@@ -145,7 +145,7 @@ public protocol PreemptionRegion {
 ///
 /// ## The policy
 ///
-/// A cloned page is a `retain`, a `mapUserPage` into the child and, in the
+/// A cloned page is a `retain`, a `installUserPage` into the child and, in the
 /// copy-on-write case, a second one that rewrites the parent's own descriptor:
 /// two three-level descents and two `dsb ishst`, with no TLB maintenance at all,
 /// which is the same order of work as the 2.06 µs a retirement page was measured

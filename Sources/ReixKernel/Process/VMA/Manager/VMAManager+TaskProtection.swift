@@ -11,6 +11,11 @@ extension VMAManager {
     /// keeps protection atomic without splitting VMA nodes on a privileged path.
     /// Every PTE is changed before the logical VMA permission is published. A
     /// hardware mapping refusal restores the pages already changed.
+    ///
+    /// `protectUserPage` invalidates the address it rewrites, so there is no
+    /// separate flush here and no page left permitted by a stale TLB entry. It
+    /// also refuses an absent descriptor, which this range cannot have: `taskMap`
+    /// backs every page of it before the region can be protected.
     mutating func protectTaskRegion(
         start      : VirtualAddress,
         end        : VirtualAddress,
@@ -35,7 +40,6 @@ extension VMAManager {
                     flags    : permissions.toPageFlags(),
                     type     : region.pointee.memoryType
                 )
-                Arch.MMU.flushTLBPage(cursor)
 
             } catch {
                 var rollback = start
@@ -46,7 +50,6 @@ extension VMAManager {
                         flags    : previous.toPageFlags(),
                         type     : region.pointee.memoryType
                     )
-                    Arch.MMU.flushTLBPage(rollback)
                     rollback += UserSpaceLayout.pageSize
                 }
                 return false

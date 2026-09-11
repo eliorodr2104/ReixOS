@@ -180,6 +180,19 @@ struct RegionClone: ResumableOperation {
     /// default to normal cacheable turned a device window inner-shareable and a
     /// DMA ring cacheable in the child, which no fault ever reports.
     ///
+    /// ## Two different operations, one loop
+    ///
+    /// The child's side is an install: its address space is empty until this
+    /// runs. The parent's downgrade is a protect, the same frame with the write
+    /// bit taken out, and it asks for `invalidate: false` because
+    /// `cloneRegions` ends in one `flushTLB` that covers the whole walk. One
+    /// full flush beats a `tlbi vaae1is` plus `dsb ish` plus `isb` per
+    /// downgraded page, and it is correct only because the parent cannot run
+    /// between the downgrade and that flush. T29 (concurrent VM) and T35 have
+    /// to revisit exactly this: on a second core the parent is running, and the
+    /// deferred flush would have to become per-page invalidation plus a
+    /// shootdown.
+    ///
     /// ## Only an anonymous frame is retained here
     ///
     /// Every reference taken here has to be given back by the child's `teardown`,
@@ -270,7 +283,7 @@ struct RegionClone: ResumableOperation {
             }
 
             do {
-                try vmm.pointee.mapUserPage(
+                try vmm.pointee.installUserPage(
                     rootTable: context.rootTablePhysical,
                     virtual  : va,
                     physical : parentPhys,
@@ -283,12 +296,12 @@ struct RegionClone: ResumableOperation {
                 // Writable in the parent's TLB until the deferred flush.
                 // Safe only while the parent cannot run before we return.
                 if downgradeParentPermissions {
-                    try vmm.pointee.mapUserPage(
-                        rootTable: parentRoot,
-                        virtual  : va,
-                        physical : parentPhys,
-                        flags    : pageFlags,
-                        type     : vma.memoryType
+                    try vmm.pointee.protectUserPage(
+                        rootTable : parentRoot,
+                        virtual   : va,
+                        flags     : pageFlags,
+                        type      : vma.memoryType,
+                        invalidate: false
                     )
                 }
 

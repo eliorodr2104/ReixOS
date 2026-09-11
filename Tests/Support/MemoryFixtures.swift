@@ -294,7 +294,7 @@ public final class HostRAM {
     /// Maps `virtual` onto `physical` as a user page, creating whatever levels of
     /// the walk are missing.
     ///
-    /// Written here rather than driven through `VirtualMemoryManager.mapUserPage`
+    /// Written here rather than driven through `VirtualMemoryManager.installUserPage`
     /// because that one allocates its intermediate tables from the physical page
     /// manager, which is exactly the entry point a staged manager cannot serve.
     /// The descriptors are the same ones `map` writes.

@@ -48,12 +48,63 @@ void disable_interrupts(void) {}
 void enable_core_timer(void) {}
 void enable_interrupts(void) {}
 void enable_mmu(uint64_t lowTable, uint64_t highTable) { (void)lowTable; (void)highTable; }
-void flush_tlb(void) {}
-void flush_tlb_page(uint64_t virtualAddress) { (void)virtualAddress; }
-void flush_tlb_page_nosync(uint64_t virtualAddress) { (void)virtualAddress; }
-void flush_tlb_sync(void) {}
+// Ordered record of the ordering shims, so a host suite can assert the exact
+// sequence one leaf-descriptor operation emits.
+//
+// The count alone cannot say what these tests are about. Break-before-make is
+// an *order*: the same four calls with the new descriptor published before the
+// invalidation is the bug, and it has the same counts as the correct sequence.
+// So each call records its position, its argument, and the value of one
+// descriptor the test nominates. That last field is what makes the ordering
+// observable off the machine at all: at the invalidation the descriptor has to
+// read as invalid, and a suite that checks it fails on a sequence that merely
+// counts right.
+//
+// The probe is read through a `volatile` pointer because the whole point is to
+// sample memory the caller is writing between calls.
+#define MMU_TRACE_CAPACITY 64
+
+static uint32_t mmu_trace_ops[MMU_TRACE_CAPACITY];
+static uint64_t mmu_trace_args[MMU_TRACE_CAPACITY];
+static uint64_t mmu_trace_descriptors[MMU_TRACE_CAPACITY];
+static uint64_t mmu_trace_len;
+static const uint64_t *mmu_trace_probe;
+
+static void mmu_trace_record(uint32_t op, uint64_t arg) {
+    if (mmu_trace_len < MMU_TRACE_CAPACITY) {
+        mmu_trace_ops[mmu_trace_len]         = op;
+        mmu_trace_args[mmu_trace_len]        = arg;
+        mmu_trace_descriptors[mmu_trace_len] =
+            mmu_trace_probe ? *(const volatile uint64_t *)mmu_trace_probe : 0;
+    }
+    mmu_trace_len += 1;
+}
+
+void mmu_trace_reset(const uint64_t *probe) {
+    mmu_trace_len   = 0;
+    mmu_trace_probe = probe;
+}
+
+uint64_t mmu_trace_length(void) { return mmu_trace_len; }
+
+uint32_t mmu_trace_op(uint64_t index) {
+    return index < MMU_TRACE_CAPACITY ? mmu_trace_ops[index] : 0;
+}
+
+uint64_t mmu_trace_arg(uint64_t index) {
+    return index < MMU_TRACE_CAPACITY ? mmu_trace_args[index] : 0;
+}
+
+uint64_t mmu_trace_descriptor(uint64_t index) {
+    return index < MMU_TRACE_CAPACITY ? mmu_trace_descriptors[index] : 0;
+}
+
+void flush_tlb(void) { mmu_trace_record(5, 0); }
+void flush_tlb_page(uint64_t virtualAddress) { mmu_trace_record(2, virtualAddress); }
+void flush_tlb_page_nosync(uint64_t virtualAddress) { mmu_trace_record(3, virtualAddress); }
+void flush_tlb_sync(void) { mmu_trace_record(4, 0); }
 uint64_t get_current_process(void) { return current_process; }
-void instruction_barrier(void) {}
+void instruction_barrier(void) { mmu_trace_record(6, 0); }
 uint8_t is_mmu_enabled(void) { return 0; }
 void jump_to_user_mode(void *trapFrame, uint64_t rootTable) { (void)trapFrame; (void)rootTable; }
 void kernel_idle_loop(void) {}
@@ -63,7 +114,7 @@ void kernel_idle_loop(void) {}
 uint32_t mmio_read32(void *address) { return *(volatile uint32_t *)address; }
 void mmio_write32(void *address, uint32_t value) { *(volatile uint32_t *)address = value; }
 void nop(void) {}
-void page_table_barrier(void) { barrier_count += 1; }
+void page_table_barrier(void) { barrier_count += 1; mmu_trace_record(1, 0); }
 uint64_t page_table_barrier_count(void) { return barrier_count; }
 void reset_page_table_barrier_count(void) { barrier_count = 0; }
 

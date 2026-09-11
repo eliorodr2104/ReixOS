@@ -83,7 +83,7 @@ extension ProcessManager {
             )
 
             do {
-                try vmm.pointee.mapUserPage(
+                try vmm.pointee.installUserPage(
                     addressSpace: process.pointee.addressSpace,
                     virtual     : cursor,
                     physical    : page.address,

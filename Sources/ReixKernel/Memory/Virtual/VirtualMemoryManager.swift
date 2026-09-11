@@ -399,10 +399,70 @@ public struct VirtualMemoryManager: Loggable {
     }
 
 
+    // MARK: - Leaf descriptor operations
+
+    /// What every user leaf descriptor carries besides the caller's permissions.
+    ///
+    /// One constant rather than the same literal at each writer: install,
+    /// protect and replace all publish a leaf of the same shape, and the way to
+    /// be sure they agree on `nG` and on the access flag is to leave them
+    /// nothing to disagree about. The boot roots do not use it, and must not:
+    /// their mappings are global.
+    private static let userLeafFlags: VirtualPageFlags = [
+        .valid, .page, .accessFlag, .notGlobal
+    ]
+
+
+    /// The descriptor a user leaf carries for `physical` under `flags`.
+    ///
+    /// Built on top of the entry already in the slot rather than from zero, so
+    /// the bits neither the address, the attributes nor `userLeafFlags` name
+    /// keep whatever the architecture left in them.
+    private static func userDescriptor(
+        from entry: Arch.PageTableEntry,
+        physical  : PhysicalAddress,
+        type      : MemoryType,
+        flags     : VirtualPageFlags
+    ) -> Arch.PageTableEntry {
+        var descriptor = entry
+        descriptor.physicalAddress = physical
+
+        let attrs = type.attributes
+        descriptor.mairIndex    = attrs.mair
+        descriptor.shareability = attrs.share
+        descriptor.flags        = flags.union(userLeafFlags)
+
+        return descriptor
+    }
+
+
+    /// Map `virtual` onto `physical` where nothing is mapped yet.
+    ///
+    /// - Precondition: the leaf descriptor for `virtual` is invalid. A valid one
+    ///   is refused with `.pageAlreadyMapped` and never overwritten. Replacing
+    ///   the frame behind a live translation is `replaceUserPage`, changing its
+    ///   permissions is `protectUserPage`, and letting one operation stand in
+    ///   for another is the audit finding these four exist to close.
+    ///
+    /// A refused install leaves the page tables and the physical allocator
+    /// exactly as it found them, even though the walk below is the creating
+    /// one. A valid leaf descriptor implies every level above it is already
+    /// there, so on the path that refuses, `mapTable` creates nothing. One walk
+    /// and not two is the point: this is the hot path of every demand fault,
+    /// every ELF page and every cloned page.
+    ///
+    /// Emits the descriptor store and `dsb ishst`, and no TLB invalidation.
+    /// That omission is sound only because a cleared descriptor never leaves a
+    /// cached translation behind it: `removeUserPage` states that contract and
+    /// `PageRetirement` is what keeps it, invalidating each address it cleared
+    /// before the frame goes back to the allocator. If a remove ever published
+    /// an invalid descriptor without invalidating, every install here would be
+    /// a page silently resolved through its predecessor's frame.
+    ///
     /// `type` has no default on purpose. It decides the MAIR index and the
     /// shareability of the descriptor, and getting it wrong is silent: a caller
     /// that forgets it is a compile error, not a device window turned cacheable.
-    public func mapUserPage(
+    public func installUserPage(
         rootTable: PhysicalAddress,
         virtual  : VirtualAddress,
         physical : PhysicalAddress,
@@ -411,54 +471,31 @@ public struct VirtualMemoryManager: Loggable {
     ) throws(PPMError) {
         let tablePointer: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable)
 
-        if !flags.contains(.uxn) {
-            let bytes: UnsafeMutablePointer<UInt8> = physToVirt(physical)
-            Arch.MMU.synchronizeInstructionCache(UnsafeMutableRawPointer(bytes), size: Self.pageSize)
-        }
-        
-        try map(
-            table   : tablePointer,
-            virtual : virtual,
+        let slot = try leafSlot(table: tablePointer, virtual: virtual)
+
+        guard !slot.pointee.isPresent else { throw .pageAlreadyMapped }
+
+        publishInstructionStream(physical: physical, flags: flags)
+
+        slot.pointee = Self.userDescriptor(
+            from    : slot.pointee,
             physical: physical,
             type    : type,
-            flags   : flags.union([.notGlobal])
+            flags   : flags
         )
-    }
-    
-    
-    /// Rewrite the flags of a page that is already mapped, keeping its frame.
-    ///
-    /// `type` is the region's, same rule as `mapUserPage`: this rewrites the
-    /// whole descriptor, so an omitted type would rewrite the attributes too.
-    public func protectUserPage(
-        rootTable: PhysicalAddress,
-        virtual  : VirtualAddress,
-        flags    : VirtualPageFlags,
-        type     : MemoryType
-    ) throws(PPMError) {
-        guard let phys = physicalAddressOf(
-            rootTable: rootTable,
-            virtual  : virtual
-        ) else { return }
 
-        try mapUserPage(
-            rootTable: rootTable,
-            virtual  : virtual,
-            physical : phys,
-            flags    : flags,
-            type     : type
-        )
+        Arch.MMU.pageTableBarrier()
     }
 
 
-    public func mapUserPage(
+    public func installUserPage(
         addressSpace: borrowing AddressSpace,
         virtual     : VirtualAddress,
         physical    : PhysicalAddress,
         flags       : VirtualPageFlags,
         type        : MemoryType
     ) throws(PPMError) {
-        try mapUserPage(
+        try installUserPage(
             rootTable: addressSpace.rootTablePhysical,
             virtual  : virtual,
             physical : physical,
@@ -466,31 +503,213 @@ public struct VirtualMemoryManager: Loggable {
             type     : type
         )
     }
-    
 
-    public func unmapUserPage(
-        rootTable: PhysicalAddress,
-        virtual  : VirtualAddress
+
+    /// Publish freshly written bytes to the instruction stream, when the mapping
+    /// about to stand is one that may be fetched from.
+    ///
+    /// Three of the four operations can produce an executable descriptor, so the
+    /// decision lives here instead of at each of them. The bytes were written
+    /// through the kernel's cached alias, and a protect needs this as much as an
+    /// install does: `TaskSealAndProtectSyscall` is the path that makes a page
+    /// executable without its frame changing at all, so it is the one case where
+    /// the code was written under a mapping that was never executable, and the
+    /// one this omission broke.
+    private func publishInstructionStream(
+        physical: PhysicalAddress,
+        flags   : VirtualPageFlags
+    ) {
+        guard !flags.contains(.uxn) else { return }
+
+        let bytes: UnsafeMutablePointer<UInt8> = physToVirt(physical)
+
+        Arch.MMU.synchronizeInstructionCache(
+            UnsafeMutableRawPointer(bytes),
+            size: Self.pageSize
+        )
+    }
+    
+    
+    /// Rewrite the access permissions of a page that is already mapped, keeping
+    /// its frame and its memory attributes.
+    ///
+    /// - Precondition: the leaf descriptor is valid, and `type` is the type it
+    ///   already carries. An absent entry is `.pageNotMapped`, a different type
+    ///   is `.pageAttributesImmutable`. The type is checked and not applied
+    ///   because it sets the MAIR index and the shareability, and changing
+    ///   either of those under a valid descriptor is one of the cases DDI 0487
+    ///   requires break-before-make for. The output address cannot drift at all:
+    ///   only the flag bits of the existing descriptor are written.
+    ///
+    /// Emits the descriptor store, then `dsb ishst; tlbi vaae1is; dsb ish; isb`
+    /// through `flushTLBPage`. A permission or XN change needs no
+    /// break-before-make, but the old entry still has to leave the TLB or the
+    /// new permissions are simply not in effect.
+    ///
+    /// A descriptor that becomes executable also publishes the frame's bytes to
+    /// the instruction stream first. See `publishInstructionStream`: this is the
+    /// only operation that can make already written code fetchable without its
+    /// frame changing.
+    ///
+    /// - Parameter invalidate: `false` publishes the descriptor with `dsb ishst`
+    ///   and leaves the invalidation to the caller. `RegionClone` is the only
+    ///   caller that asks for it: it downgrades a run of the parent's pages
+    ///   while the parent cannot run, and `cloneRegions` flushes once at the
+    ///   end. That trade is correct on one core and no more than that, so
+    ///   whoever makes this kernel run on several has to revisit it.
+    public func protectUserPage(
+        rootTable : PhysicalAddress,
+        virtual   : VirtualAddress,
+        flags     : VirtualPageFlags,
+        type      : MemoryType,
+        invalidate: Bool = true
     ) throws(PPMError) {
         let tablePointer: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable)
-        guard let leafTable = lookupLeafTable(table: tablePointer, virtual: virtual) else {
+
+        guard let leaf = lookupLeafTable(table: tablePointer, virtual: virtual),
+              leaf[virtual.l3].isPresent
+        else { throw .pageNotMapped }
+
+        var entry = leaf[virtual.l3]
+        let attrs = type.attributes
+
+        guard entry.mairIndex    == attrs.mair,
+              entry.shareability == attrs.share
+        else { throw .pageAttributesImmutable }
+
+        publishInstructionStream(physical: entry.physicalAddress, flags: flags)
+
+        entry.flags = flags.union(Self.userLeafFlags)
+
+        leaf[virtual.l3] = entry
+
+        guard invalidate else {
+            Arch.MMU.pageTableBarrier()
             return
         }
+
+        Arch.MMU.flushTLBPage(virtual)
+    }
+
+
+    /// Move a live mapping onto a different frame, break-before-make.
+    ///
+    /// - Precondition: the leaf descriptor is valid and `physical` is not the
+    ///   frame it already names. An absent entry is `.pageNotMapped`, which is
+    ///   an install; the same frame is `.pageReplaceWithoutChange`, which is at
+    ///   most a protect and would cost a torn-down translation for nothing.
+    ///
+    /// Changing the output address of a valid descriptor is the case DDI 0487
+    /// names in the VMSAv8-64 break-before-make requirements: the two
+    /// translations may be held at once, and what the walker then returns is
+    /// not defined. `breakBeforeMake` is that sequence, in one function so
+    /// there is a single site to read and a symbol the linked image can be
+    /// checked for. The copy-on-write fault is the only caller.
+    public func replaceUserPage(
+        rootTable: PhysicalAddress,
+        virtual  : VirtualAddress,
+        physical : PhysicalAddress,
+        flags    : VirtualPageFlags,
+        type     : MemoryType
+    ) throws(PPMError) {
+        let tablePointer: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable)
+
+        guard let leaf = lookupLeafTable(table: tablePointer, virtual: virtual),
+              leaf[virtual.l3].isPresent
+        else { throw .pageNotMapped }
+
+        guard leaf[virtual.l3].physicalAddress != physical else {
+            throw .pageReplaceWithoutChange
+        }
+
+        // The new frame may hold code this process is about to run, and it also
+        // decides whether the sequence below ends with an `isb`.
+        let executable = !flags.contains(.uxn)
+
+        publishInstructionStream(physical: physical, flags: flags)
+
+        let entry = Self.userDescriptor(
+            from    : leaf[virtual.l3],
+            physical: physical,
+            type    : type,
+            flags   : flags
+        )
+
+        Self.breakBeforeMake(
+            slot      : leaf + virtual.l3,
+            virtual   : virtual,
+            entry     : entry,
+            executable: executable
+        )
+    }
+
+
+    /// Clear the leaf descriptor of `virtual`, leaving the invalidation to the
+    /// caller's batch.
+    ///
+    /// - Returns: whether a valid descriptor was cleared. An absent entry is a
+    ///   no-op and deliberately not a refusal: the ranges retirement walks are
+    ///   legitimately sparse, a `.noReserve` region nobody ever touched has no
+    ///   resident page at all, and turning that into an error would make every
+    ///   caller probe the page tables once before asking this to walk them
+    ///   again.
+    ///
+    /// Emits the invalid store and `dsb ishst`, and no invalidation. The
+    /// contract that buys `installUserPage` its missing TLBI lives here: the
+    /// address may not be mapped again, and the frame may not go back to the
+    /// allocator, until the caller's `flushTLBSync` has run. `PageRetirement`
+    /// is the one caller and does both, per batch.
+    @discardableResult
+    public func removeUserPage(
+        rootTable: PhysicalAddress,
+        virtual  : VirtualAddress
+    ) -> Bool {
+        let tablePointer: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable)
+
+        guard let leafTable = lookupLeafTable(table: tablePointer, virtual: virtual),
+              leafTable[virtual.l3].isPresent
+        else { return false }
 
         leafTable[virtual.l3] = Arch.PageTableEntry(rawValue: 0)
 
         Arch.MMU.pageTableBarrier()
+
+        return true
     }
 
 
-    public func unmapUserPage(
-        addressSpace: borrowing AddressSpace,
-        virtual     : VirtualAddress
-    ) throws(PPMError) {
-        try unmapUserPage(
-            rootTable: addressSpace.rootTablePhysical,
-            virtual  : virtual
-        )
+    /// The kernel's one break-before-make sequence.
+    ///
+    /// In order: the invalid descriptor, `dsb ishst`, `tlbi vaae1is` for the
+    /// address, `dsb ish` and `isb`, the new descriptor, `dsb ishst`, and a
+    /// final `isb` when the page may be fetched from. The first store and the
+    /// invalidation together are the window in which the address has no
+    /// translation at all; publishing the new descriptor before that window
+    /// closes is what leaves two live translations for one address.
+    ///
+    /// `@inline(never)` so the sequence keeps a symbol of its own: the
+    /// `pte-bbm` post-check in `scripts/scenarios.sh` reads it back out of the
+    /// linked image, which is the only proof available for an ordering whose
+    /// failure mode is silent on QEMU.
+    @inline(never)
+    private static func breakBeforeMake(
+        slot      : UnsafeMutablePointer<Arch.PageTableEntry>,
+        virtual   : VirtualAddress,
+        entry     : Arch.PageTableEntry,
+        executable: Bool
+    ) {
+        slot.pointee = Arch.PageTableEntry(rawValue: 0)
+        Arch.MMU.pageTableBarrier()
+
+        Arch.MMU.flushTLBPageNoSync(virtual)
+        Arch.MMU.flushTLBSync()
+
+        slot.pointee = entry
+        Arch.MMU.pageTableBarrier()
+
+        guard executable else { return }
+
+        Arch.CPU.instructionBarrier()
     }
 
 
@@ -558,7 +777,38 @@ public struct VirtualMemoryManager: Loggable {
 
 
     // MARK: - Internals Handlers
-    
+
+    /// Descend to the leaf slot for `virtual`, building whatever levels of the
+    /// walk are missing. The one creating descent, shared by the boot-time
+    /// writer and by `installUserPage`.
+    ///
+    /// `@inline(never)` for size and not for correctness: inlined, the three
+    /// `mapTable` calls are copied into every writer, and this is measured at
+    /// over a kilobyte of `.text` on a 4 MiB machine. Out of line it is one
+    /// copy and one `bl`, which is what the callers paid before anyway.
+    @inline(never)
+    private func leafSlot(
+        table  : UnsafeMutablePointer<Arch.PageTableEntry>,
+        virtual: VirtualAddress
+    ) throws(PPMError) -> UnsafeMutablePointer<Arch.PageTableEntry> {
+
+        var currentTable = table
+        currentTable = try mapTable(current: currentTable, virtual.l0)
+        currentTable = try mapTable(current: currentTable, virtual.l1)
+        currentTable = try mapTable(current: currentTable, virtual.l2)
+
+        return currentTable + virtual.l3
+    }
+
+    /// The boot-time leaf writer: overwrites whatever was there, with no TLB
+    /// invalidation and no look at the entry's current state.
+    ///
+    /// Its only callers are this type's initialiser, for the MMIO windows, and
+    /// `mapSection`, which documents its own overwrite. Both fill the two roots
+    /// before `enableMMU`, so there is nothing cached to invalidate and no
+    /// descriptor is live while it is rewritten. Nothing user-facing routes here
+    /// any more: an install, a protect and a replace each state what the entry
+    /// has to be first, which is what keeps break-before-make in one place.
     private func map(
         table       : UnsafeMutablePointer<Arch.PageTableEntry>,
         virtual     : VirtualAddress,
@@ -567,14 +817,10 @@ public struct VirtualMemoryManager: Loggable {
         flags       : VirtualPageFlags = [.present],
         defaultFlags: VirtualPageFlags = [.valid, .page, .accessFlag]
     ) throws(PPMError) {
-        
-        var currentTable = table
-        currentTable = try mapTable(current: currentTable, virtual.l0)
-        currentTable = try mapTable(current: currentTable, virtual.l1)
-        currentTable = try mapTable(current: currentTable, virtual.l2)
-        
-        
-        var entry = currentTable[virtual.l3]
+
+        let slot = try leafSlot(table: table, virtual: virtual)
+
+        var entry = slot.pointee
         entry.physicalAddress = physical
         
         let attrs = type.attributes
@@ -582,7 +828,7 @@ public struct VirtualMemoryManager: Loggable {
         entry.shareability = attrs.share
         entry.flags        = flags.union(defaultFlags)
         
-        currentTable[virtual.l3] = entry
+        slot.pointee = entry
 
         Arch.MMU.pageTableBarrier()
     }

@@ -645,7 +645,7 @@ public func withLoadedELFImage(
 
 
 /// Installs one scratch mapping in every 2 MiB span the image covers, so the
-/// loader's own `mapUserPage` finds every level above L3 already present.
+/// loader's own `installUserPage` finds every level above L3 already present.
 private func buildTableLevels(
     in  ram     : HostRAM,
     for segments: [ELFSegmentFixture]

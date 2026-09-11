@@ -58,10 +58,15 @@ extension VMAManager {
     /// `RegionClone` for what a step does and what it leaves behind.
     ///
     /// The flush covers the throwing exits too, and has to: the parent's own
-    /// descriptors are rewritten in place as the walk proceeds while `mapUserPage`
-    /// retires no translation, so an exit without it leaves the parent holding
-    /// read-only descriptors in memory and stale writable entries in the TLB, with
-    /// no later path flushing on its behalf.
+    /// descriptors are downgraded in place as the walk proceeds, with
+    /// `protectUserPage(invalidate: false)` asking for exactly this flush
+    /// instead of paying a per-page invalidation. An exit without it leaves the
+    /// parent holding read-only descriptors in memory and stale writable entries
+    /// in the TLB, with no later path flushing on its behalf.
+    ///
+    /// One flush at the end is the cheaper of the two correct answers here, and
+    /// it is correct only because this kernel runs on one core and the parent
+    /// cannot run between the downgrade and the flush. See `RegionClone`.
     public mutating func cloneRegions(from parent: VMAManager) throws(VMAError) {
         defer { Arch.MMU.flushTLB() }
 
