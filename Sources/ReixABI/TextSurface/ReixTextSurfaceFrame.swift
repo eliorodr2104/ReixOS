@@ -110,10 +110,15 @@ public struct ReixTextSurfaceFrameDescriptor: Equatable {
     public let cursorColumn         : UInt16
     public let viewportRow          : UInt16
     public let viewportRows         : UInt16
-    public let overlayRow           : UInt16
-    public let overlayColumn        : UInt16
-    public let overlayRows          : UInt16
-    public let overlayColumns       : UInt16
+
+    /// Rows temporarily owned by this presentation, including detached
+    /// overlays below the editor viewport. Zero on the wire is the legacy
+    /// spelling of `viewportRows`.
+    public let presentationRows: UInt16
+    public let overlayRow      : UInt16
+    public let overlayColumn   : UInt16
+    public let overlayRows     : UInt16
+    public let overlayColumns  : UInt16
 
     public init?(
         kind                 : ReixTextSurfaceFrameKind,
@@ -137,11 +142,13 @@ public struct ReixTextSurfaceFrameDescriptor: Equatable {
         cursorColumn         : UInt16,
         viewportRow          : UInt16 = 0,
         viewportRows         : UInt16,
+        presentationRows     : UInt16 = 0,
         overlayRow           : UInt16 = 0,
         overlayColumn        : UInt16 = 0,
         overlayRows          : UInt16 = 0,
         overlayColumns       : UInt16 = 0
     ) {
+        let presentedRows = presentationRows == 0 ? viewportRows : presentationRows
         guard correlation != 0,
               revision != 0,
               textLength <= UInt32(Self.maximumTextBytes),
@@ -155,12 +162,14 @@ public struct ReixTextSurfaceFrameDescriptor: Equatable {
               cursorColumn < columns,
               viewportRows > 0,
               viewportRows <= Self.interactiveRows(for: rows),
+              presentedRows >= viewportRows,
+              presentedRows <= Self.interactiveRows(for: rows),
               cursorRow >= viewportRow,
               cursorRow - viewportRow < viewportRows,
-              overlayRows <= viewportRows,
+              overlayRows <= presentedRows,
               overlayColumns <= columns,
               overlayLength == 0 ? overlayRows == 0 && overlayColumns == 0 : overlayRows > 0 && overlayColumns > 0,
-              overlayRows == 0 || overlayRow <= viewportRows - overlayRows,
+              overlayRows == 0 || overlayRow <= presentedRows - overlayRows,
               overlayColumns == 0 || overlayColumn <= columns - overlayColumns,
               (mode != .transcript && mode != .codeTranscript && mode != .reset) || (
                   patchOffset == 0
@@ -202,6 +211,7 @@ public struct ReixTextSurfaceFrameDescriptor: Equatable {
         self.cursorColumn = cursorColumn
         self.viewportRow = viewportRow
         self.viewportRows = viewportRows
+        self.presentationRows = presentedRows
         self.overlayRow = overlayRow
         self.overlayColumn = overlayColumn
         self.overlayRows = overlayRows
@@ -250,6 +260,8 @@ public struct ReixTextSurfaceFrameDescriptor: Equatable {
         bytes[58] = severity.rawValue
         bytes[59] = outputKind.rawValue
         write16(bytes, 60, payloadKind.rawValue)
+        // Preserve the old all-zero spelling when no detached rows exist.
+        write16(bytes, 62, presentationRows == viewportRows ? 0 : presentationRows)
         return true
     }
 
@@ -259,8 +271,7 @@ public struct ReixTextSurfaceFrameDescriptor: Equatable {
               let mode        = ReixTextSurfaceFrameMode(rawValue: read16(bytes, 2)),
               let severity    = ReixTextOutputSeverity(rawValue: bytes[58]),
               let outputKind  = ReixTextOutputKind(rawValue: bytes[59]),
-              let payloadKind = ReixTextOutputPayloadKind(rawValue: read16(bytes, 60)),
-              read16(bytes, 62) == 0
+              let payloadKind = ReixTextOutputPayloadKind(rawValue: read16(bytes, 60))
         else { return nil }
         return ReixTextSurfaceFrameDescriptor(
             kind: kind,
@@ -284,6 +295,7 @@ public struct ReixTextSurfaceFrameDescriptor: Equatable {
             cursorColumn: read16(bytes, 40),
             viewportRow: read16(bytes, 42),
             viewportRows: read16(bytes, 44),
+            presentationRows: read16(bytes, 62),
             overlayRow: read16(bytes, 46),
             overlayColumn: read16(bytes, 48),
             overlayRows: read16(bytes, 50),

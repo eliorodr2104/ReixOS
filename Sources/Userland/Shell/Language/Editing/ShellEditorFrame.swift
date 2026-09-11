@@ -9,21 +9,22 @@ import ReixABI
 
 /// Metadata for one native TextSurface frame built from editor-owned storage.
 public struct ShellEditorFrame {
-    public let kind          : ReixTextSurfaceFrameKind
-    public let mode          : ReixTextSurfaceFrameMode
-    public let correlation   : UInt32
-    public let patchOffset   : UInt32
-    public let replacedLength: UInt32
-    public let textLength    : UInt32
-    public let columns       : UInt16
-    public let rows          : UInt16
-    public let cursorOffset  : UInt32
-    public let cursorRow     : UInt16
-    public let cursorColumn  : UInt16
-    public let viewportRow   : UInt16
-    public let viewportRows  : UInt16
+    public let kind            : ReixTextSurfaceFrameKind
+    public let mode            : ReixTextSurfaceFrameMode
+    public let correlation     : UInt32
+    public let patchOffset     : UInt32
+    public let replacedLength  : UInt32
+    public let textLength      : UInt32
+    public let columns         : UInt16
+    public let rows            : UInt16
+    public let cursorOffset    : UInt32
+    public let cursorRow       : UInt16
+    public let cursorColumn    : UInt16
+    public let viewportRow     : UInt16
+    public let viewportRows    : UInt16
+    public let presentationRows: UInt16
 
-    /// Where the panel sits inside the viewport, and how much of it it takes.
+    /// Where the panel sits inside the presentation, and how much of it it takes.
     /// Zero rows is no panel at all.
     public let overlayRow    : UInt16
     public let overlayColumn : UInt16

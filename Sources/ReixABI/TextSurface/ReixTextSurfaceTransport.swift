@@ -21,10 +21,11 @@ public enum ReixTextSurfaceTransport {
     public static let featureAcknowledgements: UInt32 = 1 << 7
     public static let featureResynchronization: UInt32 = 1 << 8
     public static let featurePresentationModes: UInt32 = 1 << 9
+    public static let featureDetachedOverlayRows: UInt32 = 1 << 10
     public static let supportedFeatures = featureTypedFrames | featureGeometry | featureSemanticStyles
         | featureViewport | featureOverlay | featureIncrementalUpdates | featureFullSnapshot
         | featureAcknowledgements | featureResynchronization
-        | featurePresentationModes
+        | featurePresentationModes | featureDetachedOverlayRows
     public static let requiredFeatures = supportedFeatures
     public static let capacity = (regionBytes - headerBytes) / ReixTextSurfaceProtocol.recordBytes
     public static let maximumFrameRecords = 2 + (

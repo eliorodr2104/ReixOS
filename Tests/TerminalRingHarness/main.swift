@@ -81,29 +81,32 @@ private func occurrences(
 }
 
 private func descriptor(
-    kind          : ReixTextSurfaceFrameKind = .snapshot,
-    mode          : ReixTextSurfaceFrameMode = .editor,
-    source        : UInt32 = 0,
-    severity      : ReixTextOutputSeverity = .info,
-    outputKind    : ReixTextOutputKind = .application,
-    payloadKind   : ReixTextOutputPayloadKind = .utf8Text,
-    correlation   : UInt32 = 1,
-    revision      : UInt32 = 1,
-    baseRevision  : UInt32 = 0,
-    patchOffset   : UInt32 = 0,
-    replacedLength: UInt32 = 0,
-    textLength    : Int,
-    overlayLength : Int = 0,
-    styles        : Int = 0,
-    overlayStyles : Int = 0,
-    columns       : UInt16 = 80,
-    rows          : UInt16 = 24,
-    cursorRow     : UInt16 = 0,
-    cursorColumn  : UInt16 = 0,
-    viewportRow   : UInt16 = 0,
-    viewportRows  : UInt16 = 6,
-    overlayRows   : UInt16 = 0,
-    overlayColumns: UInt16 = 0
+    kind            : ReixTextSurfaceFrameKind = .snapshot,
+    mode            : ReixTextSurfaceFrameMode = .editor,
+    source          : UInt32 = 0,
+    severity        : ReixTextOutputSeverity = .info,
+    outputKind      : ReixTextOutputKind = .application,
+    payloadKind     : ReixTextOutputPayloadKind = .utf8Text,
+    correlation     : UInt32 = 1,
+    revision        : UInt32 = 1,
+    baseRevision    : UInt32 = 0,
+    patchOffset     : UInt32 = 0,
+    replacedLength  : UInt32 = 0,
+    textLength      : Int,
+    overlayLength   : Int = 0,
+    styles          : Int = 0,
+    overlayStyles   : Int = 0,
+    columns         : UInt16 = 80,
+    rows            : UInt16 = 24,
+    cursorRow       : UInt16 = 0,
+    cursorColumn    : UInt16 = 0,
+    viewportRow     : UInt16 = 0,
+    viewportRows    : UInt16 = 6,
+    presentationRows: UInt16 = 0,
+    overlayRow      : UInt16 = 0,
+    overlayColumn   : UInt16 = 0,
+    overlayRows     : UInt16 = 0,
+    overlayColumns  : UInt16 = 0
 ) -> ReixTextSurfaceFrameDescriptor {
     ReixTextSurfaceFrameDescriptor(
         kind: kind,
@@ -127,6 +130,9 @@ private func descriptor(
         cursorColumn: cursorColumn,
         viewportRow: viewportRow,
         viewportRows: viewportRows,
+        presentationRows: presentationRows,
+        overlayRow: overlayRow,
+        overlayColumn: overlayColumn,
         overlayRows: UInt16(overlayRows),
         overlayColumns: UInt16(overlayColumns)
     )!
@@ -1027,6 +1033,147 @@ check(
 check(bottomModel.editorAnchorRow == 16, "the input opens on the last row after a clear")
 check(bottomTerminal.line(15).hasPrefix("reix>"), "the prompt is at the bottom, not at the top")
 check(bottomTerminal.line(0).allSatisfy { $0 == " " }, "and the top of the screen stays empty")
+
+// A detached popup grows the presentation, not the text viewport. When there
+// is no room below the editor the terminal must scroll every existing row;
+// re-anchoring upward and clearing would destroy transcript bytes that the
+// TextSurface model deliberately does not mirror.
+check(ReixTextSurfaceRing.initialize(page: page, token: 59), "detached popup proposal")
+check(ReixTextSurfaceRing.accept(page: page, token: 59, epoch: 60), "detached popup accept")
+producer = ReixTextSurfaceRing(page: page, token: 59, epoch: 60)!
+consumer = ReixTextSurfaceRing(page: page, token: 59, epoch: 60)!
+var popupModel = TextSurfaceScreenModel()
+var popupTerminal = TerminalScreenModel(columns: 20, rows: 16)
+
+let preservedTranscript = Array("preserve-me\n".utf8)
+let preservedDescriptor = descriptor(
+    mode: .transcript,
+    textLength: preservedTranscript.count,
+    columns: 20,
+    rows: 16,
+    viewportRows: 1
+)
+check(
+    push(producer, transaction: 1, descriptor: preservedDescriptor, text: preservedTranscript),
+    "detached popup transcript setup"
+)
+check(
+    consumer.popFrame(transaction: 1) { frame in
+        var bytes: [UInt8] = []
+        _ = TextSurfaceVTRenderer.render(screen: popupModel, frame: frame, useDiff: false) {
+            bytes.append($0)
+        }
+        check(feed(bytes, into: &popupTerminal), "detached popup transcript VT is accepted")
+        check(popupModel.commit(frame), "detached popup transcript commit")
+        return .commit
+    } == .committed,
+    "detached popup transcript consumed"
+)
+
+let popupPrompt = Array("reix> value.".utf8)
+let popupPromptDescriptor = descriptor(
+    correlation: 2,
+    revision: 2,
+    textLength: popupPrompt.count,
+    columns: 20,
+    rows: 16,
+    cursorColumn: UInt16(popupPrompt.count),
+    viewportRows: 1
+)
+check(
+    push(producer, transaction: 2, descriptor: popupPromptDescriptor, text: popupPrompt),
+    "detached popup editor setup"
+)
+check(
+    consumer.popFrame(transaction: 2) { frame in
+        var bytes: [UInt8] = []
+        _ = TextSurfaceVTRenderer.render(screen: popupModel, frame: frame, useDiff: false) {
+            bytes.append($0)
+        }
+        check(feed(bytes, into: &popupTerminal), "detached popup editor VT is accepted")
+        check(popupModel.commit(frame), "detached popup editor commit")
+        return .commit
+    } == .committed,
+    "detached popup editor consumed"
+)
+check(popupTerminal.line(14).hasPrefix("preserve-me"), "the transcript starts immediately above the editor")
+
+let popupText = Array("first\nsecond\nthird".utf8)
+let openedPopupDescriptor = descriptor(
+    correlation: 3,
+    revision: 3,
+    textLength: popupPrompt.count,
+    overlayLength: popupText.count,
+    columns: 20,
+    rows: 16,
+    cursorColumn: UInt16(popupPrompt.count),
+    viewportRows: 1,
+    presentationRows: 4,
+    overlayRow: 1,
+    overlayRows: 3,
+    overlayColumns: 20
+)
+check(
+    push(
+        producer,
+        transaction: 3,
+        descriptor: openedPopupDescriptor,
+        text: popupPrompt,
+        overlay: popupText
+    ),
+    "detached popup open setup"
+)
+check(
+    consumer.popFrame(transaction: 3) { frame in
+        let placement = popupModel.placement(for: frame)
+        check(placement.scrollRows == 3, "popup growth scrolls all terminal rows")
+        check(frame.descriptor.viewportRows == 1, "popup does not enlarge the text viewport")
+        check(frame.descriptor.presentationRows == 4, "popup owns separate presentation rows")
+        var bytes: [UInt8] = []
+        _ = TextSurfaceVTRenderer.render(screen: popupModel, frame: frame, useDiff: false) {
+            bytes.append($0)
+        }
+        check(feed(bytes, into: &popupTerminal), "detached popup open VT is accepted")
+        check(popupModel.commit(frame), "detached popup open commit")
+        return .commit
+    } == .committed,
+    "detached popup open consumed"
+)
+check(popupTerminal.line(11).hasPrefix("preserve-me"), "opening the popup scrolls the transcript instead of erasing it")
+check(popupTerminal.line(12).hasPrefix("reix> value."), "the input rises only after the screen scrolls")
+check(popupTerminal.line(13).hasPrefix("first"), "the detached popup begins below the input")
+
+let closedPopupDescriptor = descriptor(
+    correlation: 4,
+    revision: 4,
+    textLength: popupPrompt.count,
+    columns: 20,
+    rows: 16,
+    cursorColumn: UInt16(popupPrompt.count),
+    viewportRows: 1
+)
+check(
+    push(producer, transaction: 4, descriptor: closedPopupDescriptor, text: popupPrompt),
+    "detached popup close setup"
+)
+check(
+    consumer.popFrame(transaction: 4) { frame in
+        var bytes: [UInt8] = []
+        _ = TextSurfaceVTRenderer.render(screen: popupModel, frame: frame, useDiff: false) {
+            bytes.append($0)
+        }
+        check(feed(bytes, into: &popupTerminal), "detached popup close VT is accepted")
+        check(popupModel.commit(frame), "detached popup close commit")
+        return .commit
+    } == .committed,
+    "detached popup close consumed"
+)
+check(popupTerminal.line(15).hasPrefix("reix> value."), "closing the popup returns the input to the bottom")
+check(popupTerminal.line(11).hasPrefix("preserve-me"), "closing the popup leaves the scrolled transcript intact")
+check(
+    (0..<16).filter { popupTerminal.line($0).contains("preserve-me") }.count == 1,
+    "the transcript is preserved exactly once across the popup cycle"
+)
 
 check(ReixTextSurfaceRing.initialize(page: page, token: 25), "Unicode model proposal")
 check(ReixTextSurfaceRing.accept(page: page, token: 25, epoch: 26), "Unicode model accept")

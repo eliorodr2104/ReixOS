@@ -90,6 +90,7 @@ public struct InteractionSession: ~Copyable {
             cursorOffset: frame.cursorOffset,
             viewportRow: frame.viewportRow,
             viewportRows: frame.viewportRows,
+            presentationRows: frame.presentationRows,
             overlay: source.overlay,
             overlayLength: source.overlayLength,
             overlayStyles: source.overlayStyles,

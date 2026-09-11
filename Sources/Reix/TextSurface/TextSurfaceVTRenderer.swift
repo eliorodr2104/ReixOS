@@ -212,14 +212,15 @@ public enum TextSurfaceVTRenderer {
         useDiff: Bool,
         emit: (UInt8) -> Void
     ) -> UInt32 {
-        var count       : UInt32 = 0
-        let descriptor  = frame.descriptor
-        let placement   = screen.placement(for: frame)
-        let anchor      = placement.anchorRow
-        let height      = min(max(1, descriptor.viewportRows), descriptor.rows)
-        let start       = useDiff ? Int(descriptor.patchOffset) : 0
-        var startRow    = descriptor.viewportRow
-        var startColumn : UInt16 = 0
+        var count              : UInt32 = 0
+        let descriptor         = frame.descriptor
+        let placement          = screen.placement(for: frame)
+        let anchor             = placement.anchorRow
+        let height             = min(max(1, descriptor.viewportRows), descriptor.rows)
+        let presentationHeight = min(max(height, descriptor.presentationRows), descriptor.rows)
+        let start              = useDiff ? Int(descriptor.patchOffset) : 0
+        var startRow           = descriptor.viewportRow
+        var startColumn        : UInt16 = 0
 
         if useDiff,
            descriptor.textLength == 0,
@@ -251,7 +252,7 @@ public enum TextSurfaceVTRenderer {
                 screen: screen,
                 frame: frame,
                 placement: placement,
-                height: height,
+                height: presentationHeight,
                 count: &count,
                 emit: emit
             )
@@ -311,14 +312,15 @@ public enum TextSurfaceVTRenderer {
         useDiff: Bool,
         emit   : (UInt8) -> Void
     ) -> UInt32 {
-        var count            : UInt32 = 0
-        let descriptor       = frame.descriptor
-        let placement        = screen.placement(for: frame)
-        let anchor           = placement.anchorRow
-        let height           = min(max(1, descriptor.viewportRows), descriptor.rows)
-        let contentHeight    = ReixCodeEditorLayout.contentViewportRows(for: height)
-        let start            = useDiff ? Int(descriptor.patchOffset) : 0
-        var startRow         = descriptor.viewportRow
+        var count              : UInt32 = 0
+        let descriptor         = frame.descriptor
+        let placement          = screen.placement(for: frame)
+        let anchor             = placement.anchorRow
+        let height             = min(max(1, descriptor.viewportRows), descriptor.rows)
+        let presentationHeight = min(max(height, descriptor.presentationRows), descriptor.rows)
+        let contentHeight      = ReixCodeEditorLayout.contentViewportRows(for: height)
+        let start              = useDiff ? Int(descriptor.patchOffset) : 0
+        var startRow           = descriptor.viewportRow
         let cursorSurfaceRow = ReixCodeEditorLayout.surfaceRow(
             for: descriptor.cursorRow,
             viewportRow: descriptor.viewportRow,
@@ -358,7 +360,7 @@ public enum TextSurfaceVTRenderer {
                 screen: screen,
                 frame: frame,
                 placement: placement,
-                height: height,
+                height: presentationHeight,
                 count: &count,
                 emit: emit
             )

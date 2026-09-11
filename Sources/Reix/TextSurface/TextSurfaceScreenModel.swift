@@ -143,8 +143,18 @@ public struct TextSurfaceScreenModel {
         let descriptor = frame.descriptor
         let parked     = reparks(frame)
         if !parked, editorPainted {
-            let height = min(max(1, descriptor.viewportRows), descriptor.rows)
+            let height = min(max(1, descriptor.presentationRows), descriptor.rows)
             let bottom = min(descriptor.rows, editorAnchorRow + editorRows - 1)
+            if height > editorRows {
+                let growth = height - editorRows
+                let below = descriptor.rows - bottom
+                let scroll = growth > below ? growth - below : 0
+                return Placement(
+                    anchorRow: editorAnchorRow - min(scroll, editorAnchorRow - 1),
+                    breakLine: false,
+                    scrollRows: scroll
+                )
+            }
             return Placement(
                 anchorRow: bottom >= height ? bottom - height + 1 : 1,
                 breakLine: false,
@@ -155,7 +165,7 @@ public struct TextSurfaceScreenModel {
             flowRow: parked ? descriptor.rows : flowRow,
             flowColumn: parked ? 0 : flowColumn,
             rows: descriptor.rows,
-            height: descriptor.viewportRows
+            height: descriptor.presentationRows
         )
     }
 
@@ -330,7 +340,7 @@ public struct TextSurfaceScreenModel {
                 flowColumn = 0
                 editorPainted = true
                 editorAnchorRow = placement.anchorRow
-                editorRows = min(max(1, descriptor.viewportRows), rows)
+                editorRows = min(max(1, descriptor.presentationRows), rows)
         }
         mode = descriptor.mode
         revision = descriptor.revision

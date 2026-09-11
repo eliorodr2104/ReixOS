@@ -260,7 +260,8 @@ public struct ShellLineEditor: ~Copyable {
                 let frame = frameMetadata(
                     pending: pending,
                     cursorPosition: cursorPosition,
-                    viewportRows: viewportRows + panelRows,
+                    viewportRows: viewportRows,
+                    presentationRows: viewportRows + panelRows,
                     panelRow: panelRow,
                     panelColumn: panelRows == 0 ? cursorPosition.column : 0,
                     panel: geometry
@@ -1274,6 +1275,7 @@ public struct ShellLineEditor: ~Copyable {
         pending: PendingChange,
         cursorPosition: ReixTextLayout.Position,
         viewportRows: UInt16,
+        presentationRows: UInt16,
         panelRow: UInt16 = 0,
         panelColumn: UInt16 = 0,
         panel: ShellPanelGeometry? = nil
@@ -1314,6 +1316,7 @@ public struct ShellLineEditor: ~Copyable {
             cursorColumn: cursorPosition.column,
             viewportRow: viewportRow,
             viewportRows: viewportRows,
+            presentationRows: presentationRows,
             overlayRow: panelRow,
             overlayColumn: panel == nil ? 0 : panelColumn,
             overlayRows: panel?.rows ?? 0,

@@ -154,6 +154,32 @@ struct TerminalStructuredProtocolTests {
             ReixTextSurfaceFrameDescriptor.decode($0.baseAddress!, length: $0.count)?.mode
                 == .editor
         })
+
+        let detached = ReixTextSurfaceFrameDescriptor(
+            kind: .snapshot,
+            correlation: 8,
+            revision: 1,
+            baseRevision: 0,
+            textLength: 5,
+            overlayLength: 1,
+            columns: 80,
+            rows: 24,
+            cursorRow: 0,
+            cursorColumn: 5,
+            viewportRows: 1,
+            presentationRows: 6,
+            overlayRow: 1,
+            overlayRows: 5,
+            overlayColumns: 1
+        )!
+        var detachedMetadata = [UInt8](repeating: 0, count: ReixTextSurfaceFrameDescriptor.wireBytes)
+        #expect(detachedMetadata.withUnsafeMutableBufferPointer {
+            detached.encode(into: $0.baseAddress!, capacity: $0.count)
+        })
+        #expect(detachedMetadata[62] == 6 && detachedMetadata[63] == 0)
+        #expect(detachedMetadata.withUnsafeBufferPointer {
+            ReixTextSurfaceFrameDescriptor.decode($0.baseAddress!, length: $0.count)?.presentationRows == 6
+        })
         var malformedMetadata = metadata
         malformedMetadata[2] = 0
         #expect(malformedMetadata.withUnsafeBufferPointer {

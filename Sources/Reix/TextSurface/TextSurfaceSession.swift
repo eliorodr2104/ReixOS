@@ -266,6 +266,7 @@ public struct TextSurfaceSession: ~Copyable {
         cursorOffset     : UInt32,
         viewportRow      : UInt16,
         viewportRows     : UInt16,
+        presentationRows : UInt16 = 0,
         overlay          : UnsafePointer<UInt8>? = nil,
         overlayLength    : Int = 0,
         overlayStyles    : UnsafePointer<ReixTextSurfaceStyleSpan>? = nil,
@@ -275,6 +276,7 @@ public struct TextSurfaceSession: ~Copyable {
         overlayRows      : UInt16 = 0,
         overlayColumns   : UInt16 = 0
     ) -> Bool {
+        let presentedRows = presentationRows == 0 ? viewportRows : presentationRows
         guard usable,
               overlayLength >= 0,
               overlayLength <= ReixTextSurfaceFrameDescriptor.maximumOverlayBytes,
@@ -290,6 +292,10 @@ public struct TextSurfaceSession: ~Copyable {
               rows <= ReixTextSurfaceFrameDescriptor.maximumRows,
               viewportRows > 0,
               viewportRows <= ReixTextSurfaceFrameDescriptor.interactiveRows(for: rows),
+              presentedRows >= viewportRows,
+              presentedRows <= ReixTextSurfaceFrameDescriptor.interactiveRows(for: rows),
+              overlayRows <= presentedRows,
+              overlayRows == 0 || overlayRow <= presentedRows - overlayRows,
               styleCount >= 0,
               styleCount <= Int(ReixTextSurfaceFrameDescriptor.maximumStyleSpans),
               text0Length >= 0,
@@ -394,8 +400,8 @@ public struct TextSurfaceSession: ~Copyable {
         editorStyleCount = styleCount
         for index in 0..<styleCount { editorStyles[index] = styles![index] }
 
-        // An overlay is drawn over rows the editor also owns, so a frame that
-        // carries or drops one repaints rather than patches.
+        // An overlay may own detached rows below the editor viewport, so a
+        // frame that carries or drops one repaints rather than patches.
         let snapshot = kind == .snapshot || requiresSnapshot || revision == 0 || resized || modeChanged
             || overlayLength > 0
         let cursor   : ReixTextLayout.Position?
@@ -439,6 +445,7 @@ public struct TextSurfaceSession: ~Copyable {
             cursorColumn: cursor.column,
             viewportRow: actualViewport,
             viewportRows: viewportRows,
+            presentationRows: presentedRows,
             overlayRow: overlayRow,
             overlayColumn: overlayColumn,
             overlayRows: overlayRows,
