@@ -51,6 +51,15 @@ public enum ReixTextLayout {
               let first = decode(at: offset, count: count, byte: byte)
         else { return nil }
         var cursor = offset + first.length
+        // Adjacent ASCII scalars have a boundary, except CR/LF. Avoid Unicode
+        // property searches for every cell of the common source-code path.
+        // A following non-ASCII scalar still needs the full joining rules.
+        if first.value < 0x80 {
+            if cursor == count { return cursor }
+            if let next = byte(cursor), next < 0x80 {
+                return first.value == 0x0D && next == 0x0A ? cursor + 1 : cursor
+            }
+        }
         var previous = ReixUnicode16Tables.graphemeBreak(first.value)
         var regionalCount = previous == .regionalIndicator ? 1 : 0
         var emojiState: EmojiJoinState = isExtendedPictograph(first.value) ? .pictograph : .none
@@ -130,6 +139,10 @@ public enum ReixTextLayout {
         byte: (Int) -> UInt8?
     ) -> UInt16? {
         guard offset >= 0, end > offset, end <= count else { return nil }
+        if end == offset + 1, let first = byte(offset) {
+            if first == 0x0A { return 0 }
+            if first >= 0x20 && first <= 0x7E { return 1 }
+        }
         var cursor = offset
         var width: UInt16 = 0
         var hasVisibleScalar = false
