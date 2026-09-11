@@ -470,6 +470,8 @@ public struct TypedShellRuntime {
             var output = ShellSequence()
             output.beginBatch()
             for index in 0..<sequence.count {
+                let checkpoint = arena.pointee.count
+                defer { arena.pointee.truncate(to: checkpoint) }
                 guard let object = sequence.value(at: index) else { continue }
                 guard bind(.record(object)) else { return .failure(.programLimit) }
                 switch evaluate(body, program, source, count, signatures, .record(object), nil, invoke) {
@@ -532,6 +534,8 @@ public struct TypedShellRuntime {
         }
         if name.equals("allSatisfy") {
             for index in 0..<sequence.count {
+                let checkpoint = arena.pointee.count
+                defer { arena.pointee.truncate(to: checkpoint) }
                 guard let object = sequence.value(at: index) else { continue }
                 guard bind(.record(object)) else { return .failure(.programLimit) }
                 switch evaluate(body, program, source, count, signatures, .record(object), nil, invoke) {
@@ -547,6 +551,8 @@ public struct TypedShellRuntime {
         }
         if name.equals("contains") {
             for index in 0..<sequence.count {
+                let checkpoint = arena.pointee.count
+                defer { arena.pointee.truncate(to: checkpoint) }
                 guard let object = sequence.value(at: index) else { continue }
                 guard bind(.record(object)) else { return .failure(.programLimit) }
                 switch evaluate(body, program, source, count, signatures, .record(object), nil, invoke) {
@@ -567,6 +573,8 @@ public struct TypedShellRuntime {
             while index < output.count {
                 var position = index
                 while position > 0, let current = output.value(at: position), let previous = output.value(at: position - 1) {
+                    let checkpoint = arena.pointee.count
+                    defer { arena.pointee.truncate(to: checkpoint) }
                     guard bind(.record(current)) else { return .failure(.programLimit) }
                     let order = evaluate(body, program, source, count, signatures, .record(current), .record(previous), invoke)
                     guard case .success(.boolean(let precedes)) = order else {

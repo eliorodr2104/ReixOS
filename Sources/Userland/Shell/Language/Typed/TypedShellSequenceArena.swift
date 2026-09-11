@@ -12,4 +12,12 @@ public struct TypedShellSequenceArena {
     var count     = 0
 
     public init() {}
+
+    /// Closure-local sequence results die after their consumer has copied the
+    /// records or read the predicate. Handles below the checkpoint stay live.
+    mutating func truncate(to checkpoint: Int) {
+        guard checkpoint >= 0, checkpoint <= count else { return }
+        for index in checkpoint..<count { sequences[index] = nil }
+        count = checkpoint
+    }
 }
