@@ -26,11 +26,18 @@ public enum ShellCompletionKind: UInt8, Equatable {
 /// outlives the reading it came from: a receiver's name is in the catalog, a
 /// binding's name is in the line, and a path's name will come from a disk.
 public struct ShellCompletion {
-    public static let nameCapacity = 32
+    /// One filesystem name fits whole; paths keep their already-written
+    /// parent in the line and replace only the final name.
+    public static let nameCapacity = 56
 
     public let kind : ShellCompletionKind
-    public private(set) var name  = InlineArray<32, UInt8>(repeating: 0)
+    public private(set) var name  = InlineArray<56, UInt8>(repeating: 0)
     public private(set) var count = 0
+
+    /// The part of the line this candidate replaces. Nil means the analyzer's
+    /// ordinary completion prefix. Dynamic providers use this for the leaf of
+    /// `folder/name`, so accepting a candidate cannot erase `folder/`.
+    public let replacement: Span?
 
     /// What to write after the name so the line reads as it should: `.` after
     /// a receiver, `: ` after a label, ` { }` after a method that takes a
@@ -63,7 +70,8 @@ public struct ShellCompletion {
         summary  : StaticString = "",
         sensitive: Bool = false,
         rank     : UInt8 = 1,
-        caret    : Int = 0
+        caret    : Int = 0,
+        replacement: Span? = nil
     ) {
         guard name.utf8CodeUnitCount > 0, name.utf8CodeUnitCount <= Self.nameCapacity else { return nil }
         self.kind = kind
@@ -73,6 +81,7 @@ public struct ShellCompletion {
         self.summary = summary
         self.sensitive = sensitive
         self.rank = rank
+        self.replacement = replacement
         for index in 0..<name.utf8CodeUnitCount { self.name[index] = name.utf8Start[index] }
         self.count = name.utf8CodeUnitCount
     }
@@ -87,7 +96,8 @@ public struct ShellCompletion {
         summary  : StaticString = "",
         sensitive: Bool = false,
         rank     : UInt8 = 1,
-        caret    : Int = 0
+        caret    : Int = 0,
+        replacement: Span? = nil
     ) {
         guard count > 0, count <= Self.nameCapacity else { return nil }
         self.kind = kind
@@ -97,12 +107,13 @@ public struct ShellCompletion {
         self.summary = summary
         self.sensitive = sensitive
         self.rank = rank
+        self.replacement = replacement
         for index in 0..<count { self.name[index] = bytes[index] }
         self.count = count
     }
 
     public func withName<Result>(_ body: (UnsafePointer<UInt8>, Int) -> Result) -> Result {
-        var storage = name
+        let storage = name
         return storage.span.withUnsafeBufferPointer { body($0.baseAddress!, count) }
     }
 }

@@ -10,10 +10,14 @@ import ReixABI
 /// One line of a panel: something named, what shape it is, and whether it
 /// deserves a mark.
 public struct ShellPanelRow {
-    public static let nameCapacity = 32
+    public static let nameCapacity = ShellCompletion.nameCapacity
 
-    public private(set) var name  = InlineArray<32, UInt8>(repeating: 0)
+    public private(set) var name  = InlineArray<56, UInt8>(repeating: 0)
     public private(set) var count = 0
+
+    /// The source range replaced when this row is accepted. Documentation
+    /// rows leave it nil; completion rows carry the candidate's range.
+    public let replacement: Span?
 
     /// The column beside the name: a type, a receiver, whatever the row is
     /// about. Never a sentence; the footer is where sentences go.
@@ -46,7 +50,8 @@ public struct ShellPanelRow {
         suffix   : StaticString = "",
         caret    : Int = 0,
         sensitive: Bool = false,
-        role     : ReixTextSurfaceStyleRole = .plain
+        role     : ReixTextSurfaceStyleRole = .plain,
+        replacement: Span? = nil
     ) {
         guard name.utf8CodeUnitCount > 0, name.utf8CodeUnitCount <= Self.nameCapacity else { return nil }
         self.detail = detail
@@ -55,6 +60,7 @@ public struct ShellPanelRow {
         self.caret = caret
         self.sensitive = sensitive
         self.role = role
+        self.replacement = replacement
         for index in 0..<name.utf8CodeUnitCount { self.name[index] = name.utf8Start[index] }
         self.count = name.utf8CodeUnitCount
     }
@@ -67,7 +73,8 @@ public struct ShellPanelRow {
         suffix   : StaticString = "",
         caret    : Int = 0,
         sensitive: Bool = false,
-        role     : ReixTextSurfaceStyleRole = .plain
+        role     : ReixTextSurfaceStyleRole = .plain,
+        replacement: Span? = nil
     ) {
         guard count > 0, count <= Self.nameCapacity else { return nil }
         self.detail = detail
@@ -76,12 +83,13 @@ public struct ShellPanelRow {
         self.caret = caret
         self.sensitive = sensitive
         self.role = role
+        self.replacement = replacement
         for index in 0..<count { self.name[index] = bytes[index] }
         self.count = count
     }
 
     public func withName<Result>(_ body: (UnsafePointer<UInt8>, Int) -> Result) -> Result {
-        var storage = name
+        let storage = name
         return storage.span.withUnsafeBufferPointer { body($0.baseAddress!, count) }
     }
 }

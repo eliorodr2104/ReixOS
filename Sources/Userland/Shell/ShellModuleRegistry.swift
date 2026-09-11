@@ -10,8 +10,9 @@ import ShellLanguage
 
 /// The modules built into one shell, recorded once for every consumer.
 ///
-/// Adding a module is one merge in `builtIn()`: its declarations enter the
-/// catalog and its handlers enter dispatch through the same entry.
+/// Adding a module is one merge in `builtIn()`. Its declarations enter the
+/// catalog, its handlers enter dispatch, and its live completion hook enters
+/// the editor through the same entry.
 struct ShellModuleRegistry {
     static let capacity = ShellCatalog.namespaceCapacity
 
@@ -21,6 +22,11 @@ struct ShellModuleRegistry {
         let value : (UInt16, inout ShellSession) -> TypedShellInvocationResult?
         let fill  : (inout Command, UInt16, Int) -> Bool
         let handle: (Command, inout ShellSession) -> ShellCommandResult
+        let complete: (
+            ShellModuleCompletionRequest,
+            inout ShellSession,
+            inout ShellCompletionSet
+        ) -> Void
     }
 
     private var entries = InlineArray<8, Entry?>(repeating: nil)
@@ -36,7 +42,10 @@ struct ShellModuleRegistry {
             count : Module.commandCount,
             value : { code, session in Module.value(for: code, in: &session) },
             fill  : { command, code, cursor in Module.fill(&command, for: code, at: cursor) },
-            handle: { command, session in Module.handleResult(command, in: &session) }
+            handle: { command, session in Module.handleResult(command, in: &session) },
+            complete: { request, session, offered in
+                Module.complete(request, in: &session, into: &offered)
+            }
         )
         count += 1
         return true

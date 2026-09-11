@@ -79,6 +79,50 @@ private enum Impostor: ShellCommandProvider {
     }
 }
 
+/// A module that arrives later with one live vocabulary. The registry test
+/// proves one merge wires both its declaration and its completion hook.
+private enum CompletingModule: ShellModule {
+    static var namespace: ShellNamespaceDescriptor {
+        ShellNamespaceDescriptor("future", summary: "a later module")
+    }
+    static var commandCount: Int { 1 }
+    static func command(at index: Int) -> ShellCommandDescriptor? {
+        ShellCommandDescriptor(
+            code     : 7,
+            verb     : "read",
+            signature: TypedShellSignature(
+                namespace: "future",
+                name     : "read",
+                TypedShellParameter("at", subject: .path, pathTarget: .file)
+            ),
+            summary  : "read what this module owns"
+        )
+    }
+    static func handle(_ command: Command, in session: inout ShellSession) -> ShellOutcome {
+        .notHandled
+    }
+    static func complete(
+        _ request: ShellModuleCompletionRequest,
+          in session: inout ShellSession,
+          into offered: inout ShellCompletionSet
+    ) {
+        guard request.code == 7,
+              request.parameter.subject == .path,
+              request.parameter.pathTarget == .file,
+              let prefix = session.bytes(of: request.context.prefix)
+        else { return }
+        let name: StaticString = "future.txt"
+        guard prefix.count <= name.utf8CodeUnitCount else { return }
+        for index in 0..<prefix.count where prefix.bytes[index] != name.utf8Start[index] { return }
+        guard let candidate = ShellCompletion(
+            kind: .path,
+            name: name,
+            replacement: request.context.prefix
+        ) else { return }
+        offered.insert(candidate)
+    }
+}
+
 /// Runs one source through the catalog the shell resolves against, recording
 /// what was invoked instead of carrying it out.
 ///
@@ -127,6 +171,37 @@ private func run(
         }
     }
     return outcome
+}
+
+private func testOneModuleRegistrationWiresLiveCompletion() {
+    var modules = ShellModuleRegistry()
+    require(modules.merge(CompletingModule.self), "the later module enters the registry")
+    let catalog = modules.catalog
+    var pipeline = ShellPipeline(
+        environment: Environment(console: nil, nameServer: nil, spawn: nil),
+        modules: modules
+    )
+    let source = Array("read fut".utf8)
+    source.withUnsafeBufferPointer { bytes in
+        let snapshot = ShellAnalyzer.analyze(
+            bytes.baseAddress!,
+            count   : bytes.count,
+            cursor  : bytes.count,
+            revision: 1,
+            catalog : catalog
+        )
+        var offered = ShellCompletionSet()
+        pipeline.complete(
+            for   : snapshot,
+            source: bytes.baseAddress!,
+            count : bytes.count,
+            into  : &offered
+        )
+        let name = offered.candidate(at: 0)?.withName { candidate, count in
+            String(decoding: UnsafeBufferPointer(start: candidate, count: count), as: UTF8.self)
+        }
+        require(name == "future.txt", "one merge wires a module's live completion")
+    }
 }
 
 /// Whether the shell's own parser, with the receivers it documented, accepts
@@ -640,7 +715,8 @@ testQuotesMayBeLeftOffOneWord()
 testReachingIntoValuesStillReads()
 testClosuresMayNameTheirElement()
 testWrittenArgumentsMayBeBareWords()
+testOneModuleRegistrationWiresLiveCompletion()
 
 // `print` would reach Reix's freestanding `putchar`, which has no console
 // here. The harness says how it went through the file descriptor instead.
-FileHandle.standardOutput.write(Data("ShellCatalogHarness: 20 checks passed\n".utf8))
+FileHandle.standardOutput.write(Data("ShellCatalogHarness: 21 checks passed\n".utf8))

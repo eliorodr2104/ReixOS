@@ -13,6 +13,15 @@ private func shellEditorMalloc(_ size: UInt) -> UnsafeMutableRawPointer?
 @_silgen_name("free")
 private func shellEditorFree(_ pointer: UnsafeMutableRawPointer?)
 
+/// Adds candidates that require live authority or state, synchronously, to the
+/// bounded static result. The pointers are borrowed only for this call.
+public typealias ShellDynamicCompleter = (
+    _ snapshot: ShellAnalysisSnapshot,
+    _ source  : UnsafePointer<UInt8>,
+    _ count   : Int,
+    _ offered : inout ShellCompletionSet
+) -> Void
+
 /// A bounded multiline editor whose gap is always the insertion point.
 public struct ShellLineEditor: ~Copyable {
     public static let prompt: StaticString = "reix❯ "
@@ -128,6 +137,13 @@ public struct ShellLineEditor: ~Copyable {
     public var isPanelOpen: Bool { panel != nil }
 
     public mutating func apply(_ event: ReixInputRecord) -> ShellEditorUpdate {
+        apply(event, completingWith: Self.completeNothing)
+    }
+
+    public mutating func apply(
+        _ event: ReixInputRecord,
+          completingWith dynamic: ShellDynamicCompleter
+    ) -> ShellEditorUpdate {
         pendingSequence = event.sequence
         if pasteActive { return applyPaste(event) }
         if event.kind == .resize { return resize(event) }
@@ -146,7 +162,7 @@ public struct ShellLineEditor: ~Copyable {
             guard repeatable(intent) else { return refused() }
             return applyRepeated(intent, count: max(1, Int(event.repeatCount)))
         }
-        return apply(intent)
+        return apply(intent, completingWith: dynamic)
     }
 
     @inline(__always)
@@ -182,6 +198,13 @@ public struct ShellLineEditor: ~Copyable {
     /// resolves, so nothing is a receiver or a verb, which is the truth about
     /// a language nobody documented.
     public mutating func withFrame(_ body: (ShellEditorFrameSource) -> Bool) -> Bool {
+        withFrame(completingWith: Self.completeNothing, body)
+    }
+
+    public mutating func withFrame(
+        completingWith dynamic: ShellDynamicCompleter,
+        _ body: (ShellEditorFrameSource) -> Bool
+    ) -> Bool {
         guard let pending else { return true }
         guard let cursorPosition = framePosition(at: cursor) else { return false }
         let endPosition: ReixTextLayout.Position
@@ -216,8 +239,8 @@ public struct ShellLineEditor: ~Copyable {
         }
         let snapshot = analysis()
         appendInputSpans(snapshot, selection: selection, spans: &spans, count: &spanCount)
-        let ghost      = suggestion(for: snapshot)
-        let ghostTyped = Int(snapshot.context.count)
+        let ghost      = suggestion(for: snapshot, completingWith: dynamic)
+        let ghostTyped = ghost?.replacement.count ?? 0
 
         // The panel takes the rows the input is not using, and none of the
         // ones it is.
@@ -246,7 +269,7 @@ public struct ShellLineEditor: ~Copyable {
                 } else if let ghost, cursorPosition.column < columns {
                     // The grey word sits where the cursor is, on the row the
                     // cursor is on, and takes no row of its own.
-                    geometry = ghost.withName { bytes, length in
+                    geometry = ghost.candidate.withName { bytes, length in
                         ShellPanelPainter.ghost(
                             bytes.advanced(by: ghostTyped),
                             count: length - ghostTyped,
@@ -446,7 +469,10 @@ public struct ShellLineEditor: ~Copyable {
         return update(.editing, true)
     }
 
-    private mutating func apply(_ intent: ShellEditorIntent) -> ShellEditorUpdate {
+    private mutating func apply(
+        _ intent: ShellEditorIntent,
+          completingWith dynamic: ShellDynamicCompleter
+    ) -> ShellEditorUpdate {
         // While the box is open the keys that move a selection belong to it,
         // and nothing they do reaches the line.
         if panel != nil {
@@ -521,14 +547,18 @@ public struct ShellLineEditor: ~Copyable {
             case .eof:
                 return count == 0 ? update(.eof, false) : refused()
             case .complete, .completePrevious:
-                // A Tab with nothing but blanks behind it on its line is an
-                // indent, in a sheet. Anywhere else it answers what is on the
-                // screen: the grey word if there is one, the box if not.
-                if codeEditing, atLineIndent() {
+                // Completion owns Tab in editor mode too. At indentation it
+                // first answers the semantic context carried across the
+                // newline. A fresh top-level line remains ordinary code
+                // indentation even though the global catalog is non-empty.
+                let snapshot = analysis()
+                if codeEditing, atLineIndent(), snapshot.context.subject == .receiverOrCommand {
                     return insertIndent() ? update(.editing, true) : refused()
                 }
-                if intent == .complete, acceptSuggestion() { return update(.editing, true) }
-                if openPanel() { return update(.editing, true) }
+                if intent == .complete, acceptSuggestion(for: snapshot, completingWith: dynamic) {
+                    return update(.editing, true)
+                }
+                if openPanel(for: snapshot, completingWith: dynamic) { return update(.editing, true) }
                 return codeEditing && insertIndent() ? update(.editing, true) : refused()
             default:
                 break
@@ -1328,18 +1358,11 @@ public struct ShellLineEditor: ~Copyable {
     ///
     /// Nothing to offer is not a failure of the box; it is an answer, and the
     /// caller decides what to do with a Tab that has nothing to complete.
-    private mutating func openPanel() -> Bool {
-        let snapshot = analysis()
-        let offered  = withUnsafePointer(to: catalog) { table in
-            withBytes { source, length in
-                ShellCompletionEngine.complete(
-                    for    : snapshot,
-                    source : source,
-                    count  : length,
-                    catalog: table.pointee
-                )
-            }
-        }
+    private mutating func openPanel(
+        for snapshot: ShellAnalysisSnapshot,
+        completingWith dynamic: ShellDynamicCompleter
+    ) -> Bool {
+        let offered  = completions(for: snapshot, completingWith: dynamic)
         guard offered.count > 0 else { return false }
         panelPrefix = snapshot.context.prefix
         panel = ShellPanel.candidates(offered, title: Self.title(for: snapshot.context.subject))
@@ -1352,34 +1375,33 @@ public struct ShellLineEditor: ~Copyable {
     /// Only at the end of the line, only with something typed to extend, and
     /// only from what is documented: this is the static side, so it never
     /// asks a disk anything and never survives a keystroke.
-    private mutating func suggestion(for snapshot: ShellAnalysisSnapshot) -> ShellCompletion? {
+    private mutating func suggestion(
+        for snapshot: ShellAnalysisSnapshot,
+        completingWith dynamic: ShellDynamicCompleter
+    ) -> (candidate: ShellCompletion, replacement: Span)? {
         guard panel == nil, cursor == count else { return nil }
-        let typed = Int(snapshot.context.count)
-        guard typed > 0 else { return nil }
-        let offered = withUnsafePointer(to: catalog) { table in
-            withBytes { source, length in
-                ShellCompletionEngine.complete(
-                    for    : snapshot,
-                    source : source,
-                    count  : length,
-                    catalog: table.pointee
-                )
-            }
-        }
-        guard let best = offered.candidate(at: 0), best.count > typed else { return nil }
-        return best
-    }
-
-    private mutating func suggestion() -> ShellCompletion? {
-        let snapshot = analysis()
-        return suggestion(for: snapshot)
+        let offered = completions(for: snapshot, completingWith: dynamic)
+        guard let best = offered.candidate(at: 0) else { return nil }
+        let replacement = best.replacement ?? snapshot.context.prefix
+        guard replacement.isInside(count),
+              replacement.start + replacement.count == cursor,
+              (replacement.count > 0 || best.kind == .path),
+              best.count > replacement.count
+        else { return nil }
+        return (best, replacement)
     }
 
     /// Writes the rest of what was suggested, and whatever follows it.
-    private mutating func acceptSuggestion() -> Bool {
-        guard let best = suggestion() else { return false }
-        let typed = Int(analysis().context.count)
-        guard best.count > typed else { return false }
+    private mutating func acceptSuggestion(
+        for snapshot: ShellAnalysisSnapshot,
+        completingWith dynamic: ShellDynamicCompleter
+    ) -> Bool {
+        guard let suggestion = suggestion(for: snapshot, completingWith: dynamic) else { return false }
+        let best  = suggestion.candidate
+        let typed = suggestion.replacement.count
+        // With no leaf yet, grey text is a preview and Tab opens the choice
+        // box instead of silently picking its first row.
+        guard typed > 0 else { return false }
         var written = best.withName { bytes, length in
             insertRun(bytes.advanced(by: typed), length - typed)
         }
@@ -1419,8 +1441,12 @@ public struct ShellLineEditor: ~Copyable {
             closePanel()
             return false
         }
-        let start = panelPrefix.start
-        guard start >= 0, start <= cursor, cursor <= count else {
+        let replacement = candidate.replacement ?? panelPrefix
+        let start = replacement.start
+        guard replacement.isInside(count),
+              replacement.start + replacement.count == cursor,
+              start >= 0, start <= cursor, cursor <= count
+        else {
             closePanel()
             return false
         }
@@ -1499,6 +1525,34 @@ public struct ShellLineEditor: ~Copyable {
             }
         }
     }
+
+    /// Static and live candidates share one bounded set and one ordering.
+    /// The live provider is called only when completion is actually painted or
+    /// accepted, never for ordinary cursor or panel movement.
+    private mutating func completions(
+        for snapshot: ShellAnalysisSnapshot,
+        completingWith dynamic: ShellDynamicCompleter
+    ) -> ShellCompletionSet {
+        withUnsafePointer(to: catalog) { table in
+            withBytes { source, length in
+                var offered = ShellCompletionEngine.complete(
+                    for    : snapshot,
+                    source : source,
+                    count  : length,
+                    catalog: table.pointee
+                )
+                dynamic(snapshot, source, length, &offered)
+                return offered
+            }
+        }
+    }
+
+    private static func completeNothing(
+        _ snapshot: ShellAnalysisSnapshot,
+        _ source  : UnsafePointer<UInt8>,
+        _ count   : Int,
+        _ offered : inout ShellCompletionSet
+    ) {}
 
     /// Turns what the line means into what the frame carries.
     ///

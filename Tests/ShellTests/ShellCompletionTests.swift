@@ -28,7 +28,7 @@ private enum CompletionFiles: ShellCommandProvider {
                 return ShellCommandDescriptor(
                     code     : 1,
                     verb     : "move",
-                    signature: TypedShellSignature(namespace: "fileSystem", name: "changeDir", TypedShellParameter("at")),
+                    signature: TypedShellSignature(namespace: "fileSystem", name: "changeDir", TypedShellParameter("at", subject: .path, pathTarget: .place)),
                     summary  : "change this session's directory"
                 )
             case 2:
@@ -284,6 +284,32 @@ struct ShellCompletionTests {
         #expect(detail(of: "lowercased", in: "\"hello\".") == "() -> String")
     }
 
+    @Test("A member site cannot be polluted by literals or module candidates")
+    func memberKindFence() {
+        for source in [
+            "let value = \"hello\", value.",
+            "let value = 42, value.",
+            "let value = true, value.",
+            "list.",
+            "list.first.",
+            "list.filter { $0."
+        ] {
+            let result = offered(source)
+            #expect(!result.names.contains("true"), "\(source) must remain a typed member query")
+            #expect(!result.names.contains("false"), "\(source) must remain a typed member query")
+            #expect(result.kinds.allSatisfy { $0 == .member || $0 == .method })
+        }
+
+        // The same fence is retained when a module receives the set and adds
+        // live candidates. This is the generic boundary future modules use.
+        var moduleSet = ShellCompletionSet(subject: .member)
+        moduleSet.insert(ShellCompletion(kind: .keyword, name: "true")!)
+        moduleSet.insert(ShellCompletion(kind: .path, name: "memo.txt")!)
+        moduleSet.insert(ShellCompletion(kind: .method, name: "uppercased")!)
+        #expect(moduleSet.count == 1)
+        #expect(moduleSet.candidate(at: 0)?.kind == .method)
+    }
+
     @Test("The order does not depend on the weather")
     func rankingIsDeterministic() {
         let first  = offered("fileSystem.")
@@ -309,6 +335,13 @@ struct ShellCompletionTests {
         #expect(set.count == ShellCompletionSet.capacity)
         #expect(set.matched == ShellCompletionSet.capacity + 4)
         #expect(set.truncated)
+
+        var boundedLive = ShellCompletionSet()
+        boundedLive.insert(ShellCompletion(kind: .path, name: "one")!)
+        boundedLive.markIncomplete()
+        #expect(boundedLive.matched == 1, "unknown live rows are not invented as matches")
+        #expect(boundedLive.omitted == 1, "the popup still says at least one row was not scanned")
+        #expect(boundedLive.truncated)
     }
 
     @Test("A parameter that names something is offered that something")

@@ -56,9 +56,13 @@ public func main() {
 
     while engine.reading {
         // A refused frame is the adapter asking for a resend.
-        if !editor.withFrame({ terminal.present($0) }) {
+        if !editor.withFrame(completingWith: { snapshot, source, count, offered in
+            pipeline.complete(for: snapshot, source: source, count: count, into: &offered)
+        }, { terminal.present($0) }) {
             if terminal.needsEditorSnapshot { editor.requireSnapshot() }
-            if !editor.withFrame({ terminal.present($0) }), !terminal.isUsable {
+            if !editor.withFrame(completingWith: { snapshot, source, count, offered in
+                pipeline.complete(for: snapshot, source: source, count: count, into: &offered)
+            }, { terminal.present($0) }), !terminal.isUsable {
                 exit(code: 1)
             }
         }
@@ -79,7 +83,9 @@ public func main() {
             )
 #endif
 
-            let update = editor.apply(event)
+            let update = editor.apply(event, completingWith: { snapshot, source, count, offered in
+                pipeline.complete(for: snapshot, source: source, count: count, into: &offered)
+            })
 
 #if REIX_TERMINAL_PROFILE
             interactionMark(
@@ -89,9 +95,13 @@ public func main() {
                 authority  : profileMarker
             )
 #endif
-            if update.requiresPresentation, !editor.withFrame({ terminal.present($0) }) {
+            if update.requiresPresentation, !editor.withFrame(completingWith: { snapshot, source, count, offered in
+                pipeline.complete(for: snapshot, source: source, count: count, into: &offered)
+            }, { terminal.present($0) }) {
                 if terminal.needsEditorSnapshot { editor.requireSnapshot() }
-                if !editor.withFrame({ terminal.present($0) }), !terminal.isUsable {
+                if !editor.withFrame(completingWith: { snapshot, source, count, offered in
+                    pipeline.complete(for: snapshot, source: source, count: count, into: &offered)
+                }, { terminal.present($0) }), !terminal.isUsable {
                     break input
                 }
             }

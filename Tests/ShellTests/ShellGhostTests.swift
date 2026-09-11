@@ -30,7 +30,7 @@ private enum GhostFiles: ShellCommandProvider {
     static var namespace: ShellNamespaceDescriptor {
         ShellNamespaceDescriptor("fileSystem", summary: "a container")
     }
-    static var commandCount: Int { 2 }
+    static var commandCount: Int { 3 }
     static func command(at index: Int) -> ShellCommandDescriptor? {
         switch index {
             case 0:
@@ -42,10 +42,22 @@ private enum GhostFiles: ShellCommandProvider {
                     summary  : "what is here"
                 )
             default:
+                if index == 2 {
+                    return ShellCommandDescriptor(
+                        code     : 2,
+                        verb     : "read",
+                        signature: TypedShellSignature(
+                            namespace: "fileSystem",
+                            name     : "read",
+                            TypedShellParameter("at", subject: .path, pathTarget: .file)
+                        ),
+                        summary  : "read a file"
+                    )
+                }
                 return ShellCommandDescriptor(
                     code     : 1,
                     verb     : "move",
-                    signature: TypedShellSignature(namespace: "fileSystem", name: "changeDir", TypedShellParameter("at")),
+                    signature: TypedShellSignature(namespace: "fileSystem", name: "changeDir", TypedShellParameter("at", subject: .path, pathTarget: .place)),
                     summary  : "change this session's directory"
                 )
         }
@@ -78,11 +90,33 @@ private func tab(
     into editor: inout ShellLineEditor,
     sequence: inout UInt32
 ) -> ShellEditorUpdate {
+    tab(into: &editor, sequence: &sequence, completingWith: noDynamicCompletion)
+}
+
+private func tab(
+    into editor: inout ShellLineEditor,
+    sequence: inout UInt32,
+    completingWith dynamic: ShellDynamicCompleter
+) -> ShellEditorUpdate {
     let record = ReixInputRecord(
         kind       : .key,
         sequence   : sequence,
         logicalKey : .tab,
         physicalKey: 0x8000 | ReixInputKey.tab.rawValue
+    )!
+    sequence += 1
+    return editor.apply(record, completingWith: dynamic)
+}
+
+private func enter(
+    into editor: inout ShellLineEditor,
+    sequence: inout UInt32
+) -> ShellEditorUpdate {
+    let record = ReixInputRecord(
+        kind       : .key,
+        sequence   : sequence,
+        logicalKey : .enter,
+        physicalKey: 0x8000 | ReixInputKey.enter.rawValue
     )!
     sequence += 1
     return editor.apply(record)
@@ -96,15 +130,63 @@ private func line(_ editor: inout ShellLineEditor) -> String {
 
 /// What is drawn beside the line without being in it.
 private func ghost(_ editor: inout ShellLineEditor) -> (text: String, role: ReixTextSurfaceStyleRole?) {
+    ghost(&editor, completingWith: noDynamicCompletion)
+}
+
+private func ghost(
+    _ editor: inout ShellLineEditor,
+    completingWith dynamic: ShellDynamicCompleter
+) -> (text: String, role: ReixTextSurfaceStyleRole?) {
     var text = ""
     var role : ReixTextSurfaceStyleRole?
-    _ = editor.withFrame { source in
+    _ = editor.withFrame(completingWith: dynamic) { source in
         guard let overlay = source.overlay, source.overlayLength > 0 else { return true }
         text = String(decoding: UnsafeBufferPointer(start: overlay, count: source.overlayLength), as: UTF8.self)
         if source.overlayStyleCount > 0 { role = source.overlayStyles![0].role }
         return true
     }
     return (text, role)
+}
+
+private func noDynamicCompletion(
+    _ snapshot: ShellAnalysisSnapshot,
+    _ source: UnsafePointer<UInt8>,
+    _ count: Int,
+    _ offered: inout ShellCompletionSet
+) {}
+
+/// A deterministic live provider: the editor owns matching and replacement,
+/// while a real module obtains these names through its capability.
+private func pathCompletion(
+    _ snapshot: ShellAnalysisSnapshot,
+    _ source: UnsafePointer<UInt8>,
+    _ count: Int,
+    _ offered: inout ShellCompletionSet
+) {
+    let prefix = snapshot.context.prefix
+    guard snapshot.context.subject == .value, prefix.isInside(count) else { return }
+    var leaf = prefix.start
+    for index in 0..<prefix.count where source[prefix.start + index] == 0x2F {
+        leaf = prefix.start + index + 1
+    }
+    let replacement = Span(start: leaf, count: prefix.start + prefix.count - leaf)
+    let names: [StaticString] = ["docs", "memo.txt"]
+    for name in names {
+        guard replacement.count <= name.utf8CodeUnitCount else { continue }
+        var matches = true
+        for index in 0..<replacement.count where source[replacement.start + index] != name.utf8Start[index] {
+            matches = false
+        }
+        guard matches, let candidate = ShellCompletion(
+            kind   : .path,
+            name   : name,
+            detail : "Path",
+            summary: "from a live provider",
+            rank   : 0,
+            replacement: replacement
+        ) else { continue }
+        offered.insert(candidate)
+    }
 }
 
 @Suite("Shell ghost text")
@@ -187,6 +269,19 @@ struct ShellGhostTests {
         #expect(ghost(&named).text == "ainer")
     }
 
+    @Test("The grey word keeps closure types across editor-mode newlines")
+    func ghostsInsideEditorMode() {
+        var sequence: UInt32 = 1
+        var subject = editor()
+        type("list.filter {", into: &subject, sequence: &sequence)
+        #expect(enter(into: &subject, sequence: &sequence).action == .editing)
+        type("$0.isFol", into: &subject, sequence: &sequence)
+
+        #expect(ghost(&subject).text == "der")
+        _ = tab(into: &subject, sequence: &sequence)
+        #expect(line(&subject).hasSuffix("$0.isFolder"))
+    }
+
     @Test("Nothing typed, nothing suggested")
     func silenceOnAnEmptyLine() {
         var sequence: UInt32 = 1
@@ -206,5 +301,31 @@ struct ShellGhostTests {
 
         _ = tab(into: &subject, sequence: &sequence)
         #expect(line(&subject) == "fileSystem.changeDir")
+    }
+
+    @Test("Live paths ghost, preserve their parent, and are accepted by Tab")
+    func dynamicPaths() {
+        var sequence: UInt32 = 1
+        var subject = editor()
+        type("read docs/me", into: &subject, sequence: &sequence)
+
+        let shown = ghost(&subject, completingWith: pathCompletion)
+        #expect(shown.text == "mo.txt")
+        #expect(shown.role == .ghost)
+
+        _ = tab(into: &subject, sequence: &sequence, completingWith: pathCompletion)
+        #expect(line(&subject) == "read docs/memo.txt")
+    }
+
+    @Test("Live paths fill the same popup when there is no ghost prefix")
+    func dynamicPathPanel() {
+        var sequence: UInt32 = 1
+        var subject = editor()
+        type("changeDir ", into: &subject, sequence: &sequence)
+
+        #expect(ghost(&subject, completingWith: pathCompletion).text == "docs")
+        _ = tab(into: &subject, sequence: &sequence, completingWith: pathCompletion)
+        let opened = subject.isPanelOpen
+        #expect(opened)
     }
 }

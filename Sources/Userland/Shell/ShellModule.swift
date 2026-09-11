@@ -9,6 +9,27 @@ import Reix
 import ReixABI
 import ShellLanguage
 
+/// The language-level reason a module is being asked for live candidates.
+///
+/// `code` is the module's own command identity and `parameter` is the same
+/// declaration the analyzer used for highlighting. A module implements one
+/// policy for a kind of parameter; it does not repeat a list of command names.
+public struct ShellModuleCompletionRequest {
+    public let code     : UInt16
+    public let parameter: TypedShellParameter
+    public let context  : ShellCompletionContext
+
+    public init(
+        code     : UInt16,
+        parameter: TypedShellParameter,
+        context  : ShellCompletionContext
+    ) {
+        self.code = code
+        self.parameter = parameter
+        self.context = context
+    }
+}
+
 /// One receiver of the shell's language, and everything it can be asked.
 ///
 /// The shape a program will conform to when the shell starts answering
@@ -58,6 +79,18 @@ public protocol ShellModule: ShellCommandProvider {
           for code: UInt16,
           at cursor: Int
     ) -> Bool
+
+    /// Adds live candidates for one declared parameter.
+    ///
+    /// Completion is observational: the session is a disposable snapshot of
+    /// the shell's place, and the pipeline never writes changes to it back.
+    /// Implementations must remain bounded and must use only authority carried
+    /// by that session. Modules with no live vocabulary inherit the no-op.
+    static func complete(
+        _ request: ShellModuleCompletionRequest,
+          in session: inout ShellSession,
+          into offered: inout ShellCompletionSet
+    )
 }
 
 
@@ -79,4 +112,10 @@ public extension ShellModule {
           for code: UInt16,
           at cursor: Int
     ) -> Bool { true }
+
+    static func complete(
+        _ request: ShellModuleCompletionRequest,
+          in session: inout ShellSession,
+          into offered: inout ShellCompletionSet
+    ) {}
 }

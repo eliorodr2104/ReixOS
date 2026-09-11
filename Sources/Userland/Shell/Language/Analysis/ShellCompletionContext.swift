@@ -27,6 +27,35 @@ public enum ShellCompletionSubject: UInt8, Equatable {
     /// An argument's value. What it may be is in `expected`, and a path is
     /// what the dynamic providers answer to.
     case value
+
+    /// Whether one candidate category can ever be written at this site.
+    ///
+    /// Static completion and module-owned live completion both feed the same
+    /// bounded set. Keeping the gate on the subject means a provider cannot
+    /// accidentally put a path, literal, or command in a member popup merely
+    /// because it was handed that set.
+    public func accepts(_ kind: ShellCompletionKind) -> Bool {
+        switch self {
+            case .none:
+                return false
+            case .receiverOrCommand:
+                return kind == .namespace || kind == .command || kind == .variable
+                    || kind == .keyword
+            case .command:
+                return kind == .command
+            case .label:
+                return kind == .label
+            case .member:
+                return kind == .member || kind == .method
+            case .value:
+                // Scoped expressions such as `$0.name` retain the role of
+                // their final member, while symbol-valued parameters may ask
+                // for names from the catalog.
+                return kind == .variable || kind == .keyword || kind == .operatorSymbol
+                    || kind == .path || kind == .namespace || kind == .command
+                    || kind == .member || kind == .method
+        }
+    }
 }
 
 /// Everything a completer needs, decided once, where the language was read.

@@ -30,7 +30,7 @@ private enum FilesProvider: ShellCommandProvider {
                 return ShellCommandDescriptor(
                     code     : 1,
                     verb     : "move",
-                    signature: TypedShellSignature(namespace: "fileSystem", name: "changeDir", TypedShellParameter("at")),
+                    signature: TypedShellSignature(namespace: "fileSystem", name: "changeDir", TypedShellParameter("at", subject: .path, pathTarget: .place)),
                     summary  : "change this session's directory"
                 )
             case 2:
@@ -117,7 +117,7 @@ struct ShellAnalyzerTests {
         #expect(role(snapshot, source, of: "fileSystem") == .namespace)
         #expect(role(snapshot, source, of: "changeDir") == .command)
         #expect(role(snapshot, source, of: "at") == .label)
-        #expect(role(snapshot, source, of: "\"vault\"") == .text)
+        #expect(role(snapshot, source, of: "\"vault\"") == .path)
         #expect(diagnostics(snapshot).isEmpty)
     }
 
@@ -126,7 +126,7 @@ struct ShellAnalyzerTests {
         let source   = "changeDir vault"
         let snapshot = analyze(source)
         #expect(role(snapshot, source, of: "changeDir") == .command)
-        #expect(role(snapshot, source, of: "vault") == .plain)
+        #expect(role(snapshot, source, of: "vault") == .path)
         #expect(diagnostics(snapshot).isEmpty)
     }
 
@@ -312,6 +312,18 @@ struct ShellAnalyzerTests {
         let atArgument = analyze("changeDir vault", cursor: 13)
         #expect(atArgument.context.subject == .value)
         #expect(atArgument.context.count == 5)
+    }
+
+    @Test("A signature that names a path also colours its plain spelling as a path")
+    func pathParameters() {
+        let source   = "changeDir vault"
+        let snapshot = analyze(source)
+        #expect(role(snapshot, source, of: "vault") == .path)
+
+        let quoted = "changeDir \"vault"
+        let unfinished = analyze(quoted)
+        #expect(role(unfinished, quoted, of: "\"vault") == .path)
+        #expect(diagnostics(unfinished).count == 1)
     }
 
     @Test("A snapshot says which revision it is about")

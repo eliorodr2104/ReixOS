@@ -176,6 +176,38 @@ struct ShellPipeline {
         return result
     }
 
+    /// Lets the module that owns the current command add live candidates.
+    /// The session is deliberately not written back: looking at a popup cannot
+    /// move the shell or otherwise become a command.
+    mutating func complete(
+        for snapshot: ShellAnalysisSnapshot,
+        source      : UnsafePointer<UInt8>,
+        count       : Int,
+        into offered: inout ShellCompletionSet
+    ) {
+        let context = snapshot.context
+        guard context.subject == .value,
+              let descriptor = modules.catalog.command(at: context.command),
+              let parameter = modules.catalog.parameter(for: context),
+              let module = modules.entry(for: context.command)
+        else { return }
+
+        let request = ShellModuleCompletionRequest(
+            code     : descriptor.code,
+            parameter: parameter,
+            context  : context
+        )
+        var session = ShellSession(
+            environment: environment,
+            line       : source,
+            count      : count,
+            catalog    : modules.catalog
+        )
+        session.container = container
+        session.folder = folder
+        module.complete(request, &session, &offered)
+    }
+
     mutating func present(_ value: ShellValue) -> Bool {
         switch value {
             case .void: return true

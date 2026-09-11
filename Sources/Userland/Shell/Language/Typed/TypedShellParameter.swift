@@ -23,10 +23,23 @@ public enum ShellParameterSubject: UInt8, Equatable {
     case path
 }
 
+/// What may complete a path parameter.
+///
+/// The distinction belongs to the signature rather than to the completer: a
+/// reader names bytes, while changing directory names a place. A module can
+/// therefore add another path-taking command without adding its name to the
+/// editor or to a completion switch.
+public enum ShellPathTarget: UInt8, Equatable {
+    case anything
+    case file
+    case place
+}
+
 public struct TypedShellParameter {
     public let label        : StaticString
     public let type         : ShellValueType
     public let subject      : ShellParameterSubject
+    public let pathTarget   : ShellPathTarget
     public let required     : Bool
     public let requiresLabel: Bool
 
@@ -34,12 +47,14 @@ public struct TypedShellParameter {
         _ label        : StaticString,
           type         : ShellValueType = .text,
           subject      : ShellParameterSubject = .value,
+          pathTarget   : ShellPathTarget = .anything,
           required     : Bool = true,
           requiresLabel: Bool = false
     ) {
         self.label = label
         self.type = type
         self.subject = subject
+        self.pathTarget = pathTarget
         self.required = required
         self.requiresLabel = requiresLabel
     }

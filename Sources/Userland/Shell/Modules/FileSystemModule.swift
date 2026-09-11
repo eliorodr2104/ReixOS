@@ -43,7 +43,7 @@ public enum FileSystemModule: ShellModule {
                 return descriptor(declared, "where", TypedShellSignature(namespace: "FileManager", name: "currentDirectory", effect: .session),
                                   summary: "say where this shell is standing")
             case .changeDir:
-                return descriptor(declared, "move", TypedShellSignature(namespace: "FileManager", name: "changeDir", TypedShellParameter("at", subject: .path), effect: .session),
+                return descriptor(declared, "move", TypedShellSignature(namespace: "FileManager", name: "changeDir", TypedShellParameter("at", subject: .path, pathTarget: .place), effect: .session),
                                   summary: "change this session's directory")
             case .move:
                 return descriptor(declared, "rename", TypedShellSignature(namespace: "FileManager", name: "move", TypedShellParameter("from", subject: .path), TypedShellParameter("to", subject: .path)),
@@ -55,7 +55,7 @@ public enum FileSystemModule: ShellModule {
                 return descriptor(declared, "info", TypedShellSignature(namespace: "FileManager", name: "info", TypedShellParameter("at", subject: .path)),
                                   summary: "what something is, and when")
             case .read:
-                return descriptor(declared, "read", TypedShellSignature(namespace: "FileManager", name: "read", TypedShellParameter("at", subject: .path)),
+                return descriptor(declared, "read", TypedShellSignature(namespace: "FileManager", name: "read", TypedShellParameter("at", subject: .path, pathTarget: .file)),
                                   summary: "the first bytes of a file")
             case .write:
                 return descriptor(declared, "write", TypedShellSignature(namespace: "FileManager", name: "write", TypedShellParameter("at", subject: .path), TypedShellParameter("text")),
@@ -79,7 +79,7 @@ public enum FileSystemModule: ShellModule {
                 return descriptor(declared, "unmount", TypedShellSignature(namespace: "FileManager", name: "unmount"),
                                   sensitive: true, summary: "mark the disk clean before stopping")
             case .compact:
-                return descriptor(declared, "compact", TypedShellSignature(namespace: "FileManager", name: "compact", TypedShellParameter("at", subject: .path)),
+                return descriptor(declared, "compact", TypedShellSignature(namespace: "FileManager", name: "compact", TypedShellParameter("at", subject: .path, pathTarget: .file)),
                                   summary: "put a scattered file back in one piece")
             case .scrub:
                 return descriptor(declared, "scrub", TypedShellSignature(namespace: "FileManager", name: "scrub"),
@@ -111,6 +111,24 @@ public enum FileSystemModule: ShellModule {
         command.arguments[command.argumentCount] = Span(start: cursor, count: 0)
         command.argumentCount += 1
         return true
+    }
+
+    /// Every path-taking command reaches this one live vocabulary. The
+    /// signature decides whether files or places fit; command spellings never
+    /// appear here, so a newly declared path parameter is completed at once.
+    public static func complete(
+        _ request: ShellModuleCompletionRequest,
+          in session: inout ShellSession,
+          into offered: inout ShellCompletionSet
+    ) {
+        guard request.parameter.subject == .path,
+              let files = Files.attached(session.environment)
+        else { return }
+        if session.folder == 0 {
+            session.container = files.root
+            session.folder = files.root
+        }
+        completePath(request, in: &session, files: files, into: &offered)
     }
 
     private static func descriptor(
@@ -724,6 +742,220 @@ private func showPlace(
 /// names is one round trip where it used to be thirty-two. Bigger buys less and
 /// less: the cost that mattered was per-call, not per-entry.
 private let listBatchSize = 32
+
+/// A completion remains interactive even when a hostile or damaged service
+/// never reaches the end of a listing. The list itself still has top-K bounds;
+/// this is the independent bound on service work per request.
+private let completionEntryLimit = FSListEntry.batchLimit
+
+private func completePath(
+    _ request: ShellModuleCompletionRequest,
+      in session: inout ShellSession,
+      files: FileSystemClient,
+      into offered: inout ShellCompletionSet
+) {
+    let whole = request.context.prefix
+    guard let written = session.bytes(of: whole) else { return }
+
+    // A quoted path lends only its contents to PathParser. When the quote is
+    // still open, accepting a candidate closes it; a settled quoted value is
+    // already complete and has no leaf at the cursor to extend.
+    var path = whole
+    var closing: StaticString = ""
+    if written.count > 0, written.bytes[0] == 0x22 {
+        if written.count > 1, written.bytes[written.count - 1] == 0x22 { return }
+        path = Span(start: whole.start + 1, count: whole.count - 1)
+        closing = "\""
+    }
+    guard let typed = session.bytes(of: path) else { return }
+
+    var leafOffset = 0
+    var baseCount  = 0
+    var index      = 0
+    while index < typed.count {
+        switch typed.bytes[index] {
+            case 0x2F:
+                leafOffset = index + 1
+                baseCount = index
+            case 0x3A:
+                guard index + 1 < typed.count, typed.bytes[index + 1] == 0x3A else { return }
+                leafOffset = index + 2
+                // A trailing `::` is meaningful to PathParser; keep it in the
+                // place being resolved, unlike a trailing slash.
+                baseCount = index + 2
+                index += 1
+            default:
+                break
+        }
+        index += 1
+    }
+
+    let here: Place
+    if leafOffset == 0 {
+        here = Place(container: session.container, folder: session.folder)
+    } else {
+        let base = Span(start: path.start, count: baseCount)
+        guard let resolved = completionPlace(base, session, files) else { return }
+        here = resolved
+    }
+
+    let leaf = Span(
+        start: path.start + leafOffset,
+        count: typed.count - leafOffset
+    )
+    let prefix = typed.bytes.advanced(by: leafOffset)
+    let prefixCount = typed.count - leafOffset
+
+    if request.parameter.pathTarget == .place, files.up(from: here.folder) != nil {
+        let parent : StaticString = ".."
+        offerPath(
+            parent.utf8Start,
+            count: 2,
+            kind: .folder,
+            prefix: prefix,
+            prefixCount: prefixCount,
+            replacement: leaf,
+            target: request.parameter.pathTarget,
+            suffix: closing,
+            into: &offered
+        )
+    }
+
+    withUnsafeTemporaryAllocation(of: UInt8.self, capacity: listBatchSize * FSListEntry.width) { room in
+        let base = UnsafeMutableRawPointer(room.baseAddress!)
+        var cursor = UInt32(0)
+        var seen   = 0
+        while seen < completionEntryLimit {
+            let capacity = min(listBatchSize, completionEntryLimit - seen)
+            let batch = files.listBatch(here.folder, from: cursor, into: base, capacity: capacity)
+            let found: Int
+            let finished: Bool
+            switch batch.step {
+                case .more(let count): found = count; finished = false
+                case .end(let count): found = count; finished = true
+                case .stopped(let count, _): found = count; finished = true
+            }
+            for offset in 0..<found {
+                let entry = FSListEntry(reading: base.advanced(by: offset * FSListEntry.width))
+                entry.name.span.withUnsafeBufferPointer { name in
+                    offerPath(
+                        name.baseAddress!,
+                        count: Int(entry.length),
+                        kind: entry.kind,
+                        prefix: prefix,
+                        prefixCount: prefixCount,
+                        replacement: leaf,
+                        target: request.parameter.pathTarget,
+                        suffix: closing,
+                        into: &offered
+                    )
+                }
+            }
+            seen += found
+            if finished || found == 0 || batch.next == cursor { return }
+            cursor = batch.next
+        }
+        offered.markIncomplete()
+    }
+}
+
+/// Resolves only the already-written parent of a candidate, without emitting a
+/// diagnostic or changing the shell's place.
+private func completionPlace(
+    _ span   : Span,
+    _ session: ShellSession,
+    _ files  : FileSystemClient
+) -> Place? {
+    guard let parsed = session.path(span), case .success(let parts) = parsed else { return nil }
+    var here = parts.isRooted
+        ? Place(container: files.root, folder: files.root)
+        : Place(container: session.container, folder: session.folder)
+
+    if parts.isRooted {
+        guard let root = session.bytes(of: parts.root),
+              files.rootIsNamed(root.bytes, length: root.count)
+        else { return nil }
+    }
+    for index in 0..<parts.containerCount {
+        guard let name = session.bytes(of: parts.containers[index]) else { return nil }
+        let opened = files.open(name.bytes, length: name.count, in: here.container)
+        guard opened.status == .ok, let found = opened.file, found.kind == .container else { return nil }
+        here = Place(container: found.object, folder: found.object)
+    }
+    for index in 0..<parts.folderCount {
+        guard let next = completionStep(parts.folders[index], from: here, session, files) else { return nil }
+        here = next
+    }
+    return here
+}
+
+private func completionStep(
+    _ segment: Span,
+    from here: Place,
+    _ session: ShellSession,
+    _ files  : FileSystemClient
+) -> Place? {
+    if session.spells(segment, ".") { return here }
+    if session.spells(segment, "..") {
+        guard let above = files.up(from: here.folder) else { return nil }
+        return Place(
+            container: here.folder == here.container ? above : here.container,
+            folder   : above
+        )
+    }
+    guard let name = session.bytes(of: segment) else { return nil }
+    let opened = files.open(name.bytes, length: name.count, in: here.folder)
+    guard opened.status == .ok, let found = opened.file, found.kind != .file else { return nil }
+    return Place(
+        container: found.kind == .container ? found.object : here.container,
+        folder   : found.object
+    )
+}
+
+private func offerPath(
+    _ name: UnsafePointer<UInt8>,
+      count: Int,
+      kind: FSKind,
+      prefix: UnsafePointer<UInt8>,
+      prefixCount: Int,
+      replacement: Span,
+      target: ShellPathTarget,
+      suffix: StaticString,
+      into offered: inout ShellCompletionSet
+) {
+    guard count > 0, count <= ShellCompletion.nameCapacity,
+          pathTarget(target, accepts: kind), prefixCount <= count
+    else { return }
+    for index in 0..<prefixCount where prefix[index] != name[index] { return }
+    guard let candidate = ShellCompletion(
+        kind   : .path,
+        bytes  : name,
+        count  : count,
+        suffix : suffix,
+        detail : pathKind(kind),
+        summary: "reachable from the current place",
+        rank   : 0,
+        replacement: replacement
+    ) else { return }
+    offered.insert(candidate)
+}
+
+private func pathTarget(_ target: ShellPathTarget, accepts kind: FSKind) -> Bool {
+    switch target {
+        case .anything: return kind != .free
+        case .file: return kind == .file
+        case .place: return kind == .folder || kind == .container
+    }
+}
+
+private func pathKind(_ kind: FSKind) -> StaticString {
+    switch kind {
+        case .free: return ""
+        case .file: return "File"
+        case .folder: return "Folder"
+        case .container: return "Container"
+    }
+}
 
 
 private func listFiles(

@@ -97,6 +97,23 @@ private func overlay(_ editor: inout ShellLineEditor) -> String {
     return text
 }
 
+private func overlayScene(
+    _ editor: inout ShellLineEditor
+) -> (text: String, viewportRows: UInt16, presentationRows: UInt16) {
+    var scene = (text: "", viewportRows: UInt16(0), presentationRows: UInt16(0))
+    _ = editor.withFrame { source in
+        scene.viewportRows = source.frame.viewportRows
+        scene.presentationRows = source.frame.presentationRows
+        guard let bytes = source.overlay, source.overlayLength > 0 else { return true }
+        scene.text = String(
+            decoding: UnsafeBufferPointer(start: bytes, count: source.overlayLength),
+            as: UTF8.self
+        )
+        return true
+    }
+    return scene
+}
+
 @Suite("Shell editor panel")
 struct ShellEditorPanelTests {
 
@@ -239,6 +256,25 @@ struct ShellEditorPanelTests {
         #expect(!drawn.contains("count"), "and not what the list is")
     }
 
+    @Test("Tab on a String binding opens only the String member popup")
+    func panelOnStringBinding() {
+        var sequence: UInt32 = 1
+        var subject = editor()
+        type("let greeting = \"hello\", greeting.", into: &subject, sequence: &sequence)
+
+        #expect(press(.tab, into: &subject, sequence: &sequence).action == .editing)
+        let opened = subject.isPanelOpen
+        #expect(opened)
+        let scene = overlayScene(&subject)
+        let drawn = scene.text
+        #expect(drawn.contains("trimmed"))
+        #expect(drawn.contains("String"))
+        #expect(!drawn.contains("true"))
+        #expect(!drawn.contains("false"))
+        #expect(scene.viewportRows == 1, "the popup does not become part of the text viewport")
+        #expect(scene.presentationRows > scene.viewportRows, "the popup declares its temporary rows separately")
+    }
+
     @Test("And when the closure named it, the name answers the same way")
     func panelAfterANamedParameter() {
         var sequence: UInt32 = 1
@@ -250,6 +286,41 @@ struct ShellEditorPanelTests {
         let named = overlay(&subject)
         #expect(named.contains("isFile"))
         #expect(named.contains("of 6"))
+    }
+
+    @Test("Tab opens typed completion at indentation in editor mode")
+    func panelInsideEditorMode() {
+        var sequence: UInt32 = 1
+        var subject = editor()
+        type("list.filter {", into: &subject, sequence: &sequence)
+        #expect(press(.enter, into: &subject, sequence: &sequence).action == .editing)
+        let before = line(&subject)
+        #expect(before.contains("\n"))
+
+        #expect(press(.tab, into: &subject, sequence: &sequence).action == .editing)
+        let opened = subject.isPanelOpen
+        #expect(opened)
+        #expect(line(&subject) == before, "completion wins over indentation when the scope has candidates")
+
+        let drawn = overlay(&subject)
+        #expect(drawn.contains("true"))
+        #expect(drawn.contains("isFile"))
+    }
+
+    @Test("A trailing Bool operator continues into editor mode")
+    func booleanContinuationInEditorMode() {
+        var sequence: UInt32 = 1
+        var subject = editor()
+        type("true &&", into: &subject, sequence: &sequence)
+        #expect(press(.enter, into: &subject, sequence: &sequence).action == .editing)
+        #expect(line(&subject).hasSuffix("\n"))
+
+        #expect(press(.tab, into: &subject, sequence: &sequence).action == .editing)
+        let opened = subject.isPanelOpen
+        #expect(opened)
+        let drawn = overlay(&subject)
+        #expect(drawn.contains("true"))
+        #expect(drawn.contains("false"))
     }
 
     @Test("With nothing to offer, the box does not open")

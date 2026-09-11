@@ -30,11 +30,12 @@ public extension ShellPanel {
                     suffix   : candidate.suffix,
                     caret    : candidate.caret,
                     sensitive: candidate.sensitive,
-                    role     : role(of: candidate.kind)
+                    role     : role(of: candidate.kind),
+                    replacement: candidate.replacement
                 )
             })
         }
-        panel.note(missing: set.matched - set.count)
+        panel.note(missing: set.omitted)
         return panel
     }
 

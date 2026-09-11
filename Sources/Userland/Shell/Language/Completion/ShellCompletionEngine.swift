@@ -21,8 +21,8 @@ public enum ShellCompletionEngine {
         count       : Int,
         catalog     : borrowing ShellCatalog
     ) -> ShellCompletionSet {
-        var set     = ShellCompletionSet()
         let context = snapshot.context
+        var set     = ShellCompletionSet(subject: context.subject)
         let prefix  = context.prefix
         guard prefix.start >= 0, prefix.start + prefix.count <= count else { return set }
 

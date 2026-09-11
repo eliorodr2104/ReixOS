@@ -22,9 +22,24 @@ public struct ShellCompletionSet {
     /// How many candidates matched in all, including the ones that did not fit.
     public private(set) var matched = 0
 
-    public init() {}
+    /// A bounded live provider may know that more source rows exist without
+    /// scanning them. This keeps the popup honest without pretending to know
+    /// how many of those rows would match.
+    private var incomplete = false
 
-    public var truncated: Bool { matched > count }
+    /// Nil is the unrestricted set used by generic panel/test construction.
+    /// Completion queries carry their semantic site, including through module
+    /// hooks, so incompatible candidates never enter the ordered storage.
+    private let subject: ShellCompletionSubject?
+
+    public init(subject: ShellCompletionSubject? = nil) {
+        self.subject = subject
+    }
+
+    public var truncated: Bool { matched > count || incomplete }
+    public var omitted: Int { max(matched - count, incomplete ? 1 : 0) }
+
+    public mutating func markIncomplete() { incomplete = true }
 
     public func candidate(at index: Int) -> ShellCompletion? {
         guard index >= 0, index < count else { return nil }
@@ -40,6 +55,7 @@ public struct ShellCompletionSet {
     /// time, memory addresses or insertion order, so the same line always
     /// offers the same list in the same order.
     public mutating func insert(_ candidate: ShellCompletion) {
+        guard subject?.accepts(candidate.kind) ?? true else { return }
         matched += 1
         var position = count
         while position > 0, let existing = entries[position - 1],
