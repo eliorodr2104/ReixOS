@@ -11,7 +11,7 @@ import ShellLanguage
 
 struct ShellPipeline {
     private let environment  : Environment
-    private let catalog      : ShellCatalog
+    private let modules      : ShellModuleRegistry
     private var runtime      = TypedShellRuntime()
     private var arena        = TypedShellSequenceArena()
     private var container    : UInt32 = 0
@@ -22,10 +22,10 @@ struct ShellPipeline {
 
     init(
         environment: Environment,
-        catalog    : ShellCatalog = Self.merged()
+        modules    : ShellModuleRegistry = .builtIn()
     ) {
         self.environment = environment
-        self.catalog = catalog
+        self.modules = modules
     }
 
     /// Every module the shell was built with, in one catalog.
@@ -33,15 +33,10 @@ struct ShellPipeline {
     /// This list is the whole of what a shell offers: a module absent here is
     /// absent from resolution, from help and from completion at once.
     static func merged() -> ShellCatalog {
-        var catalog = ShellCatalog()
-        _ = catalog.merge(CoreModule.self)
-        _ = catalog.merge(ProcessModule.self)
-        _ = catalog.merge(DiskModule.self)
-        _ = catalog.merge(FileSystemModule.self)
-        return catalog
+        ShellModuleRegistry.builtIn().catalog
     }
 
-    var documentation: ShellCatalog { catalog }
+    var documentation: ShellCatalog { modules.catalog }
 
     mutating func execute(
         _ program: TypedShellProgram,
@@ -51,7 +46,7 @@ struct ShellPipeline {
     ) -> Result<ShellValue, TypedShellFailure> {
         var evaluator     = runtime
         var sequenceArena = arena
-        let result        = catalog.withSignatures { signatures in
+        let result        = modules.catalog.withSignatures { signatures in
             evaluator.execute(program, source: source, count: count, signatures: signatures, arena: &sequenceArena) { invocation in
                 self.invoke(invocation, signatures: signatures, flush: flush)
             }
@@ -77,33 +72,20 @@ struct ShellPipeline {
     ) -> TypedShellInvocationResult {
         guard invocation.signatureIndex >= 0,
               invocation.signatureIndex < signatures.count,
-              let descriptor = catalog.command(at: invocation.signatureIndex),
-              let receiver = catalog.receiver(ofCommandAt: invocation.signatureIndex)
+              let descriptor = modules.catalog.command(at: invocation.signatureIndex),
+              let module = modules.entry(for: invocation.signatureIndex)
         else { return .failure(UInt32.max) }
-
-        if same(receiver.name, CoreModule.namespace.name) {
-            return dispatch(CoreModule.self, descriptor, invocation, flush)
-        }
-        if same(receiver.name, ProcessModule.namespace.name) {
-            return dispatch(ProcessModule.self, descriptor, invocation, flush)
-        }
-        if same(receiver.name, DiskModule.namespace.name) {
-            return dispatch(DiskModule.self, descriptor, invocation, flush)
-        }
-        if same(receiver.name, FileSystemModule.namespace.name) {
-            return dispatch(FileSystemModule.self, descriptor, invocation, flush)
-        }
-        return .failure(UInt32.max)
+        return dispatch(module, descriptor, invocation, flush)
     }
 
-    private mutating func dispatch<Module: ShellModule>(
-        _ module     : Module.Type,
+    private mutating func dispatch(
+        _ module     : ShellModuleRegistry.Entry,
         _ descriptor : ShellCommandDescriptor,
         _ invocation : TypedShellInvocation,
         _ flush      : () -> Bool
     ) -> TypedShellInvocationResult {
         if let value = withSession(line: UnsafePointer(Self.empty.utf8Start), count: 0, {
-            Module.value(for: descriptor.code, in: &$0)
+            module.value(descriptor.code, &$0)
         }) {
             // What the answer is made of, so printing it can say so.
             if case .sequence = value { lastSchema = descriptor.schema }
@@ -119,7 +101,7 @@ struct ShellPipeline {
                 cursor += text.utf8CodeUnitCount
                 return span
             }
-            guard let receiver = append(Module.namespace.name),
+            guard let receiver = append(descriptor.signature.namespace),
                   let verb = append(descriptor.verb)
             else { return .failure(UInt32.max) }
             var command = Command(receiver: receiver, verb: verb)
@@ -156,12 +138,12 @@ struct ShellPipeline {
                 command.arguments[command.argumentCount] = Span(start: start, count: cursor - start)
                 command.argumentCount += 1
             }
-            guard Module.fill(&command, for: descriptor.code, at: cursor) else {
+            guard module.fill(&command, descriptor.code, cursor) else {
                 return .failure(UInt32.max)
             }
 
             let result = withSession(line: storage.baseAddress!, count: cursor) { session in
-                Module.handleResult(command, in: &session)
+                module.handle(command, &session)
             }
             outcome = result.outcome
             guard result.status == .ok else { return .failure(result.status.rawValue) }
@@ -185,24 +167,13 @@ struct ShellPipeline {
           count : Int,
         _ body: (inout ShellSession) -> Result
     ) -> Result {
-        var session = ShellSession(environment: environment, line: line, count: count, catalog: catalog)
+        var session = ShellSession(environment: environment, line: line, count: count, catalog: modules.catalog)
         session.container = container
         session.folder = folder
         let result = body(&session)
         container = session.container
         folder = session.folder
         return result
-    }
-
-    private func same(
-        _ left : StaticString,
-        _ right: StaticString
-    ) -> Bool {
-        guard left.utf8CodeUnitCount == right.utf8CodeUnitCount else { return false }
-        for index in 0..<left.utf8CodeUnitCount where left.utf8Start[index] != right.utf8Start[index] {
-            return false
-        }
-        return true
     }
 
     mutating func present(_ value: ShellValue) -> Bool {

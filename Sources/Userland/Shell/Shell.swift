@@ -45,9 +45,10 @@ public func main() {
 
     // One catalog, read by all three: the editor colours with it, the parser
     // resolves receivers against it, and the pipeline dispatches through it.
-    let catalog  = ShellPipeline.merged()
+    let modules  = ShellModuleRegistry.builtIn()
+    let catalog  = modules.catalog
     var editor   = ShellLineEditor(catalog: catalog)
-    var pipeline = ShellPipeline(environment: environment, catalog: catalog)
+    var pipeline = ShellPipeline(environment: environment, modules: modules)
     var engine   = ShellEngine(
         capacity  : ShellLineEditor.capacity,
         namespaces: catalog.namespaceSet()
