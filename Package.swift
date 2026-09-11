@@ -15,7 +15,11 @@ let isTerminalProfile      = ProcessInfo.processInfo.environment["TERMINAL_PROFI
 let isFPSIMDDiagnostic     = ProcessInfo.processInfo.environment["REIX_FPSIMD_DIAGNOSTIC"] == "1"
 let isRuntimeDiagnostic    = ProcessInfo.processInfo.environment["REIX_RUNTIME_DIAGNOSTIC"] == "1"
 let isRuntimeStackDiagnostic = ProcessInfo.processInfo.environment["REIX_RUNTIME_STACK_DIAGNOSTIC"] == "1"
+let isPerformanceGate       = ProcessInfo.processInfo.environment["REIX_PERFORMANCE_GATES"] == "1"
 let reixPluginDependencies : [Target.Dependency] = isFreestanding ? [] : ["ReixApp"]
+let performanceTestSettings: [SwiftSetting] = isPerformanceGate
+    ? [.define("REIX_PERFORMANCE_GATES")]
+    : []
 
 // @_extern stays on in both modes so the editor resolves the @_extern(c) shims.
 var bareMetal: [SwiftSetting] = [
@@ -292,7 +296,8 @@ let package = Package(
         .testTarget(
             name        : "FileSystemTests",
             dependencies: ["ReixFS", "ReixABI"],
-            path        : "Tests/FileSystemTests"
+            path        : "Tests/FileSystemTests",
+            swiftSettings: performanceTestSettings
         ),
 
         // The pipe's wire format, over nothing at all: frames, acknowledgements

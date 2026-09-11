@@ -6,11 +6,23 @@
 //
 
 struct SerialTransmitQueue {
+    // A terminal-profile dump can contain 1024 worst-case trace lines plus
+    // boot phases, process names, and framing. Keep that bounded transcript in
+    // RAM until the ordinary timer drain reaches the UART; do not busy-wait in
+    // the syscall that formats it. Production images retain the 16 KiB queue.
+    #if REIX_TERMINAL_PROFILE
+    static let capacity = 131072
+    #else
     static let capacity = 16384
+    #endif
 
     private static let mask = UInt64(capacity - 1)
 
+    #if REIX_TERMINAL_PROFILE
+    private var storage             = InlineArray<131072, UInt8>(repeating: 0)
+    #else
     private var storage             = InlineArray<16384, UInt8>(repeating: 0)
+    #endif
     private var head       : UInt64 = 0
     private var tail       : UInt64 = 0
     private var recordStart: UInt64 = 0

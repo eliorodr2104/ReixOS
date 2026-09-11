@@ -14,7 +14,9 @@ public enum SlabFreeResult {
 public protocol SlabBackend {
     
     mutating func acquirePage() -> UnsafeMutableRawPointer?
-    mutating func releasePage(_ page: UnsafeMutableRawPointer)
+    /// Releases one page. `false` means the backend still retains it.
+    @discardableResult
+    mutating func releasePage(_ page: UnsafeMutableRawPointer) -> Bool
 
     mutating func bind(page: UnsafeMutableRawPointer, shift: UInt8)
     /// Returns nil before indexing metadata when the page is foreign, released,

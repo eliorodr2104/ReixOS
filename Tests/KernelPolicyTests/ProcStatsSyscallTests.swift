@@ -29,7 +29,7 @@ struct ProcStatsSyscallTests {
     /// below carry the handle a real caller would have been handed.
     private let authorityHandle = BootCap.profiler.rawValue
 
-    @Test("process operation copies exactly one 48-byte record")
+    @Test("process operation copies exactly one 62-byte record")
     func exactCopyout() {
         withAuthorizedProcess(pid: 41) { process in
             process.pointee.cpuTime = 1234
@@ -38,7 +38,7 @@ struct ProcStatsSyscallTests {
             withBuffer(fill: 0xA5) { buffer in
                 UserMemory.validationOverride = { address, size, permissions in
                     address == UInt64(UInt(bitPattern: buffer)) &&
-                    size == 48 && permissions == [.write, .user]
+                    size == 62 && permissions == [.write, .user]
                 }
 
                 var frame = processFrame(buffer: buffer)
@@ -50,10 +50,63 @@ struct ProcStatsSyscallTests {
                 #expect(stats.cpuTime == 1234)
                 #expect(stats.status == ProcessStatusCode.ready.rawValue)
 
-                // A record is 48 bytes and the copy is one struct store, so the rest of
+                // The fixture has no address space, so the footprint is not a
+                // reading and must not be published as one.
+                #expect(stats.availability == 0)
+                #expect(stats.mappedPages == 0 && stats.virtualExtentPages == 0)
+
+                // A record is 62 bytes and the copy is one struct store, so the rest of
                 // the buffer has to still carry the fill.
-                #expect(Array(UnsafeBufferPointer(start: buffer.advanced(by: 48).assumingMemoryBound(to: UInt8.self), count: 16)) == Array(repeating: 0xA5, count: 16))
+                #expect(bytes(buffer, from: 62, count: 16) == Array(repeating: 0xA5, count: 16))
             }
+        }
+    }
+
+    @Test("system operation reports domains and leaves its sentinel tail")
+    func exactSystemCopyout() {
+        AArch64PMU.withTestState(
+            initialized: false,
+            eventCounters: 0,
+            eventAvailability: 0
+        ) {
+          withProcessManager(pages: 64) { ram, heap, manager in
+            withAuthorizedProcess(pid: 43) { _ in
+                let allocation = heap.pointee.kmalloc(100)
+                defer { heap.pointee.kfree(allocation) }
+                let scheduler = allocateZeroedStorage(KernelScheduler.self)
+                let ipc = allocateZeroedStorage(KernelIPC.self)
+                defer { scheduler.deallocate(); ipc.deallocate() }
+
+                withBuffer(fill: 0xC7) { buffer in
+                    UserMemory.validationOverride = { address, size, permissions in
+                        address == UInt64(UInt(bitPattern: buffer))
+                            && size == 96 && permissions == [.write, .user]
+                    }
+                    var frame = processFrame(
+                        buffer: buffer,
+                        operation: .systemOperation
+                    )
+                    let context = SyscallContext(
+                        processManager: manager,
+                        scheduler: scheduler,
+                        ipc: ipc,
+                        ppm: ram.ppm
+                    )
+                    ProcStatsSyscall.handle(frame: &frame, context: context)
+
+                    #expect(frame.x0 == 0)
+                    let stats = buffer.load(as: SystemStats.self)
+                    #expect((stats.availability & SystemMetricAvailability.physicalMemory) != 0)
+                    #expect((stats.availability & SystemMetricAvailability.kernelHeap) != 0)
+                    #expect((stats.availability & SystemMetricAvailability.pmuCycleCounter) == 0)
+                    #expect(stats.kernelHeapLiveBytes == 128)
+                    #expect(stats.kernelHeapReservedBytes == 4096)
+                    #expect(stats.physicalAllocatedPages + stats.physicalFreePages == stats.physicalTotalPages)
+                    #expect(stats.pmuEventAvailability == 0 && stats.pmuEventCounters == 0)
+                    #expect(bytes(buffer, from: 96, count: 16) == Array(repeating: 0xC7, count: 16))
+                }
+            }
+          }
         }
     }
 
@@ -107,7 +160,7 @@ struct ProcStatsSyscallTests {
                 let base = UInt64(UInt(bitPattern: buffer))
 
                 UserMemory.validationOverride = { address, size, _ in
-                    address == base && size <= 47
+                    address == base && size <= 61
                 }
                 var partial = processFrame(buffer: buffer)
                 ProcStatsSyscall.handle(frame: &partial, context: unusedContext())
@@ -127,7 +180,7 @@ struct ProcStatsSyscallTests {
     func terminalCursor() {
         withAuthorizedProcess(pid: 9) { _ in
             withBuffer(fill: 0xC3) { buffer in
-                UserMemory.validationOverride = { _, size, _ in size == 48 }
+                UserMemory.validationOverride = { _, size, _ in size == 62 }
                 var frame = processFrame(cursor: 9, buffer: buffer)
                 ProcStatsSyscall.handle(frame: &frame, context: unusedContext())
                 #expect(frame.x0 == UInt64.max)
@@ -151,10 +204,11 @@ struct ProcStatsSyscallTests {
 
     private func processFrame(
         cursor: PID = 0,
-        buffer: UnsafeMutableRawPointer
+        buffer: UnsafeMutableRawPointer,
+        operation: StatsSubOperation = .processOperation
     ) -> Arch.TrapFrame {
         var frame = Arch.TrapFrame()
-        frame.x0 = StatsSubOperation.processOperation.rawValue
+        frame.x0 = operation.rawValue
         frame.x1 = cursor
         frame.x2 = UInt64(UInt(bitPattern: buffer))
         frame.x3 = UInt64(authorityHandle)
@@ -209,15 +263,26 @@ struct ProcStatsSyscallTests {
         fill: UInt8,
         _ body: (UnsafeMutableRawPointer) -> Void
     ) {
-        let buffer = UnsafeMutableRawPointer.allocate(byteCount: 64, alignment: 8)
-        buffer.initializeMemory(as: UInt8.self, repeating: fill, count: 64)
+        let buffer = UnsafeMutableRawPointer.allocate(byteCount: 128, alignment: 8)
+        buffer.initializeMemory(as: UInt8.self, repeating: fill, count: 128)
         body(buffer)
         UserMemory.validationOverride = nil
         buffer.deallocate()
     }
 
     private func bytes(_ buffer: UnsafeMutableRawPointer) -> [UInt8] {
-        Array(UnsafeBufferPointer(start: buffer.assumingMemoryBound(to: UInt8.self), count: 64))
+        bytes(buffer, from: 0, count: 64)
+    }
+
+    private func bytes(
+        _ buffer: UnsafeMutableRawPointer,
+        from offset: Int,
+        count: Int
+    ) -> [UInt8] {
+        Array(UnsafeBufferPointer(
+            start: (buffer + offset).assumingMemoryBound(to: UInt8.self),
+            count: count
+        ))
     }
 }
 

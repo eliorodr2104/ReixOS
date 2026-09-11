@@ -252,13 +252,37 @@ public func main() {
     }
 
 #if REIX_TERMINAL_PROFILE
-    guard writeTerminalEditorBaseline(to: &terminal) else {
+    // Availability is queried before any optional system-register access. The
+    // actual system snapshot is taken after the editor workload so heap and
+    // stack high-water marks describe the same completed workload.
+    var availabilityMetrics = SystemStats()
+    let hasAvailabilityMetrics = systemStats(
+        into: &availabilityMetrics,
+        authority: profileStats
+    )
+    let pmuCycleAvailable = hasAvailabilityMetrics
+        && (availabilityMetrics.availability & SystemMetricAvailability.pmuCycleCounter) != 0
+    let instructionEventAvailable = pmuCycleAvailable
+        && (availabilityMetrics.pmuEventAvailability
+            & PMUEventAvailability.instructionsRetired) != 0
+    guard writeTerminalEditorBaseline(
+        pmuCycleAvailable: pmuCycleAvailable,
+        instructionEventAvailable: instructionEventAvailable,
+        to: &terminal
+    ) else {
         exit(code: 1)
     }
 
-    guard writeTerminalBaselineSystem(authority: profileStats, to: &terminal) else {
-        exit(code: 1)
-    }
+    var systemMetrics = SystemStats()
+    let hasSystemMetrics = systemStats(
+        into: &systemMetrics,
+        authority: profileStats
+    )
+    guard writeTerminalBaselineSystem(
+        hasMetrics: hasSystemMetrics,
+        metrics   : systemMetrics,
+        to        : &terminal
+    ) else { exit(code: 1) }
 
     guard writeTerminalBaselineProcesses(authority: profileStats, to: &terminal) else {
         exit(code: 1)
@@ -281,18 +305,24 @@ public func main() {
 #if REIX_TERMINAL_PROFILE
 @inline(__always)
 fileprivate func writeTerminalEditorBaseline(
+    pmuCycleAvailable: Bool,
+    instructionEventAvailable: Bool,
     to terminal: inout InteractionSession
 ) -> Bool {
     var editor            = ShellLineEditor()
     var sequence          : UInt32 = 1
-    var pasteCycles       : UInt64 = 0
-    var pasteInstructions : UInt64 = 0
+    var pasteDelta        : PMUDelta? = nil
+    var pasteTimerTicks   : UInt64 = 0
     var pasteMeasured     = false
 
     withUnsafeTemporaryAllocation(of: UInt8.self, capacity: ReixInputProtocol.maximumPayload) { bytes in
         for index in 0..<bytes.count { bytes[index] = UInt8(ascii: "a") }
 
-        let section = PMUSection.begin()
+        let timerStart = readVirtualCounter()
+        let section = OptionalPMUSection.begin(
+            cyclesAvailable: pmuCycleAvailable,
+            instructionsAvailable: instructionEventAvailable
+        )
         guard let begin = ReixInputRecord(kind: .pasteBegin, sequence: sequence) else { return }
         sequence += 1
         _ = editor.apply(begin)
@@ -313,14 +343,15 @@ fileprivate func writeTerminalEditorBaseline(
         sequence += 1
         let update = editor.apply(end)
         let delta  = section.end()
+        let timerTicks = readVirtualCounter() &- timerStart
 
         guard update.action != .refused,
               update.requiresPresentation,
               editor.count == ShellLineEditor.capacity
         else { return }
 
-        pasteCycles = delta.cycles
-        pasteInstructions = delta.instructions
+        pasteDelta = delta
+        pasteTimerTicks = timerTicks
         pasteMeasured = true
     }
 
@@ -333,60 +364,126 @@ fileprivate func writeTerminalEditorBaseline(
           )
     else { return false }
 
-    let layoutSection = PMUSection.begin()
+    let layoutTimerStart = readVirtualCounter()
+    let layoutSection = OptionalPMUSection.begin(
+        cyclesAvailable: pmuCycleAvailable,
+        instructionsAvailable: instructionEventAvailable
+    )
     let layoutUpdate  = editor.apply(resize)
     let layoutDelta   = layoutSection.end()
+    let layoutTimerTicks = readVirtualCounter() &- layoutTimerStart
     guard layoutUpdate.requiresPresentation,
           layoutUpdate.action != .refused,
           editor.count == ShellLineEditor.capacity
     else { return false }
 
     ShellOutput.begin()
-    print("[ TERMINAL BASELINE ] editor status=measured workload=paste-8192 bytes=8192 cycles=", terminator: "")
-    printDec(pasteCycles, terminator: "")
-    print(" instructions=", terminator: "")
-    printDec(pasteInstructions)
-    print("[ TERMINAL BASELINE ] editor status=measured workload=layout-8192 bytes=8192 cycles=", terminator: "")
-    printDec(layoutDelta.cycles, terminator: "")
-    print(" instructions=", terminator: "")
-    printDec(layoutDelta.instructions)
+    writeEditorMetric(workload: "paste-8192", timerTicks: pasteTimerTicks, delta: pasteDelta)
+    writeEditorMetric(workload: "layout-8192", timerTicks: layoutTimerTicks, delta: layoutDelta)
     return ShellOutput.flush(to: &terminal)
 }
 
 @inline(__always)
-fileprivate func writeTerminalBaselineSystem(
-       authority: UInt32,
-    to terminal : inout InteractionSession
-) -> Bool {
+fileprivate func writeEditorMetric(
+    workload: StaticString,
+    timerTicks: UInt64,
+    delta: PMUDelta?
+) {
+    print("[ TERMINAL BASELINE ] editor status=measured workload=\(workload) bytes=8192 timer_unit=ticks timer_ticks=", terminator: "")
+    printDec(timerTicks, terminator: "")
+    if let delta {
+        print(" pmu_status=available counter_unit=raw cycles=", terminator: "")
+        printDec(delta.cycles, terminator: "")
+        if let instructions = delta.instructions {
+            print(" instruction_event_status=available instructions=", terminator: "")
+            printDec(instructions)
+        } else {
+            print(" instruction_event_status=unavailable instruction_reason=inst-retired-not-advertised")
+        }
+    } else {
+        print(" pmu_status=unavailable reason=pmu-counters-unavailable")
+    }
+}
 
-    var stats = SystemStats()
+@inline(__always)
+fileprivate func writeTerminalBaselineSystem(
+    hasMetrics: Bool,
+    metrics   : SystemStats,
+    to terminal: inout InteractionSession
+) -> Bool {
     ShellOutput.begin()
 
-    if systemStats(into: &stats, authority: authority) {
-        print("[ TERMINAL BASELINE ] system status=measured total_pages=", terminator: "")
-        printDec(stats.totalPages, terminator: "")
+    let requiredAvailability = SystemMetricAvailability.physicalMemory
+        | SystemMetricAvailability.kernelHeap
+        | SystemMetricAvailability.stacks
+        | SystemMetricAvailability.timer
+    if hasMetrics,
+       (metrics.availability & requiredAvailability) == requiredAvailability {
+        print("[ TERMINAL BASELINE ] system status=measured page_bytes=4096 physical_total_pages=", terminator: "")
+        printDec(metrics.physicalTotalPages, terminator: "")
 
-        print(" free_pages=", terminator: "")
-        printDec(stats.freePages, terminator: "")
+        print(" physical_allocated_pages=", terminator: "")
+        printDec(metrics.physicalAllocatedPages, terminator: "")
 
-        print(" counter_freq=", terminator: "")
-        printDec(stats.counterFreq, terminator: "")
+        print(" physical_free_pages=", terminator: "")
+        printDec(metrics.physicalFreePages, terminator: "")
+
+        print(" kernel_heap_live_capacity_bytes=", terminator: "")
+        printDec(metrics.kernelHeapLiveBytes, terminator: "")
+
+        print(" kernel_heap_live_high_water_bytes=", terminator: "")
+        printDec(metrics.kernelHeapLiveHighWaterBytes, terminator: "")
+
+        print(" kernel_heap_reserved_bytes=", terminator: "")
+        printDec(metrics.kernelHeapReservedBytes, terminator: "")
+
+        print(" kernel_heap_reserved_high_water_bytes=", terminator: "")
+        printDec(metrics.kernelHeapReservedHighWaterBytes, terminator: "")
+
+        print(" timer_frequency_hz=", terminator: "")
+        printDec(metrics.timerFrequency, terminator: "")
 
         print(" trace_lost=", terminator: "")
-        printDec(stats.traceLost, terminator: "")
+        printDec(metrics.traceLost, terminator: "")
 
-        print(" heap_high_water_bytes=", terminator: "")
-        printDec(UInt64(userHeapHighWaterBytes()), terminator: "")
+        print(" kernel_stack_used_high_water_bytes=", terminator: "")
+        printDec(UInt64(metrics.kernelStackUsedBytes), terminator: "")
 
-        print(" kernel_stack_peak_bytes=", terminator: "")
-        printDec(UInt64(stats.kernelStackPeak), terminator: "")
+        print(" kernel_stack_capacity_bytes=", terminator: "")
+        printDec(UInt64(metrics.kernelStackCapacity), terminator: "")
 
-        print(" exception_stack_peak_bytes=", terminator: "")
-        printDec(UInt64(stats.exceptionStackPeak))
+        print(" exception_stack_used_high_water_bytes=", terminator: "")
+        printDec(UInt64(metrics.exceptionStackUsedBytes), terminator: "")
+
+        print(" exception_stack_capacity_bytes=", terminator: "")
+        printDec(UInt64(metrics.exceptionStackCapacity), terminator: "")
+
+        let pmuAvailable = (metrics.availability & SystemMetricAvailability.pmuCycleCounter) != 0
+        print(" pmu_status=", terminator: "")
+        print(pmuAvailable ? "available" : "unavailable", terminator: "")
+        if pmuAvailable {
+            print(" pmu_event_counters=", terminator: "")
+            printDec(UInt64(metrics.pmuEventCounters), terminator: "")
+            let instructionsAvailable = (metrics.pmuEventAvailability
+                & PMUEventAvailability.instructionsRetired) != 0
+            print(" instruction_event_status=", terminator: "")
+            if instructionsAvailable {
+                print("available")
+            } else {
+                print("unavailable instruction_reason=inst-retired-not-advertised")
+            }
+        } else {
+            print(" pmu_reason=pmu-cycle-counter-unavailable")
+        }
 
     } else {
-        print("[ TERMINAL BASELINE ] system status=unavailable reason=stats-refused")
+        print("[ TERMINAL BASELINE ] system status=unavailable reason=stats-refused-or-unmeasured")
     }
+
+    print("[ TERMINAL BASELINE ] user_heap status=measured process=Shell.elf domain=virtual-reservation unit=bytes reserved_bytes=", terminator: "")
+    printDec(UInt64(userHeapReservedBytes()), terminator: "")
+    print(" high_water_bytes=", terminator: "")
+    printDec(UInt64(userHeapHighWaterBytes()))
 
     return ShellOutput.flush(to: &terminal)
 }
@@ -403,11 +500,18 @@ fileprivate func writeTerminalBaselineProcesses(
 
     while records < 64 {
         var stats = ProcessStats()
-        let pid   = nextProcessStats(after: after, into: &stats, authority: authority)
+        let pid = nextProcessStats(after: after, into: &stats, authority: authority)
 
         guard pid != UInt64.max else { break }
 
-        print("[ TERMINAL BASELINE ] process status=measured pid=", terminator: "")
+        let requiredAvailability = ProcessMetricAvailability.virtualExtent
+            | ProcessMetricAvailability.mappedPages
+            | ProcessMetricAvailability.stack
+        let valid = (stats.availability & requiredAvailability) == requiredAvailability
+
+        print("[ TERMINAL BASELINE ] process status=", terminator: "")
+        print(valid ? "measured" : "unavailable", terminator: "")
+        print(" mapped_semantics=address-space-nonunique pid=", terminator: "")
         printDec(stats.pid, terminator: "")
 
         print(" name=", terminator: "")
@@ -418,11 +522,21 @@ fileprivate func writeTerminalBaselineProcesses(
             printPadded(name.baseAddress!, count: length, width: 0)
         }
 
-        print(" resident_pages=", terminator: "")
-        printDec(UInt64(stats.residentPages), terminator: "")
+        if valid {
+            print(" mapped_pages=", terminator: "")
+            printDec(UInt64(stats.mappedPages), terminator: "")
 
-        print(" stack_pages=", terminator: "")
-        printDec(UInt64(stats.stackPages))
+            print(" virtual_extent_pages=", terminator: "")
+            printDec(stats.virtualExtentPages, terminator: "")
+
+            print(" stack_extent_pages=", terminator: "")
+            printDec(UInt64(stats.stackExtentPages), terminator: "")
+
+            print(" stack_capacity_pages=", terminator: "")
+            printDec(UInt64(stats.stackCapacityPages))
+        } else {
+            print(" reason=address-space-metrics-unavailable")
+        }
 
         after = pid
         records += 1

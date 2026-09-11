@@ -67,6 +67,19 @@ require(
     "large-allocation OOM did not make exactly one mmap request"
 )
 
+reix_heap_host_enable_large_mapping()
+let large = reixMalloc(8192)
+require(large != nil, "host large mapping was not allocated")
+require(userHeapReservedBytes() == 8192, "large reservation was not accounted")
+reix_heap_host_fail_munmap(1)
+reixFree(large)
+require(reix_heap_host_munmap_count() == 1, "failed large release did not call munmap")
+require(userHeapReservedBytes() == 8192, "failed large release erased its reservation")
+reixFree(large)
+require(reix_heap_host_munmap_count() == 2, "large release was not retryable")
+require(userHeapReservedBytes() == 0, "successful large release retained its reservation")
+require(userHeapHighWaterBytes() >= 8192, "large reservation high-water mark was not recorded")
+
 // A failed decommit retains backing but still clears the old slab class and
 // recycles the empty page exactly once.
 reix_heap_host_fail_decommit(1)

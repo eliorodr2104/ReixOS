@@ -937,7 +937,9 @@ public struct RendezvousIPC: IPCInterface, Loggable {
     /// filed as a real measurement of nothing.
     @inline(__always)
     private func pmuRecording<C: TraceCategory>(_ category: C.Type) -> Bool {
-        C.isEnabled && Trace.runtimeMask & C.bit != 0 && Arch.PMU.initialized
+        C.isEnabled && Trace.runtimeMask & C.bit != 0
+            && Arch.PMU.initialized
+            && Arch.PMU.instructionsRetiredAvailable
     }
 
 

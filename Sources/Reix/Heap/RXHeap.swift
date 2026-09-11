@@ -26,7 +26,10 @@ struct UserHeap {
         let need = max(roundedSize, roundedAlignment)
         if need <= 4096 {
             let pointer = slab.alloc(size: need)
-            if pointer != nil { recordHighWater() }
+            // A failed metadata transition may still leave the newly extended
+            // arena reserved, so the high-water observation follows the whole
+            // attempt rather than only a returned pointer.
+            recordHighWater()
             return pointer
         }
         
@@ -66,7 +69,8 @@ struct UserHeap {
 
     private mutating func freeLarge(_ arena: UInt) {
         for i in 0..<large.count where large[i].base == arena {
-            _ = munmap(addr: UInt64(arena), size: UInt64(large[i].size))
+            guard munmap(addr: UInt64(arena), size: UInt64(large[i].size)) == 0
+            else { return }
             largeBytes -= large[i].size
             large[i] = LargeRegion()
             return
@@ -115,4 +119,15 @@ func reix_malloc(_ size: UInt) -> UnsafeMutableRawPointer? {
 /// mappings. The counter is monotonic for the process lifetime.
 public func userHeapHighWaterBytes() -> UInt {
     gHeap.highWaterBytes
+}
+
+/// Current virtual reservation of this process's heap arena and large maps.
+/// Empty slab pages may be decommitted physically while the arena span remains
+/// reserved, so this is deliberately not an RSS figure.
+public func userHeapReservedBytes() -> UInt {
+    let slabBytes = gHeap.slab.backend.arenaEnd >= gHeap.slab.backend.arenaBase
+        ? gHeap.slab.backend.arenaEnd - gHeap.slab.backend.arenaBase
+        : 0
+    let (total, overflow) = slabBytes.addingReportingOverflow(gHeap.largeBytes)
+    return overflow ? UInt.max : total
 }

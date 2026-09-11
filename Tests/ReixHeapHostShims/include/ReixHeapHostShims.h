@@ -5,6 +5,9 @@
 
 void reix_heap_host_reset(void);
 void reix_heap_host_fail_decommit(uint64_t count);
+void reix_heap_host_enable_large_mapping(void);
+void reix_heap_host_fail_munmap(uint64_t count);
+uint64_t reix_heap_host_munmap_count(void);
 void reix_heap_host_zero_next_break_query(void);
 void reix_heap_host_malformed_next_break_query(void);
 void reix_heap_host_malformed_query_after_next_growth(void);

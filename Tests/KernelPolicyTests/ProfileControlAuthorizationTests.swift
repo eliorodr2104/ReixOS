@@ -81,13 +81,28 @@ struct ProfileControlAuthorizationTests {
         }
     }
 
-    @Test("interaction tracing stays compiled out in normal host builds")
+    @Test("interaction trace capacities match the build mode")
     func interactionTraceLayout() {
         #expect(TraceInteraction.bit == 1 << 8)
-        #expect(!TraceInteraction.isEnabled)
         #expect(MemoryLayout<TraceEvent>.size == 32)
         #expect(MemoryLayout<TraceEvent>.stride == 32)
+
+        #if REIX_TERMINAL_PROFILE
+        #expect(TraceInteraction.isEnabled)
+        #expect(TraceRing.capacity == 1024)
+        #expect(SerialTransmitQueue.capacity == 131_072)
+
+        // Maximum-width records for the live ring, all write-once boot phases,
+        // and every process slot still leave room for dump framing. This is a
+        // capacity proof for the configured bound, not a promise for an
+        // unbounded number of future side-table records.
+        let recordBytes = (Int(TraceRing.capacity) + 12 + 32) * 122
+        #expect(recordBytes + 256 <= SerialTransmitQueue.capacity)
+        #else
+        #expect(!TraceInteraction.isEnabled)
         #expect(TraceRing.capacity == 256)
+        #expect(SerialTransmitQueue.capacity == 16_384)
+        #endif
     }
 }
 

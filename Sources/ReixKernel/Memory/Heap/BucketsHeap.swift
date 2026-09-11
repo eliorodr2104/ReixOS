@@ -20,6 +20,25 @@ public struct BucketsHeap: KernelHeapInterface, Loggable {
     public static let logLevel: LogLevel     = .info
     
     private var core: SlabCore<PPMBackend>
+    private var liveBytes: UInt64 = 0
+    private var liveHighWaterBytes: UInt64 = 0
+    private var largeReservedBytes: UInt64 = 0
+    private var reservedHighWaterBytes: UInt64 = 0
+
+    /// Rounded capacity of all currently live allocations.
+    public var metricsLiveBytes: UInt64 { liveBytes }
+
+    /// Maximum `metricsLiveBytes` observed since heap construction.
+    public var metricsLiveHighWaterBytes: UInt64 { liveHighWaterBytes }
+
+    /// Physical backing currently retained by slab and large allocations.
+    public var metricsReservedBytes: UInt64 {
+        UInt64(core.reservedPages) * UInt64(SlabCore<PPMBackend>.pageSize)
+            + largeReservedBytes
+    }
+
+    /// Maximum `metricsReservedBytes` observed since heap construction.
+    public var metricsReservedHighWaterBytes: UInt64 { reservedHighWaterBytes }
 
     public init(ppmPtr: UnsafeMutablePointer<KernelPPM>) {
         core = SlabCore(backend: PPMBackend(ppmPtr: ppmPtr))
@@ -97,7 +116,10 @@ public struct BucketsHeap: KernelHeapInterface, Loggable {
 
     @inline(__always)
     public mutating func kfree(_ ptr: UnsafeMutableRawPointer) {
-        if core.free(ptr) { return }
+        if let capacity = core.freeCapacity(ptr) {
+            noteFree(capacity: UInt64(capacity))
+            return
+        }
 
         // Large pages carry no slab shift, so a valid large allocation reaches
         // this fallback while the common slab path pays only SlabCore's single
@@ -113,16 +135,23 @@ public struct BucketsHeap: KernelHeapInterface, Loggable {
 
         guard meta.pointee.flags.contains(.heapLarge),
               ptr == page,
-              meta.pointee.refCount > 0,
+              meta.pointee.refCount == 1,
               meta.pointee.order <= 11
         else {
             Arch.CPU.panic("kfree: invalid or double free")
         }
 
         let phys = UInt64(UInt(bitPattern: page)) - PPMBackend.physicalOffset
-        try? core.backend.ppmPtr.pointee.free(
+        let capacity = UInt64(4096) << UInt64(meta.pointee.order)
+        guard (try? core.backend.ppmPtr.pointee.free(
             PhysicalPage(address: phys, order: meta.pointee.order)
-        )
+        )) != nil else { return }
+
+        noteFree(capacity: capacity)
+        guard capacity <= largeReservedBytes else {
+            Arch.CPU.panic("kernel heap reserved-byte accounting underflow")
+        }
+        largeReservedBytes -= capacity
     }
 
     /// Typed counterpart of `kmalloc<Object>`: deinitializes the pointee(s) and
@@ -204,12 +233,39 @@ public struct BucketsHeap: KernelHeapInterface, Loggable {
                 flag: .heapLarge
             ) else { return nil }
 
+            let capacity = UInt64(4096) << UInt64(page.order)
+            largeReservedBytes += capacity
+            noteAllocation(capacity: capacity)
+
             return UnsafeMutableRawPointer(
                 bitPattern: UInt(page.address + PPMBackend.physicalOffset)
             )!
         }
 
-        return core.alloc(size: size)
+        let pointer = core.alloc(size: size)
+        // A failed carve can still retain its page if the backend refuses the
+        // rollback. Capture that state even though no live block was returned.
+        reservedHighWaterBytes = max(reservedHighWaterBytes, metricsReservedBytes)
+        guard let pointer else { return nil }
+        let rounded = max(roundUpPow2(size), 8)
+        let capacity = UInt64(rounded)
+        noteAllocation(capacity: capacity)
+        return pointer
+    }
+
+    @inline(__always)
+    private mutating func noteAllocation(capacity: UInt64) {
+        liveBytes += capacity
+        liveHighWaterBytes = max(liveHighWaterBytes, liveBytes)
+        reservedHighWaterBytes = max(reservedHighWaterBytes, metricsReservedBytes)
+    }
+
+    @inline(__always)
+    private mutating func noteFree(capacity: UInt64) {
+        guard capacity <= liveBytes else {
+            Arch.CPU.panic("kernel heap live-byte accounting underflow")
+        }
+        liveBytes -= capacity
     }
 
     @inline(__always)
@@ -241,7 +297,7 @@ public struct BucketsHeap: KernelHeapInterface, Loggable {
 
         let meta = frameInfo(of: page).pointee
         if meta.flags.contains(.heapLarge) {
-            guard ptr == page, meta.refCount > 0, meta.order <= 11 else { return nil }
+            guard ptr == page, meta.refCount == 1, meta.order <= 11 else { return nil }
             return UInt(4096) << UInt(meta.order)
         }
 

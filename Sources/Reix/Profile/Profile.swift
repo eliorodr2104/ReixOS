@@ -35,7 +35,7 @@ public func profileDump(authority: UInt32) {
 }
 
 
-/// Fills `stats` with the kernel's machine-wide counters.
+/// Fills `stats` with the kernel's machine-wide metrics.
 /// Returns `true` when the kernel replies with x0 == 0.
 ///
 /// `authority` is a profiler capability handle carrying `.profileStats`, the
@@ -84,6 +84,7 @@ public func nextProcessStats(
         )
     }
 }
+
 
 /// Hands the kernel the SHM handle to export live profiler state into.
 /// See `Top.swift` for the exported layout.

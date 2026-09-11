@@ -71,9 +71,47 @@ public struct PMUSection {
 }
 
 
+/// A PMU section that exists only after kernel-reported availability.
+/// Constructing `.unavailable` performs no system-register access.
+public enum OptionalPMUSection {
+    case unavailable
+    case cycles(UInt64)
+    case measuring(PMUSection)
+
+    @inline(__always)
+    public static func begin(
+        cyclesAvailable: Bool,
+        instructionsAvailable: Bool
+    ) -> OptionalPMUSection {
+        guard cyclesAvailable else { return .unavailable }
+        return instructionsAvailable
+            ? .measuring(PMUSection.begin())
+            : .cycles(reixPMUCycles())
+    }
+
+    @inline(__always)
+    public func end() -> PMUDelta? {
+        switch self {
+            case .unavailable: return nil
+            case .cycles(let start):
+                return PMUDelta(
+                    cycles: reixPMUCycles() &- start,
+                    instructions: nil
+                )
+            case .measuring(let section): return section.end()
+        }
+    }
+}
+
+
 /// What one `PMUSection` cost, in cycles and retired instructions.
 @frozen
 public struct PMUDelta {
     public let cycles      : UInt64
-    public let instructions: UInt64
+    public let instructions: UInt64?
+
+    public init(cycles: UInt64, instructions: UInt64?) {
+        self.cycles = cycles
+        self.instructions = instructions
+    }
 }

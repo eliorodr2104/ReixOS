@@ -3,14 +3,16 @@
 # terminal-baseline-report.py
 # ReixOS
 #
-# Turns one profiled 4 MiB terminal run into a baseline document. It accepts
+# Turns one profiled terminal run into a baseline document. It accepts
 # only the fixed records printed by Shell and the host trace decoder: unknown,
 # conflicting, partial, and non-numeric records are evidence gaps, never zeros.
 
 import json
+import hashlib
 import math
 import os
 import re
+import shlex
 import subprocess
 import sys
 
@@ -52,64 +54,215 @@ def parse_uint(value, field):
     return int(value)
 
 
-def last_trace_frequency(lines):
+def parse_fields(tokens, context):
+    fields = {}
+    for token in tokens:
+        if "=" not in token:
+            continue
+        name, value = token.split("=", 1)
+        if name in fields:
+            fail(f"duplicate {context} field: {name}")
+        fields[name] = value
+    # The records carry no version tag: there is one of each. A line that still
+    # has one was printed by an image this reporter does not know.
+    if "schema" in fields:
+        fail(f"{context} record carries an unknown schema tag")
+    return fields
+
+
+def last_cli_option(tokens, name):
+    value = None
+    for index, token in enumerate(tokens):
+        if token == name:
+            if index + 1 >= len(tokens):
+                fail(f"manifest QEMU option has no value: {name}")
+            value = tokens[index + 1]
+        elif token.startswith(name + "="):
+            value = token[len(name) + 1:]
+    return value
+
+
+def last_trace_header(lines):
     open_block = None
     completed = []
+    event_count = 0
+    saw_drop = False
     for line in lines:
         if line.startswith("[TRACE] begin "):
-            fields = dict(token.split("=", 1) for token in line.split()[2:] if "=" in token)
+            if open_block is not None:
+                fail("nested or truncated trace block")
+            fields = parse_fields(line.split()[2:], "trace header")
             open_block = fields
-        elif line.startswith("[TRACE] end") and open_block is not None:
-            completed.append(open_block)
+            event_count = 0
+            saw_drop = False
+        elif line.startswith("[TRACE] t="):
+            if open_block is not None:
+                event_count += 1
+        elif line.startswith("[TRACE-DROP]"):
+            if open_block is not None:
+                saw_drop = True
+        elif line.startswith("[TRACE] end"):
+            if open_block is None:
+                fail("trace end without begin")
+            end_fields = parse_fields(line.split()[2:], "trace trailer")
+            declared_count = parse_uint(end_fields.get("count", ""), "trace count")
+            if declared_count != event_count:
+                fail("trace trailer count disagrees with emitted records")
+            completed.append((open_block, saw_drop))
             open_block = None
+    if open_block is not None:
+        fail("truncated final trace block")
     if not completed:
         fail("no complete trace block")
-    frequency = parse_uint(completed[-1].get("freq", ""), "trace freq")
+    header, final_saw_drop = completed[-1]
+    if final_saw_drop:
+        fail("final trace block contains a transmit drop")
+    if parse_uint(header.get("v", ""), "trace schema") != 2:
+        fail("unsupported trace schema")
+    frequency = parse_uint(header.get("freq", ""), "trace freq")
+    lost = parse_uint(header.get("lost", ""), "trace lost")
     if frequency <= 0:
         fail("last trace block has no positive frequency")
-    return frequency
+    return frequency, lost
 
 
 def parse_system(lines):
     prefix = "[ TERMINAL BASELINE ] system "
-    measured = []
+    records = []
     for line in lines:
         if not line.startswith(prefix):
             continue
-        fields = dict(token.split("=", 1) for token in line[len(prefix):].split() if "=" in token)
-        if fields.get("status") == "measured":
-            measured.append(fields)
-    if not measured:
-        fail("missing measured system baseline")
-    fields = measured[-1]
+        fields = parse_fields(line[len(prefix):].split(), "system")
+        records.append(fields)
+    if len(records) != 1 or records[0].get("status") != "measured":
+        fail("system baseline must contain exactly one measured record")
+    fields = records[0]
     required = (
-        "total_pages", "free_pages", "counter_freq", "trace_lost",
-        "heap_high_water_bytes", "kernel_stack_peak_bytes", "exception_stack_peak_bytes",
+        "page_bytes", "physical_total_pages", "physical_allocated_pages",
+        "physical_free_pages", "kernel_heap_live_capacity_bytes",
+        "kernel_heap_live_high_water_bytes", "kernel_heap_reserved_bytes",
+        "kernel_heap_reserved_high_water_bytes", "timer_frequency_hz", "trace_lost",
+        "kernel_stack_used_high_water_bytes", "kernel_stack_capacity_bytes",
+        "exception_stack_used_high_water_bytes", "exception_stack_capacity_bytes",
     )
-    return {name: parse_uint(fields.get(name, ""), f"system {name}") for name in required}
+    values = {name: parse_uint(fields.get(name, ""), f"system {name}") for name in required}
+    if values["page_bytes"] != PAGE_BYTES:
+        fail("unsupported system metric page size")
+    if values["physical_allocated_pages"] > values["physical_total_pages"]:
+        fail("physical allocated pages exceed total pages")
+    if values["physical_free_pages"] != values["physical_total_pages"] - values["physical_allocated_pages"]:
+        fail("physical page accounting does not balance")
+    if values["kernel_heap_live_capacity_bytes"] > values["kernel_heap_reserved_bytes"]:
+        fail("kernel heap live capacity exceeds reserved backing")
+    if values["kernel_heap_live_capacity_bytes"] > values["kernel_heap_live_high_water_bytes"]:
+        fail("kernel heap live capacity exceeds its high-water mark")
+    if values["kernel_heap_reserved_bytes"] > values["kernel_heap_reserved_high_water_bytes"]:
+        fail("kernel heap reserved backing exceeds its high-water mark")
+    if values["kernel_stack_used_high_water_bytes"] > values["kernel_stack_capacity_bytes"]:
+        fail("kernel stack use exceeds capacity")
+    if values["exception_stack_used_high_water_bytes"] > values["exception_stack_capacity_bytes"]:
+        fail("exception stack use exceeds capacity")
+
+    pmu_status = fields.get("pmu_status")
+    if pmu_status == "available":
+        values["pmu_event_counters"] = parse_uint(
+            fields.get("pmu_event_counters", ""), "system pmu_event_counters"
+        )
+        if "pmu_reason" in fields:
+            fail("available PMU must not have an unavailability reason")
+        instruction_status = fields.get("instruction_event_status")
+        if instruction_status not in ("available", "unavailable"):
+            fail("available PMU needs instruction-event availability")
+        if instruction_status == "available" and values["pmu_event_counters"] <= 0:
+            fail("instruction event cannot be available without an event counter")
+        if instruction_status == "available":
+            if "instruction_reason" in fields:
+                fail("available instruction event must not have an unavailability reason")
+        elif not fields.get("instruction_reason"):
+            fail("unavailable instruction event needs a reason")
+        values["instruction_event_status"] = instruction_status
+        if instruction_status == "unavailable":
+            values["instruction_reason"] = fields["instruction_reason"]
+    elif pmu_status == "unavailable":
+        if not fields.get("pmu_reason") or "pmu_event_counters" in fields:
+            fail("unavailable PMU needs a reason and no counter value")
+        values["pmu_reason"] = fields["pmu_reason"]
+    else:
+        fail("missing or unsupported PMU status")
+    values["pmu_status"] = pmu_status
+    return values
 
 
-def parse_editor(lines, frequency):
+def parse_user_heap(lines):
+    prefix = "[ TERMINAL BASELINE ] user_heap "
+    records = []
+    for line in lines:
+        if line.startswith(prefix):
+            fields = parse_fields(line[len(prefix):].split(), "user_heap")
+            records.append(fields)
+    if len(records) != 1 or records[0].get("status") != "measured":
+        fail("user heap baseline must contain exactly one measured record")
+    fields = records[0]
+    if fields.get("domain") != "virtual-reservation" \
+            or fields.get("unit") != "bytes" or not fields.get("process"):
+        fail("unsupported user heap metric domain")
+    reserved = parse_uint(fields.get("reserved_bytes", ""), "user heap reserved_bytes")
+    high_water = parse_uint(fields.get("high_water_bytes", ""), "user heap high_water_bytes")
+    if reserved > high_water:
+        fail("user heap reservation exceeds its high-water mark")
+    return {"process": fields["process"], "reserved_bytes": reserved, "high_water_bytes": high_water}
+
+
+def parse_editor(lines, pmu_status, instruction_event_status):
     prefix = "[ TERMINAL BASELINE ] editor "
     wanted = {"paste-8192": None, "layout-8192": None}
     for line in lines:
         if not line.startswith(prefix):
             continue
-        fields = dict(token.split("=", 1) for token in line[len(prefix):].split() if "=" in token)
+        fields = parse_fields(line[len(prefix):].split(), "editor")
         workload = fields.get("workload")
-        if fields.get("status") != "measured" or workload not in wanted:
+        if workload not in wanted:
             continue
-        cycles = parse_uint(fields.get("cycles", ""), f"editor {workload} cycles")
-        measurement = {
-            "bytes": parse_uint(fields.get("bytes", ""), f"editor {workload} bytes"),
-            "cycles": cycles,
-            "instructions": parse_uint(
-                fields.get("instructions", ""), f"editor {workload} instructions"
-            ),
-            "microseconds": cycles * US_PER_SECOND / frequency,
-        }
-        if wanted[workload] is not None and wanted[workload] != measurement:
-            fail(f"conflicting editor baseline for {workload}")
+        if fields.get("status") != "measured" or fields.get("timer_unit") != "ticks":
+            fail(f"editor {workload} has unsupported timer unit or status")
+        byte_count = parse_uint(fields.get("bytes", ""), f"editor {workload} bytes")
+        timer_ticks = parse_uint(fields.get("timer_ticks", ""), f"editor {workload} timer_ticks")
+        if fields.get("pmu_status") == "available":
+            if pmu_status != "available" or fields.get("counter_unit") != "raw" \
+                    or "reason" in fields:
+                fail(f"editor {workload} measured counters without available raw PMU")
+            measurement = {
+                "pmu_status": "available", "bytes": byte_count, "timer_ticks": timer_ticks,
+                "cycles": parse_uint(fields.get("cycles", ""), f"editor {workload} cycles"),
+            }
+            instruction_status = fields.get("instruction_event_status")
+            if instruction_status == "available":
+                if "instruction_reason" in fields:
+                    fail(f"editor {workload} has an instruction value and reason")
+                measurement["instructions"] = parse_uint(
+                    fields.get("instructions", ""), f"editor {workload} instructions"
+                )
+            elif instruction_status == "unavailable":
+                if not fields.get("instruction_reason") or "instructions" in fields:
+                    fail(f"editor {workload} has malformed unavailable instruction event")
+                measurement["instruction_reason"] = fields["instruction_reason"]
+            else:
+                fail(f"editor {workload} has unsupported instruction-event status")
+            if instruction_status != instruction_event_status:
+                fail(f"editor {workload} instruction-event availability disagrees with system")
+            measurement["instruction_event_status"] = instruction_status
+        elif fields.get("pmu_status") == "unavailable":
+            if pmu_status != "unavailable" or not fields.get("reason") \
+                    or "cycles" in fields or "instructions" in fields:
+                fail(f"editor {workload} has malformed unavailable counters")
+            measurement = {
+                "pmu_status": "unavailable", "bytes": byte_count,
+                "timer_ticks": timer_ticks, "reason": fields["reason"]
+            }
+        else:
+            fail(f"editor {workload} has unsupported PMU status")
+        if wanted[workload] is not None:
+            fail(f"duplicate editor baseline for {workload}")
         wanted[workload] = measurement
     missing = [name for name, values in wanted.items() if values is None]
     if missing:
@@ -131,19 +284,27 @@ def parse_processes(lines):
     for line in lines:
         if not line.startswith(prefix):
             continue
-        fields = dict(token.split("=", 1) for token in line[len(prefix):].split() if "=" in token)
-        if fields.get("status") != "measured":
-            continue
+        fields = parse_fields(line[len(prefix):].split(), "process")
         name = fields.get("name")
         canonical = canonical_process_name(name)
         if canonical not in wanted:
             continue
+        if fields.get("status") != "measured":
+            fail(f"process metrics unavailable for {canonical}")
         measurement = {
-            "resident_pages": parse_uint(fields.get("resident_pages", ""), f"{canonical} resident_pages"),
-            "stack_pages": parse_uint(fields.get("stack_pages", ""), f"{canonical} stack_pages"),
+            "mapped_pages": parse_uint(fields.get("mapped_pages", ""), f"{canonical} mapped_pages"),
+            "virtual_extent_pages": parse_uint(fields.get("virtual_extent_pages", ""), f"{canonical} virtual_extent_pages"),
+            "stack_extent_pages": parse_uint(fields.get("stack_extent_pages", ""), f"{canonical} stack_extent_pages"),
+            "stack_capacity_pages": parse_uint(fields.get("stack_capacity_pages", ""), f"{canonical} stack_capacity_pages"),
         }
-        if wanted[canonical] is not None and wanted[canonical] != measurement:
-            fail(f"conflicting process baseline for {canonical}")
+        if fields.get("mapped_semantics") != "address-space-nonunique":
+            fail(f"unsupported mapped-page semantics for {canonical}")
+        if measurement["mapped_pages"] > measurement["virtual_extent_pages"]:
+            fail(f"{canonical} mapped pages exceed virtual extent")
+        if measurement["stack_extent_pages"] > measurement["stack_capacity_pages"]:
+            fail(f"{canonical} stack accounting does not nest")
+        if wanted[canonical] is not None:
+            fail(f"duplicate process baseline for {canonical}")
         wanted[canonical] = measurement
     missing = [name for name, values in wanted.items() if values is None]
     if missing:
@@ -182,10 +343,12 @@ def parse_interactions(lines, frequency):
     rows = []
     for line in lines:
         if line.startswith("interaction groups="):
-            fields = dict(token.split("=", 1) for token in line.split() if "=" in token)
+            if header is not None:
+                fail("duplicate interaction header")
+            fields = parse_fields(line.split(), "interaction header")
             header = fields
         elif line.startswith("interaction correlation="):
-            fields = dict(token.split("=", 1) for token in line.split() if "=" in token)
+            fields = parse_fields(line.split(), "interaction row")
             rows.append(fields)
     if header is None:
         fail("missing interaction header")
@@ -275,20 +438,136 @@ def git_provenance():
         return "unavailable", False
 
 
-def main(arguments):
-    if len(arguments) != 3:
-        print("usage: terminal-baseline-report.py SERIAL_LOG INTERACTION_REPORT OUTPUT_JSON", file=sys.stderr)
-        return 1
-    serial_path, interaction_path, output_path = arguments
+def load_manifest(path):
     try:
+        with open(path, "r", encoding="utf-8") as source:
+            manifest = json.load(source)
+    except (OSError, json.JSONDecodeError) as error:
+        fail(f"cannot read run manifest {path}: {error}")
+    if not isinstance(manifest, dict) or manifest.get("schema_version") != 1:
+        fail("unsupported run manifest schema")
+    required = {
+        "build_mode": str,
+        "guest_memory_bytes": int,
+        "initrd": str,
+        "pmu": str,
+        "storage": str,
+        "pre_shell_workload": str,
+        "workload_id": str,
+        "command": str,
+        "kernel_sha256": str,
+        "disk_sha256": str,
+        "input_sha256": str,
+        "toolchain": str,
+        "measurement_scope": str,
+        "trace_scope": str,
+        "qemu_flags": str,
+        "working_directory": str,
+        "effective_cpu": str,
+        "effective_drive_file": str,
+        "machine": str,
+        "vcpu_count": int,
+        "initrd_artifact": dict,
+        "disk_hash_scope": str,
+        "kernel_path": str,
+        "disk_path": str,
+    }
+    for name, expected in required.items():
+        value = manifest.get(name)
+        if not isinstance(value, expected) or (expected is str and not value):
+            fail(f"missing or malformed run manifest field: {name}")
+    if manifest["build_mode"] != "instrumented":
+        fail("terminal metric report requires an instrumented build")
+    if manifest["measurement_scope"] != "terminal-interactions-and-final-snapshot":
+        fail("manifest measurement scope does not match the terminal report")
+    if manifest["trace_scope"] != "bounded-ring-cumulative-at-final-dump":
+        fail("manifest trace scope does not match the terminal report")
+    if manifest["pre_shell_workload"] != "StorageCheck":
+        fail("terminal workload requires StorageCheck in the same guest execution")
+    if manifest["vcpu_count"] != 1:
+        fail("terminal metric report requires one vCPU")
+    if manifest["disk_hash_scope"] != "pre-run":
+        fail("terminal metric report requires a pre-run disk hash")
+    qemu_tokens = shlex.split(manifest["qemu_flags"])
+    if last_cli_option(qemu_tokens, "-cpu") != manifest["effective_cpu"] \
+            or last_cli_option(qemu_tokens, "-machine") != manifest["machine"]:
+        fail("effective QEMU CPU or machine disagrees with final flags")
+    pmu_match = re.search(r"(?:^|,)pmu=(on|off)(?:,|$)", manifest["effective_cpu"])
+    if not pmu_match or pmu_match.group(1) != manifest["pmu"]:
+        fail("effective QEMU CPU disagrees with manifest PMU mode")
+    smp = last_cli_option(qemu_tokens, "-smp")
+    effective_vcpus = int(smp.split(",", 1)[0]) if smp else 1
+    if effective_vcpus != manifest["vcpu_count"]:
+        fail("effective QEMU vCPU count disagrees with manifest")
+    drive = last_cli_option(qemu_tokens, "-drive")
+    device = last_cli_option(qemu_tokens, "-device")
+    drive_fields = dict(
+        field.split("=", 1) for field in (drive or "").split(",") if "=" in field
+    )
+    if drive_fields.get("id") != "reixdisk" \
+            or drive_fields.get("file") != manifest["effective_drive_file"] \
+            or device != "virtio-blk-device,drive=reixdisk":
+        fail("effective QEMU block device disagrees with manifest")
+    effective_disk = os.path.abspath(os.path.join(
+        manifest["working_directory"], manifest["effective_drive_file"]
+    ))
+    if effective_disk != manifest["disk_path"]:
+        fail("hashed disk path is not the image QEMU mounts")
+    if not os.path.isabs(manifest["kernel_path"]):
+        fail("manifest kernel path is not absolute")
+    initrd = manifest["initrd_artifact"]
+    if initrd.get("mode") not in ("embedded-in-kernel", "qemu-file") \
+            or not re.fullmatch(r"[0-9a-f]{64}", initrd.get("sha256", "")):
+        fail("run manifest initrd artifact is malformed")
+    if manifest["initrd"] == "embedded":
+        if initrd.get("mode") != "embedded-in-kernel" \
+                or initrd.get("hash_scope") != "kernel-image-includes-initrd" \
+                or initrd["sha256"] != manifest["kernel_sha256"]:
+            fail("embedded initrd is not bound to the kernel image")
+    elif initrd.get("mode") != "qemu-file":
+        fail("qemu initrd mode needs a separately hashed artifact")
+    if manifest["guest_memory_bytes"] <= 0 or manifest["initrd"] not in ("embedded", "qemu"):
+        fail("unsupported manifest memory or initrd mode")
+    if manifest["pmu"] not in ("on", "off") \
+            or manifest["storage"] != "virtio-blk-rxfs-storagecheck-shell":
+        fail("baseline workload requires explicit PMU mode and attached storage")
+    if "virtio-blk-device" not in manifest["qemu_flags"]:
+        fail("manifest storage workload has no virtio block device")
+    for name in ("kernel_sha256", "disk_sha256", "input_sha256"):
+        if not re.fullmatch(r"[0-9a-f]{64}", manifest[name]):
+            fail(f"run manifest {name} is not SHA-256")
+    if hashlib.sha256(manifest["command"].encode("utf-8")).hexdigest() \
+            != manifest["input_sha256"]:
+        fail("run manifest input hash disagrees with decoded command")
+    return manifest
+
+
+def main(arguments):
+    if len(arguments) != 4:
+        print("usage: terminal-baseline-report.py SERIAL_LOG INTERACTION_REPORT RUN_MANIFEST OUTPUT_JSON", file=sys.stderr)
+        return 1
+    serial_path, interaction_path, manifest_path, output_path = arguments
+    try:
+        manifest = load_manifest(manifest_path)
         serial_lines = read_lines(serial_path)
         interaction_lines = read_lines(interaction_path)
-        frequency = last_trace_frequency(serial_lines)
+        frequency, dumped_lost = last_trace_header(serial_lines)
         system = parse_system(serial_lines)
-        if system["trace_lost"] != 0:
+        user_heap = parse_user_heap(serial_lines)
+        if frequency != system["timer_frequency_hz"]:
+            fail("trace frequency disagrees with system generic timer")
+        if dumped_lost != system["trace_lost"]:
+            fail("final trace dump loss disagrees with the system snapshot")
+        if dumped_lost != 0:
             fail("terminal workload lost trace events")
         processes = parse_processes(serial_lines)
-        editor = parse_editor(serial_lines, frequency)
+        editor = parse_editor(
+            serial_lines,
+            system["pmu_status"],
+            system.get("instruction_event_status", "unavailable"),
+        )
+        if (manifest["pmu"] == "on") != (system["pmu_status"] == "available"):
+            fail("manifest PMU mode disagrees with guest availability")
         (
             groups,
             invalid,
@@ -315,9 +594,9 @@ def main(arguments):
                 metric["provenance"] = "vt-deterministic-encoded-byte-count"
 
         document = {
-            "build_mode": "REIX_TERMINAL_PROFILE",
-            "guest_memory_bytes": 4_194_304,
-            "initrd": "embedded",
+            "build_mode": manifest["build_mode"],
+            "guest_memory_bytes": manifest["guest_memory_bytes"],
+            "initrd": manifest["initrd"],
             "interactions": {
                 "complete_total_samples": len(latency_values["total"]),
                 "groups": groups,
@@ -339,23 +618,31 @@ def main(arguments):
             ),
             "processes": {
                 name: {
-                    "resident_pages": {"status": "measured", "value": values["resident_pages"], "provenance": "serial"},
-                    "stack_pages": {"status": "measured", "value": values["stack_pages"], "provenance": "serial"},
+                    "mapped_pages": {"status": "measured", "value": values["mapped_pages"], "provenance": "address-space-nonunique"},
+                    "virtual_extent_pages": {"status": "measured", "value": values["virtual_extent_pages"], "provenance": "vma-extent"},
+                    "stack_extent_pages": {"status": "measured", "value": values["stack_extent_pages"], "provenance": "grow-down-vma-high-water"},
+                    "stack_capacity_pages": {"status": "measured", "value": values["stack_capacity_pages"], "provenance": "vma-gap-limit"},
                 }
                 for name, values in processes.items()
             },
             "editor_workloads": {
-                name: {
+                name: ({
                     "bytes": {"status": "measured", "value": values["bytes"], "provenance": "serial"},
-                    "cycles": {"status": "measured", "value": values["cycles"], "provenance": "pmu-el0"},
-                    "instructions": {
-                        "status": "measured", "value": values["instructions"], "provenance": "pmu-el0"
-                    },
-                    "microseconds": {
-                        "status": "derived", "value": values["microseconds"],
-                        "provenance": "pmu-cycles-over-counter-frequency"
-                    },
-                }
+                    "duration_ticks": {"status": "measured", "value": values["timer_ticks"], "unit": "generic-timer-ticks", "provenance": "cntvct-el0"},
+                    "duration_us": {"status": "derived", "value": values["timer_ticks"] * US_PER_SECOND / system["timer_frequency_hz"], "unit": "microseconds", "provenance": "generic-timer"},
+                    "cycles": {"status": "measured", "value": values["cycles"], "unit": "raw-pmu-cycles", "provenance": "pmu-el0"},
+                    "instructions": (
+                        {"status": "measured", "value": values["instructions"], "unit": "raw-event0", "provenance": "pmu-el0"}
+                        if values["instruction_event_status"] == "available" else
+                        {"status": "unavailable", "reason": values["instruction_reason"]}
+                    ),
+                } if values["pmu_status"] == "available" else {
+                    "bytes": {"status": "measured", "value": values["bytes"], "provenance": "serial"},
+                    "duration_ticks": {"status": "measured", "value": values["timer_ticks"], "unit": "generic-timer-ticks", "provenance": "cntvct-el0"},
+                    "duration_us": {"status": "derived", "value": values["timer_ticks"] * US_PER_SECOND / system["timer_frequency_hz"], "unit": "microseconds", "provenance": "generic-timer"},
+                    "cycles": {"status": "unavailable", "reason": values["reason"]},
+                    "instructions": {"status": "unavailable", "reason": values["reason"]},
+                })
                 for name, values in editor.items()
             },
             "provenance": {
@@ -363,29 +650,66 @@ def main(arguments):
                 "git_revision": revision,
                 "qemu_version": os.environ.get("QEMU_VERSION", "unavailable"),
                 "sources": {"interaction_report": interaction_path, "serial_log": serial_path},
-            },
-            "schema_version": 1,
-            "system": {
-                "counter_freq": {"status": "measured", "value": system["counter_freq"], "provenance": "serial"},
-                "exception_stack_peak_bytes": {"status": "measured", "value": system["exception_stack_peak_bytes"], "provenance": "serial"},
-                "free_bytes": {"status": "derived", "value": system["free_pages"] * PAGE_BYTES, "provenance": "pages-4096"},
-                "free_pages": {"status": "measured", "value": system["free_pages"], "provenance": "serial"},
-                "heap_high_water_bytes": {
-                    "status": "measured", "value": system["heap_high_water_bytes"], "provenance": "serial"
+                "run_manifest": manifest_path,
+                "binary_and_input": {
+                    "kernel_sha256": manifest["kernel_sha256"],
+                    "disk_sha256": manifest["disk_sha256"],
+                    "input_sha256": manifest["input_sha256"],
+                    "toolchain": manifest["toolchain"],
+                    "qemu_flags": manifest["qemu_flags"],
+                    "working_directory": manifest["working_directory"],
+                    "effective_cpu": manifest["effective_cpu"],
+                    "effective_drive_file": manifest["effective_drive_file"],
+                    "machine": manifest["machine"],
+                    "vcpu_count": manifest["vcpu_count"],
+                    "initrd_artifact": manifest["initrd_artifact"],
+                    "disk_hash_scope": manifest["disk_hash_scope"],
+                    "kernel_path": manifest["kernel_path"],
+                    "disk_path": manifest["disk_path"],
                 },
-                "kernel_stack_peak_bytes": {"status": "measured", "value": system["kernel_stack_peak_bytes"], "provenance": "serial"},
-                "total_pages": {"status": "measured", "value": system["total_pages"], "provenance": "serial"},
+            },
+            "schema_version": 2,
+            "system": {
+                "page_bytes": PAGE_BYTES,
+                "physical_total_pages": {"status": "measured", "value": system["physical_total_pages"], "provenance": "ppm"},
+                "physical_allocated_pages": {"status": "measured", "value": system["physical_allocated_pages"], "provenance": "ppm"},
+                "physical_free_pages": {"status": "measured", "value": system["physical_free_pages"], "provenance": "ppm"},
+                "kernel_heap_live_capacity_bytes": {"status": "measured", "value": system["kernel_heap_live_capacity_bytes"], "provenance": "kernel-heap-rounded-capacity"},
+                "kernel_heap_live_high_water_bytes": {"status": "measured", "value": system["kernel_heap_live_high_water_bytes"], "provenance": "kernel-heap-rounded-capacity"},
+                "kernel_heap_reserved_bytes": {"status": "measured", "value": system["kernel_heap_reserved_bytes"], "provenance": "kernel-heap-physical-backing"},
+                "kernel_heap_reserved_high_water_bytes": {"status": "measured", "value": system["kernel_heap_reserved_high_water_bytes"], "provenance": "kernel-heap-physical-backing"},
+                "timer_frequency_hz": {"status": "measured", "value": system["timer_frequency_hz"], "provenance": "generic-timer"},
+                "user_heap_virtual_reservation_bytes": {"status": "measured", "value": user_heap["reserved_bytes"], "provenance": "shell-user-heap"},
+                "user_heap_virtual_high_water_bytes": {"status": "measured", "value": user_heap["high_water_bytes"], "provenance": "shell-user-heap"},
+                "kernel_stack_used_high_water_bytes": {"status": "measured", "value": system["kernel_stack_used_high_water_bytes"], "provenance": "stack-poison-scan"},
+                "kernel_stack_capacity_bytes": {"status": "measured", "value": system["kernel_stack_capacity_bytes"], "provenance": "linker-span"},
+                "exception_stack_used_high_water_bytes": {"status": "measured", "value": system["exception_stack_used_high_water_bytes"], "provenance": "panic-only-stack-poison-scan"},
+                "exception_stack_capacity_bytes": {"status": "measured", "value": system["exception_stack_capacity_bytes"], "provenance": "linker-span"},
+                "pmu": ({"status": "available", "event_counters": system["pmu_event_counters"],
+                         "instructions_retired": (
+                             {"status": "available", "provenance": "pmceid0-event-0x08"}
+                             if system["instruction_event_status"] == "available" else
+                             {"status": "unavailable", "reason": system["instruction_reason"],
+                              "provenance": "pmceid0-event-0x08"}
+                         ),
+                         "provenance": "kernel-pmu-probe"}
+                        if system["pmu_status"] == "available" else
+                        {"status": "unavailable", "reason": system["pmu_reason"], "provenance": "kernel-pmu-probe"}),
                 "trace_lost": {"status": "measured", "value": system["trace_lost"], "provenance": "serial"},
-                "trace_overflow_during_workload": {
+                "trace_lost_final_snapshot": {
                     "status": "measured",
                     "value": system["trace_lost"],
-                    "provenance": "trace-reset-before-workload",
+                    "scope": manifest["trace_scope"],
+                    "provenance": "trace-ring-final-dump",
                 },
             },
             "workload": {
-                "command": "shell.exit()",
+                "id": manifest["workload_id"],
+                "command": manifest["command"],
                 "editor": ["paste-8192", "layout-8192"],
-                "storage": "absent",
+                "storage": manifest["storage"],
+                "pre_shell_workload": manifest["pre_shell_workload"],
+                "pmu": manifest["pmu"],
             },
         }
         with open(output_path, "w", encoding="utf-8", newline="\n") as output:

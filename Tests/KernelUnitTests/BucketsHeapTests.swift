@@ -30,6 +30,59 @@ struct BucketsHeapTests {
         var value: UInt64 = 0
     }
 
+    @Test("heap metrics separate live rounded capacity from retained backing")
+    func metricAccounting() {
+        withHostHeap(pages: 32) { _, heap in
+            #expect(heap.metricsLiveBytes == 0)
+            #expect(heap.metricsReservedBytes == 0)
+
+            let small = heap.kmalloc(1)
+            #expect(heap.metricsLiveBytes == 8)
+            #expect(heap.metricsLiveHighWaterBytes == 8)
+            #expect(heap.metricsReservedBytes == 4096)
+            #expect(heap.metricsReservedHighWaterBytes == 4096)
+
+            let large = heap.kmalloc(5000)
+            #expect(heap.metricsLiveBytes == 8200)
+            #expect(heap.metricsLiveHighWaterBytes == 8200)
+            #expect(heap.metricsReservedBytes == 12_288)
+            #expect(heap.metricsReservedHighWaterBytes == 12_288)
+
+            heap.kfree(small)
+            #expect(heap.metricsLiveBytes == 8192)
+            #expect(heap.metricsReservedBytes == 8192)
+            heap.kfree(large)
+            #expect(heap.metricsLiveBytes == 0)
+            #expect(heap.metricsReservedBytes == 0)
+            #expect(heap.metricsLiveHighWaterBytes == 8200)
+            #expect(heap.metricsReservedHighWaterBytes == 12_288)
+        }
+    }
+
+
+    @Test("an unexpected PPM reference retains slab backing in the metric")
+    func retainedBackingAfterPPMRefusal() {
+        withHostHeap(pages: 32) { ram, heap in
+            let wholePage = heap.kmalloc(4096)
+            let physical = PhysicalAddress(UInt(bitPattern: wholePage))
+            let index = ram.frameIndex(of: physical)
+            let allocated = ram.ppm.pointee.allocatedPages
+
+            // Heap slab frames have one owner. An injected extra reference is
+            // precisely the state PPMBackend must refuse rather than claiming
+            // that PhysicalPageManager released the frame.
+            ram.frames[index].refCount = 2
+            heap.kfree(wholePage)
+
+            #expect(heap.metricsLiveBytes == 0)
+            #expect(heap.metricsReservedBytes == 4096)
+            #expect(heap.metricsReservedHighWaterBytes == 4096)
+            #expect(ram.ppm.pointee.allocatedPages == allocated)
+            #expect(ram.frames[index].refCount == 2)
+            #expect(ram.frames[index].heapShift == 12)
+        }
+    }
+
     @Test("a request is promoted to the next power of two, floored at the smallest bucket")
     func bucketPromotion() {
         withHostHeap(pages: 32) { ram, heap in

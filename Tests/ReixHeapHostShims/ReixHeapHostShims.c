@@ -17,6 +17,7 @@ enum {
 };
 
 static _Alignas(reix_page_size) unsigned char arena[reix_arena_pages * reix_page_size];
+static _Alignas(reix_page_size) unsigned char large_arena[4 * reix_page_size];
 static uintptr_t current_break;
 static uint64_t syscall_count;
 static uint64_t decommit_count;
@@ -25,6 +26,10 @@ static int zero_next_break_query;
 static int malformed_next_break_query;
 static int malformed_query_after_next_growth;
 static uint64_t break_set_count;
+static uint64_t munmap_count;
+static uint64_t munmap_failures;
+static int large_mapping_enabled;
+static uint64_t large_mapping_size;
 
 void reix_heap_host_reset(void) {
     current_break = (uintptr_t)arena;
@@ -35,7 +40,15 @@ void reix_heap_host_reset(void) {
     malformed_next_break_query = 0;
     malformed_query_after_next_growth = 0;
     break_set_count = 0;
+    munmap_count = 0;
+    munmap_failures = 0;
+    large_mapping_enabled = 0;
+    large_mapping_size = 0;
 }
+
+void reix_heap_host_enable_large_mapping(void) { large_mapping_enabled = 1; }
+void reix_heap_host_fail_munmap(uint64_t count) { munmap_failures = count; }
+uint64_t reix_heap_host_munmap_count(void) { return munmap_count; }
 
 void reix_heap_host_fail_decommit(uint64_t count) {
     decommit_failures = count;
@@ -79,7 +92,6 @@ uint64_t _asm_syscall(
     uint64_t arg6,
     uint64_t arg7
 ) {
-    (void)arg2;
     (void)arg3;
     (void)arg4;
     (void)arg5;
@@ -124,7 +136,26 @@ uint64_t _asm_syscall(
         return 0;
     }
 
-    if (number == reix_syscall_mmap || number == reix_syscall_munmap) {
+    if (number == reix_syscall_mmap) {
+        if (!large_mapping_enabled || arg1 == 0 || arg1 > sizeof(large_arena)
+            || large_mapping_size != 0) {
+            return 0;
+        }
+        large_mapping_size = arg1;
+        return (uint64_t)(uintptr_t)large_arena;
+    }
+
+    if (number == reix_syscall_munmap) {
+        munmap_count += 1;
+        if (munmap_failures > 0) {
+            munmap_failures -= 1;
+            return UINT64_MAX;
+        }
+        if (arg1 != (uint64_t)(uintptr_t)large_arena || arg2 != large_mapping_size
+            || large_mapping_size == 0) {
+            return UINT64_MAX;
+        }
+        large_mapping_size = 0;
         return 0;
     }
 

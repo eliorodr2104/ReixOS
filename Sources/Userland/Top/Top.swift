@@ -73,7 +73,7 @@ public func main() {
             
             print("[ TOP   ]  PID  NAME                CPU_US  PAGES  STACK     MEM     STATUS")
 
-            let microsPerTick = sys.counterFreq / 1_000_000
+            let microsPerTick = sys.timerFrequency / 1_000_000
 
             for i in 0..<processCount {
                 let stats     = buffer[i]
@@ -86,12 +86,12 @@ public func main() {
                 print(" ", terminator: "")
                 printDecPadded(cpuMicros, width: 9)
                 print("  ", terminator: "")
-                printDecPadded(UInt64(stats.residentPages), width: 4)
+                printDecPadded(UInt64(stats.mappedPages), width: 4)
                 print("  ", terminator: "")
-                printDecPadded(UInt64(stats.stackPages), width: 5)
+                printDecPadded(UInt64(stats.stackExtentPages), width: 5)
                 print("  ", terminator: "")
                 
-                let memoryNormalized = normalizeRam(pages: UInt64(stats.residentPages))
+                let memoryNormalized = normalizeRam(pages: UInt64(stats.mappedPages))
                 
                 printDecPadded(UInt64(memoryNormalized.value), width: 3)
                 print(" ", terminator: "")
@@ -106,14 +106,14 @@ public func main() {
             
             print("[ TOP   ] FREE PAGES      EVENTS   DROPPED   MEM FREE")
             print("[ TOP   ]", terminator: " ")
-            printDec(sys.freePages, terminator: "")
+            printDec(sys.physicalFreePages, terminator: "")
             print("/", terminator: "")
-            printDec(sys.totalPages, terminator: "")
+            printDec(sys.physicalTotalPages, terminator: "")
             
             printDecPadded(UInt64(drained), width: 11)
             printDecPadded(ring.dropped, width: 10)
             
-            let normalizedRam = normalizeRam(pages: sys.freePages)
+            let normalizedRam = normalizeRam(pages: sys.physicalFreePages)
             
             printDecPadded(normalizedRam.value, width: 9)
             print(" ", terminator: "")

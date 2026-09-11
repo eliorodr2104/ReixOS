@@ -68,10 +68,10 @@ struct TraceExportBatch {
 ///
 ///     @0   seq          UInt32   odd while being written
 ///     @4   reserved     UInt32
-///     @8   SystemStats  56 B
-///     @64  processCount UInt32
-///     @68  reserved     UInt32
-///     @72  ProcessStats 48 B each, up to 16
+///     @8   SystemStats  96 B
+///     @104 processCount UInt32
+///     @108 reserved     UInt32
+///     @112 ProcessStats 64 B each, up to 16
 ///
 /// Pages 1 and up are an event ring:
 ///
@@ -100,18 +100,8 @@ enum TraceExport {
 
     // MARK: - Wire layout
 
-    /// Byte offsets inside page 0. Wire constants: the userland consumer
-    /// hardcodes the same numbers, so add fields, never move one.
-    private static let seqOffset          = 0
-    private static let systemStatsOffset  = 8
-    private static let processCountOffset = 64
-    private static let processStatsOffset = 72
-
-    /// `ProcessStats` on the wire, and how many of them page 0 has room for.
-    /// The stride is the ABI struct's own, restated here because the offsets
-    /// above are a contract and not a consequence of a Swift layout.
-    private static let processStatsStride = 48
-    private static let processLimit       = 16
+    // Page 0 is addressed through `StatsExportPage` at every use below: the
+    // userland consumer reads that same declaration.
 
     /// Byte offsets inside the ring header, which starts at page 1.
     private static let ringTailOffset    = TraceExportBatch.tailOffset
@@ -136,8 +126,9 @@ enum TraceExport {
     /// Records moved per tick once `TraceRing` is filling up faster than
     /// `baseEventBudget` drains it.
     ///
-    /// A quarter of `TraceRing.capacity` (256): a backlog that reaches the
-    /// whole ring drains in at most four ticks instead of thirty-two, while a
+    /// A quarter of the normal `TraceRing.capacity` (256): a backlog that
+    /// reaches the whole normal ring drains in at most four ticks instead of
+    /// thirty-two, while a
     /// single tick still never copies more than 64 * 32 = 2,048 bytes, a few
     /// hundred stores that cannot meaningfully delay the scheduler, sleep
     /// wakeups, or IPC timeouts riding the same tick. The overflow is not
@@ -171,7 +162,6 @@ enum TraceExport {
     private static var ringCapacity: UInt32 = 0
     private static var ringMask    : UInt32 = 0
 
-    private static var scheduler     : UnsafeMutablePointer<KernelScheduler>? = nil
     private static var ppm           : UnsafeMutablePointer<KernelPPM>?       = nil
     private static var heap          : UnsafeMutablePointer<KernelHeap>?      = nil
     private static var processManager: UnsafeMutablePointer<ProcessManager>?  = nil
@@ -200,9 +190,9 @@ enum TraceExport {
     ///
     /// `base` is the kernel's linear-map window on the region's frames and
     /// `pageCount` its length, both already validated by the caller against
-    /// the capability that named it. The scheduler and the PPM come from the
-    /// syscall context rather than from `Kernel`, so the tick reads exactly the
-    /// instances the syscall layer was built with.
+    /// the capability that named it. The PPM, the heap and the process manager
+    /// come from the syscall context rather than from `Kernel`, so the tick
+    /// reads exactly the instances the syscall layer was built with.
     ///
     /// A second attach replaces the first without ceremony. There is one
     /// consumer, and a kernel that refused would leave a process that died
@@ -219,7 +209,6 @@ enum TraceExport {
         base          : UnsafeMutableRawPointer,
         backing       : UnsafeMutablePointer<SharedRegion>,
         pageCount     : UInt32,
-        scheduler     : UnsafeMutablePointer<KernelScheduler>,
         ppm           : UnsafeMutablePointer<KernelPPM>,
         heap          : UnsafeMutablePointer<KernelHeap>,
         processManager: UnsafeMutablePointer<ProcessManager>
@@ -246,7 +235,6 @@ enum TraceExport {
 
         Self.ringCapacity   = capacity
         Self.ringMask       = capacity &- 1
-        Self.scheduler      = scheduler
         Self.ppm            = ppm
         Self.heap           = heap
         Self.processManager = processManager
@@ -301,7 +289,6 @@ enum TraceExport {
         ringCapacity = 0
         ringMask     = 0
 
-        scheduler      = nil
         ppm            = nil
         heap           = nil
         processManager = nil
@@ -362,12 +349,12 @@ enum TraceExport {
     /// six stores each, one `dsb ishst`, one cursor store, and one read of the
     /// consumer's head — bounded regardless of how far behind the kernel ring
     /// has fallen, since the budget never exceeds that constant. One tick in
-    /// 32 adds a stats refresh, which is one 48-byte store for the system
-    /// counters and, for at most sixteen processes, a 48-byte store and a
-    /// 16-byte name copy each. Every figure it reports is a counter somebody
-    /// else already maintains, so there is no walk inside the walk: a few
-    /// kilobytes of stores at the worst is the whole of the interrupt latency
-    /// this subsystem adds.
+    /// 32 adds a stats refresh: one 96-byte store for the system counters, and
+    /// for at most sixteen processes a 62-byte store, a 16-byte name copy and
+    /// one pass over that process's VMA list, which is O(its VMA count) and
+    /// touches no page table. A few kilobytes of stores and sixteen short list
+    /// walks at the worst is the whole of the interrupt latency this subsystem
+    /// adds.
     ///
     /// - Note: IRQs are masked for the length of the tick handler, so no emit
     ///   can reach `TraceRing` while the drain below reads it. That is the
@@ -394,7 +381,7 @@ enum TraceExport {
     ///
     /// The free-slot count is what bounds the copy, so the body below cannot
     /// overrun a reader that has fallen behind: a record with nowhere to go is
-    /// left in `TraceRing`, which holds 256 of them and is the buffer that
+    /// left in `TraceRing`, whose build-specific capacity is the buffer that
     /// absorbs a consumer's bad second. Only when the kernel ring evicts one
     /// before the cursor reaches it does anything become unrecoverable, and
     /// that is exactly what `drainForExport` returns.
@@ -468,127 +455,49 @@ enum TraceExport {
     /// interrupt and must never wait on a user process, and because the only
     /// cost of losing the race is the reader looking again.
     ///
-    /// Every scheduler and PPM scalar is read into a local before the process
-    /// walk starts. Reading one inside `forEachProcess` would be a second
-    /// access to a value the walk is already reading, which is an exclusivity
-    /// violation and not merely untidy.
+    /// The system record is taken before the process walk starts. Reading a
+    /// PPM or heap scalar inside `forEachProcess` would be a second access to
+    /// a value the walk is already reading, which is an exclusivity violation
+    /// and not merely untidy.
     ///
-    /// The counters are the same ones `ProcStatsSyscall` reports, read the same
-    /// way. The two providers deliberately share no code: that one answers a
-    /// caller's own buffer under `validateRegion` and this one writes a region
-    /// the kernel already owns, and the only thing they have in common is the
-    /// arithmetic, which is a subtraction.
+    /// The record is filled by `ProcStatsSyscall`, which is the other writer
+    /// of it: one wire record has one filler. What differs is where it lands,
+    /// a caller's buffer under `validateRegion` there and a region the kernel
+    /// already owns here.
     private static func refreshStats(into page: UnsafeMutableRawPointer) {
-        guard let scheduler      = Self.scheduler,
-              let ppm            = Self.ppm,
+        guard let ppm            = Self.ppm,
+              let heap           = Self.heap,
               let processManager = Self.processManager
         else { return }
 
-        let now       = Arch.Timer.counterUnordered()
-        let total     = ppm.pointee.totalPages
-        let allocated = ppm.pointee.allocatedPages
-
-        var stats = SystemStats()
-
-        stats.totalPages  = total
-        stats.freePages   = allocated >= total ? 0 : total - allocated
-        stats.systemTicks = scheduler.pointee.systemTicks
-        stats.idleTime    = scheduler.pointee.idleTime
-        stats.counterFreq = Arch.Timer.frequency()
-        stats.traceLost   = TraceRing.lost
-
-        stats.kernelStackPeak    = UInt32(StackUsage.kernelStack)
-        stats.exceptionStackPeak = UInt32(StackUsage.exceptionStack)
+        let now   = Arch.Timer.counterUnordered()
+        let stats = ProcStatsSyscall.systemSnapshot(ppm: ppm, heap: heap)
 
         sequence &+= 1
-        page.storeBytes(of: sequence, toByteOffset: seqOffset, as: UInt32.self)
+        page.storeBytes(of: sequence, toByteOffset: StatsExportPage.sequenceOffset, as: UInt32.self)
         publishBarrier()
 
-        let systemSlot = page + systemStatsOffset
+        let systemSlot = page + StatsExportPage.systemOffset
         systemSlot.assumingMemoryBound(to: SystemStats.self).pointee = stats
         var slotIndex: UInt32 = 0
 
         // The family tree, not the scheduler queues: those miss every process
         // blocked on an endpoint, which is where the servers live.
-        let visited = processManager.pointee.forEachProcess(upTo: UInt32(processLimit)) { process in
-            let slot = page + processStatsOffset + Int(slotIndex) * processStatsStride
-            slot.assumingMemoryBound(to: ProcessStats.self).pointee = snapshot(
+        let limit = UInt32(StatsExportPage.processSlotLimit)
+        let visited = processManager.pointee.forEachProcess(upTo: limit) { process in
+            let slot = page + StatsExportPage.processSlotsOffset
+                + Int(slotIndex) * StatsExportPage.processSlotStride
+            slot.assumingMemoryBound(to: ProcessStats.self).pointee = ProcStatsSyscall.snapshot(
                 of : process,
                 now: now
             )
             slotIndex &+= 1
         }
 
-        page.storeBytes(of: visited, toByteOffset: processCountOffset, as: UInt32.self)
+        page.storeBytes(of: visited, toByteOffset: StatsExportPage.processCountOffset, as: UInt32.self)
 
         publishBarrier()
         sequence &+= 1
-        page.storeBytes(of: sequence, toByteOffset: seqOffset, as: UInt32.self)
-    }
-
-
-    /// One process, as the ABI reports it.
-    ///
-    /// The running process is the only one with an open slice, so its live
-    /// `cpuTime` is the closed total plus `now - scheduledAt`. One `now` serves
-    /// the whole refresh, and it is the unordered counter read: this is a
-    /// report and not a measured region, so there is nothing an `isb` would
-    /// keep on the right side of it.
-    ///
-    /// A corpse the parent has not reaped has already lost its metadata and its
-    /// address space, so both are read through an optional and a missing one
-    /// costs the slot its name or its page count, never the walk.
-    private static func snapshot(
-        of process: UnsafeMutablePointer<Process>,
-        now       : UInt64
-    ) -> ProcessStats {
-
-        var stats = ProcessStats()
-
-        let scheduledAt = process.pointee.scheduledAt
-
-        var cpuTime = process.pointee.cpuTime
-        if case .running = process.pointee.status, scheduledAt != 0 {
-            cpuTime &+= now &- scheduledAt
-        }
-
-        stats.pid         = process.pointee.pid
-        stats.cpuTime     = cpuTime
-        stats.status      = statusCode(of: process.pointee.status)
-        stats.scheduledAt = scheduledAt
-
-        stats.residentPages = process.pointee.addressSpace.vmaManager?.pointee.residentPages ?? 0
-
-        let stackPages = process.pointee.addressSpace.vmaManager?.pointee.stackPages ?? 0
-        stats.stackPages = UInt16(min(stackPages, UInt32(UInt16.max)))
-
-        if let metadata = process.pointee.metadata {
-            stats.nameLength = metadata.pointee.nameLength
-
-            for index in 0..<stats.name.count {
-                stats.name[index] = metadata.pointee.name[index]
-            }
-        }
-
-        return stats
-    }
-
-
-    /// The scheduler state, as the wire numbers the ABI documents.
-    ///
-    /// Fixed by the ABI and not by `ProcessStatus`'s declaration order, so a
-    /// case added to that enum leaves these alone. The two blocked-on-endpoint
-    /// cases drop their endpoint: a reader has no way to name one.
-    private static func statusCode(of status: ProcessStatus) -> UInt8 {
-        switch status {
-            case .new                : 0
-            case .ready              : 1
-            case .running            : 2
-            case .waiting            : 3
-            case .blockedOnSend(_)   : 4
-            case .blockedOnReceive(_): 5
-            case .blockedOnReply     : 6
-            case .terminated         : 7
-        }
+        page.storeBytes(of: sequence, toByteOffset: StatsExportPage.sequenceOffset, as: UInt32.self)
     }
 }

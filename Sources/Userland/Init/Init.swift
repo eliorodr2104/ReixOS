@@ -133,7 +133,7 @@ public func main() {
     // this run, rather than to boot activity retained for the normal image.
     profileControl(.reset, authority: profiler)
     // Keep only interaction marks while Shell scans process statistics: IPC and
-    // context events would otherwise displace the bounded 256-entry correlation
+    // context events would otherwise displace the bounded profiling correlation
     // trace. The normal 0x3F suite already covers those general categories.
     profileControl(.enable, authority: profiler, arg: 0x100)
     #else

@@ -95,10 +95,10 @@ struct SbrkBackend<let arenaPages: Int>: SlabBackend {
         return UnsafeMutableRawPointer(bitPattern: previousEnd)
     }
 
-    mutating func releasePage(_ page: UnsafeMutableRawPointer) {
-        guard owns(page: page) else { return }
+    mutating func releasePage(_ page: UnsafeMutableRawPointer) -> Bool {
+        guard owns(page: page) else { return false }
         let index = pageIndex(page)
-        guard shifts[index] != 0, freeTop < UInt(arenaPages) else { return }
+        guard shifts[index] != 0, freeTop < UInt(arenaPages) else { return false }
 
         _ = decommit(addr: UInt64(UInt(bitPattern: page)), size: 4096)
 
@@ -111,6 +111,7 @@ struct SbrkBackend<let arenaPages: Int>: SlabBackend {
 
         freePages[Int(freeTop)] = UInt16(index)
         freeTop += 1
+        return true
     }
 
     @inline(__always)

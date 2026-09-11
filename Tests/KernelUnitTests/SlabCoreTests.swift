@@ -27,6 +27,29 @@ struct SlabCoreTests {
 
     private static let pageSize = 4096
 
+    @Test("reserved backing follows acquisition, rollback, and final release")
+    func reservedBackingAccounting() {
+        withSlabCore(pages: 3) { core in
+            #expect(core.reservedPages == 0)
+
+            let first = core.alloc(size: 64)!
+            #expect(core.reservedPages == 1)
+            let released = core.free(first)
+            #expect(released)
+            #expect(core.reservedPages == 0)
+
+            core.backend.rejectOneAllocation()
+            #expect(core.alloc(size: 128) == nil)
+            #expect(core.reservedPages == 0)
+
+            core.backend.rejectOneAllocation()
+            core.backend.retainOneReleasedPage()
+            #expect(core.alloc(size: 256) == nil)
+            #expect(core.reservedPages == 1)
+            #expect(core.backend.livePages == 1)
+        }
+    }
+
 
     @Test("every size rounds up to a power of two and shares that bucket")
     func bucketPromotion() {

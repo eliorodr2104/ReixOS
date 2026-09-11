@@ -95,7 +95,7 @@ QEMU_INITRD  = $(if $(filter embedded,$(INITRD_MODE)),,-initrd $(OUT)/initrd.tar
 # instead and get working code intelligence.
 export FREESTANDING := 1
 
-.PHONY: all build image release app programs programs-release run boot run-release run-4m smoke smoke-4m test host-test vm-test terminal-baseline-4m disk prune-dups clean-image clean
+.PHONY: all build image release app programs programs-release run boot run-release run-4m smoke smoke-4m test host-test performance-test vm-test terminal-baseline-4m disk prune-dups clean-image clean
 
 all: image
 
@@ -261,6 +261,17 @@ host-test: prune-dups
 	$(SWIFT) run ShellCatalogHarness
 	$(SWIFT) run SbrkHeapHarness
 	SWIFT=$(SWIFT) sh scripts/test-trace-interaction.sh
+	sh scripts/test-scenario-artifact-isolation.sh
+
+# Timing thresholds run only in an optimized, unsanitized host build. The same
+# tests still exercise their functional oracle in host-test and ASan runs.
+#
+# Two lines, and both are needed: a target-specific variable line carries no
+# recipe, so the rule below is what make actually runs.
+performance-test: FREESTANDING :=
+performance-test:
+	REIX_PERFORMANCE_GATES=1 $(SWIFT) test -c release --no-parallel \
+	    --scratch-path $(OUT)/build-performance --filter FileSystemTests.OptimisationTests
 
 # The QEMU scenario matrix: every row in Tests/Scenarios/scenarios.tsv, booted
 # one at a time by scripts/scenarios.sh over the same scripts/smoke.sh that
@@ -277,13 +288,11 @@ vm-test: programs
 
 terminal-baseline-4m: export TERMINAL_PROFILE := 1
 terminal-baseline-4m: BUILD_PATH := .build-terminal-profile
-# Terminal-focused: storage-4m remains the separate proof for the full storage
-# stack. At 4 MiB the instrumented image completes storage with a disk but does
-# not start Shell; without a disk this measures kernel -> VTAdapter -> Shell
-# without conflating terminal capacity with the file system's footprint.
-terminal-baseline-4m: image
-	QEMU=$(QEMU) QEMU_FLAGS='$(QEMU_FLAGS)' SWIFT=$(SWIFT) OUT=$(OUT) \
-	    scripts/scenarios.sh terminal-profile-4m
+# Same disk + StorageCheck + Shell.help/exit workload as the normal mixed row.
+# The instrumented image additionally emits the metric snapshot.
+terminal-baseline-4m: programs
+	QEMU=$(QEMU) QEMU_FLAGS='$(QEMU_FLAGS) $(QEMU_DISK)' DISK=$(DISK) \
+	    SWIFT=$(SWIFT) OUT=$(OUT) scripts/scenarios.sh mixed-profile-4m
 
 clean-image:
 	rm -rf $(OUT)

@@ -19,4 +19,5 @@ protocol PMURegisterAccess {
     static func readDebugFeatures() -> UInt64
     static func configure()
     static func readPMCR() -> UInt64
+    static func readPMCEID0() -> UInt64
 }

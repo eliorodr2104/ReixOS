@@ -143,7 +143,6 @@ public struct ProfileControlSyscall: SyscallProvider {
             base          : base,
             backing       : region,
             pageCount     : pageCount,
-            scheduler     : context.scheduler,
             ppm           : context.ppm,
             heap          : context.ipc.pointee.heap,
             processManager: context.processManager

@@ -1,9 +1,12 @@
-[ TERMINAL BASELINE ] system status=measured total_pages=1024 free_pages=512 counter_freq=1000000 trace_lost=0 kernel_stack_peak_bytes=1024 exception_stack_peak_bytes=0
-[ TERMINAL BASELINE ] process status=measured pid=2 name=SerialServer.elf resident_pages=9 stack_pages=1
-[ TERMINAL BASELINE ] process status=measured pid=3 name=ConsoleServer.elf resident_pages=16 stack_pages=1
-[ TERMINAL BASELINE ] process status=measured pid=5 name=InputServer.elf resident_pages=12 stack_pages=2
-[ TERMINAL BASELINE ] process status=measured pid=6 name=VTAdapter.elf resident_pages=19 stack_pages=3
-[ TERMINAL BASELINE ] process status=measured pid=8 name=Shell.elf resident_pages=173 stack_pages=134
+[ TERMINAL BASELINE ] editor status=measured workload=paste-8192 bytes=8192 timer_unit=ticks timer_ticks=200 pmu_status=available counter_unit=raw cycles=500 instruction_event_status=unavailable instruction_reason=inst-retired-not-advertised
+[ TERMINAL BASELINE ] editor status=measured workload=layout-8192 bytes=8192 timer_unit=ticks timer_ticks=50 pmu_status=available counter_unit=raw cycles=100 instruction_event_status=unavailable instruction_reason=inst-retired-not-advertised
+[ TERMINAL BASELINE ] system status=measured page_bytes=4096 physical_total_pages=1024 physical_allocated_pages=512 physical_free_pages=512 kernel_heap_live_capacity_bytes=10000 kernel_heap_live_high_water_bytes=12000 kernel_heap_reserved_bytes=16384 kernel_heap_reserved_high_water_bytes=20480 timer_frequency_hz=1000000 trace_lost=0 kernel_stack_used_high_water_bytes=1024 kernel_stack_capacity_bytes=65536 exception_stack_used_high_water_bytes=0 exception_stack_capacity_bytes=4096 pmu_status=available pmu_event_counters=6 instruction_event_status=unavailable instruction_reason=inst-retired-not-advertised
+[ TERMINAL BASELINE ] user_heap status=measured process=Shell.elf domain=virtual-reservation unit=bytes reserved_bytes=65536 high_water_bytes=131072
+[ TERMINAL BASELINE ] process status=measured mapped_semantics=address-space-nonunique pid=2 name=SerialServer.elf mapped_pages=9 virtual_extent_pages=20 stack_extent_pages=1 stack_capacity_pages=8
+[ TERMINAL BASELINE ] process status=measured mapped_semantics=address-space-nonunique pid=3 name=ConsoleServer.elf mapped_pages=16 virtual_extent_pages=30 stack_extent_pages=1 stack_capacity_pages=8
+[ TERMINAL BASELINE ] process status=measured mapped_semantics=address-space-nonunique pid=5 name=InputServer.elf mapped_pages=12 virtual_extent_pages=24 stack_extent_pages=2 stack_capacity_pages=8
+[ TERMINAL BASELINE ] process status=measured mapped_semantics=address-space-nonunique pid=6 name=VTAdapter.elf mapped_pages=19 virtual_extent_pages=32 stack_extent_pages=3 stack_capacity_pages=8
+[ TERMINAL BASELINE ] process status=measured mapped_semantics=address-space-nonunique pid=8 name=Shell.elf mapped_pages=173 virtual_extent_pages=220 stack_extent_pages=10 stack_capacity_pages=32
 [TRACE] begin v=2 freq=1000000 lost=0 stack=1024 exstack=0
 [TRACE] t=100 ev=interactionMark pid=8 info=1 a=1 b=1
 [TRACE] t=110 ev=interactionMark pid=8 info=2 a=1 b=1

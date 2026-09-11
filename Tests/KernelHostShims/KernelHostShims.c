@@ -97,6 +97,7 @@ uint64_t pmu_read_cycles(void) { return 0; }
 uint64_t pmu_read_event0(void) { return 0; }
 uint64_t pmu_read_id_aa64dfr0(void) { return 0; }
 uint64_t pmu_read_pmcr(void) { return 0; }
+uint64_t pmu_read_pmceid0(void) { return 0; }
 void rearm_core_timer(void) {}
 // The firmware call that stops the machine. On the host there is no firmware
 // and nothing to stop, so it answers "not supported" and comes back - which is

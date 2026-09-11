@@ -19,6 +19,7 @@ public struct AArch64PMU: Loggable {
     /// The cycle counter is not one of them: it is a separate register with its
     /// own enable bit, always present, and never included in this count.
     public private(set) static var eventCounters: UInt64 = 0
+    public private(set) static var eventAvailability: UInt64 = 0
     
     public static let nameLog : StaticString = "[PMU ]"
     public static let logLevel: LogLevel     = .info
@@ -38,6 +39,7 @@ public struct AArch64PMU: Loggable {
     static func initialize<Registers: PMURegisterAccess>(using: Registers.Type) -> Bool {
         initialized = false
         eventCounters = 0
+        eventAvailability = 0
 
         let version = (Registers.readDebugFeatures() >> 8) & 0xF
         switch version {
@@ -47,6 +49,7 @@ public struct AArch64PMU: Loggable {
 
         Registers.configure()
         eventCounters = (Registers.readPMCR() >> 11) & 0x1F
+        eventAvailability = Registers.readPMCEID0()
         initialized = true
         return true
     }
@@ -58,6 +61,32 @@ public struct AArch64PMU: Loggable {
     public static func probe() -> UInt64 {
         eventCounters
     }
+
+    public static var instructionsRetiredAvailable: Bool {
+        eventCounters > 0 && (eventAvailability & (UInt64(1) << 0x08)) != 0
+    }
+
+    #if !hasFeature(Embedded)
+    /// Host-test seam for record producers that must prove a known PMU state
+    /// without depending on suite order. The machine build contains no setter.
+    static func withTestState(
+        initialized: Bool,
+        eventCounters: UInt64,
+        eventAvailability: UInt64,
+        _ body: () -> Void
+    ) {
+        let saved = (Self.initialized, Self.eventCounters, Self.eventAvailability)
+        Self.initialized = initialized
+        Self.eventCounters = eventCounters
+        Self.eventAvailability = eventAvailability
+        defer {
+            Self.initialized = saved.0
+            Self.eventCounters = saved.1
+            Self.eventAvailability = saved.2
+        }
+        body()
+    }
+    #endif
 
 
     /// The cycle counter, `PMCCNTR_EL0`.

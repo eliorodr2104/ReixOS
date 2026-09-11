@@ -141,6 +141,39 @@ struct VMADecommitTests {
     }
 
 
+    @Test("memory metrics separate mapped pages, stack extent and stack capacity")
+    func memoryMetricsDomains() {
+        withManager { ram, manager in
+            let stackStart = UserSpaceLayout.stackTop - 3 * Self.pageSize
+            register(
+                manager,
+                start: stackStart - 4 * Self.pageSize,
+                pages: 2,
+                backing: .anonymous
+            )
+            register(
+                manager,
+                start: stackStart,
+                pages: 3,
+                backing: .anonymous,
+                flags: .growDown
+            )
+
+            // `mappedPages` is maintained per address space and may include
+            // shared/device mappings elsewhere, so it is not the stack's own.
+            manager.pointee.noteMapped(4)
+
+            let metrics = manager.pointee.memoryMetrics()
+            #expect(metrics.mappedPages == 4)
+            #expect(metrics.virtualExtentPages == 5)
+            #expect(metrics.stackExtentPages == 3)
+            // The two-page gap below the three-page extent is reserved for
+            // future grow-down faults; it is capacity, not resident memory.
+            #expect(metrics.stackCapacityPages == 5)
+        }
+    }
+
+
     // MARK: - Fixture
 
     /// Stands up a `VMAManager` over a host arena and runs `body` on it.
@@ -191,15 +224,33 @@ struct VMADecommitTests {
         _ manager: UnsafeMutablePointer<VMAManager>,
         from  firstPage: UInt64,
         pages          : UInt64,
-        backing        : BackingType
+        backing        : BackingType,
+        flags          : MappingFlags = .none
+    ) {
+        register(
+            manager,
+            start: Self.base + firstPage * Self.pageSize,
+            pages: pages,
+            backing: backing,
+            flags: flags
+        )
+    }
+
+
+    private func register(
+        _ manager: UnsafeMutablePointer<VMAManager>,
+        start           : VirtualAddress,
+        pages           : UInt64,
+        backing         : BackingType,
+        flags           : MappingFlags = .none
     ) {
         let node = UnsafeMutablePointer<VirtualMemoryArea>.allocate(capacity: 1)
         node.initialize(to: VirtualMemoryArea(
-            startAddress: Self.base + firstPage * Self.pageSize,
-            endAddress  : Self.base + (firstPage + pages) * Self.pageSize,
+            startAddress: start,
+            endAddress  : start + pages * Self.pageSize,
             permissions : [.read, .write, .user],
             backingType : backing,
-            mappingFlags: .none
+            mappingFlags: flags
         ))
 
         manager.pointee.vmaList.insert(node)

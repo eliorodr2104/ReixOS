@@ -304,6 +304,12 @@ private func performanceMonitors() -> [AsmRoutine] {
             mov("x0", 0b111)
             msr("pmcr_el0", "x0")
 
+            // PMCR.N is checked before any event-register access. A legal PMU
+            // with zero programmable counters still enables its cycle counter.
+            mrs("x4", "pmcr_el0")
+            raw("    ubfx x4, x4, #11, #5")
+            raw("    cbz  x4, .L_pmu_cycle_only")
+
             ldrImm("x1", countersEnabled)
             msr("pmcntenset_el0", "x1")
 
@@ -319,6 +325,15 @@ private func performanceMonitors() -> [AsmRoutine] {
             mov("x3", 0b1100)
             msr("pmuserenr_el0", "x3")
 
+            b(".L_pmu_init_done")
+
+            label(".L_pmu_cycle_only")
+            ldrImm("x1", UInt64(1) << 31)
+            msr("pmcntenset_el0", "x1")
+            mov("x3", 0b0100)
+            msr("pmuserenr_el0", "x3")
+
+            label(".L_pmu_init_done")
             isb()
             ret()
         },
@@ -326,6 +341,11 @@ private func performanceMonitors() -> [AsmRoutine] {
         // PMCR_EL0 itself, for the implemented-counter count in bits 15:11.
         fn("pmu_read_pmcr") {
             mrs("x0", "pmcr_el0")
+            ret()
+        },
+
+        fn("pmu_read_pmceid0") {
+            mrs("x0", "pmceid0_el0")
             ret()
         },
 

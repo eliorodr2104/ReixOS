@@ -10,4 +10,5 @@ internal enum HardwarePMURegisters: PMURegisterAccess {
     static func readDebugFeatures() -> UInt64 { pmu_read_id_aa64dfr0() }
     static func configure() { pmu_init() }
     static func readPMCR() -> UInt64 { pmu_read_pmcr() }
+    static func readPMCEID0() -> UInt64 { pmu_read_pmceid0() }
 }

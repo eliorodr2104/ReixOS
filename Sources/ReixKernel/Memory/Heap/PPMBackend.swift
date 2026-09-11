@@ -25,15 +25,21 @@ struct PPMBackend: SlabBackend {
         return UnsafeMutableRawPointer(bitPattern: UInt(virtual))
     }
     
-    func releasePage(_ page: UnsafeMutableRawPointer) {
-        guard owns(page: page) else { return }
+    func releasePage(_ page: UnsafeMutableRawPointer) -> Bool {
+        guard owns(page: page) else { return false }
         let idx = frameIndex(page)
 
+        // Heap pages are never shared. Refusing an unexpected extra reference
+        // keeps both the physical backing and the metric reserved instead of
+        // reporting a release that the PPM only decremented.
+        guard ppmPtr.pointee.framesMetadata![idx].refCount == 1 else { return false }
+
         guard (try? ppmPtr.pointee.free(PhysicalPage(address: phys(page), order: 0))) != nil
-        else { return }
+        else { return false }
 
         ppmPtr.pointee.framesMetadata![idx].heapShift = 0
         ppmPtr.pointee.framesMetadata![idx].heapAllocationBits = 0
+        return true
     }
 
     @inline(__always)

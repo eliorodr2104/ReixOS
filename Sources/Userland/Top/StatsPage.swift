@@ -21,21 +21,37 @@ struct StatsPage {
     ) -> Int {
 
         while true {
-            let before = base.load(fromByteOffset: 0, as: UInt32.self)
+            let before = base.load(
+                fromByteOffset: StatsExportPage.sequenceOffset,
+                as: UInt32.self
+            )
             dmbISH()
             if before & 1 != 0 { continue }
 
-            sys = base.load(fromByteOffset: 8, as: SystemStats.self)
+            sys = base.load(
+                fromByteOffset: StatsExportPage.systemOffset,
+                as: SystemStats.self
+            )
 
-            let processCount = base.load(fromByteOffset: 64, as: UInt32.self)
-            let toRead       = min(Int(processCount), buffer.count)
+            let processCount = base.load(
+                fromByteOffset: StatsExportPage.processCountOffset,
+                as: UInt32.self
+            )
+            let toRead = min(Int(processCount), buffer.count)
 
             for i in 0..<toRead {
-                buffer[i] = base.load(fromByteOffset: 72 + i * 48, as: ProcessStats.self)
+                buffer[i] = base.load(
+                    fromByteOffset: StatsExportPage.processSlotsOffset
+                        + i * StatsExportPage.processSlotStride,
+                    as: ProcessStats.self
+                )
             }
 
             dmbISH()
-            let after = base.load(fromByteOffset: 0, as: UInt32.self)
+            let after = base.load(
+                fromByteOffset: StatsExportPage.sequenceOffset,
+                as: UInt32.self
+            )
             if after == before { return toRead }
         }
     }

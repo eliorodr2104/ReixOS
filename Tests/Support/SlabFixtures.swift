@@ -25,6 +25,8 @@ public struct HostSlabBackend: SlabBackend {
 
     public private(set) var acquiredPages = 0
     public private(set) var releasedPages = 0
+    private var rejectNextAllocation = false
+    private var retainNextRelease = false
 
     /// Pages handed out and not yet given back.
     public var livePages: Int { acquiredPages - releasedPages }
@@ -57,6 +59,9 @@ public struct HostSlabBackend: SlabBackend {
     /// only once the core is out of use.
     public func release() { arena.deallocate() }
 
+    public mutating func rejectOneAllocation() { rejectNextAllocation = true }
+    public mutating func retainOneReleasedPage() { retainNextRelease = true }
+
 
     public mutating func acquirePage() -> UnsafeMutableRawPointer? {
         let page: UnsafeMutableRawPointer
@@ -76,10 +81,15 @@ public struct HostSlabBackend: SlabBackend {
     }
 
 
-    public mutating func releasePage(_ page: UnsafeMutableRawPointer) {
+    public mutating func releasePage(_ page: UnsafeMutableRawPointer) -> Bool {
+        if retainNextRelease {
+            retainNextRelease = false
+            return false
+        }
         states[key(page)] = nil
         recycled.append(page)
         releasedPages += 1
+        return true
     }
 
 
@@ -124,6 +134,10 @@ public struct HostSlabBackend: SlabBackend {
         blockIndex: Int,
         shift     : UInt8
     ) -> Bool {
+        if rejectNextAllocation {
+            rejectNextAllocation = false
+            return false
+        }
         guard var state = states[key(page)], state.freeCount > 0 else { return false }
 
         if shift < 8 {

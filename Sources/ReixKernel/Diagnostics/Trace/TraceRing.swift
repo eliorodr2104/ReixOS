@@ -9,9 +9,10 @@
 ///
 /// Lives in `.bss` as a plain `static var`, exactly like `LogRing` and for the
 /// same reason: the first records are written before the heap exists and the
-/// last ones may be written after it has stopped being trustworthy. 256 slots
-/// of 32 bytes is 8 KiB, sized so a burst of syscalls survives long enough to
-/// be dumped and no larger.
+/// last ones may be written after it has stopped being trustworthy. Normal
+/// images keep 256 slots (8 KiB). The terminal profiling image keeps 1024
+/// slots (32 KiB), enough for its fixed mixed-workload interaction window;
+/// that extra 24 KiB is absent from production images.
 ///
 /// Records are fixed size, so unlike `LogRing` there is no framing and no
 /// header to pack: a slot is written with one struct assignment, which is legal
@@ -28,9 +29,13 @@ enum TraceRing {
 
     /// Slots in the ring. Power of two so cursors are masked rather than
     /// divided. Must stay in step with the `InlineArray` size below.
+    #if REIX_TERMINAL_PROFILE
+    static let capacity: UInt32 = 1024
+    #else
     static let capacity: UInt32 = 256
+    #endif
 
-    private static let mask: UInt32 = 255
+    private static let mask: UInt32 = capacity - 1
     
     /// The position a reader that wants only what happens next starts from.
     ///
@@ -39,7 +44,11 @@ enum TraceRing {
     /// for a live view is history it has no timeline to put anywhere.
     static var currentHead: UInt32 { head }
 
+    #if REIX_TERMINAL_PROFILE
+    private static var storage = InlineArray<1024, TraceEvent>(repeating: TraceEvent())
+    #else
     private static var storage = InlineArray<256, TraceEvent>(repeating: TraceEvent())
+    #endif
 
     /// Monotonic and never wrapped in place: `head &- tail` is the number of
     /// live records and masking happens only at the point of access. Thirty-two

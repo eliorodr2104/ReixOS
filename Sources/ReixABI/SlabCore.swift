@@ -11,6 +11,13 @@ public struct SlabCore<Backend: SlabBackend> {
     public static var minShift: UInt8 { 3    } // 8B small block
 
     public var backend: Backend
+
+    /// Pages this core currently holds from its backend.
+    ///
+    /// This is allocator backing, not live payload: one page remains reserved
+    /// while any block carved from it is live. The wrapper may combine it with
+    /// backing for allocations larger than one page.
+    public private(set) var reservedPages: UInt = 0
     
     private var buckets = InlineArray<10, UnsafeMutableRawPointer?>(repeating: nil)
 
@@ -36,14 +43,22 @@ public struct SlabCore<Backend: SlabBackend> {
     /// page owned by this backend. Rejected pointers never touch the free list.
     @discardableResult
     public mutating func free(_ ptr: UnsafeMutableRawPointer) -> Bool {
-        guard let location = location(of: ptr) else { return false }
+        freeCapacity(ptr) != nil
+    }
+
+    /// Frees a validated live block and returns its rounded capacity.
+    /// The location/liveness lookup is shared with the transition so wrappers
+    /// can account a free without repeating the hot-path metadata walk.
+    @discardableResult
+    public mutating func freeCapacity(_ ptr: UnsafeMutableRawPointer) -> UInt? {
+        guard let location = location(of: ptr) else { return nil }
 
         let result = backend.onFreeBlock(
             page      : location.page,
             blockIndex: location.blockIndex,
             shift     : location.shift
         )
-        guard result != .invalid else { return false }
+        guard result != .invalid else { return nil }
 
         let i = Int(location.shift - Self.minShift)
 
@@ -54,7 +69,7 @@ public struct SlabCore<Backend: SlabBackend> {
             reclaim(page: location.page, index: i)
         }
 
-        return true
+        return UInt(1) << UInt(location.shift)
     }
 
     /// Size of the bucket that owns `ptr`, only while that exact block is live.
@@ -118,6 +133,11 @@ public struct SlabCore<Backend: SlabBackend> {
 
     private mutating func carve(shift: UInt8, index i: Int) -> UnsafeMutableRawPointer? {
         guard let page = backend.acquirePage() else { return nil }
+
+        // Account the backing as soon as ownership transfers. If initialization
+        // then fails and the backend cannot release it, the retained page stays
+        // visible instead of disappearing from the metric.
+        reservedPages += 1
         
         backend.bind(page: page, shift: shift)
         let chunk = 1 << Int(shift)
@@ -138,7 +158,7 @@ public struct SlabCore<Backend: SlabBackend> {
             blockIndex: location.blockIndex,
             shift     : location.shift
         ) else {
-            backend.releasePage(page)
+            if backend.releasePage(page) { reservedPages -= 1 }
             return nil
         }
 
@@ -177,7 +197,10 @@ public struct SlabCore<Backend: SlabBackend> {
             
             cur = next
         }
-        backend.releasePage(page)
+        if backend.releasePage(page) {
+            precondition(reservedPages > 0, "slab reserved-page accounting underflow")
+            reservedPages -= 1
+        }
     }
 
     private struct BlockLocation {

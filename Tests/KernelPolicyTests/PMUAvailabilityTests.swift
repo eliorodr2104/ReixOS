@@ -10,6 +10,7 @@ import Testing
 private enum FakePMURegisters: PMURegisterAccess {
     static var debugFeatures: UInt64 = 0
     static var pmcr: UInt64 = 0
+    static var pmceid0: UInt64 = 0
     static var configureCalls = 0
     static var pmcrReads = 0
 
@@ -19,10 +20,12 @@ private enum FakePMURegisters: PMURegisterAccess {
         pmcrReads += 1
         return pmcr
     }
+    static func readPMCEID0() -> UInt64 { pmceid0 }
 
-    static func reset(debugFeatures: UInt64, pmcr: UInt64 = 0) {
+    static func reset(debugFeatures: UInt64, pmcr: UInt64 = 0, pmceid0: UInt64 = 0) {
         self.debugFeatures = debugFeatures
         self.pmcr = pmcr
+        self.pmceid0 = pmceid0
         configureCalls = 0
         pmcrReads = 0
     }
@@ -58,11 +61,32 @@ struct PMUAvailabilityTests {
 
     @Test("supported PMUv3 configures counters")
     func present() {
-        FakePMURegisters.reset(debugFeatures: 1 << 8, pmcr: 6 << 11)
+        FakePMURegisters.reset(
+            debugFeatures: 1 << 8,
+            pmcr: 6 << 11,
+            pmceid0: UInt64(1) << 0x08
+        )
         #expect(AArch64PMU.initialize(using: FakePMURegisters.self))
         #expect(FakePMURegisters.configureCalls == 1)
         #expect(FakePMURegisters.pmcrReads == 1)
         #expect(AArch64PMU.probe() == 6)
+        #expect(AArch64PMU.instructionsRetiredAvailable)
+    }
+
+    @Test("event count and instruction-event availability are independent")
+    func instructionEventAvailability() {
+        FakePMURegisters.reset(debugFeatures: 1 << 8, pmcr: 6 << 11)
+        #expect(AArch64PMU.initialize(using: FakePMURegisters.self))
+        #expect(AArch64PMU.probe() == 6)
+        #expect(!AArch64PMU.instructionsRetiredAvailable)
+
+        FakePMURegisters.reset(
+            debugFeatures: 1 << 8,
+            pmcr: 0,
+            pmceid0: UInt64(1) << 0x08
+        )
+        #expect(AArch64PMU.initialize(using: FakePMURegisters.self))
+        #expect(!AArch64PMU.instructionsRetiredAvailable)
     }
 }
 

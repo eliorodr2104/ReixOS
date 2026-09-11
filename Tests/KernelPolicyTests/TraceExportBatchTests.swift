@@ -132,10 +132,6 @@ struct TraceExportBatchTests {
         TraceRing.reset()
 
         let base = UnsafeMutableRawPointer.allocate(byteCount: 8192, alignment: 4096)
-        let schedulerStorage = UnsafeMutableRawPointer.allocate(
-            byteCount: MemoryLayout<KernelScheduler>.stride,
-            alignment: MemoryLayout<KernelScheduler>.alignment
-        )
         let ppmStorage = UnsafeMutableRawPointer.allocate(
             byteCount: MemoryLayout<KernelPPM>.stride,
             alignment: MemoryLayout<KernelPPM>.alignment
@@ -151,11 +147,6 @@ struct TraceExportBatchTests {
         let backing = UnsafeMutablePointer<SharedRegion>.allocate(capacity: 1)
 
         base.initializeMemory(as: UInt8.self, repeating: 0, count: 8192)
-        schedulerStorage.initializeMemory(
-            as: UInt8.self,
-            repeating: 0,
-            count: MemoryLayout<KernelScheduler>.stride
-        )
         ppmStorage.initializeMemory(as: UInt8.self, repeating: 0, count: MemoryLayout<KernelPPM>.stride)
         heapStorage.initializeMemory(as: UInt8.self, repeating: 0, count: MemoryLayout<KernelHeap>.stride)
         managerStorage.initializeMemory(
@@ -164,7 +155,6 @@ struct TraceExportBatchTests {
             count: MemoryLayout<ProcessManager>.stride
         )
 
-        let scheduler = schedulerStorage.bindMemory(to: KernelScheduler.self, capacity: 1)
         let ppm = ppmStorage.bindMemory(to: KernelPPM.self, capacity: 1)
         let heap = heapStorage.bindMemory(to: KernelHeap.self, capacity: 1)
         let manager = managerStorage.bindMemory(to: ProcessManager.self, capacity: 1)
@@ -179,7 +169,6 @@ struct TraceExportBatchTests {
             base: base,
             backing: backing,
             pageCount: 2,
-            scheduler: scheduler,
             ppm: ppm,
             heap: heap,
             processManager: manager
@@ -195,7 +184,6 @@ struct TraceExportBatchTests {
         managerStorage.deallocate()
         heapStorage.deallocate()
         ppmStorage.deallocate()
-        schedulerStorage.deallocate()
         base.deallocate()
     }
 }

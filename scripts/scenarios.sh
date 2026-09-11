@@ -33,6 +33,9 @@
 #   QEMU_FLAGS  base machine flags every row appends to
 #   SWIFT       host toolchain used by the post-checks (default: swift)
 #   OBJDUMP     disassembler used by the post-checks (default: llvm-objdump)
+#   DISK        disk image whose pre-run digest enters mixed-workload manifests
+#   KERNEL      kernel image actually handed to smoke.sh (default: $OUT/kernel.bin)
+#   INITRD      qemu initrd image actually handed to smoke.sh (default: $OUT/initrd.tar)
 #   TERMINAL_PROFILE  profile-only terminal scenarios require the value `1`
 #
 # Exit codes: 0 every row behaved as declared, 1 a row failed or an xfail row
@@ -46,10 +49,14 @@ SWIFT="${SWIFT:-swift}"
 OBJDUMP="${OBJDUMP:-llvm-objdump}"
 QEMU="${QEMU:-qemu-system-aarch64}"
 ENGINE="${ENGINE:-scripts/smoke.sh}"
+PACKAGE_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 # Keep in sync with QEMU_FLAGS in the Makefile and in scripts/smoke.sh. `make
 # vm-test` passes the Makefile's copy in, so this default only ever serves a
 # bare `sh scripts/scenarios.sh` from a developer's shell.
 QEMU_FLAGS="${QEMU_FLAGS:--machine virt,gic-version=2 -cpu cortex-a53,pmu=on -nographic}"
+DISK="${DISK:-$OUT/disk.img}"
+KERNEL="${KERNEL:-$OUT/kernel.bin}"
+INITRD="${INITRD:-$OUT/initrd.tar}"
 
 # Ceiling on the kernel stack high-water figure the trace dump reports, in
 # bytes. Deliberately far below the size `.stack` gets in linker.ld: the two
@@ -403,8 +410,10 @@ post_terminal_baseline() {
     ptb_log=$1
     ptb_out=$2
     ptb_json="${ptb_out%.txt}.json"
+    ptb_manifest="${ptb_out%-terminal-baseline.txt}-run-manifest.json"
 
-    if ! FREESTANDING= "$SWIFT" package --allow-writing-to-package-directory \
+    if ! FREESTANDING= "$SWIFT" package --package-path "$PACKAGE_ROOT" \
+            --disable-sandbox --allow-writing-to-package-directory \
             reix trace "$ptb_log" --interaction > "$ptb_out" 2>&1; then
         printf 'the terminal interaction decoder failed, see %s' "$ptb_out"
         return 1
@@ -414,7 +423,7 @@ post_terminal_baseline() {
     [ -n "$ptb_qemu_version" ] || ptb_qemu_version=unavailable
 
     if ! QEMU_VERSION="$ptb_qemu_version" python3 scripts/terminal-baseline-report.py \
-            "$ptb_log" "$ptb_out" "$ptb_json"; then
+            "$ptb_log" "$ptb_out" "$ptb_manifest" "$ptb_json"; then
         printf 'the terminal baseline reporter failed'
         return 1
     fi
@@ -427,6 +436,27 @@ post_terminal_baseline() {
     return 0
 }
 
+post_run_manifest() {
+    prm_out=$2
+    prm_manifest="${prm_out%-run-manifest.txt}-run-manifest.json"
+    if ! python3 - "$prm_manifest" > "$prm_out" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d['schema_version'] == 1
+assert d['build_mode'] in ('normal', 'instrumented')
+assert d['measurement_scope'] in ('complete-workload-verdict', 'terminal-interactions-and-final-snapshot')
+assert d['storage'] == 'virtio-blk-rxfs-storagecheck-shell'
+assert d['pre_shell_workload'] == 'StorageCheck'
+assert d['trace_scope'] == 'bounded-ring-cumulative-at-final-dump'
+assert len(d['kernel_sha256']) == len(d['disk_sha256']) == len(d['input_sha256']) == 64
+print('run manifest: valid')
+PY
+    then
+        printf 'mixed-workload run manifest is missing or malformed'
+        return 1
+    fi
+}
+
 # post=profile-authority: prove the instrumented Shell reached Ready with both
 # profiler shares and with its creation identity. Process statistics exercise
 # the `.profileStats` binding; an interaction mark attributed to the Shell pid
@@ -437,9 +467,9 @@ post_profile_authority() {
     ppa_log=$1
     ppa_out=$2
 
-    ppa_shell_count=$(grep -Ec '^\[ TERMINAL BASELINE \] process status=measured pid=[0-9]+ name=Shell\.elf ' "$ppa_log" 2>/dev/null || true)
-    ppa_server_count=$(grep -Ec '^\[ TERMINAL BASELINE \] process status=measured pid=[0-9]+ name=ProcessServer\.el ' "$ppa_log" 2>/dev/null || true)
-    ppa_shell_pid=$(sed -n 's/^\[ TERMINAL BASELINE \] process status=measured pid=\([0-9][0-9]*\) name=Shell\.elf .*/\1/p' "$ppa_log" | tail -n 1)
+    ppa_shell_count=$(grep -Ec '^\[ TERMINAL BASELINE \] process status=measured .* pid=[0-9]+ name=Shell\.elf ' "$ppa_log" 2>/dev/null || true)
+    ppa_server_count=$(grep -Ec '^\[ TERMINAL BASELINE \] process status=measured .* pid=[0-9]+ name=ProcessServer\.el ' "$ppa_log" 2>/dev/null || true)
+    ppa_shell_pid=$(sed -n 's/^\[ TERMINAL BASELINE \] process status=measured .* pid=\([0-9][0-9]*\) name=Shell\.elf .*/\1/p' "$ppa_log" | tail -n 1)
 
     {
         printf 'shell_identity_count=%s\n' "$ppa_shell_count"
@@ -486,6 +516,7 @@ run_post() {
             queue-depth)  post_queue_depth "$2" "$rp_out" || return 1 ;;
             shell-closed) post_shell_closed "$2" "$rp_out" || return 1 ;;
             terminal-baseline)  post_terminal_baseline "$2" "$rp_out" || return 1 ;;
+            run-manifest)       post_run_manifest "$2" "$rp_out" || return 1 ;;
             profile-authority)  post_profile_authority "$2" "$rp_out" || return 1 ;;
             *)            setup_error "unknown post-check '$rp_name'" ;;
         esac
@@ -515,6 +546,11 @@ skip_condition() {
         no-terminal-profile)
             [ "${TERMINAL_PROFILE:-}" = 1 ] && return 1
             skip_reason="terminal profiling requires TERMINAL_PROFILE=1"
+            return 0
+            ;;
+        terminal-profile)
+            [ "${TERMINAL_PROFILE:-}" = 1 ] || return 1
+            skip_reason="normal workload runs only without TERMINAL_PROFILE=1"
             return 0
             ;;
         *)
@@ -600,6 +636,15 @@ do
     post_out="$OUT/scenario-$id.post.txt"
     engine_out="$work/engine-$id.txt"
 
+    # A timed-out or failed prior run must not donate its post-check artifacts
+    # to this one. Remove only this row's known outputs before even deciding a
+    # skip, so an old PASS is never mistaken for current evidence.
+    for stale in "$log" "$post_out" "${post_out%.txt}-"*.txt \
+                 "${post_out%.txt}-"*.json
+    do
+        [ ! -e "$stale" ] || rm -f -- "$stale"
+    done
+
     # skip-if is decided before the guest boots: the point of a skip is not
     # spending the 30s.
     skip_reason=
@@ -667,8 +712,50 @@ do
             ;;
     esac
 
+    case ",$post," in
+        *,terminal-baseline,*|*,run-manifest,*)
+            manifest="${post_out%.txt}-run-manifest.json"
+            build_mode=normal
+            [ "${TERMINAL_PROFILE:-}" = 1 ] && build_mode=instrumented
+            effective_cpu=$(printf '%s\n' "$row_flags" | awk '
+                { for (i = 1; i <= NF; i++) {
+                    if ($i == "-cpu" && i < NF) cpu = $(i + 1)
+                    else if ($i ~ /^-cpu=/) { cpu = $i; sub(/^-cpu=/, "", cpu) }
+                }}
+                END { print cpu }
+            ')
+            case ,$effective_cpu, in
+                *,pmu=on,*) pmu_mode=on ;;
+                *,pmu=off,*) pmu_mode=off ;;
+                *) setup_error "row '$id': effective final -cpu has no explicit PMU mode" ;;
+            esac
+            case $row_flags in
+                *virtio-blk-device*) storage=virtio-blk-rxfs-storagecheck-shell ;;
+                *) setup_error "row '$id': reproducible workload needs attached storage" ;;
+            esac
+            [ -f "$KERNEL" ] || setup_error "row '$id': missing kernel for manifest"
+            [ -f "$DISK" ] || setup_error "row '$id': missing disk for manifest"
+            case $row_flags in
+                *"-drive file=$DISK,if=none,format=raw,id=reixdisk"*"-device virtio-blk-device,drive=reixdisk"*) ;;
+                *) setup_error "row '$id': manifest disk is not the reixdisk image QEMU mounts" ;;
+            esac
+            swift_version=$("$SWIFT" --version 2>/dev/null | sed -n '1p')
+            qemu_version=$("$QEMU" --version 2>/dev/null | sed -n '1p')
+            python3 scripts/write-run-manifest.py \
+                --output "$manifest" --build-mode "$build_mode" \
+                --memory "${row_mem:-128M}" --initrd "$initrd" --pmu "$pmu_mode" \
+                --storage "$storage" --workload-id "$id" --command "$row_input" \
+                --pre-shell-workload StorageCheck \
+                --kernel "$KERNEL" --disk "$DISK" \
+                --initrd-path "$INITRD" --qemu-flags "$row_flags" \
+                --toolchain "$swift_version; $qemu_version" \
+                || setup_error "row '$id': could not write run manifest"
+            ;;
+    esac
+
     QEMU_FLAGS="$row_flags" MEM="$row_mem" INITRD_MODE="$initrd" \
-    OUT="$OUT" LOG="$engine_log" TIMEOUT="$timeout" \
+    KERNEL="$KERNEL" INITRD="$INITRD" \
+    OUT="$OUT" DISK="$DISK" LOG="$engine_log" TIMEOUT="$timeout" \
     SUCCESS_MARKER="$engine_marker" INPUT="$row_input" \
         sh "$ENGINE" > "$engine_out" 2>&1
     engine_rc=$?

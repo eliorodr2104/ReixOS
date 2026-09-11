@@ -253,29 +253,49 @@ public struct VMAManager: RXAllocatable {
     }
 
 
-    /// Pages the user stack has ever occupied, which is its high-water mark.
+    /// One traversal for the process reporter: the VMA list once, and no page
+    /// table touched. The timer tick calls this for up to sixteen processes.
     ///
     /// A `.growDown` region gains a page only because a fault demanded one, and
-    /// nothing moves its start back up, so its extent is the deepest the stack
-    /// has ever been rather than where SP happens to be now. No poison and no
-    /// scan are needed on this side: demand paging already keeps the record.
-    ///
-    /// Walked rather than counted alongside `residentPages`: the region is the
-    /// one source of truth, and a counter beside it could only disagree with it.
-    public var stackPages: UInt32 {
+    /// nothing moves its start back up, so its extent is both the deepest the
+    /// stack has ever been and what it has resident.
+    func memoryMetrics() -> VMAMemoryMetrics {
+        var virtualExtent: UInt64 = 0
+        var stack: UnsafeMutablePointer<VirtualMemoryArea>? = nil
         var current = vmaList.head
 
         while let nodePtr = current {
-            let node = nodePtr.pointee
-
-            if node.mappingFlags.contains(.growDown) {
-                return UInt32((node.endAddress &- node.startAddress) / UserSpaceLayout.pageSize)
-            }
-
-            current = node.next
+            virtualExtent &+= nodePtr.pointee.size / UserSpaceLayout.pageSize
+            if nodePtr.pointee.mappingFlags.contains(.growDown) { stack = nodePtr }
+            current = nodePtr.pointee.next
         }
 
-        return 0
+        guard let stack else {
+            return VMAMemoryMetrics(
+                mappedPages: residentPages,
+                virtualExtentPages: virtualExtent,
+                stackExtentPages: 0,
+                stackCapacityPages: 0
+            )
+        }
+
+        let extent64 = stack.pointee.size / UserSpaceLayout.pageSize
+        let extent = UInt32(min(extent64, UInt64(UInt32.max)))
+
+        var lowerBound = UserSpaceLayout.stackLimit
+        if let previous = stack.pointee.prev {
+            lowerBound = max(lowerBound, previous.pointee.endAddress)
+        }
+        let capacity64 = stack.pointee.endAddress > lowerBound
+            ? (stack.pointee.endAddress &- lowerBound) / UserSpaceLayout.pageSize
+            : 0
+
+        return VMAMemoryMetrics(
+            mappedPages: residentPages,
+            virtualExtentPages: virtualExtent,
+            stackExtentPages: extent,
+            stackCapacityPages: UInt32(min(capacity64, UInt64(UInt32.max)))
+        )
     }
 
 
@@ -319,4 +339,11 @@ public struct VMAManager: RXAllocatable {
 
         if isBrkRegion { brkVMA = vmaList.search(at: vma.startAddress) }
     }
+}
+
+struct VMAMemoryMetrics {
+    let mappedPages       : UInt32
+    let virtualExtentPages: UInt64
+    let stackExtentPages  : UInt32
+    let stackCapacityPages: UInt32
 }

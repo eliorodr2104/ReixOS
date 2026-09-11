@@ -20,7 +20,7 @@
 /// The userland side of the same question needs none of this. A user stack is
 /// a `.growDown` VMA that only ever gained a page because a fault demanded it,
 /// so its extent already records its high-water mark exactly. See
-/// `VMAManager.stackPages`.
+/// `VMAManager.memoryMetrics().stackExtentPages`.
 enum StackUsage {
 
     /// `REIXSTK!`. Chosen because no pointer, length, tag or zeroed struct can
