@@ -25,6 +25,15 @@ public enum PPMError: KernelFatal {
     /// Retaining would wrap the fixed-width counter back to zero.
     case referenceCountOverflow
 
+    /// The frames are there, and the process asking for them has already been
+    /// charged everything its `FrameBudget` allows. Raised before the allocator
+    /// is asked, so a refusal costs no allocation and leaves no partial state.
+    ///
+    /// Reported as out of memory, because that is what it is from the asking
+    /// program's side: a legitimate request the machine will not serve it.
+    case budgetExceeded
+
+
     /// A per-address operation was handed a frame that is not the first of its
     /// block. No payload is needed because the caller already owns the request.
     case frameNotBlockHead
@@ -115,6 +124,9 @@ public enum PPMError: KernelFatal {
 
             case .referenceCountOverflow:
                 "PPM Error: frame reference count is saturated."
+
+            case .budgetExceeded:
+                "PPM Error: the process has been charged every frame its budget allows."
 
             case .pageAlreadyMapped:
                 "PPM Error: install found a valid descriptor already mapping that page."

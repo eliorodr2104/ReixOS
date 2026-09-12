@@ -217,11 +217,18 @@ extension VMAManager {
         type        : MemoryType
     ) -> FaultOutcome {
 
+        // The private copy is a page this address space did not hold before;
+        // the shared reference it replaces is given back below.
+        guard chargeFrames(context.budget, 1) else { return .outOfMemory }
+
         let page: PhysicalPage
         do {
             page = try context.ppm.pointee.alloc(4096)
 
-        } catch { return .outOfMemory }
+        } catch {
+            refundFrames(context.budget, 1)
+            return .outOfMemory
+        }
 
         let src: UnsafeMutablePointer<UInt8> = context.vmm.pointee.physToVirt(source)
         let dst: UnsafeMutablePointer<UInt8> = context.vmm.pointee.physToVirt(page.address)
@@ -239,10 +246,13 @@ extension VMAManager {
 
         } catch {
             try? context.ppm.pointee.free(page)
+            refundFrames(context.budget, 1)
             return .outOfMemory
         }
 
-        try? context.ppm.pointee.release(source)
+        if (try? context.ppm.pointee.release(source)) != nil {
+            refundFrames(context.budget, 1)
+        }
 
         return .handled
     }
@@ -316,11 +326,16 @@ extension VMAManager {
         vma    : VirtualMemoryArea,
         address: VirtualAddress
     ) -> FaultOutcome {
+        guard chargeFrames(context.budget, 1) else { return .outOfMemory }
+
         let page: PhysicalPage
         do {
             page = try context.ppm.pointee.alloc(4096)
 
-        } catch { return .outOfMemory }
+        } catch {
+            refundFrames(context.budget, 1)
+            return .outOfMemory
+        }
 
         let aligned = address & ~(UserSpaceLayout.pageSize - 1)
         let flags   = vma.permissions.toPageFlags()
@@ -337,11 +352,13 @@ extension VMAManager {
                 virtual  : aligned,
                 physical : page.address,
                 flags    : flags,
-                type     : vma.memoryType
+                type     : vma.memoryType,
+                budget   : context.budget
             )
 
         } catch {
             try? context.ppm.pointee.free(page)
+            refundFrames(context.budget, 1)
             return .outOfMemory
         }
 

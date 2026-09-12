@@ -83,6 +83,14 @@ public struct ProcessMetadata: RXAllocatable {
     public var nameLength: UInt8 = 0           // 1 Byte
 
 
+    /// Frames this process may hold, and holds. See `FrameBudget`.
+    ///
+    /// Its own reference-counted cell, because a shared region this process
+    /// created may outlive it and still owe it a refund. Populated by
+    /// `ProcessManager.makeMetadata` immediately after this block is allocated.
+    public var budget: UnsafeMutablePointer<FrameBudget>!  // 8 Byte
+
+
 
     public init(
         elfImage       : PhysicalAddress?  = nil,
@@ -104,6 +112,7 @@ public struct ProcessMetadata: RXAllocatable {
         self.taskControl     = nil
         self.name            = InlineArray<16, UInt8>(repeating: 0)
         self.nameLength      = 0
+        self.budget          = nil
     }
 
     public init() {
@@ -119,6 +128,7 @@ public struct ProcessMetadata: RXAllocatable {
         self.taskControl     = nil
         self.name            = InlineArray<16, UInt8>(repeating: 0)
         self.nameLength      = 0
+        self.budget          = nil
     }
 
 

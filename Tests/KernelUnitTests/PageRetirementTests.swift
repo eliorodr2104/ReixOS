@@ -193,11 +193,15 @@ struct PageRetirementTests {
     }
 
 
-    private func context(_ ram: HostRAM) -> PagingContext {
+    private func context(
+        _ ram : HostRAM,
+        budget: UnsafeMutablePointer<FrameBudget>? = nil
+    ) -> PagingContext {
         PagingContext(
             vmm              : ram.vmm,
             ppm              : ram.ppm,
-            rootTablePhysical: ram.rootTablePhysical
+            rootTablePhysical: ram.rootTablePhysical,
+            budget           : budget
         )
     }
 }

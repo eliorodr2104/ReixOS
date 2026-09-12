@@ -268,9 +268,13 @@ public func terminate(pid: PID) -> Bool {
 /// Create an empty, unscheduled task plus the parent's bootstrap endpoint.
 /// No user instruction can run until every region is sealed and `taskStart`
 /// converts this task handle into a job handle in the same slot.
+///
+/// - Parameter frameLimit: 4 KiB frames the child may hold at once, `0` to let
+///   it inherit the creator's own ceiling. A request larger than what the
+///   creator may hold is clamped to it, never refused.
 @inline(__always)
-public func taskCreate() -> TaskCreation {
-    let raw = twoWordSyscall(.taskCreate)
+public func taskCreate(frameLimit: UInt32 = 0) -> TaskCreation {
+    let raw = twoWordSyscall(.taskCreate, 0, 0, UInt64(frameLimit))
     return TaskCreation(
         task     : UInt32(truncatingIfNeeded: raw.first),
         bootstrap: UInt32(truncatingIfNeeded: raw.second)
@@ -281,10 +285,13 @@ public func taskCreate() -> TaskCreation {
 /// Create an empty task with a bounded printable-ASCII diagnostic identity
 /// chosen by its launcher. The bytes never select or load a program; they are
 /// copied only into process metadata for tracing and process statistics.
+///
+/// - Parameter frameLimit: as above.
 @inline(__always)
 public func taskCreate(
-    name  : UnsafePointer<UInt8>,
-    length: Int
+    name      : UnsafePointer<UInt8>,
+    length    : Int,
+    frameLimit: UInt32 = 0
 ) -> TaskCreation {
     guard length > 0, length <= TaskCreation.maximumNameBytes else {
         return TaskCreation(task: UInt32.max, bootstrap: UInt32.max)
@@ -293,7 +300,8 @@ public func taskCreate(
     let raw = twoWordSyscall(
         .taskCreate,
         UInt64(UInt(bitPattern: name)),
-        UInt64(length)
+        UInt64(length),
+        UInt64(frameLimit)
     )
     return TaskCreation(
         task     : UInt32(truncatingIfNeeded: raw.first),

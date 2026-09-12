@@ -511,7 +511,9 @@ private func withLiveRAM(
         Issue.record("could not donate host RAM to the buddy")
         return
     }
-    ram.installLiveManager()
+    // No reserve: every suite here means to drain the arena, which is exactly
+    // what the machine's reserve refuses.
+    ram.installLiveManager(reservePages: 0)
 
     try body(ram)
 }

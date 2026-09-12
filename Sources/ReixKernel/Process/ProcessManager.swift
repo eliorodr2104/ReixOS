@@ -119,15 +119,32 @@ public struct ProcessManager: RXAllocatable, Loggable {
             case .success(let handle):
                 defer { _ = fileSystem.pointee.close(handle: handle) }
 
+                // The metadata is built first because it holds the budget, and
+                // everything below this line is charged to it.
+                guard let metadataPtr = makeMetadata(basenameOf: path) else {
+                    throw .heapAllocationFailed
+                }
+
+                metadataPtr.pointee.budget.pointee.limit = childFrameLimit()
+
+                let budget = metadataPtr.pointee.budget
+
                 var addressSpace: AddressSpace
                 do {
-                    addressSpace = try vmm.pointee.createAddressSpace()
-                } catch { throw .creationProcessFailed(error) }
+                    addressSpace = try vmm.pointee.createAddressSpace(budget: budget)
+                } catch {
+                    freeMetadata(metadataPtr)
+                    throw .creationProcessFailed(error)
+                }
 
-                guard let vmaManagerPtr = attachVMAManager(to: &addressSpace) else {
+                guard let vmaManagerPtr = attachVMAManager(
+                    to    : &addressSpace,
+                    budget: budget
+                ) else {
                     // Only the fresh root table is live and `vmaManager` is still
                     // `nil`, so teardown is just destroying the address space.
-                    destroyPartialAddressSpace(&addressSpace)
+                    destroyPartialAddressSpace(&addressSpace, budget: budget)
+                    freeMetadata(metadataPtr)
                     throw .heapAllocationFailed
                 }
 
@@ -139,18 +156,27 @@ public struct ProcessManager: RXAllocatable, Loggable {
                         vmm: vmm, ppm: ppm
                     )
                 } catch {
-                    destroyPartialAddressSpace(&addressSpace)
+                    destroyPartialAddressSpace(&addressSpace, budget: budget)
+                    freeMetadata(metadataPtr)
                     throw .elfParsingFailed(error)
                 }
 
                 let userStackTop   = UserSpaceLayout.stackTop
                 let firstStackPage = userStackTop - UserSpaceLayout.pageSize
 
+                guard chargeFrames(budget, 1) else {
+                    destroyPartialAddressSpace(&addressSpace, budget: budget)
+                    freeMetadata(metadataPtr)
+                    throw .allocationPageFailed(.budgetExceeded)
+                }
+
                 let stackPage: PhysicalPage
                 do {
                     stackPage = try ppm.pointee.alloc(4096)
                 } catch {
-                    destroyPartialAddressSpace(&addressSpace)
+                    refundFrames(budget, 1)
+                    destroyPartialAddressSpace(&addressSpace, budget: budget)
+                    freeMetadata(metadataPtr)
                     throw .allocationPageFailed(error)
                 }
 
@@ -168,11 +194,14 @@ public struct ProcessManager: RXAllocatable, Loggable {
                         virtual     : firstStackPage,
                         physical    : stackPage.address,
                         flags       : [.present, .userAccess, .pxn, .uxn],
-                        type        : .normal
+                        type        : .normal,
+                        budget      : budget
                     )
                 } catch {
                     try? ppm.pointee.release(stackPage.address)
-                    destroyPartialAddressSpace(&addressSpace)
+                    refundFrames(budget, 1)
+                    destroyPartialAddressSpace(&addressSpace, budget: budget)
+                    freeMetadata(metadataPtr)
                     throw .mappingFailed(error)
                 }
 
@@ -187,7 +216,9 @@ public struct ProcessManager: RXAllocatable, Loggable {
                     )
                 } catch {
                     try? ppm.pointee.release(stackPage.address)
-                    destroyPartialAddressSpace(&addressSpace)
+                    refundFrames(budget, 1)
+                    destroyPartialAddressSpace(&addressSpace, budget: budget)
+                    freeMetadata(metadataPtr)
                     throw .registerRegionError(error)
                 }
 
@@ -197,13 +228,15 @@ public struct ProcessManager: RXAllocatable, Loggable {
                     entry: elf.entryPoint, stack: userStackTop
                 
                 ) else {
-                    destroyPartialAddressSpace(&addressSpace)
+                    destroyPartialAddressSpace(&addressSpace, budget: budget)
+                    freeMetadata(metadataPtr)
                     throw .heapAllocationFailed
                 }
 
                 guard let numbered = self.nextIdentifiers() else {
                     heap.pointee.kfree(trapFramePtr)
-                    destroyPartialAddressSpace(&addressSpace)
+                    destroyPartialAddressSpace(&addressSpace, budget: budget)
+                    freeMetadata(metadataPtr)
                     throw .identitiesExhausted
                 }
 
@@ -212,13 +245,10 @@ public struct ProcessManager: RXAllocatable, Loggable {
 
                 let initialBreak = (elf.loadEnd + UserSpaceLayout.pageSize - 1) & ~(UserSpaceLayout.pageSize - 1)
 
-                guard let metadataPtr = makeMetadata(
-                    elf: elf, programBreak: initialBreak, basenameOf: path
-                ) else {
-                    heap.pointee.kfree(trapFramePtr)
-                    destroyPartialAddressSpace(&addressSpace)
-                    throw .heapAllocationFailed
-                }
+                metadataPtr.pointee.elfImage     = elf.image
+                metadataPtr.pointee.elfLoadBase  = elf.loadBase
+                metadataPtr.pointee.elfLoadEnd   = elf.loadEnd
+                metadataPtr.pointee.programBreak = initialBreak
 
                 guard let processPtr = makeProcess(
                     pid         : pid,
@@ -228,9 +258,9 @@ public struct ProcessManager: RXAllocatable, Loggable {
                     metadata    : metadataPtr
                 
                 ) else {
-                    heap.pointee.kfree(metadataPtr)
+                    freeMetadata(metadataPtr)
                     heap.pointee.kfree(trapFramePtr)
-                    destroyPartialAddressSpace(&addressSpace)
+                    destroyPartialAddressSpace(&addressSpace, budget: budget)
                     throw .heapAllocationFailed
                 }
 
@@ -254,47 +284,22 @@ public struct ProcessManager: RXAllocatable, Loggable {
     }
     
     
+    /// - Parameter frameLimit: what the creator asks the child be allowed to
+    ///   hold, clamped to the creator's own limit. `nil` inherits it whole.
     public mutating func spawnProcess(
         name      : InlineArray<16, UInt8>? = nil,
-        nameLength: Int = 0
+        nameLength: Int = 0,
+        frameLimit: UInt32? = nil
     ) throws(ProcessManagerError) -> UnsafeMutablePointer<Process> {
-        
-        var addressSpace: AddressSpace
-        do {
-            addressSpace = try vmm.pointee.createAddressSpace()
-        } catch { throw .creationProcessFailed(error) }
-        
-        
-        guard attachVMAManager(to: &addressSpace) != nil else {
-            destroyPartialAddressSpace(&addressSpace)
-            throw .heapAllocationFailed
-        }
-
-        guard let trapFramePtr = makeTrapFrame(
-            entry: 0, stack: UserSpaceLayout.stackTop
-        
-        ) else {
-            destroyPartialAddressSpace(&addressSpace)
-            throw .heapAllocationFailed
-        }
-
-        guard let numbered = self.nextIdentifiers() else {
-            heap.pointee.kfree(trapFramePtr)
-            destroyPartialAddressSpace(&addressSpace)
-            throw .identitiesExhausted
-        }
-
-        let pid      = numbered.pid
-        let identity = numbered.identity
 
         guard let metadataPtr = makeMetadata(
             inheritingNameFrom: Arch.CPU.getCurrentProcess()?.pointee.metadata
        
-        ) else {
-            heap.pointee.kfree(trapFramePtr)
-            destroyPartialAddressSpace(&addressSpace)
-            throw .heapAllocationFailed
-        }
+        ) else { throw .heapAllocationFailed }
+
+        metadataPtr.pointee.budget.pointee.limit = childFrameLimit(requesting: frameLimit)
+
+        let budget = metadataPtr.pointee.budget
 
         // A suspended task may carry a launcher-chosen diagnostic identity.
         // Apply it before registration and trace emission; ordinary split-like
@@ -308,6 +313,40 @@ public struct ProcessManager: RXAllocatable, Loggable {
             }
         }
 
+        var addressSpace: AddressSpace
+        do {
+            addressSpace = try vmm.pointee.createAddressSpace(budget: budget)
+        } catch {
+            freeMetadata(metadataPtr)
+            throw .creationProcessFailed(error)
+        }
+        
+        
+        guard attachVMAManager(to: &addressSpace, budget: budget) != nil else {
+            destroyPartialAddressSpace(&addressSpace, budget: budget)
+            freeMetadata(metadataPtr)
+            throw .heapAllocationFailed
+        }
+
+        guard let trapFramePtr = makeTrapFrame(
+            entry: 0, stack: UserSpaceLayout.stackTop
+        
+        ) else {
+            destroyPartialAddressSpace(&addressSpace, budget: budget)
+            freeMetadata(metadataPtr)
+            throw .heapAllocationFailed
+        }
+
+        guard let numbered = self.nextIdentifiers() else {
+            heap.pointee.kfree(trapFramePtr)
+            destroyPartialAddressSpace(&addressSpace, budget: budget)
+            freeMetadata(metadataPtr)
+            throw .identitiesExhausted
+        }
+
+        let pid      = numbered.pid
+        let identity = numbered.identity
+
         guard let processPtr = makeProcess(
             pid         : pid,
             identity    : identity,
@@ -316,9 +355,9 @@ public struct ProcessManager: RXAllocatable, Loggable {
             metadata    : metadataPtr
         
         ) else {
-            heap.pointee.kfree(metadataPtr)
+            freeMetadata(metadataPtr)
             heap.pointee.kfree(trapFramePtr)
-            destroyPartialAddressSpace(&addressSpace)
+            destroyPartialAddressSpace(&addressSpace, budget: budget)
             throw .heapAllocationFailed
         }
 
@@ -358,8 +397,11 @@ public struct ProcessManager: RXAllocatable, Loggable {
 
         defer { reinstallCurrentAddressSpace() }
 
+        // The metadata block, and with it the budget, is freed later by
+        // `releaseProcess`: the page tables can still be refunded here.
         try vmm.pointee.destroyAddressSpace(
-            addressSpace: process.pointee.addressSpace
+            addressSpace: process.pointee.addressSpace,
+            budget      : process.pointee.metadata?.pointee.budget
         )
     }
 
@@ -416,7 +458,7 @@ public struct ProcessManager: RXAllocatable, Loggable {
                 TaskRegistry.markProcessGone(control)
             }
 
-            heap.pointee.kfree(metadata)
+            freeMetadata(metadata)
             process.pointee.metadata = nil
         }
 
@@ -818,32 +860,53 @@ public struct ProcessManager: RXAllocatable, Loggable {
     /// pointer, and a missing terminator must cost a fixed walk and not the
     /// address space. `open` has already accepted this same string, so a path
     /// longer than the bound is refused there and never reaches here.
-    /// Allocate a metadata block and fill it in, named after `path`.
+    /// Allocate an empty metadata block named after `path`, for the loader that
+    /// needs the budget before it has an image to describe.
+    ///
+    /// The ELF fields are written by the caller once `loadSegments` returns; the
+    /// block has to exist first because every frame that load takes is charged
+    /// to the budget inside it.
     ///
     /// Out of line on purpose, and this is the whole reason the function
-    /// exists: `initialize(to: ProcessMetadata(...))` reads as building in
-    /// place but is not. The initialiser returns its 490 bytes into a
-    /// temporary and the store then copies them, so inlined into the spawn
-    /// this frame would carry the capability table twice for the whole call,
-    /// the ELF load included, which is where the deepest point of the kernel
-    /// stack is. Out of line the temporary lives and dies here instead.
+    /// exists: `initialize(to: ProcessMetadata())` reads as building in place
+    /// but is not. The initialiser returns its bytes into a temporary and the
+    /// store then copies them, so inlined into the spawn this frame would carry
+    /// the capability table twice for the whole call, the ELF load included,
+    /// which is where the deepest point of the kernel stack is. Out of line the
+    /// temporary lives and dies here instead.
     @inline(never)
     private mutating func makeMetadata(
-        elf            : LoadedELF,
-        programBreak   : VirtualAddress,
         basenameOf path: UnsafePointer<CChar>
     ) -> UnsafeMutablePointer<ProcessMetadata>? {
 
-        guard let ptr = heap.pointee.kmallocOrNil(ProcessMetadata.self) else { return nil }
-
-        ptr.initialize(to: ProcessMetadata(
-            elfImage: elf.image, elfLoadBase: elf.loadBase,
-            elfLoadEnd: elf.loadEnd, programBreak: programBreak
-        ))
+        guard let ptr = makeEmptyMetadata() else { return nil }
 
         Self.assignName(ptr, basenameOf: path)
 
         return ptr
+    }
+
+
+    /// What a child this process creates may hold, attenuated against what the
+    /// creator itself may.
+    ///
+    /// Monotone by construction: a request above the creator's ceiling is
+    /// clamped rather than refused, so no subtree can exceed its root and
+    /// nothing has to sum one. With nobody running this is Init, and its ceiling
+    /// is the machine minus the kernel's progress reserve.
+    private func childFrameLimit(requesting requested: UInt32? = nil) -> UInt32 {
+
+        guard let metadata = Arch.CPU.getCurrentProcess()?.pointee.metadata,
+              let budget   = metadata.pointee.budget
+        else {
+            let machine = ppm.pointee.totalPages > KernelPPM.reservePages
+                ? ppm.pointee.totalPages - KernelPPM.reservePages
+                : 0
+
+            return UInt32(truncatingIfNeeded: machine)
+        }
+
+        return budget.pointee.attenuated(to: requested)
     }
 
 
@@ -854,11 +917,46 @@ public struct ProcessManager: RXAllocatable, Loggable {
         inheritingNameFrom parent: UnsafeMutablePointer<ProcessMetadata>?
     ) -> UnsafeMutablePointer<ProcessMetadata>? {
 
-        guard let ptr = heap.pointee.kmallocOrNil(ProcessMetadata.self) else { return nil }
-
-        ptr.initialize(to: ProcessMetadata())
+        guard let ptr = makeEmptyMetadata() else { return nil }
 
         if let parent { ptr.pointee.setName(copyingFrom: parent) }
+
+        return ptr
+    }
+
+
+    /// Give back a metadata block a spawn is unwinding, budget cell and all.
+    ///
+    /// The counterpart of `makeEmptyMetadata`, and it has to exist: the cell is
+    /// reference counted, so a plain `kfree` of the block that names it leaks
+    /// it, one slab block per failed spawn.
+    private func freeMetadata(_ metadata: UnsafeMutablePointer<ProcessMetadata>) {
+        if let budget = metadata.pointee.budget {
+            releaseBudget(budget, heap: heap)
+        }
+
+        heap.pointee.kfree(metadata)
+    }
+
+
+    /// The metadata block and the budget cell it points at, or nothing.
+    ///
+    /// Two allocations and not one, because the budget outlives the process
+    /// whenever a shared region it created does. The first is given back when
+    /// the second fails, so a refusal leaves the heap where it found it.
+    private func makeEmptyMetadata() -> UnsafeMutablePointer<ProcessMetadata>? {
+
+        guard let ptr = heap.pointee.kmallocOrNil(ProcessMetadata.self) else { return nil }
+
+        guard let budget = heap.pointee.kmallocOrNil(FrameBudget.self) else {
+            heap.pointee.kfree(ptr)
+            return nil
+        }
+
+        budget.initialize(to: FrameBudget())
+
+        ptr.initialize(to: ProcessMetadata())
+        ptr.pointee.budget = budget
 
         return ptr
     }
@@ -951,7 +1049,8 @@ public struct ProcessManager: RXAllocatable, Loggable {
 
 
     private func attachVMAManager(
-        to addressSpace: inout AddressSpace
+        to addressSpace: inout AddressSpace,
+        budget         : UnsafeMutablePointer<FrameBudget>?
     ) -> UnsafeMutablePointer<VMAManager>? {
 
         guard let vmaPtr = heap.pointee.kmallocOrNil(VMAManager.self) else {
@@ -962,14 +1061,18 @@ public struct ProcessManager: RXAllocatable, Loggable {
             heap             : heap,
             vmm              : vmm,
             ppm              : ppm,
-            rootTablePhysical: addressSpace.rootTablePhysical
+            rootTablePhysical: addressSpace.rootTablePhysical,
+            budget           : budget
         ))
 
         addressSpace.vmaManager = vmaPtr
         return vmaPtr
     }
     
-    private func destroyPartialAddressSpace(_ space: inout AddressSpace) {
+    private func destroyPartialAddressSpace(
+        _ space: inout AddressSpace,
+        budget : UnsafeMutablePointer<FrameBudget>?
+    ) {
         
         if let vma = space.vmaManager {
             vma.pointee.teardown()
@@ -978,7 +1081,7 @@ public struct ProcessManager: RXAllocatable, Loggable {
             space.vmaManager = nil
         }
         
-        try? vmm.pointee.destroyAddressSpace(addressSpace: space)
+        try? vmm.pointee.destroyAddressSpace(addressSpace: space, budget: budget)
 
         reinstallCurrentAddressSpace()
     }

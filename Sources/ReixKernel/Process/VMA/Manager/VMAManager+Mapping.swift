@@ -15,6 +15,10 @@ extension VMAManager {
     /// `memoryType` is always explicit, with no default: `.shared` covers both an
     /// SHM window and a DMA buffer, so a type the gate would accept is not one it
     /// can infer. `validAttributes` below refuses the pairs no kind produces.
+    ///
+    /// The number of regions one address space may hold is bounded: see
+    /// `VMAList.defaultNodeLimit`. The refusal is `.regionLimitReached` and is
+    /// taken before the node is allocated.
     public mutating func registerRegion(
         start       : VirtualAddress,
         size        : UInt64,
@@ -41,6 +45,10 @@ extension VMAManager {
         if vmaList.searchOverlap(start: start, end: end) != nil {
             throw .regionOverlap
         }
+
+        // Before the heap is asked, so a refused registration allocates nothing
+        // and leaves the list exactly as it was.
+        guard vmaList.admitsNode else { throw .regionLimitReached }
 
         guard let nodePtr = heap.pointee.kmallocOrNil(VirtualMemoryArea.self) else {
             throw .heapAllocationFailed(.allocationFailed(reason: .fullMemory))
@@ -165,7 +173,8 @@ extension VMAManager {
                     virtual  : start        + currentVirtualPage,
                     physical : physicalBase + currentVirtualPage,
                     flags    : permissions.toPageFlags(),
-                    type     : kind.memoryType
+                    type     : kind.memoryType,
+                    budget   : context.budget
                 )
 
             } catch {

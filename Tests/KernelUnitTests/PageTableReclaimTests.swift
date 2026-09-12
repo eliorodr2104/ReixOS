@@ -87,12 +87,14 @@ struct PageTableReclaimTests {
 
     private func context(
         _ ram : HostRAM,
-        _ root: PhysicalAddress
+        _ root: PhysicalAddress,
+        budget: UnsafeMutablePointer<FrameBudget>? = nil
     ) -> PagingContext {
         PagingContext(
             vmm              : ram.vmm,
             ppm              : ram.ppm,
-            rootTablePhysical: root
+            rootTablePhysical: root,
+            budget           : budget
         )
     }
 

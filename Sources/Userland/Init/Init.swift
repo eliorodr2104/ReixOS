@@ -391,6 +391,8 @@ public func main() {
         )
 
         copyOnWriteSelfCheck()
+
+        frameBudgetSelfCheck()
     }
 
     // The shell gets every filesystem right except `unmount`; the
@@ -987,6 +989,82 @@ private func pourGift(
 
 /// The byte a shared page carries into a split, and must still carry after the
 /// other side has written all over its own copy.
+/// Frames the budgeted child below is allowed to hold.
+///
+/// Small enough that a handful of one-page maps reaches it, and large enough
+/// that its address space fits: the root table is charged at creation and the
+/// first map pays for the three levels of the walk under it. Every frame is
+/// given back by `taskAbort`, so the check's transient cost is these eight
+/// frames plus the task's own bookkeeping, about 32 KiB, held for as long as
+/// the loop runs.
+private let budgetChildFrames: UInt32 = 8
+
+
+/// A child given a tiny frame budget is refused the page past it, and this
+/// process carries on.
+///
+/// Through the task path and not through `split`, because a split child
+/// inherits its parent's ceiling whole: `taskCreate` is the one call on this
+/// machine that describes a child's limit, and this is the only check that the
+/// number reaches the kernel at all.
+///
+/// The task is never started. What is under test is the charge, and the charge
+/// is taken by the mapping and not by the running: a task map is the one path
+/// that commits frames to a process that has not run.
+private func frameBudgetSelfCheck() {
+
+    let created = taskCreate(frameLimit: budgetChildFrames)
+
+    guard created.succeeded else {
+        print("[ CHECK ] budget: this process may not create a task")
+        return
+    }
+
+    defer {
+        _ = taskAbort(created.task)
+        _ = capDrop(created.bootstrap)
+    }
+
+    var mapped  = 0
+    var refused = false
+
+    // One page at a time, and bounded well past the ceiling so a budget that
+    // was never enforced ends the loop instead of the machine.
+    for index in 0..<(Int(budgetChildFrames) + 8) {
+        let result = taskMapAnonymous(
+            created.task,
+            at   : TaskABI.programBase + UInt64(index) * TaskABI.pageSize,
+            pages: 1
+        )
+
+        if result == .outOfMemory {
+            refused = true
+            break
+        }
+
+        guard result == .ok else {
+            print("[ CHECK ] budget: a map failed for a reason that is not the budget")
+            return
+        }
+
+        mapped += 1
+    }
+
+    guard refused else {
+        print("[ CHECK ] budget: the child was never refused")
+        return
+    }
+
+    // Through `printDec` and not interpolation: one interpolated line pulls
+    // 17 KiB of native String machinery into this image, for two numbers.
+    print("[ CHECK ] budget: a child held ", terminator: "")
+    printDec(UInt64(mapped), terminator: "")
+    print(" of ", terminator: "")
+    printDec(UInt64(budgetChildFrames), terminator: "")
+    print(" frames and was refused the next")
+}
+
+
 private let cowPattern: UInt8 = 0xC0
 
 /// Copy-on-write, proved by two processes sharing one page for real.

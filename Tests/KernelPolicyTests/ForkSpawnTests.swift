@@ -242,6 +242,7 @@ struct ForkSpawnTests {
             UInt(MemoryLayout<VMAManager>.stride),
             UInt(MemoryLayout<Arch.TrapFrame>.stride),
             UInt(MemoryLayout<ProcessMetadata>.stride),
+            UInt(MemoryLayout<FrameBudget>.stride),
             UInt(MemoryLayout<Process>.stride),
         ]
 
@@ -254,11 +255,11 @@ struct ForkSpawnTests {
 
     @Test("every rollback in the spawn sequence gives back what it took")
     func rollbacksAreComplete() {
-        // The spawn makes four heap allocations after creating the address
-        // space: the VMA manager, the trap frame, the metadata block and the
-        // process record. Failing the nth is the only way to reach the nth
-        // rollback, which is why the heap has a fault-injection seam at all.
-        for surviving in 0..<4 {
+        // The spawn makes five heap allocations: the metadata block and its
+        // budget cell before the address space, then the VMA manager, the trap
+        // frame and the process record. Failing the nth is the only way to
+        // reach the nth rollback, which is why the heap has the seam at all.
+        for surviving in 0..<5 {
             withProcessManager(pages: 64) { ram, heap, manager in
                 warmSlab(heap)
 
@@ -294,7 +295,7 @@ struct ForkSpawnTests {
             // Twenty failures at a rotating step. A rollback that misses a
             // frame shows up as this climbing rather than holding.
             for attempt in 0..<20 {
-                KernelHeap.failAllocationsAfter = attempt % 4
+                KernelHeap.failAllocationsAfter = attempt % 5
                 #expect((try? manager.pointee.spawnProcess()) == nil)
             }
             KernelHeap.failAllocationsAfter = nil

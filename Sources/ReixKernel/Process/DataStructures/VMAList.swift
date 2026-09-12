@@ -14,6 +14,16 @@
 /// buddy's free lists) used to carry the two words unset and unread.
 public struct VMAList: VMAStructure {
 
+    /// Regions one address space may register at once.
+    ///
+    /// A node is 56 bytes of kernel heap, and nothing bounded how many of them
+    /// a process could ask for: an `mmap` loop leaving a gap between mappings
+    /// never merges, and every iteration costs a node the frame budget does not
+    /// see. The deepest any address space got across the whole QEMU matrix is 16
+    /// regions, in the shell rows; 64 is four times that, and 3584 bytes of heap
+    /// at the ceiling.
+    public static let defaultNodeLimit: UInt16 = 64
+
     /// The user window `findFreeGAP` searches, fixed at construction.
     internal let minAddress: VirtualAddress // 8 Byte
     internal let maxAddress: VirtualAddress // 8 Byte
@@ -21,18 +31,35 @@ public struct VMAList: VMAStructure {
     /// The regions themselves, ordered by `startAddress`.
     internal var nodes: LinkedList<VirtualMemoryArea> // 16 Byte
 
+    /// Nodes the chain currently holds, maintained by the five methods below
+    /// that link or unlink one. Kept rather than counted, because the check it
+    /// serves runs before a node is allocated and a walk there would make every
+    /// registration quadratic in the list it is joining.
+    internal private(set) var nodeCount: UInt16 = 0 // 2 Byte
+
+    /// Ceiling on `nodeCount`, fixed at construction.
+    internal let nodeLimit: UInt16 // 2 Byte
+
 
     internal var head: UnsafeMutablePointer<VirtualMemoryArea>? { nodes.head }
     internal var tail: UnsafeMutablePointer<VirtualMemoryArea>? { nodes.tail }
 
 
+    /// Whether one more node may be linked. Asked before the heap is, so a
+    /// refusal costs no allocation.
+    @inline(__always)
+    internal var admitsNode: Bool { nodeCount < nodeLimit }
+
+
     public init(
         minAddress: VirtualAddress,
-        maxAddress: VirtualAddress
+        maxAddress: VirtualAddress,
+        nodeLimit : UInt16 = VMAList.defaultNodeLimit
     ) {
         self.minAddress = minAddress
         self.maxAddress = maxAddress
         self.nodes      = LinkedList(head: nil, tail: nil)
+        self.nodeLimit  = nodeLimit
     }
 
 
@@ -43,6 +70,7 @@ public struct VMAList: VMAStructure {
     internal mutating func detachAll() -> LinkedList<VirtualMemoryArea> {
         let chain = nodes
         nodes     = LinkedList(head: nil, tail: nil)
+        nodeCount = 0
 
         return chain
     }
@@ -51,6 +79,7 @@ public struct VMAList: VMAStructure {
     /// Unlink `region` without freeing it. The caller owns the node afterwards.
     internal mutating func remove(element region: UnsafeMutablePointer<VirtualMemoryArea>) {
         nodes.remove(element: region)
+        noteUnlinked()
     }
 
 
@@ -114,6 +143,7 @@ public struct VMAList: VMAStructure {
                 }
 
                 nodes.insertBefore(element: region, to: elementPtr)
+                nodeCount &+= 1
                 return
             }
 
@@ -127,6 +157,7 @@ public struct VMAList: VMAStructure {
         }
 
         nodes.pushBack(region)
+        nodeCount &+= 1
     }
 
 
@@ -136,6 +167,7 @@ public struct VMAList: VMAStructure {
         }
 
         nodes.remove(element: currentNode)
+        noteUnlinked()
 
         _ = currentNode
     }
@@ -201,6 +233,9 @@ public struct VMAList: VMAStructure {
               address < region.pointee.endAddress
         else { throw .invalidLayout }
 
+        // Before the heap, so a refused split allocates nothing.
+        guard admitsNode else { throw .regionLimitReached }
+
         guard let newRegionPtr = heap.pointee.kmallocOrNil(VirtualMemoryArea.self) else {
             throw .heapAllocationFailed(.allocationFailed(reason: .fullMemory))
         }
@@ -235,6 +270,7 @@ public struct VMAList: VMAStructure {
         region.pointee = truncated
 
         nodes.insertAfter(element: newRegionPtr, to: region)
+        nodeCount &+= 1
 
         return newRegionPtr
     }
@@ -269,7 +305,16 @@ public struct VMAList: VMAStructure {
         first.pointee = merged
 
         nodes.remove(element: second)
+        noteUnlinked()
+
         return second
+    }
+
+
+    /// One node fewer, clamped for `FrameBudget.refund`'s reason.
+    @inline(__always)
+    private mutating func noteUnlinked() {
+        nodeCount = nodeCount == 0 ? 0 : nodeCount &- 1
     }
 
 

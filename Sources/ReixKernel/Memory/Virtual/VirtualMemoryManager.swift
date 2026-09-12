@@ -304,7 +304,14 @@ public struct VirtualMemoryManager: Loggable {
     }
 
 
-    public mutating func createAddressSpace() throws(PPMError) -> AddressSpace {
+    /// A fresh address space, with its root table charged to `budget`.
+    ///
+    /// The ASID bitmap is not charged: it is one page for the whole machine's
+    /// ASID space, grown at most a handful of times, and it belongs to no
+    /// address space in particular.
+    public mutating func createAddressSpace(
+        budget: UnsafeMutablePointer<FrameBudget>? = nil
+    ) throws(PPMError) -> AddressSpace {
         let pageManager = ppmPtr
         guard let asid = asids.allocate(expand: {
             guard let bitmap = try? pageManager.pointee.alloc(8192, flag: .kernel) else { return nil }
@@ -313,10 +320,16 @@ public struct VirtualMemoryManager: Loggable {
         }) else {
             throw .allocationFailed(reason: .fullMemory)
         }
+        guard chargeFrames(budget, 1) else {
+            asids.release(asid)
+            throw .budgetExceeded
+        }
+
         let page: PhysicalPage
         do {
             page = try ppmPtr.pointee.alloc(4096, flag: .kernel)
         } catch {
+            refundFrames(budget, 1)
             asids.release(asid)
             throw error
         }
@@ -336,12 +349,17 @@ public struct VirtualMemoryManager: Loggable {
     }
 
 
-    public mutating func destroyAddressSpace(addressSpace: consuming AddressSpace) throws(PPMError) {
+    public mutating func destroyAddressSpace(
+        addressSpace: consuming AddressSpace,
+        budget      : UnsafeMutablePointer<FrameBudget>? = nil
+    ) throws(PPMError) {
         
         Arch.MMU.switchUserAddressSpace(self.identityTableAddress, asid: 0)
         Arch.MMU.flushTLB()
 
-        freePageTables(rootTable: addressSpace.rootTablePhysical)
+        freePageTables(rootTable: addressSpace.rootTablePhysical, budget: budget)
+
+        refundFrames(budget, 1)
 
         try ppmPtr.pointee.freeOwnedKernelPage(
             PhysicalPage(address: addressSpace.rootTablePhysical, order: 0)
@@ -362,7 +380,10 @@ public struct VirtualMemoryManager: Loggable {
     /// descend into it and the page is not freed twice. The PPM would refuse
     /// the second free with `.frameNotAllocated` rather than corrupt anything,
     /// but the unlink is what makes that refusal unreachable.
-    private func freePageTables(rootTable: PhysicalAddress) {
+    private func freePageTables(
+        rootTable: PhysicalAddress,
+        budget   : UnsafeMutablePointer<FrameBudget>?
+    ) {
         let l0: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable)
         let kernelMaster: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(self.identityTableAddress)
 
@@ -372,7 +393,11 @@ public struct VirtualMemoryManager: Loggable {
 
             if entry.physicalAddress == kernelMaster[index].physicalAddress { continue }
 
-            freePageTableSubtree(tablePhysical: entry.physicalAddress, level: 1)
+            freePageTableSubtree(
+                tablePhysical: entry.physicalAddress,
+                level        : 1,
+                budget       : budget
+            )
         }
     }
 
@@ -382,7 +407,8 @@ public struct VirtualMemoryManager: Loggable {
     /// reclaimed block never races the walk.
     private func freePageTableSubtree(
         tablePhysical: PhysicalAddress,
-        level        : Int
+        level        : Int,
+        budget       : UnsafeMutablePointer<FrameBudget>?
     ) {
             
         if level < 3 {
@@ -394,10 +420,13 @@ public struct VirtualMemoryManager: Loggable {
                 
                 freePageTableSubtree(
                     tablePhysical: entry.physicalAddress,
-                    level        : level + 1
+                    level        : level + 1,
+                    budget       : budget
                 )
             }
         }
+
+        refundFrames(budget, 1)
 
         try? ppmPtr.pointee.freeOwnedKernelPage(
             PhysicalPage(address: tablePhysical, order: 0)
@@ -424,7 +453,8 @@ public struct VirtualMemoryManager: Loggable {
     public func pruneEmptyTables(
         rootTable : PhysicalAddress,
         from start: VirtualAddress,
-        to end    : VirtualAddress
+        to end    : VirtualAddress,
+        budget    : UnsafeMutablePointer<FrameBudget>? = nil
     ) {
         var span = start & ~(Self.blockSize - 1)
 
@@ -435,7 +465,7 @@ public struct VirtualMemoryManager: Loggable {
                   span <  UserSpaceLayout.userMax
             else { continue }
 
-            pruneSpan(rootTable: rootTable, virtual: span)
+            pruneSpan(rootTable: rootTable, virtual: span, budget: budget)
         }
     }
 
@@ -447,7 +477,8 @@ public struct VirtualMemoryManager: Loggable {
     /// a span whose neighbours are still mapped costs one scan and no store.
     private func pruneSpan(
         rootTable: PhysicalAddress,
-        virtual  : VirtualAddress
+        virtual  : VirtualAddress,
+        budget   : UnsafeMutablePointer<FrameBudget>?
     ) {
         let level0Table: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable)
 
@@ -467,11 +498,11 @@ public struct VirtualMemoryManager: Loggable {
         let level3Table: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(level2.physicalAddress)
         guard Self.isEmpty(table: level3Table) else { return }
 
-        unlinkTableAndFree(slot: level2Table + virtual.l2, table: level2.physicalAddress)
+        unlinkTableAndFree(slot: level2Table + virtual.l2, table: level2.physicalAddress, budget: budget)
 
         guard Self.isEmpty(table: level2Table) else { return }
 
-        unlinkTableAndFree(slot: level1Table + virtual.l1, table: level1.physicalAddress)
+        unlinkTableAndFree(slot: level1Table + virtual.l1, table: level1.physicalAddress, budget: budget)
 
         guard Self.isEmpty(table: level1Table) else { return }
 
@@ -480,7 +511,7 @@ public struct VirtualMemoryManager: Loggable {
         let kernelMaster: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(self.identityTableAddress)
         guard level0.physicalAddress != kernelMaster[virtual.l0].physicalAddress else { return }
 
-        unlinkTableAndFree(slot: level0Table + virtual.l0, table: level0.physicalAddress)
+        unlinkTableAndFree(slot: level0Table + virtual.l0, table: level0.physicalAddress, budget: budget)
     }
 
 
@@ -520,13 +551,18 @@ public struct VirtualMemoryManager: Loggable {
     /// linked image, `pte-bbm`'s sibling and for `pte-bbm`'s reason.
     @inline(never)
     private func unlinkTableAndFree(
-        slot : UnsafeMutablePointer<Arch.PageTableEntry>,
-        table: PhysicalAddress
+        slot  : UnsafeMutablePointer<Arch.PageTableEntry>,
+        table : PhysicalAddress,
+        budget: UnsafeMutablePointer<FrameBudget>?
     ) {
         slot.pointee = Arch.PageTableEntry(rawValue: 0)
         Arch.MMU.pageTableBarrier()
 
         Arch.MMU.flushTLB()
+
+        // On the unlink and not on the free: the descriptor is already invalid,
+        // so this address space no longer holds the table either way.
+        refundFrames(budget, 1)
 
         try? ppmPtr.pointee.freeOwnedKernelPage(
             PhysicalPage(address: table, order: 0)
@@ -604,11 +640,16 @@ public struct VirtualMemoryManager: Loggable {
         virtual  : VirtualAddress,
         physical : PhysicalAddress,
         flags    : VirtualPageFlags,
-        type     : MemoryType
+        type     : MemoryType,
+        budget   : UnsafeMutablePointer<FrameBudget>? = nil
     ) throws(PPMError) {
         let tablePointer: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable)
 
-        let slot = try leafSlot(table: tablePointer, virtual: virtual)
+        let slot = try leafSlot(
+            table  : tablePointer,
+            virtual: virtual,
+            budget : budget
+        )
 
         guard !slot.pointee.isPresent else { throw .pageAlreadyMapped }
 
@@ -630,14 +671,16 @@ public struct VirtualMemoryManager: Loggable {
         virtual     : VirtualAddress,
         physical    : PhysicalAddress,
         flags       : VirtualPageFlags,
-        type        : MemoryType
+        type        : MemoryType,
+        budget      : UnsafeMutablePointer<FrameBudget>? = nil
     ) throws(PPMError) {
         try installUserPage(
             rootTable: addressSpace.rootTablePhysical,
             virtual  : virtual,
             physical : physical,
             flags    : flags,
-            type     : type
+            type     : type,
+            budget   : budget
         )
     }
 
@@ -939,7 +982,8 @@ public struct VirtualMemoryManager: Loggable {
     @inline(never)
     private func leafSlot(
         table  : UnsafeMutablePointer<Arch.PageTableEntry>,
-        virtual: VirtualAddress
+        virtual: VirtualAddress,
+        budget : UnsafeMutablePointer<FrameBudget>?
     ) throws(PPMError) -> UnsafeMutablePointer<Arch.PageTableEntry> {
 
         let indexes: InlineArray<3, Int> = [virtual.l0, virtual.l1, virtual.l2]
@@ -959,13 +1003,14 @@ public struct VirtualMemoryManager: Loggable {
             let created = parent[index].isPresent == false
 
             do {
-                currentTable = try mapTable(current: parent, index)
+                currentTable = try mapTable(current: parent, index, budget: budget)
 
             } catch {
                 rollbackCreatedTables(
-                    slots: createdSlots,
-                    pages: createdPages,
-                    count: createdCount
+                    slots : createdSlots,
+                    pages : createdPages,
+                    count : createdCount,
+                    budget: budget
                 )
 
                 throw error
@@ -988,14 +1033,15 @@ public struct VirtualMemoryManager: Loggable {
     /// linked, which is the order teardown walks in and the only one in which
     /// every store lands in a page that is still the caller's.
     private func rollbackCreatedTables(
-        slots: InlineArray<3, UnsafeMutablePointer<Arch.PageTableEntry>>,
-        pages: InlineArray<3, PhysicalAddress>,
-        count: Int
+        slots : InlineArray<3, UnsafeMutablePointer<Arch.PageTableEntry>>,
+        pages : InlineArray<3, PhysicalAddress>,
+        count : Int,
+        budget: UnsafeMutablePointer<FrameBudget>?
     ) {
         var index = count - 1
 
         while index >= 0 {
-            unlinkTableAndFree(slot: slots[index], table: pages[index])
+            unlinkTableAndFree(slot: slots[index], table: pages[index], budget: budget)
             index -= 1
         }
     }
@@ -1019,7 +1065,7 @@ public struct VirtualMemoryManager: Loggable {
         defaultFlags: VirtualPageFlags = [.valid, .page, .accessFlag]
     ) throws(PPMError) {
 
-        let slot = try leafSlot(table: table, virtual: virtual)
+        let slot = try leafSlot(table: table, virtual: virtual, budget: nil)
 
         var entry = slot.pointee
         entry.physicalAddress = physical
@@ -1051,8 +1097,8 @@ public struct VirtualMemoryManager: Loggable {
     ) throws(PPMError) {
 
         var currentTable = table
-        currentTable = try mapTable(current: currentTable, virtual.l0)
-        currentTable = try mapTable(current: currentTable, virtual.l1)
+        currentTable = try mapTable(current: currentTable, virtual.l0, budget: nil)
+        currentTable = try mapTable(current: currentTable, virtual.l1, budget: nil)
 
         var entry = currentTable[virtual.l2]
         entry.physicalAddress = physical
@@ -1104,7 +1150,8 @@ public struct VirtualMemoryManager: Loggable {
     /// map already blocked, so this halts instead of corrupting it silently.
     private func mapTable(
         current: UnsafeMutablePointer<Arch.PageTableEntry>,
-        _ index: Int
+        _ index: Int,
+        budget : UnsafeMutablePointer<FrameBudget>?
     ) throws(PPMError) -> UnsafeMutablePointer<Arch.PageTableEntry> {
         var entry = current[index]
 
@@ -1113,7 +1160,18 @@ public struct VirtualMemoryManager: Loggable {
         }
 
         if !entry.isPresent {
-            let newPage = try ppmPtr.pointee.alloc(4096, flag: .kernel)
+            // The tables of an address space are that address space's cost,
+            // charged here and given back by prune, rollback and teardown.
+            guard chargeFrames(budget, 1) else { throw .budgetExceeded }
+
+            let newPage: PhysicalPage
+            do {
+                newPage = try ppmPtr.pointee.alloc(4096, flag: .kernel)
+
+            } catch {
+                refundFrames(budget, 1)
+                throw error
+            }
 
             let newTablePtr: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(newPage.address)
             

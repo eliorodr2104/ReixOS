@@ -18,4 +18,13 @@ struct PagingContext {
     let vmm              : UnsafeMutablePointer<VirtualMemoryManager> // 8 Byte
     let ppm              : UnsafeMutablePointer<KernelPPM>            // 8 Byte
     let rootTablePhysical: PhysicalAddress                            // 8 Byte
+
+    /// The budget every frame this address space causes to be allocated is
+    /// charged to, and every frame it gives back is refunded to.
+    ///
+    /// Points into the owning process's `ProcessMetadata`, which outlives the
+    /// address space: `releaseAddressSpace` runs the whole teardown and only
+    /// `releaseProcess`, later, frees the metadata block. Optional for the host
+    /// fixtures alone, which drive an address space with no process behind it.
+    let budget           : UnsafeMutablePointer<FrameBudget>?         // 8 Byte
 }

@@ -9,14 +9,19 @@ extension ProcessManager {
 
     /// Allocate an empty address space and publish only a stable task token.
     /// The returned process is unscheduled and cannot execute until `startTask`.
+    ///
+    /// - Parameter frameLimit: the ceiling the owner asks for the child, clamped
+    ///   to the owner's own. `nil` inherits it whole.
     mutating func createSuspendedTask(
         ownedBy owner: UnsafeMutablePointer<Process>,
         name         : InlineArray<16, UInt8>? = nil,
-        nameLength   : Int = 0
+        nameLength   : Int = 0,
+        frameLimit   : UInt32? = nil
     ) -> (control: TaskControl, process: UnsafeMutablePointer<Process>)? {
         guard let process = try? spawnProcess(
             name      : name,
-            nameLength: nameLength
+            nameLength: nameLength,
+            frameLimit: frameLimit
         ) else { return nil }
 
         guard let control = TaskRegistry.create(
@@ -63,15 +68,26 @@ extension ProcessManager {
                 memoryType : .normal
             )
         } catch {
+            if case .regionLimitReached = error { return .full }
             return .invalidRange
         }
 
+        let budget = vma.pointee.budget
+
         var cursor = range.start
         while cursor < range.end {
+            // The pages of a task map are the child's, charged to the child and
+            // given back by the rollback below or by its teardown.
+            guard chargeFrames(budget, 1) else {
+                try? vma.pointee.rollbackMapping(addr: range.start, size: byteCount)
+                return .outOfMemory
+            }
+
             let page: PhysicalPage
             do {
                 page = try ppm.pointee.alloc(Int(UserSpaceLayout.pageSize))
             } catch {
+                refundFrames(budget, 1)
                 try? vma.pointee.rollbackMapping(addr: range.start, size: byteCount)
                 return .outOfMemory
             }
@@ -88,10 +104,12 @@ extension ProcessManager {
                     virtual     : cursor,
                     physical    : page.address,
                     flags       : VMAPermissions([.read, .write, .user]).toPageFlags(),
-                    type        : .normal
+                    type        : .normal,
+                    budget      : budget
                 )
             } catch {
                 try? ppm.pointee.free(page)
+                refundFrames(budget, 1)
                 try? vma.pointee.rollbackMapping(addr: range.start, size: byteCount)
                 return .outOfMemory
             }

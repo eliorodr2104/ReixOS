@@ -142,7 +142,8 @@ enum PageRetirement {
             context.vmm.pointee.pruneEmptyTables(
                 rootTable: context.rootTablePhysical,
                 from     : start,
-                to       : end
+                to       : end,
+                budget   : context.budget
             )
 
             return
@@ -191,9 +192,13 @@ enum PageRetirement {
             }
             Arch.MMU.flushTLBSync()
 
+            // One refund per reference actually given back, which is what the
+            // budget counts.
             index = 0
             while index < pending {
-                try? context.ppm.pointee.release(physicals[index])
+                if (try? context.ppm.pointee.release(physicals[index])) != nil {
+                    refundFrames(context.budget, 1)
+                }
                 index += 1
             }
         }
@@ -203,7 +208,8 @@ enum PageRetirement {
         context.vmm.pointee.pruneEmptyTables(
             rootTable: context.rootTablePhysical,
             from     : start,
-            to       : end
+            to       : end,
+            budget   : context.budget
         )
     }
 

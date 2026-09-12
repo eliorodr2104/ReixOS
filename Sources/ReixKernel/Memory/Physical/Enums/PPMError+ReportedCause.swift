@@ -63,6 +63,7 @@ extension PPMError {
             case .invalidFrameAddress     : .requestRejected
             case .frameNotAllocated       : .requestRejected
             case .referenceCountOverflow  : .requestRejected
+            case .budgetExceeded          : .outOfMemory
             case .pageAlreadyMapped       : .requestRejected
             case .pageNotMapped           : .requestRejected
             case .pageAttributesImmutable : .requestRejected

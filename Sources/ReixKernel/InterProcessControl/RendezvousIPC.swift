@@ -609,6 +609,8 @@ public struct RendezvousIPC: IPCInterface, Loggable {
         return .success(parentEndpointHandle)
     }
     
+    /// - Note: the region's frames are charged to `process` by the syscall that
+    ///   allocated them; the owner recorded here is what gives them back.
     public mutating func createShared(
         for process  : UnsafeMutablePointer<Process>,
             page     : consuming PhysicalPage,
@@ -629,10 +631,15 @@ public struct RendezvousIPC: IPCInterface, Loggable {
             to: SharedRegion(
                 physicalPage: page,
                 references  : 0,
-                pageCount   : pageCount
+                pageCount   : pageCount,
+                owner       : process.pointee.metadata?.pointee.budget
             )
         )
         
+        // One hold per region, so the budget outlives the process whenever a
+        // region it created does.
+        if let owner = sharedRegion.pointee.owner { rxRetain(owner) }
+
         let capability = Capability(
             target: forDevice ? .dma(sharedRegion) : .shared(sharedRegion),
             badge : Badge(0),
@@ -1364,6 +1371,8 @@ public struct RendezvousIPC: IPCInterface, Loggable {
               let capability = metadata.pointee.capsTable.resolve(handle)
         else { return .failure(.invalidCapability) }
 
+        // Deliberately no disown: a window may still map the region, and the
+        // frames it maps are still this process's. See `disownSharedRegion`.
         release(capability)
         metadata.pointee.capsTable.remove(handle: Int(handle))
 
@@ -1383,10 +1392,35 @@ public struct RendezvousIPC: IPCInterface, Loggable {
         for i in 0..<metadata.pointee.capsTable.caps.count where metadata.pointee.capsTable.caps[i] != nil {
             let capability = metadata.pointee.capsTable.caps[i]!
 
+            disown(capability, of: metadata)
+
             release(capability)
             metadata.pointee.capsTable.remove(handle: i)
             
         }
+    }
+
+
+    /// End a dying process's frame charge for a shared or DMA region it
+    /// created, before the reference that may free the region is dropped.
+    ///
+    /// Only teardown reaches this. A live process dropping one of its own
+    /// references keeps paying, because it may still hold the frames through
+    /// another one; see `disownSharedRegion`.
+    @inline(__always)
+    private func disown(
+        _ capability: Capability,
+        of metadata : UnsafeMutablePointer<ProcessMetadata>
+    ) {
+        let region: UnsafeMutablePointer<SharedRegion>
+
+        switch capability.target {
+            case .shared(let shared): region = shared
+            case .dma   (let dma)   : region = dma
+            default                 : return
+        }
+
+        disownSharedRegion(region, ownedBy: metadata.pointee.budget, heap: heap)
     }
     
     /// Fork: the child inherits the parent's whole table, badges included.

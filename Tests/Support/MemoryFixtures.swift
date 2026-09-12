@@ -199,9 +199,14 @@ public final class HostRAM {
     ///   and already withheld, so `markReserved(from:to:)` comes first and this call
     ///   second. The seam checks all three and traps rather than letting a reclaim
     ///   donate frames the allocator already holds.
+    ///
+    /// - Parameter reservePages: the progress reserve this manager keeps. The
+    ///   machine's own value by default; pass `0` for a suite that means to
+    ///   drain the arena, which is the one thing the reserve exists to prevent.
     public func installLiveManager(
         deviceTree    : (start: PhysicalAddress, end: PhysicalAddress)? = nil,
-        reportedRAMSize: UInt64? = nil
+        reportedRAMSize: UInt64? = nil,
+        reservePages  : UInt64? = nil
     ) {
         ppm.pointee = KernelPPM(
             hostAllocator : buddy,
@@ -210,6 +215,8 @@ public final class HostRAM {
             framesMetadata: frames,
             deviceTree    : deviceTree
         )
+
+        if let reservePages { ppm.pointee.setReservePages(reservePages) }
     }
 
 

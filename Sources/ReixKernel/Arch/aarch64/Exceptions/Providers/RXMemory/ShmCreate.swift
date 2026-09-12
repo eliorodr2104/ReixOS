@@ -9,6 +9,11 @@ import ReixABI
 
 /// `shmCreate(pageCount)` syscall provider.
 ///
+/// The region's frames are charged to the creator's `FrameBudget` before the
+/// allocator is asked, so a process cannot buy the machine's memory a window at
+/// a time. A mapper of somebody else's region pays nothing: the frames have one
+/// owner, and it is the one that minted them.
+///
 /// This is a two-register syscall: `x0` carries the capability handle and `x1`
 /// the base virtual address the region was mapped at. The userland wrapper goes
 /// through `_asm_spawn`, which stores `x1` into the result buffer
@@ -44,12 +49,23 @@ public struct ShmCreate: SyscallProvider {
             return
         }
 
+        // Charged to the creator for as long as it holds the region; see the
+        // note above the type.
+        let budget = vmaManager.pointee.budget
+
+        guard chargeFrames(budget, UInt32(truncatingIfNeeded: pageCount)) else {
+            frame.pointee.x0 = UInt64.max
+            frame.pointee.x1 = 0
+            return
+        }
+
         // Allocate the contiguous physical block.
         let physicalPage: PhysicalPage
         do {
             physicalPage = try context.ppm.pointee.alloc(Int(pageCount * UserSpaceLayout.pageSize))
             
         } catch {
+            refundFrames(budget, UInt32(truncatingIfNeeded: pageCount))
             frame.pointee.x0 = UInt64.max
             frame.pointee.x1 = 0
             return
@@ -75,6 +91,8 @@ public struct ShmCreate: SyscallProvider {
                 region = created.region
 
             case .failure:
+                // `createShared` has already given the frames back.
+                refundFrames(budget, UInt32(truncatingIfNeeded: pageCount))
                 frame.pointee.x0 = UInt64.max
                 frame.pointee.x1 = 0
                 return

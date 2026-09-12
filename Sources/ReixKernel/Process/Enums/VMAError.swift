@@ -24,6 +24,10 @@ public enum VMAError: KernelDiagnostic {
     /// no region may have. See `VMAManager.validAttributes`.
     case invalidAttributes
 
+    /// The address space already holds every VMA node its limit allows. Raised
+    /// before the kernel heap is asked, so a refusal allocates nothing.
+    case regionLimitReached
+
     case allocationFailed     (PPMError)
     case mappingFailed        (PPMError)
     case heapAllocationFailed (PPMError)
@@ -53,6 +57,9 @@ public enum VMAError: KernelDiagnostic {
 
             case .invalidAttributes:
                 "VMA Error: backing, memory type and permissions do not describe a region that can exist."
+
+            case .regionLimitReached:
+                "VMA Error: the address space already holds every region its limit allows."
 
             case .allocationFailed(let inner):
                 switch inner.reportedCause {

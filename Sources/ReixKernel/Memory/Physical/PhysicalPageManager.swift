@@ -53,6 +53,40 @@ public struct PhysicalPageManager<A: Allocator>: Loggable {
 
     private static var pageSize: UInt64 { 4096 }
 
+
+    /// Frames kept back from unflagged allocations, so the kernel can still make
+    /// progress once user memory is gone. The initial value of `reservePages`.
+    ///
+    /// Measured against what runs after a user allocation is refused, with the
+    /// machine at its 4 MiB floor:
+    ///
+    ///   - a teardown allocates nothing: `PageRetirement`, `freePageTables` and
+    ///     `destroyAddressSpace` only release, which is why T11 had to land first;
+    ///   - a reply allocates nothing: `RendezvousIPC` copies into a trap frame
+    ///     that already exists;
+    ///   - the kernel heap needs at most one backing page for a new slab
+    ///     (`PPMBackend.allocatePage`);
+    ///   - a kernel mapping needs at most three, one per absent level of the
+    ///     walk (`VirtualMemoryManager.leafSlot`).
+    ///
+    /// Four is therefore the worst case that has to be servable, and eight is
+    /// that doubled. On the 4 MiB machine it is 8 of 1024 frames, against the
+    /// 401 a disk boot holds, so it costs the boot nothing.
+    ///
+    /// Spent only by `.kernel` allocations, which are the kernel's own: a page
+    /// table, a heap slab, an ASID bitmap. Everything a process causes is
+    /// unflagged and stops here.
+    public static var reservePages: UInt64 { 8 }
+
+
+    /// This machine's reserve. Set from the constant above and only ever lowered
+    /// by the host seam, so nothing on the machine can spend it by accident.
+    public private(set) var reservePages: UInt64 = Self.reservePages
+
+
+    /// Frames nobody holds.
+    public var freePages: UInt64 { totalPages - allocatedPages }
+
     /// Flags a caller may attach to an allocator-owned block. `.reserved` is a
     /// boot ownership state, and the upper bits include the manager's private
     /// allocator state, so neither may enter through `alloc`.
@@ -64,6 +98,11 @@ public struct PhysicalPageManager<A: Allocator>: Loggable {
     }
 
 
+    /// Two gates stand before the allocator, and both refuse without touching
+    /// it: the caller's own `FrameBudget`, checked at the charge point above
+    /// this one, and the machine's progress reserve, checked here. Nothing that
+    /// is not `.kernel` may spend the reserve.
+    ///
     /// - Note: `mutating` for the accounting alone. Every call site reaches the
     ///   manager through a pointer, so the pointee is the one that is bumped and
     ///   no caller had to change.
@@ -87,6 +126,17 @@ public struct PhysicalPageManager<A: Allocator>: Loggable {
 
         guard allocatedPages <= totalPages else {
             throw .metadataInconsistency
+        }
+
+        // Tested against the request and before the allocator is asked, so a
+        // refusal leaves the buddy untouched. See `reservePages`.
+        if reservePages > 0, !flag.contains(.kernel) {
+            let requested = (UInt64(bytes) + Self.pageSize - 1) / Self.pageSize
+            let free      = totalPages - allocatedPages
+
+            guard free > requested, free - requested > reservePages else {
+                throw .allocationFailed(reason: .fullMemory)
+            }
         }
 
         #if !hasFeature(Embedded)
@@ -956,6 +1006,13 @@ extension PhysicalPageManager {
 
         self.deviceTreeStart = extent.start
         self.deviceTreeEnd   = extent.end
+    }
+
+
+    /// Choose this manager's progress reserve. Zero turns it off, which is what
+    /// a suite that deliberately drains its arena needs.
+    mutating func setReservePages(_ pages: UInt64) {
+        self.reservePages = pages
     }
 
 

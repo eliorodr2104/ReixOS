@@ -9,6 +9,11 @@ import ReixABI
 
 /// `dmaAlloc(pageCount, deviceHandle)` syscall provider.
 ///
+/// Charged to the creator like an SHM region, with one difference: a buffer
+/// `dmaPhysical` has published is quarantined for the rest of the boot, so its
+/// charge is never refunded either. A driver that restarts in a loop pays for
+/// every buffer it leaves behind.
+///
 /// Hands back a physically contiguous, non-cacheable buffer mapped into the
 /// caller, and a capability that names it. Two registers on the way out, like
 /// `shmCreate`: `x0` the handle, `x1` the base virtual address.
@@ -72,6 +77,14 @@ public struct DmaAlloc: SyscallProvider {
             return
         }
 
+        // Charged to the creator, like an SHM region: the frames have one owner.
+        let budget = vmaManager.pointee.budget
+
+        guard chargeFrames(budget, UInt32(truncatingIfNeeded: pageCount)) else {
+            fail(frame)
+            return
+        }
+
         let physicalPage: PhysicalPage
         do {
             physicalPage = try context.ppm.pointee.alloc(
@@ -79,6 +92,7 @@ public struct DmaAlloc: SyscallProvider {
             )
 
         } catch {
+            refundFrames(budget, UInt32(truncatingIfNeeded: pageCount))
             fail(frame)
             return
         }
@@ -111,6 +125,8 @@ public struct DmaAlloc: SyscallProvider {
                 region = created.region
 
             case .failure:
+                // `createShared` has already given the frames back.
+                refundFrames(budget, UInt32(truncatingIfNeeded: pageCount))
                 fail(frame)
                 return
         }

@@ -14,7 +14,10 @@
 ///
 /// All dependencies (kernel heap, VMM, PPM) and the root page table physical
 /// reference are injected at construction time so the type is free of static
-/// facades.
+/// facades. The owning process's `FrameBudget` travels with them: every frame
+/// this address space causes to be allocated is charged to it, and every frame
+/// it gives back is refunded, so nothing here is unbounded any more. The count
+/// of regions has a ceiling of its own, `VMAList.defaultNodeLimit`.
 ///
 /// The state below is `internal` rather than `private` because the type is split
 /// across the files of this folder, which is what keeps each of them readable.
@@ -74,19 +77,34 @@ public struct VMAManager: RXAllocatable {
         heap             : UnsafeMutablePointer<BucketsHeap>,
         vmm              : UnsafeMutablePointer<VirtualMemoryManager>,
         ppm              : UnsafeMutablePointer<KernelPPM>,
-        rootTablePhysical: PhysicalAddress
+        rootTablePhysical: PhysicalAddress,
+        budget           : UnsafeMutablePointer<FrameBudget>? = nil,
+        nodeLimit        : UInt16 = VMAList.defaultNodeLimit
     ) {
         self.heap    = heap
         self.context = PagingContext(
             vmm              : vmm,
             ppm              : ppm,
-            rootTablePhysical: rootTablePhysical
+            rootTablePhysical: rootTablePhysical,
+            budget           : budget
         )
         self.vmaList = VMAList(
             minAddress: UserSpaceLayout.userMin,
-            maxAddress: UserSpaceLayout.userMax
+            maxAddress: UserSpaceLayout.userMax,
+            nodeLimit : nodeLimit
         )
     }
+
+
+    /// The budget this address space charges to, for the operations that reach
+    /// the page tables through the virtual memory manager directly.
+    var budget: UnsafeMutablePointer<FrameBudget>? { context.budget }
+
+
+    /// Regions registered here, and the ceiling on them. See
+    /// `VMAList.defaultNodeLimit`.
+    public var registeredRegions: UInt16 { vmaList.nodeCount }
+    public var regionLimit      : UInt16 { vmaList.nodeLimit }
 
 
     /// Seed the program break value used by `extendBreak`. Called by
@@ -311,6 +329,8 @@ public struct VMAManager: RXAllocatable {
         vmaList.remove(element: node)
         heap.pointee.kfree(node)
 
+        // No disown here: a live unmap leaves the frames with a process that
+        // still holds the region another way. See `disownSharedRegion`.
         if let sharedRegion {
             _ = releaseSharedRegion(sharedRegion, ppm: context.ppm, heap: heap)
         }

@@ -92,7 +92,10 @@ struct ListRetirement: ResumableOperation {
         let sharedRegion = nodePtr.pointee.sharedRegion
         heap.pointee.kfree(nodePtr)
 
+        // The address space is going, so a region this process created stops
+        // being charged to it even if somebody else keeps the region alive.
         if let sharedRegion {
+            disownSharedRegion(sharedRegion, ownedBy: context.budget, heap: heap)
             _ = releaseSharedRegion(sharedRegion, ppm: context.ppm, heap: heap)
         }
 

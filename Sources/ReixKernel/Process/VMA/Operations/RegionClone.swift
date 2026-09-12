@@ -196,6 +196,10 @@ struct RegionClone: ResumableOperation {
     /// deferred flush would have to become per-page invalidation plus a
     /// shootdown.
     ///
+    /// Every retain below is also a page charged to the child: a reference is a
+    /// claim on the frame, and a clone of an address space the machine cannot
+    /// afford has to be refused rather than served.
+    ///
     /// ## Only an anonymous frame is retained here
     ///
     /// Every reference taken here has to be given back by the child's `teardown`,
@@ -278,9 +282,16 @@ struct RegionClone: ResumableOperation {
             }
 
             if childOwnsFrameReference {
+                // A reference is a claim on the frame, so the child pays for
+                // every one the clone keeps.
+                guard chargeFrames(context.budget, 1) else {
+                    throw .mappingFailed(.budgetExceeded)
+                }
+
                 do {
                     try ppm.pointee.retain(parentPhys)
                 } catch {
+                    refundFrames(context.budget, 1)
                     throw .mappingFailed(error)
                 }
             }
@@ -291,7 +302,8 @@ struct RegionClone: ResumableOperation {
                     virtual  : va,
                     physical : parentPhys,
                     flags    : pageFlags,
-                    type     : vma.memoryType
+                    type     : vma.memoryType,
+                    budget   : context.budget
                 )
 
                 manager.pointee.noteMapped(1)
@@ -313,6 +325,7 @@ struct RegionClone: ResumableOperation {
                 // one: undo only a reference this batch actually took.
                 if childOwnsFrameReference {
                     try? ppm.pointee.release(parentPhys)
+                    refundFrames(context.budget, 1)
                 }
 
                 throw .mappingFailed(error)

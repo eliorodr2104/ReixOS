@@ -7,6 +7,13 @@
 
 import ReixABI
 
+/// `taskCreate(name, length, frameLimit)` syscall provider.
+///
+/// `x2` carries the frame ceiling the creator asks for the child, in 4 KiB
+/// frames, and `0` asks for nothing: a child with no request inherits its
+/// creator's limit whole. A request above what the creator itself may hold is
+/// clamped and not refused, which is what makes the quota attenuate like a
+/// capability instead of needing a sum over the subtree.
 public struct TaskCreateSyscall: SyscallProvider {
     public static let number: SyscallNumber = .taskCreate
 
@@ -57,11 +64,16 @@ public struct TaskCreateSyscall: SyscallProvider {
             requestedName = name
         }
 
+        let requestedLimit = frame.pointee.x2 == 0
+            ? nil
+            : UInt32(truncatingIfNeeded: min(frame.pointee.x2, UInt64(UInt32.max)))
+
         guard metadata.pointee.capsTable.hasFreeSlots(2),
               let created = context.processManager.pointee.createSuspendedTask(
                 ownedBy   : current,
                 name      : requestedName,
-                nameLength: nameLength
+                nameLength: nameLength,
+                frameLimit: requestedLimit
               )
         else {
             fail(frame)

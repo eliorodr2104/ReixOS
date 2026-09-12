@@ -63,6 +63,11 @@ public struct ElfParser {
     /// and correctly: `.anonymous` regions release their frames, `.fileBacked`
     /// ones only drop translations, because the initrd frames were never this
     /// address space's to free.
+    ///
+    /// Every frame this load takes is charged to the budget in the process
+    /// being built, which `ProcessManager` creates before the address space for
+    /// exactly that reason. An image larger than the limit is refused here
+    /// rather than after it has taken every frame the machine had.
     public static func loadSegments(
         handle      : FileHandle,
         fileSystem  : UnsafeMutablePointer<KernelInternalFileSystem>,
@@ -254,7 +259,8 @@ public struct ElfParser {
                         virtual     : cursor,
                         physical    : base + offset,
                         flags       : permissions.toPageFlags(),
-                        type        : .normal
+                        type        : .normal,
+                        budget      : vmaManager.pointee.budget
                     )
                 } catch { throw .mappingFailed(error) }
 
@@ -282,7 +288,8 @@ public struct ElfParser {
                     permissions : permissions,
                     addressSpace: addressSpace,
                     vmm         : vmm,
-                    ppm         : ppm
+                    ppm         : ppm,
+                    budget      : vmaManager.pointee.budget
                 )
 
                 copiedPages += 1
@@ -332,7 +339,8 @@ public struct ElfParser {
                 permissions : permissions,
                 addressSpace: addressSpace,
                 vmm         : vmm,
-                ppm         : ppm
+                ppm         : ppm,
+                budget      : vmaManager.pointee.budget
             )
 
             copiedPages += 1
@@ -437,17 +445,29 @@ public struct ElfParser {
     /// Zeroed before it is mapped and not after: the frame comes from the buddy
     /// allocator carrying whatever the last owner left in it, and the copy pass
     /// only writes the bytes the file actually has.
+    ///
+    /// Charged to the process being built, which is what bounds an image: a
+    /// program with a large `.bss` is refused here rather than after it has
+    /// taken every frame the machine had.
     private static func materialize(
         page        : VirtualAddress,
         permissions : VMAPermissions,
         addressSpace: borrowing AddressSpace,
         vmm         : UnsafeMutablePointer<VirtualMemoryManager>,
-        ppm         : UnsafeMutablePointer<PhysicalPageManager<BuddyAllocator>>
+        ppm         : UnsafeMutablePointer<PhysicalPageManager<BuddyAllocator>>,
+        budget      : UnsafeMutablePointer<FrameBudget>?
     ) throws(ElfError) {
+
+        guard chargeFrames(budget, 1) else {
+            throw .allocationFailed(.budgetExceeded)
+        }
 
         let frame: PhysicalPage
         do { frame = try ppm.pointee.alloc(Int(Self.pageSize)) }
-        catch { throw .allocationFailed(error) }
+        catch {
+            refundFrames(budget, 1)
+            throw .allocationFailed(error)
+        }
 
         let dst: UnsafeMutablePointer<UInt8> = vmm.pointee.physToVirt(frame.address)
         dst.initialize(repeating: 0, count: Int(Self.pageSize))
@@ -458,10 +478,12 @@ public struct ElfParser {
                 virtual     : page,
                 physical    : frame.address,
                 flags       : permissions.toPageFlags(),
-                type        : .normal
+                type        : .normal,
+                budget      : budget
             )
         } catch {
             try? ppm.pointee.release(frame.address)
+            refundFrames(budget, 1)
             throw .mappingFailed(error)
         }
     }
