@@ -389,6 +389,8 @@ public func main() {
             environment: terminalEnvironment,
             diagnostic : diagnostic
         )
+
+        copyOnWriteSelfCheck()
     }
 
     // The shell gets every filesystem right except `unmount`; the
@@ -978,4 +980,155 @@ private func pourGift(
     }
 
     if poured != .ok { print("[ INIT  ] the pipe transfer was refused") }
+}
+
+
+// MARK: - Copy-on-write
+
+/// The byte a shared page carries into a split, and must still carry after the
+/// other side has written all over its own copy.
+private let cowPattern: UInt8 = 0xC0
+
+/// Copy-on-write, proved by two processes sharing one page for real.
+///
+/// It lives in init and not in `StorageCheck` for one reason: `split` refuses
+/// any process that has a parent, and init is the only process on the machine
+/// that has none. Everything `StorageCheck` runs as is spawned by init, so a
+/// split from there answers `UInt64.max` before it does anything at all. The
+/// alternative would be relaxing that guard, which is a change to what `split`
+/// means and not to whether copy-on-write is correct.
+///
+/// Runs under `if let machine`, so it costs nothing on a machine that mounted no
+/// disk and it lands in exactly the rows `StorageCheck` already lands in.
+///
+/// Single writer throughout: the child prints nothing and answers with its exit
+/// code, and the parent is parked in `reapChild` for as long as the child runs.
+private func copyOnWriteSelfCheck() {
+
+    // Its own region rather than the heap's: moving the break behind
+    // `SbrkBackend` leaves it refusing every page it is asked for afterwards.
+    let base = mmap(size: 4096)
+
+    guard base != 0,
+          let page = UnsafeMutableRawPointer(bitPattern: UInt(base))
+    else {
+        print("[ CHECK ] cow: no page to share")
+        return
+    }
+
+    // Every road out of here gives the page back. Init outlives the machine, so
+    // a frame it stops using and keeps is a frame gone for the boot.
+    defer { _ = munmap(addr: base, size: 4096) }
+
+    let bytes = page.assumingMemoryBound(to: UInt8.self)
+
+    // Written before the split, so the page is resident and private, which is
+    // the only state the clone can turn into a shared one.
+    for index in 0..<4096 { bytes[index] = cowPattern }
+
+    guard divergedAcrossSplit(bytes) else { return }
+
+    nonExecutableDataPage(page)
+}
+
+
+/// The child writes over the shared page, and this side must not see it.
+///
+/// Then the write this side takes once the child is gone, which is the
+/// promotion: the frame is back to one holder, so the descriptor regains its
+/// write bit in place and no copy is taken. It has to return, and that is the
+/// assertion. An unresolvable fault here would restart the same store forever
+/// and this function would simply never come back.
+private func divergedAcrossSplit(_ bytes: UnsafeMutablePointer<UInt8>) -> Bool {
+
+    let pid = split()
+
+    if pid == 0 {
+        bytes[0]    = 0x0C
+        bytes[4095] = 0x0C
+        exit(code: 41)
+    }
+
+    guard pid != UInt64.max else {
+        print("[ CHECK ] cow: this process may not split")
+        return false
+    }
+
+    guard reapChild(for: pid) == 41 else {
+        print("[ CHECK ] cow: the child did not finish its write")
+        return false
+    }
+
+    guard bytes[0] == cowPattern, bytes[4095] == cowPattern else {
+        print("[ CHECK ] cow: the child's write reached this page")
+        return false
+    }
+
+    print("[ CHECK ] cow: a child's write left this page untouched")
+
+    bytes[0] = 0x1C
+
+    guard bytes[0] == 0x1C else {
+        print("[ CHECK ] cow: the promoted page did not take the write")
+        return false
+    }
+
+    print("[ CHECK ] cow: writing again after the child is gone returns")
+
+    return true
+}
+
+
+/// A child points the program counter at a page of data and has to die of it.
+///
+/// The page is read/write and never executable, so the fetch raises a
+/// permission fault on a descriptor that copy-on-write could otherwise be asked
+/// to resolve. It is not resolvable by anything: no frame makes a non-executable
+/// page executable. Treating it as a write fault returned the child to the same
+/// instruction for as long as it was scheduled.
+///
+/// The kernel's own line carries the classification that decides this, and the
+/// boot matrix requires it: `access=fetch`.
+///
+/// Two writers reach the port around this check, and around no other line this
+/// process prints: the kernel reports the fault itself, on a road that owes
+/// nothing to the console server everything else here travels through. Neither
+/// can be ordered against the other, and a line of one arriving inside a line
+/// of the other is a marker nothing can match. So each wait below empties one
+/// road before the other is used.
+private func nonExecutableDataPage(_ page: UnsafeMutableRawPointer) {
+
+    // Drain what this process has already printed, so the kernel's line lands
+    // between two lines instead of inside one.
+    sleep(for: .milliseconds(200))
+
+    let pid = split()
+
+    if pid == 0 {
+        let thunk = unsafeBitCast(page, to: (@convention(c) () -> Void).self)
+        thunk()
+
+        // Reached only if the fetch was allowed, which is the failure.
+        exit(code: 42)
+    }
+
+    guard pid != UInt64.max else {
+        print("[ CHECK ] cow: this process may not split")
+        return
+    }
+
+    // Zero is every death that is not `exit(code:)`, and the only other way out
+    // of that child is the 42 above.
+    let code = reapChild(for: pid)
+
+    // And now the other way round: let the kernel's line reach the port before
+    // the verdict below enters the console server's queue.
+    sleep(for: .milliseconds(200))
+
+    guard code == 0 else {
+        print("[ CHECK ] cow: a jump into a data page was executed")
+        return
+    }
+
+    print("[ CHECK ] cow: a jump into a data page killed the child alone")
 }

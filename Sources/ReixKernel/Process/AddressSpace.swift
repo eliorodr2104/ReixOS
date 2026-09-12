@@ -38,22 +38,26 @@ public struct AddressSpace {
 
 
     /// Forwards a synchronous user-space memory abort to the owning VMA
-    /// manager. Returns `true` if the manager handled the fault (lazy
-    /// allocation, stack growth, COW), `false` if the fault is a real
-    /// segfault that the exception handler must propagate.
+    /// manager, which answers whether it backed the access, refused it, or
+    /// found nothing to back it with.
+    ///
+    /// A process with no manager has no mapping to consult, so every fault it
+    /// raises is a refusal.
     ///
     /// Marked `@inline(__always)` so the call site in the exception
     /// vector keeps the same cost as a direct pointer dispatch.
     @inline(__always)
     public func handlePageFault(
         at address: VirtualAddress,
-        cause     : FaultCause
-    ) -> Bool {
-        guard let vmaManager = self.vmaManager else { return false }
+        cause     : FaultCause,
+        access    : FaultAccess
+    ) -> FaultOutcome {
+        guard let vmaManager = self.vmaManager else { return .refused }
 
         return vmaManager.pointee.handlePageFault(
-            at   : address,
-            cause: cause
+            at    : address,
+            cause : cause,
+            access: access
         )
     }
 }

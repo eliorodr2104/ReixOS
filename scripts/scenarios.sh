@@ -409,6 +409,116 @@ pte_body() {
     ' "$1"
 }
 
+# Prints the disassembly of the one function whose symbol line starts with the
+# address $2, which is how a call target is followed when its name is shared.
+pte_body_at() {
+    awk -v want="$2" '
+        /^[0-9a-f]+ <.*>:$/ { inside = ($1 == want); next }
+        inside { print }
+    ' "$1"
+}
+
+# post=pte-prune: the sequence that takes an empty page table out of its parent
+# and gives the page back, read out of the linked image.
+#
+# `pte-bbm`'s sibling, for the other half of T11 and for the same reason: a page
+# freed before the invalidation completes can be reissued as data while a walk
+# cache still reads it as a table, and QEMU's soft TLB caches no intermediate
+# level at all, so every row in this matrix passes on a kernel that frees first.
+#
+# `VirtualMemoryManager.unlinkTableAndFree` is `@inline(never)` to keep a symbol
+# here. The free is the last call and the optimizer is free to outline it, so the
+# target is followed by address rather than matched by name inside the region.
+post_pte_prune() {
+    pp_out=$2
+    pp_elf=$KERNEL_ELF
+
+    if [ ! -f "$pp_elf" ]; then
+        printf 'no %s to read the sequence out of' "$pp_elf"
+        return 1
+    fi
+
+    "$OBJDUMP" -d "$pp_elf" > "$pp_out" 2>&1 || {
+        printf 'could not disassemble %s' "$pp_elf"
+        return 1
+    }
+
+    if ! grep -q 'unlinkTableAndFree' "$pp_out"; then
+        printf 'no unlinkTableAndFree symbol in %s' "$pp_elf"
+        return 1
+    fi
+
+    # Same alphabet as pte-bbm: S a descriptor store, B a `dsb ishst`, T the TLB
+    # invalidation. Stack traffic is not a descriptor store.
+    pp_seq=$(
+        awk '
+            /^[0-9a-f]+ <.*>:$/ { inside = index($0, "unlinkTableAndFree") > 0; next }
+            !inside                           { next }
+            index($0, "<page_table_barrier>") { seq = seq "B"; next }
+            index($0, "<flush_tlb>")          { seq = seq "T"; next }
+            /[ \t](str|stur|stp)[ \t]/ {
+                if (index($0, "sp") == 0) seq = seq "S"
+                next
+            }
+            END { print seq }
+        ' "$pp_out"
+    )
+
+    case $pp_seq in
+        SBT*) ;;
+        *)
+            printf 'the table unlink is out of order: read "%s", wanted "SBT..."' \
+                   "$pp_seq"
+            return 1
+            ;;
+    esac
+
+    if ! pte_body "$pp_out" 'unlinkTableAndFree' | grep -qE '<flush_tlb>'; then
+        printf 'the table unlink does not invalidate the TLB'
+        return 1
+    fi
+
+    if ! pte_body "$pp_out" '<flush_tlb>' | grep -qE 'tlbi[[:space:]]+vmalle1is'; then
+        printf 'flush_tlb does not invalidate every cached walk entry'
+        return 1
+    fi
+
+    # The free, after the invalidation. It is whatever the region branches or
+    # calls away to last, followed one level in case the optimizer outlined it.
+    pp_tail=$(pte_body "$pp_out" 'unlinkTableAndFree' | awk '
+        index($0, "<flush_tlb>") { seen = 1; next }
+        !seen                    { next }
+        /[ \t](bl|b)[ \t]/       { line = $0 }
+        END { print line }
+    ')
+
+    if [ -z "$pp_tail" ]; then
+        printf 'nothing is called after the invalidation: the page is never freed'
+        return 1
+    fi
+
+    case $pp_tail in
+        *freeOwned*) return 0 ;;
+    esac
+
+    pp_target=$(printf '%s\n' "$pp_tail" | sed -n 's/.*[[:space:]]0x\([0-9a-f]*\)[[:space:]]*<.*/\1/p')
+
+    if [ -z "$pp_target" ]; then
+        printf 'could not read the call target after the invalidation: %s' "$pp_tail"
+        return 1
+    fi
+
+    pp_target=$(printf '%016s\n' "$pp_target" | tr ' ' '0')
+
+    if ! pte_body_at "$pp_out" "$pp_target" | grep -q 'freeOwned'; then
+        printf 'what runs after the invalidation at %s does not free the table' \
+               "$pp_target"
+        return 1
+    fi
+
+    return 0
+}
+
 # post=queue-depth: how many requests one client ever had accepted and not yet
 # collected, read out of the block server's own log lines.
 #
@@ -605,6 +715,7 @@ run_post() {
             trace-boot)   post_trace_boot "$2" "$rp_out" || return 1 ;;
             dma-barriers) post_dma_barriers "$2" "$rp_out" || return 1 ;;
             pte-bbm)      post_pte_bbm "$2" "$rp_out" || return 1 ;;
+            pte-prune)    post_pte_prune "$2" "$rp_out" || return 1 ;;
             queue-depth)  post_queue_depth "$2" "$rp_out" || return 1 ;;
             shell-closed) post_shell_closed "$2" "$rp_out" || return 1 ;;
             terminal-baseline)  post_terminal_baseline "$2" "$rp_out" || return 1 ;;

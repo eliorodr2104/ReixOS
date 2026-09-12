@@ -83,19 +83,27 @@ public struct UserMemory {
     ) -> Bool {
         var cursor = start
 
+        // What the kernel is about to do to the page, which is what decides
+        // whether a copy-on-write page has to be resolved at all.
+        let access: FaultAccess = writable ? .write : .read
+
         while cursor < end {
             if !vmaManager.pointee.isPageMapped(at: cursor) {
-                guard vmaManager.pointee.handlePageFault(
-                    at   : cursor,
-                    cause: .translation
+                guard case .handled = vmaManager.pointee.handlePageFault(
+                    at    : cursor,
+                    cause : .translation,
+                    access: access
                 ) else { return false }
             }
 
             // A present COW page is still read-only in hardware. Resolve it
             // before an EL1 store, where a permission fault cannot be retried.
             if writable, !vmaManager.pointee.isPageMapped(at: cursor, writable: true) {
-                guard vmaManager.pointee.handlePageFault(at: cursor, cause: .permission),
-                      vmaManager.pointee.isPageMapped(at: cursor, writable: true)
+                guard case .handled = vmaManager.pointee.handlePageFault(
+                    at    : cursor,
+                    cause : .permission,
+                    access: .write
+                ), vmaManager.pointee.isPageMapped(at: cursor, writable: true)
                 else { return false }
             }
 

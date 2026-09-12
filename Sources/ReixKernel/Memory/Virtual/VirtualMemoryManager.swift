@@ -356,6 +356,12 @@ public struct VirtualMemoryManager: Loggable {
     /// Walks the L0 root and recurses through table descriptors only; the L0
     /// root page itself is freed by the caller. Leaf (block/page) descriptors
     /// point at data frames owned elsewhere and are deliberately left alone.
+    ///
+    /// Whatever `pruneEmptyTables` already reclaimed is not here to find: a
+    /// pruned table left its parent descriptor invalid, so this walk does not
+    /// descend into it and the page is not freed twice. The PPM would refuse
+    /// the second free with `.frameNotAllocated` rather than corrupt anything,
+    /// but the unlink is what makes that refusal unreachable.
     private func freePageTables(rootTable: PhysicalAddress) {
         let l0: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable)
         let kernelMaster: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(self.identityTableAddress)
@@ -395,6 +401,135 @@ public struct VirtualMemoryManager: Loggable {
 
         try? ppmPtr.pointee.freeOwnedKernelPage(
             PhysicalPage(address: tablePhysical, order: 0)
+        )
+    }
+
+
+    // MARK: - Reclaiming empty tables
+
+    /// Give back the page tables that a retirement over `[start, end)` emptied.
+    ///
+    /// Called once per retirement batch and never per page: emptiness is decided
+    /// by reading all 512 entries of a table, so the cost is one 4 KiB scan per
+    /// 2 MiB span the batch touched, and a batch is at most 32 pages. Per page
+    /// it would be that scan 32 times over for the same answer.
+    ///
+    /// A span is examined whole because that is what an L3 table covers: the
+    /// table is freed only when nothing in the span is mapped any more, whoever
+    /// unmapped it and in whichever batch.
+    ///
+    /// Outside `[userMin, userMax)` this does nothing. The kernel's own tables
+    /// are reached through the same roots and are not this address space's to
+    /// free; the L0 test in `pruneSpan` is the second lock on the same door.
+    public func pruneEmptyTables(
+        rootTable : PhysicalAddress,
+        from start: VirtualAddress,
+        to end    : VirtualAddress
+    ) {
+        var span = start & ~(Self.blockSize - 1)
+
+        while span < end {
+            defer { span &+= Self.blockSize }
+
+            guard span >= UserSpaceLayout.userMin,
+                  span <  UserSpaceLayout.userMax
+            else { continue }
+
+            pruneSpan(rootTable: rootTable, virtual: span)
+        }
+    }
+
+
+    /// Unlink and free the L3 table of one 2 MiB span if nothing is mapped in
+    /// it, then its L2 and its L1 if they are emptied in turn.
+    ///
+    /// Bottom up and stopping at the first table that still holds something, so
+    /// a span whose neighbours are still mapped costs one scan and no store.
+    private func pruneSpan(
+        rootTable: PhysicalAddress,
+        virtual  : VirtualAddress
+    ) {
+        let level0Table: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable)
+
+        let level0 = level0Table[virtual.l0]
+        guard level0.isPresent, level0.isTableDescriptor else { return }
+
+        let level1Table: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(level0.physicalAddress)
+
+        let level1 = level1Table[virtual.l1]
+        guard level1.isPresent, level1.isTableDescriptor else { return }
+
+        let level2Table: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(level1.physicalAddress)
+
+        let level2 = level2Table[virtual.l2]
+        guard level2.isPresent, level2.isTableDescriptor else { return }
+
+        let level3Table: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(level2.physicalAddress)
+        guard Self.isEmpty(table: level3Table) else { return }
+
+        unlinkTableAndFree(slot: level2Table + virtual.l2, table: level2.physicalAddress)
+
+        guard Self.isEmpty(table: level2Table) else { return }
+
+        unlinkTableAndFree(slot: level1Table + virtual.l1, table: level1.physicalAddress)
+
+        guard Self.isEmpty(table: level1Table) else { return }
+
+        // The L0 entries `createAddressSpace` copied by reference: freeing one
+        // would free a table every other address space is still walking.
+        let kernelMaster: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(self.identityTableAddress)
+        guard level0.physicalAddress != kernelMaster[virtual.l0].physicalAddress else { return }
+
+        unlinkTableAndFree(slot: level0Table + virtual.l0, table: level0.physicalAddress)
+    }
+
+
+    /// Whether a 512-entry table holds no present descriptor.
+    private static func isEmpty(
+        table: UnsafeMutablePointer<Arch.PageTableEntry>
+    ) -> Bool {
+        for index in 0..<512 {
+            if table[index].isPresent { return false }
+        }
+
+        return true
+    }
+
+
+    /// Take a table out of its parent and give the page back.
+    ///
+    /// The kernel's one break of a translation-table walk entry, and the mirror
+    /// of `breakBeforeMake`: in order, the invalid descriptor, `dsb ishst`, the
+    /// TLB invalidation, the `dsb ish` that completes it, and only then the free.
+    /// A page released before the invalidation completes can be reissued as data
+    /// while a walk cache still reads it as a table, which is the walker
+    /// following whatever the new owner writes there.
+    ///
+    /// `tlbi vmalle1is` and not the per-address form. DDI 0487 lets an
+    /// implementation cache intermediate levels of a walk, and a walk may be
+    /// speculative: the L2 descriptor naming this L3 table can be cached for any
+    /// address in the 2 MiB span, including addresses that were never mapped and
+    /// so were never invalidated by the batch. Covering the span by address is
+    /// 512 `tlbi vaae1is`, which is Linux's own threshold for giving up and
+    /// flushing everything, and this runs at most once per 512 pages retired.
+    /// See DDI 0487 "TLB maintenance", D8.17 in issue M.b; the section number
+    /// moves between issues and the title does not.
+    ///
+    /// `@inline(never)` so the sequence keeps a symbol of its own: the
+    /// `pte-prune` post-check in `scripts/scenarios.sh` reads it back out of the
+    /// linked image, `pte-bbm`'s sibling and for `pte-bbm`'s reason.
+    @inline(never)
+    private func unlinkTableAndFree(
+        slot : UnsafeMutablePointer<Arch.PageTableEntry>,
+        table: PhysicalAddress
+    ) {
+        slot.pointee = Arch.PageTableEntry(rawValue: 0)
+        Arch.MMU.pageTableBarrier()
+
+        Arch.MMU.flushTLB()
+
+        try? ppmPtr.pointee.freeOwnedKernelPage(
+            PhysicalPage(address: table, order: 0)
         )
     }
 
@@ -446,10 +581,12 @@ public struct VirtualMemoryManager: Loggable {
     ///
     /// A refused install leaves the page tables and the physical allocator
     /// exactly as it found them, even though the walk below is the creating
-    /// one. A valid leaf descriptor implies every level above it is already
-    /// there, so on the path that refuses, `mapTable` creates nothing. One walk
-    /// and not two is the point: this is the hot path of every demand fault,
-    /// every ELF page and every cloned page.
+    /// one. For `.pageAlreadyMapped` that is free: a valid leaf descriptor
+    /// implies every level above it is already there, so `mapTable` creates
+    /// nothing. For a walk that runs out of frames it is `leafSlot`'s rollback,
+    /// which unlinks and frees the tables that walk had just made. One walk and
+    /// not two is the point: this is the hot path of every demand fault, every
+    /// ELF page and every cloned page.
     ///
     /// Emits the descriptor store and `dsb ishst`, and no TLB invalidation.
     /// That omission is sound only because a cleared descriptor never leaves a
@@ -612,6 +749,10 @@ public struct VirtualMemoryManager: Loggable {
         flags    : VirtualPageFlags,
         type     : MemoryType
     ) throws(PPMError) {
+        #if !hasFeature(Embedded)
+        if VMMFaultInjection.failReplaces { throw .pageNotMapped }
+        #endif
+
         let tablePointer: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable)
 
         guard let leaf = lookupLeafTable(table: tablePointer, virtual: virtual),
@@ -782,6 +923,15 @@ public struct VirtualMemoryManager: Loggable {
     /// walk are missing. The one creating descent, shared by the boot-time
     /// writer and by `installUserPage`.
     ///
+    /// A descent that fails part way undoes itself: the tables *this call*
+    /// linked are unlinked and freed before the error is rethrown, so a refused
+    /// install leaves the physical allocator exactly as it found it. Without
+    /// that, an install that ran out of frames at L2 left a fresh L1 linked and
+    /// allocated until the process died, which is the audit's H5 on the mapping
+    /// side. Each of those tables is empty by construction, nothing but this
+    /// call has ever reached it, and a table that was already there is never
+    /// touched: an install that fails over an existing L1 leaves that L1 alone.
+    ///
     /// `@inline(never)` for size and not for correctness: inlined, the three
     /// `mapTable` calls are copied into every writer, and this is measured at
     /// over a kilobyte of `.text` on a 4 MiB machine. Out of line it is one
@@ -792,13 +942,64 @@ public struct VirtualMemoryManager: Loggable {
         virtual: VirtualAddress
     ) throws(PPMError) -> UnsafeMutablePointer<Arch.PageTableEntry> {
 
+        let indexes: InlineArray<3, Int> = [virtual.l0, virtual.l1, virtual.l2]
+
+        // Parent slot and page of each table this call created, youngest last.
+        // Two arrays and not one of pairs, as `PageRetirement`'s batch is.
+        var createdSlots = InlineArray<3, UnsafeMutablePointer<Arch.PageTableEntry>>(repeating: table)
+        var createdPages = InlineArray<3, PhysicalAddress>(repeating: 0)
+        var createdCount = 0
+
         var currentTable = table
-        currentTable = try mapTable(current: currentTable, virtual.l0)
-        currentTable = try mapTable(current: currentTable, virtual.l1)
-        currentTable = try mapTable(current: currentTable, virtual.l2)
+
+        for level in 0..<indexes.count {
+            let parent = currentTable
+            let index  = indexes[level]
+
+            let created = parent[index].isPresent == false
+
+            do {
+                currentTable = try mapTable(current: parent, index)
+
+            } catch {
+                rollbackCreatedTables(
+                    slots: createdSlots,
+                    pages: createdPages,
+                    count: createdCount
+                )
+
+                throw error
+            }
+
+            guard created else { continue }
+
+            createdSlots[createdCount] = parent + index
+            createdPages[createdCount] = parent[index].physicalAddress
+            createdCount += 1
+        }
 
         return currentTable + virtual.l3
     }
+
+
+    /// Undo the tables a failed `leafSlot` linked, youngest first.
+    ///
+    /// Youngest first so a parent is never freed while a child of it is still
+    /// linked, which is the order teardown walks in and the only one in which
+    /// every store lands in a page that is still the caller's.
+    private func rollbackCreatedTables(
+        slots: InlineArray<3, UnsafeMutablePointer<Arch.PageTableEntry>>,
+        pages: InlineArray<3, PhysicalAddress>,
+        count: Int
+    ) {
+        var index = count - 1
+
+        while index >= 0 {
+            unlinkTableAndFree(slot: slots[index], table: pages[index])
+            index -= 1
+        }
+    }
+
 
     /// The boot-time leaf writer: overwrites whatever was there, with no TLB
     /// invalidation and no look at the entry's current state.
@@ -1033,3 +1234,25 @@ public struct VirtualMemoryManager: Loggable {
     }
 
 }
+
+
+// MARK: - Host test seam
+
+#if !hasFeature(Embedded)
+/// Host-only fault injection for `replaceUserPage`, seamed exactly like
+/// `PPMFaultInjection`: `hasFeature(Embedded)` is on only when `Package.swift`
+/// sees `FREESTANDING=1`, so the machine is compiled without it.
+///
+/// It exists for one case the copy-on-write path has to get right and a test
+/// cannot otherwise reach: the map that throws *after* the new frame was
+/// allocated and the page copied into it. Every natural way to make that throw
+/// needs the descriptor to be absent or unchanged, and both are ruled out by
+/// the fault having happened on a present page whose frame the allocator just
+/// handed out fresh.
+///
+/// A namespace of its own and not a static on the manager, which is generic and
+/// so can hold no static storage. A suite has to put it back.
+enum VMMFaultInjection {
+    static var failReplaces = false
+}
+#endif

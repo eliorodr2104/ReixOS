@@ -230,7 +230,11 @@ func handleExceptionType(
                     )
 
                 case 0x24, 0x20: // User Space Abort (Data | Instruction)
-                    userAbortHandle(frame: framePointer, faultAddress: frame.far)
+                    userAbortHandle(
+                        frame             : framePointer,
+                        faultAddress      : frame.far,
+                        isInstructionFetch: exceptionClass == 0x20
+                    )
                     
                 case 0x25, 0x21: // Kernel Space Abort (Data | Instruction)
                     if exceptionClass == 0x25, isStackGuardFault(at: frame.far) {
@@ -289,9 +293,17 @@ func isStackGuardFault(at address: UInt64) -> Bool {
 
 /// Handles memory access violations (Data/Instruction Aborts) originating from User Space (EL0).
 ///
-/// It decodes the Data Fault Status Code (DFSC) from the ISS (Instruction Specific Syndrome)
-/// into a `FaultCause`: translation (page fault), permission (COW), access flag,
-/// or alignment.
+/// Two fields, not one. The Data Fault Status Code (DFSC) of the ISS says why
+/// the walk refused: translation, permission, access flag or alignment. The
+/// exception class says what was asked, instruction fetch against data access,
+/// and for a data abort the ISS `WnR` bit says whether it was a store.
+///
+/// Decoding only the DFSC made every permission fault look like a candidate for
+/// copy-on-write, an instruction fetch on an NX page included. Such a fetch is
+/// unresolvable by construction, so the process was returned to the very
+/// instruction that raised it, forever. The access kind is what tells the two
+/// apart, and it is decoded here because the ISS layout is this file's business
+/// and nowhere else's.
 ///
 /// A DFSC the kernel cannot classify carries no `FaultCause`, so it skips the
 /// page-fault servicing attempt and terminates the process directly: there is
@@ -300,14 +312,17 @@ func isStackGuardFault(at address: UInt64) -> Bool {
 /// - Parameters:
 ///   - frame: The execution context of the user process.
 ///   - faultAddress: The virtual address that triggered the fault (from FAR_EL1).
+///   - isInstructionFetch: Whether the exception class was an instruction abort
+///     (EC 0x20) rather than a data abort (EC 0x24).
 fileprivate
 func userAbortHandle(
-    frame       : UnsafeMutablePointer<Arch.TrapFrame>,
-    faultAddress: UInt64
+    frame             : UnsafeMutablePointer<Arch.TrapFrame>,
+    faultAddress      : UInt64,
+    isInstructionFetch: Bool
 ) {
     let iss  = frame.pointee.esr & 0x1FFFFFF
     let dfsc = iss & 0x3F
-    
+
     let cause: FaultCause? = switch dfsc {
         case 0x04...0x07: .translation
         case 0x0C...0x0F: .permission
@@ -316,22 +331,42 @@ func userAbortHandle(
         default         : nil
     }
 
+    // WnR is ISS bit 6 and belongs to a data abort alone; an instruction abort
+    // reuses the bit, so the exception class has to be consulted first.
+    let access: FaultAccess = if isInstructionFetch { .instructionFetch }
+                              else if iss & (1 << 6) != 0 { .write }
+                              else { .read }
+
     guard let process = Arch.CPU.getCurrentProcess() else {
         Arch.CPU.panic("User abort raised without a current process")
     }
 
-    if let cause, process.pointee.addressSpace.handlePageFault(
-        at   : faultAddress,
-        cause: cause
-    ) { return }
-
-
-    kprint("[SEGFAULT] pid=\(process.pointee.pid) far=0x\(hex: faultAddress) elr=0x\(hex: frame.pointee.elr) dfsc=0x\(hex: dfsc)")
+    let outcome: FaultOutcome = if let cause {
+        process.pointee.addressSpace.handlePageFault(
+            at    : faultAddress,
+            cause : cause,
+            access: access
+        )
+    } else { .refused }
 
     let guardLow = UserSpaceLayout.stackLimit - UInt64(UserSpaceLayout.guardPageCount) * UserSpaceLayout.pageSize
-    
-    let reason: ExitReason = if faultAddress >= guardLow &&
-                                faultAddress < UserSpaceLayout.stackLimit { .stackOverflow } else { .memoryFault(cause ?? .translation) }
+
+    let reason: ExitReason
+
+    switch outcome {
+        case .handled: return
+
+        case .outOfMemory:
+            kprint("[OOMFAULT] pid=\(process.pointee.pid) far=0x\(hex: faultAddress) elr=0x\(hex: frame.pointee.elr) access=\(access.label)")
+            reason = .outOfMemory
+
+        case .refused:
+            kprint("[SEGFAULT] pid=\(process.pointee.pid) far=0x\(hex: faultAddress) elr=0x\(hex: frame.pointee.elr) dfsc=0x\(hex: dfsc) access=\(access.label)")
+
+            reason = if faultAddress >= guardLow &&
+                        faultAddress < UserSpaceLayout.stackLimit { .stackOverflow }
+                     else { .memoryFault(cause ?? .translation, access) }
+    }
 
     Kernel.syscallHandler.pointee.killCurrent(
         frame : frame,

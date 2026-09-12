@@ -83,6 +83,19 @@ enum PageRetirement {
     /// Every page that had a translation is added to `retiredPages`, whatever
     /// the backing: the count is of mappings dropped and not of frames freed.
     ///
+    /// ## The page tables themselves
+    ///
+    /// A call that cleared at least one descriptor ends in `pruneEmptyTables`
+    /// over the same range, which gives back the L3 tables of the 2 MiB spans
+    /// this batch emptied, and their L2 and L1 when those empty in turn. Once
+    /// per batch and not once per page, because emptiness is a scan of all 512
+    /// entries: see that function for the cost. A batch that cleared nothing
+    /// emptied nothing and skips the scan entirely.
+    ///
+    /// Before that, tables were freed only at `destroyAddressSpace`, so a
+    /// process that mapped and unmapped sparse regions for its whole life held
+    /// one 4 KiB table per span it had ever touched.
+    ///
     /// ## Why only `.anonymous` reaches the allocator
     ///
     /// Any other backing is retired by the branch below, which clears the leaf
@@ -106,18 +119,32 @@ enum PageRetirement {
         // Unmap only, for every backing this address space does not own: the
         // translations go, the frames stay with whoever owns them.
         guard backing == .anonymous else {
-            var va = start
+            var cleared = false
+            var va      = start
+
             while va < end {
 
                 if context.vmm.pointee.removeUserPage(
                     rootTable: context.rootTablePhysical,
                     virtual  : va
-                ) { retiredPages &+= 1 }
+                ) {
+                    retiredPages &+= 1
+                    cleared = true
+                }
 
                 va += UserSpaceLayout.pageSize
             }
 
             invalidate(start: start, end: end)
+
+            guard cleared else { return }
+
+            context.vmm.pointee.pruneEmptyTables(
+                rootTable: context.rootTablePhysical,
+                from     : start,
+                to       : end
+            )
+
             return
         }
 
@@ -126,7 +153,9 @@ enum PageRetirement {
         var virtuals  = InlineArray<32, VirtualAddress>(repeating: 0)
         var physicals = InlineArray<32, PhysicalAddress>(repeating: 0)
 
+        var cleared    = false
         var chunkStart = start
+
         while chunkStart < end {
             var pending = 0
             var va      = chunkStart
@@ -152,6 +181,7 @@ enum PageRetirement {
 
             guard pending > 0 else { continue }
 
+            cleared = true
             retiredPages &+= UInt64(pending)
 
             var index = 0
@@ -167,6 +197,14 @@ enum PageRetirement {
                 index += 1
             }
         }
+
+        guard cleared else { return }
+
+        context.vmm.pointee.pruneEmptyTables(
+            rootTable: context.rootTablePhysical,
+            from     : start,
+            to       : end
+        )
     }
 
 

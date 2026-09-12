@@ -945,6 +945,7 @@ public struct ProcessManager: RXAllocatable, Loggable {
             case .memoryFault       : 3
             case .illegalInstruction: 4
             case .stackOverflow     : 5
+            case .outOfMemory       : 6
         }
     }
 

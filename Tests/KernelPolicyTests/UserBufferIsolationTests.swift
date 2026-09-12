@@ -170,11 +170,12 @@ struct UserBufferIsolationTests {
             ram.setFrame(metadata, at: original)
             let before = ram.pmmStateSnapshot()
             let handled = childVMA.pointee.handlePageFault(
-                at   : address,
-                cause: .permission
+                at    : address,
+                cause : .permission,
+                access: .write
             )
 
-            #expect(!handled)
+            #expect(handled == .refused)
             #expect(ram.pmmStateSnapshot() == before)
             #expect(ram.vmm.pointee.physicalAddressOf(
                 rootTable: child.pointee.addressSpace.rootTablePhysical,

@@ -45,6 +45,26 @@ public struct VMAPermissions: OptionSet {
         self = permissions
     }
 
+    /// Whether a region carrying these permissions allows `access` at all.
+    ///
+    /// Asked of a fault before anything is allocated for it. A fetch into a
+    /// region that is not executable and a store into one that is not writable
+    /// are refusals this set can pronounce on its own, whatever state the page
+    /// tables are in, so neither has to be discovered by backing a page and
+    /// taking the permission fault on the retry.
+    ///
+    /// A read is granted by every region: `toPageFlags` has no encoding for a
+    /// page that is mapped and unreadable, so a region this layer would back at
+    /// all is one a load may touch.
+    public func grant(_ access: FaultAccess) -> Bool {
+        switch access {
+            case .instructionFetch: contains(.execute)
+            case .write           : contains(.write)
+            case .read            : true
+        }
+    }
+
+
     /// Project the logical permissions onto the AArch64 PTE flags the
     /// VMM consumes.
     ///

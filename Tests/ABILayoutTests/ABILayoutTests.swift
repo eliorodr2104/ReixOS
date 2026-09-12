@@ -203,6 +203,12 @@ struct ABILayoutTests {
         // sentinel the wire already uses rather than as an optional took the
         // five-byte field to four and brought both back.
         #expect(MemoryLayout<PendingMessage>.stride <= 40)
+
+        // `ProcessMetadata` says nine bytes padded to sixteen for its own copy.
+        // A reason whose payload outgrows an `ExitCode` moves that field.
+        #expect(MemoryLayout<ExitReason>.size    == 9)
+        #expect(MemoryLayout<ExitReason>.stride  == 16)
+        #expect(MemoryLayout<ExitReason?>.size   == 9)
     }
 
 

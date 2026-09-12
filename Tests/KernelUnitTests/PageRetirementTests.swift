@@ -34,7 +34,7 @@ struct PageRetirementTests {
 
     @Test("a file-backed retirement drops the mappings and releases no frame")
     func fileBackedIsUnmapOnly() {
-        withHostRAM(pages: 16) { ram in
+        withRetirementRAM(pages: 16) { ram in
             let mapped = map(ram, pages: 4)
 
             let before = PageRetirement.retiredPages
@@ -66,7 +66,7 @@ struct PageRetirementTests {
 
     @Test("an anonymous retirement drops the mappings and releases every frame")
     func anonymousReleasesFrames() {
-        withHostRAM(pages: 16) { ram in
+        withRetirementRAM(pages: 16) { ram in
             let mapped = map(ram, pages: 4)
 
             let before = PageRetirement.retiredPages
@@ -94,7 +94,7 @@ struct PageRetirementTests {
 
     @Test("a shared retirement releases nothing either")
     func sharedIsUnmapOnly() {
-        withHostRAM(pages: 16) { ram in
+        withRetirementRAM(pages: 16) { ram in
             let mapped = map(ram, pages: 2)
 
             PageRetirement.retire(
@@ -116,7 +116,7 @@ struct PageRetirementTests {
 
     @Test("a range with nothing resident retires nothing")
     func absentPagesAreNotCounted() {
-        withHostRAM(pages: 16) { ram in
+        withRetirementRAM(pages: 16) { ram in
             // No mapping at all, which is the shape of a reservation nobody touched.
             // A step bounded by frames would spin here; the count must stay put.
             let before = PageRetirement.retiredPages
@@ -142,7 +142,7 @@ struct PageRetirementTests {
 
     @Test("a half-resident file-backed range counts only what was mapped")
     func partiallyResidentRange() {
-        withHostRAM(pages: 16) { ram in
+        withRetirementRAM(pages: 16) { ram in
             // Pages 0 and 2 of the range resident, 1 and 3 absent, so the walk has to
             // skip holes rather than stop at the first one.
             let first = ram.page(8)
@@ -199,5 +199,34 @@ struct PageRetirementTests {
             ppm              : ram.ppm,
             rootTablePhysical: ram.rootTablePhysical
         )
+    }
+}
+
+
+/// A `HostRAM` whose manager is the real one, over the same staged allocator.
+///
+/// `withHostRAM` leaves the manager zeroed, which was enough while retirement
+/// only cleared descriptors. It ends in `pruneEmptyTables` now, and that asks the
+/// manager which of its L0 entries the kernel master shares, so a manager with no
+/// master at all is a null dereference rather than a leak.
+///
+/// The arena's first page stands in for the master: zeroed, and never mapped by
+/// the fixtures here, which start at page 4. The tables themselves stay host
+/// allocations outside the arena, so a prune that reaches one hands the manager
+/// an address it refuses, which is the bounded leak `freePageTableSubtree`
+/// already treats a rejected frame as.
+private func withRetirementRAM(
+    pages : Int,
+    _ body: (HostRAM) -> Void
+) {
+    withKernelTestGlobals {
+        withHostRAM(pages: pages) { ram in
+            ram.vmm.pointee = VirtualMemoryManager(
+                hostPPM      : ram.ppm,
+                identityTable: ram.page(0)
+            )
+
+            body(ram)
+        }
     }
 }

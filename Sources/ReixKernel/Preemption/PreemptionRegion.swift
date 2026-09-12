@@ -149,7 +149,8 @@ public protocol PreemptionRegion {
 /// copy-on-write case, a second one that rewrites the parent's own descriptor:
 /// two three-level descents and two `dsb ishst`, with no TLB maintenance at all,
 /// which is the same order of work as the 2.06 µs a retirement page was measured
-/// at (a descent, a descriptor clear, a `tlbi`, a `dsb` and a frame release). So
+/// at (a descent, a descriptor clear, a `tlbi`, a `dsb` and a frame release,
+/// with the emptied page tables given back once per batch). So
 /// 32 pages is ~64 µs against a 200 µs budget, and probing every step puts one
 /// batch of overshoot on top of it, ~264 µs, the profile the retirement regions
 /// were proven at.
@@ -342,6 +343,12 @@ public enum AddressSpaceTeardown: PreemptionRegion {
 /// same operation overshoots by one batch and the ~70 ns counter read costs
 /// 0.1% of the step it guards. There is nothing left to buy by probing less
 /// often: `stepsPerProbe` above one is for steps far cheaper than a probe.
+///
+/// A batch that cleared anything also ends by scanning the 512 entries of each
+/// 2 MiB span it touched and giving back the tables that are now empty: 512 to
+/// 1024 loads against 32 page retires, plus one `tlbi vmalle1is` on the one
+/// batch in sixteen that empties a span. That is inside the noise of the
+/// estimate above rather than a term of it.
 ///
 /// A teardown's steps are not all that expensive, because the last step of a
 /// region retires whatever is left of it and a one-page region is one 2.06 µs

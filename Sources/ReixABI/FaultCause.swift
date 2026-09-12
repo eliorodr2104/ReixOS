@@ -16,7 +16,8 @@ public enum FaultCause {
     case translation
 
     /// Permission fault: PTE exists but its flags forbid the attempted
-    /// access (used to drive COW and write-to-read-only segfaults).
+    /// access. Only a data write on a copy-on-write region is serviceable;
+    /// every other one is a segfault.
     case permission
 
     /// Alignment fault on a strictly-aligned access.
@@ -24,4 +25,35 @@ public enum FaultCause {
 
     /// Access-flag fault: PTE present but the access flag bit is clear.
     case access
+}
+
+
+/// What the faulting instruction was trying to do.
+///
+/// The cause says why the walk refused, this says what was asked. Both are
+/// needed to tell a copy-on-write write apart from an instruction fetch on an
+/// NX page, which raise the same permission fault on the same descriptor.
+///
+/// Built from the exception class (instruction abort against data abort) and,
+/// for a data abort, the `WnR` bit of the ISS, so the VMA layer stays free of
+/// any AArch64-specific knowledge.
+public enum FaultAccess {
+
+    /// The PC was pointed at the page: an instruction abort.
+    case instructionFetch
+
+    /// A load: a data abort with `WnR` clear.
+    case read
+
+    /// A store or a cache-maintenance write: a data abort with `WnR` set.
+    case write
+
+    /// How the access is named in a diagnostic line.
+    public var label: StaticString {
+        switch self {
+            case .instructionFetch: "fetch"
+            case .read            : "read"
+            case .write           : "write"
+        }
+    }
 }

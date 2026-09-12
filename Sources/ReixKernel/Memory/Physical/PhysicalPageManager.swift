@@ -89,6 +89,16 @@ public struct PhysicalPageManager<A: Allocator>: Loggable {
             throw .metadataInconsistency
         }
 
+        #if !hasFeature(Embedded)
+        if let remaining = PPMFaultInjection.failAllocationsAfter {
+            guard remaining > 0 else {
+                throw .allocationFailed(reason: .fullMemory)
+            }
+
+            PPMFaultInjection.failAllocationsAfter = remaining - 1
+        }
+        #endif
+
         let frame: PhysicalPage
         do {
             frame = try allocator.alloc(bytes)
@@ -855,6 +865,27 @@ extension PhysicalPageManager where A == BuddyAllocator {
 /// it forbids `alloc`. These four declarations are what open the allocation and
 /// reclaim paths to a test, and nothing else about the type had to change.
 #if !hasFeature(Embedded)
+/// Host-only fault injection for `PhysicalPageManager.alloc`: the next `n`
+/// allocations succeed and every one after that is refused with
+/// `.allocationFailed(.fullMemory)`. `nil` disables it, and a suite has to put
+/// it back.
+///
+/// Shaped like `BucketsHeap.failAllocationsAfter` and seamed like it, so the
+/// machine is compiled without it. It exists because `leafSlot`'s rollback is
+/// otherwise unreachable from a test: the rollback needs a table allocation to
+/// fail at L1 or L2 *after* one at L0 succeeded, and draining the arena makes
+/// the first of the three fail every time, which is the one case with nothing
+/// to undo.
+///
+/// A namespace of its own and not a static on the manager, which is generic and
+/// so can hold no static storage. One counter across every specialization is
+/// also what a test wants: it is the allocation that has to fail, not the
+/// allocator behind it.
+enum PPMFaultInjection {
+    static var failAllocationsAfter: Int? = nil
+}
+
+
 extension PhysicalPageManager {
 
     /// A manager over a caller-owned arena, with a working allocator behind it.

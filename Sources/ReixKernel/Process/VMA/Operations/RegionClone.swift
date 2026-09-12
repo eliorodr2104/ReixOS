@@ -47,8 +47,11 @@
 ///
 /// The parent is left with some of its pages read-only and `.copyOnWrite` set on
 /// the region, which is the state a throwing exit has always left it in: the
-/// first write faults, `serviceFault` finds the frame's reference count back at
-/// one and restores the write permission in place.
+/// first *data write* faults, `serviceFault` finds the frame's reference count
+/// back at one and restores the write permission in place. Only a data write:
+/// the region keeps its own `.execute` and `.read` rights throughout, and a
+/// fault of either of those kinds on these pages is refused rather than
+/// promoted.
 struct RegionClone: ResumableOperation {
 
     typealias Failure = VMAError

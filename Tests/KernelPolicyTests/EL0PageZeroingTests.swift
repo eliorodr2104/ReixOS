@@ -118,8 +118,8 @@ struct EL0PageZeroingTests {
                 return
             }
 
-            let firstHandled = vma.pointee.handlePageFault(at: lazy, cause: .translation)
-            #expect(firstHandled)
+            let firstHandled = vma.pointee.handlePageFault(at: lazy, cause: .translation, access: .read)
+            #expect(firstHandled == .handled)
             guard let firstPhysical = expectMappedZeroPage(
                 lazy,
                 of       : process,
@@ -149,8 +149,8 @@ struct EL0PageZeroingTests {
                 rootTable: process.pointee.addressSpace.rootTablePhysical,
                 virtual  : lazy
             ) == nil)
-            let recycledHandled = vma.pointee.handlePageFault(at: lazy, cause: .translation)
-            #expect(recycledHandled)
+            let recycledHandled = vma.pointee.handlePageFault(at: lazy, cause: .translation, access: .read)
+            #expect(recycledHandled == .handled)
             guard let recycledPhysical = expectMappedZeroPage(
                 lazy,
                 of       : process,
@@ -175,8 +175,8 @@ struct EL0PageZeroingTests {
             }
 
             let grown = stackStart - UserSpaceLayout.pageSize
-            let grownHandled = vma.pointee.handlePageFault(at: grown, cause: .translation)
-            #expect(grownHandled)
+            let grownHandled = vma.pointee.handlePageFault(at: grown, cause: .translation, access: .write)
+            #expect(grownHandled == .handled)
             _ = expectMappedZeroPage(
                 grown,
                 of       : process,
@@ -205,8 +205,8 @@ struct EL0PageZeroingTests {
             defer { release(held, in: ram) }
             let residentBefore = vma.pointee.residentPages
 
-            let handled = vma.pointee.handlePageFault(at: address, cause: .translation)
-            #expect(!handled)
+            let handled = vma.pointee.handlePageFault(at: address, cause: .translation, access: .read)
+            #expect(handled == .outOfMemory)
             #expect(ram.vmm.pointee.physicalAddressOf(
                 rootTable: process.pointee.addressSpace.rootTablePhysical,
                 virtual  : address
