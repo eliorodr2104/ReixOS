@@ -23,16 +23,23 @@ public func brk(_ newBreak: UInt64) -> UInt64 {
 /// Bump the program break by `delta` bytes and return the address of
 /// the previous break (POSIX `sbrk` semantics).
 ///
-/// Returns `RXMemoryError.memoryFailure` if the underlying `brk` rejects the new
-/// break. Pass `0` to query the current break without growing.
+/// Returns `RXMemoryError.memoryFailure` if the signed address arithmetic is not
+/// representable or the underlying `brk` rejects the new break. Pass `0` to
+/// query the current break without growing.
 @inline(__always)
 public func sbrk(_ delta: Int64) -> UInt64 {
     let current = brk(0)
 
     if delta == 0 { return current }
 
-    let target = UInt64(Int64(current) + delta)
-    let result = brk(target)
+    guard current != RXMemoryError.memoryFailure,
+          let signedCurrent = Int64(exactly: current)
+    else { return RXMemoryError.memoryFailure }
+
+    let (signedTarget, overflow) = signedCurrent.addingReportingOverflow(delta)
+    guard !overflow, signedTarget >= 0 else { return RXMemoryError.memoryFailure }
+
+    let result = brk(UInt64(signedTarget))
 
     if result == RXMemoryError.memoryFailure {
         return result

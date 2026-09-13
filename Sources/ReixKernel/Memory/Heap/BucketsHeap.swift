@@ -38,7 +38,9 @@ public struct BucketsHeap: KernelHeapInterface, Loggable {
         _ type    : Object.Type,
         _ capacity: Int = 1
     ) -> UnsafeMutablePointer<Object> {
-        let size = UInt(MemoryLayout<Object>.stride * capacity)
+        guard let size = checkedByteCount(type, capacity: capacity) else {
+            Arch.CPU.panic(Object.errorMessageAllocation)
+        }
 
         return allocBytes(size, Object.errorMessageAllocation)
                    .bindMemory(to: Object.self, capacity: capacity)
@@ -57,7 +59,7 @@ public struct BucketsHeap: KernelHeapInterface, Loggable {
         _ type    : Object.Type,
         _ capacity: Int = 1
     ) -> UnsafeMutablePointer<Object>? {
-        let size = UInt(MemoryLayout<Object>.stride * capacity)
+        guard let size = checkedByteCount(type, capacity: capacity) else { return nil }
 
         return allocBytesOrNil(size)?
                    .bindMemory(to: Object.self, capacity: capacity)
@@ -65,34 +67,64 @@ public struct BucketsHeap: KernelHeapInterface, Loggable {
 
     @inline(__always)
     public mutating func kfree(_ ptr: UnsafeMutableRawPointer) {
-        let page = SlabCore<PPMBackend>.pageBase(ptr)
+        if core.free(ptr) { return }
+
+        // Large pages carry no slab shift, so a valid large allocation reaches
+        // this fallback while the common slab path pays only SlabCore's single
+        // ownership and liveness transition.
+        let address = UInt(bitPattern: ptr)
+        let pageAddress = address & ~UInt(0xFFF)
+        guard pageAddress != 0,
+              let page = UnsafeMutableRawPointer(bitPattern: pageAddress),
+              core.backend.owns(page: page)
+        else { Arch.CPU.panic("kfree: invalid or double free") }
+
         let meta = frameInfo(of: page)
 
-        if meta.pointee.flags.contains(.heapLarge) {
-            
-            let phys = UInt64(UInt(bitPattern: page)) - PPMBackend.physicalOffset
-            try? core.backend.ppmPtr.pointee.free(
-                PhysicalPage(address: phys, order: meta.pointee.order)
-            )
-            
-            return
-        }
-
-        guard core.free(ptr) else {
+        guard meta.pointee.flags.contains(.heapLarge),
+              ptr == page,
+              meta.pointee.refCount > 0,
+              meta.pointee.order <= 11
+        else {
             Arch.CPU.panic("kfree: invalid or double free")
         }
+
+        let phys = UInt64(UInt(bitPattern: page)) - PPMBackend.physicalOffset
+        try? core.backend.ppmPtr.pointee.free(
+            PhysicalPage(address: phys, order: meta.pointee.order)
+        )
     }
 
     /// Typed counterpart of `kmalloc<Object>`: deinitializes the pointee(s) and
     /// returns the storage to the slab in one call, so callers never hand-roll
     /// `deinitialize` + a raw-pointer cast.
-    @inline(__always)
+    @inline(never)
     public mutating func kfree<Object: ~Copyable>(
         _ ptr  : UnsafeMutablePointer<Object>,
         count  : Int = 1
     ) {
+        guard freeIfValid(ptr, count: count) else {
+            Arch.CPU.panic("kfree: invalid pointer or count")
+        }
+    }
+
+    /// Testable core of typed free. Validation is complete before destruction;
+    /// the public non-failable contract turns a false result into a kernel panic.
+    @discardableResult
+    mutating func freeIfValid<Object: ~Copyable>(
+        _ ptr  : UnsafeMutablePointer<Object>,
+        count  : Int = 1
+    ) -> Bool {
+        let (bytes, overflow) = MemoryLayout<Object>.stride.multipliedReportingOverflow(by: count)
+        guard count >= 0,
+              !overflow,
+              let allocationSize = allocationSize(of: UnsafeMutableRawPointer(ptr)),
+              UInt(bytes) <= allocationSize
+        else { return false }
+
         ptr.deinitialize(count: count)
         kfree(UnsafeMutableRawPointer(ptr))
+        return true
     }
 
     // MARK: - internals
@@ -124,6 +156,11 @@ public struct BucketsHeap: KernelHeapInterface, Loggable {
 
 
     private mutating func allocBytesOrNil(_ size: UInt) -> UnsafeMutableRawPointer? {
+        guard size != 0 else { return nil }
+        if size > UInt(SlabCore<PPMBackend>.pageSize) {
+            guard size <= UInt(Int.max) else { return nil }
+        }
+
         #if !hasFeature(Embedded)
         if let remaining = Self.failAllocationsAfter {
             guard remaining > 0 else { return nil }
@@ -143,6 +180,42 @@ public struct BucketsHeap: KernelHeapInterface, Loggable {
         }
 
         return core.alloc(size: size)
+    }
+
+    @inline(__always)
+    private func checkedByteCount<Object: ~Copyable>(
+        _ type    : Object.Type,
+        capacity  : Int
+    ) -> UInt? {
+        guard capacity > 0 else { return nil }
+
+        let (bytes, overflow) = MemoryLayout<Object>.stride.multipliedReportingOverflow(
+            by: capacity
+        )
+        guard !overflow else { return nil }
+
+        return UInt(bytes)
+    }
+
+    /// Exact block capacity for a live allocation beginning at `ptr`.
+    /// Kept internal so host tests can prove invalid pointers are rejected before
+    /// typed destruction; it is not part of `KernelHeapInterface`.
+    @inline(__always)
+    func allocationSize(of ptr: UnsafeMutableRawPointer) -> UInt? {
+        let address = UInt(bitPattern: ptr)
+        let pageAddress = address & ~UInt(0xFFF)
+        guard pageAddress != 0,
+              let page = UnsafeMutableRawPointer(bitPattern: pageAddress),
+              core.backend.owns(page: page)
+        else { return nil }
+
+        let meta = frameInfo(of: page).pointee
+        if meta.flags.contains(.heapLarge) {
+            guard ptr == page, meta.refCount > 0, meta.order <= 11 else { return nil }
+            return UInt(4096) << UInt(meta.order)
+        }
+
+        return core.allocationSize(of: ptr)
     }
 
     private func frameInfo(of page: UnsafeMutableRawPointer) -> UnsafeMutablePointer<FrameInfo> {

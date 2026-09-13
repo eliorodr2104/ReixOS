@@ -52,6 +52,10 @@ struct SlabCoreTests {
 
             #expect(roundUpPow2(9)    == 16)
             #expect(roundUpPow2(4096) == 4096)
+            #expect(roundUpPow2(0) == 0)
+            #expect(roundUpPow2(UInt(1) << (UInt.bitWidth - 1)) == UInt(1) << (UInt.bitWidth - 1))
+            #expect(roundUpPow2((UInt(1) << (UInt.bitWidth - 1)) + 1) == 0)
+            #expect(roundUpPow2(UInt.max) == 0)
         }
     }
 
@@ -157,6 +161,149 @@ struct SlabCoreTests {
 
             let doubleFreed = core.free(live)
             #expect(!doubleFreed)
+        }
+    }
+
+
+    @Test("duplicate and interior frees leave the live allocation and free list intact")
+    func rejectsDuplicateAndInteriorPointers() {
+        withSlabCore(pages: 8) { core in
+            let first  = core.alloc(size: 64)!
+            let second = core.alloc(size: 64)!
+
+            first.storeBytes(of: UInt64(0x1122_3344_5566_7788), as: UInt64.self)
+
+            let interiorFreed = core.free(first + 8)
+            #expect(!interiorFreed)
+            #expect(first.load(as: UInt64.self) == 0x1122_3344_5566_7788)
+
+            let secondFreed = core.free(second)
+            #expect(secondFreed)
+            let duplicateFreed = core.free(second)
+            #expect(!duplicateFreed)
+
+            let reused = core.alloc(size: 64)
+            let next   = core.alloc(size: 64)
+            #expect(reused == second)
+            #expect(next != second)
+            #expect(first.load(as: UInt64.self) == 0x1122_3344_5566_7788)
+        }
+    }
+
+
+    @Test("an aligned address for a free block is not accepted as a live allocation")
+    func rejectsNeverAllocatedBlock() {
+        withSlabCore(pages: 8) { core in
+            let live = core.alloc(size: 128)!
+            let neverAllocated = live + 128
+
+            let freed = core.free(neverAllocated)
+            #expect(!freed)
+
+            let next = core.alloc(size: 128)
+            #expect(next == neverAllocated)
+            #expect(core.backend.acquiredPages == 1)
+        }
+    }
+
+
+    @Test("a stale address that is not a block head in the rebound class is rejected")
+    func rejectsPointerFromPreviousClass() {
+        withSlabCore(pages: 1) { core in
+            let oldHead = core.alloc(size: 2048)!
+            let oldTail = core.alloc(size: 2048)!
+            let freedHead = core.free(oldHead)
+            let freedTail = core.free(oldTail)
+            #expect(freedHead)
+            #expect(freedTail)
+
+            let rebound = core.alloc(size: 4096)!
+            #expect(rebound == oldHead)
+
+            // The tail used to be a block head, but is interior to the rebound
+            // 4096-byte class and cannot free or alias its live allocation.
+            let staleFreed = core.free(oldTail)
+            #expect(!staleFreed)
+            #expect(core.allocationSize(of: rebound) == 4096)
+            let reboundFreed = core.free(rebound)
+            #expect(reboundFreed)
+        }
+    }
+
+
+    @Test("small bucket bitmap reservation is bounded and never handed out")
+    func smallBucketMetadataCapacity() {
+        withSlabCore(pages: 1) { core in
+            var blocks: [UnsafeMutableRawPointer] = []
+            while let block = core.alloc(size: 8) { blocks.append(block) }
+
+            #expect(SlabCore<HostSlabBackend>.reservedBlockCount(forShift: 3) == 8)
+            #expect(blocks.count == 504)
+            #expect(blocks.allSatisfy { UInt(bitPattern: $0) & UInt(0xFFF) >= 64 })
+
+            for block in blocks {
+                let freed = core.free(block)
+                #expect(freed)
+            }
+            #expect(core.backend.livePages == 0)
+        }
+    }
+
+
+    @Test("deterministic mixed allocation stress preserves payloads, uniqueness, and accounting")
+    func deterministicMixedStress() {
+        struct LiveBlock {
+            let pointer: UnsafeMutableRawPointer
+            let bucket : UInt
+            let pattern: UInt64
+        }
+
+        withSlabCore(pages: 64) { core in
+            let sizes: [UInt] = [1, 8, 9, 31, 64, 127, 256, 511, 1024, 2048, 4096]
+            var live: [LiveBlock] = []
+            var addresses: Set<UInt> = []
+            var state: UInt64 = 0xA110_CA7E_5EED_0001
+            var sawOutOfMemory = false
+
+            for step in 0..<6_000 {
+                state = state &* 6364136223846793005 &+ 1442695040888963407
+
+                if live.isEmpty || (state & 3) != 0 {
+                    let size = sizes[Int((state >> 8) % UInt64(sizes.count))]
+                    guard let pointer = core.alloc(size: size) else {
+                        sawOutOfMemory = true
+                        continue
+                    }
+
+                    let rounded = max(roundUpPow2(size), 8)
+                    let address = UInt(bitPattern: pointer)
+                    #expect(address % rounded == 0)
+                    #expect(addresses.insert(address).inserted)
+
+                    let pattern = UInt64(step) ^ 0xD15C_A11C_0000_0000
+                    pointer.storeBytes(of: pattern, as: UInt64.self)
+                    live.append(LiveBlock(pointer: pointer, bucket: rounded, pattern: pattern))
+                } else {
+                    let index = Int((state >> 16) % UInt64(live.count))
+                    let block = live[index]
+                    #expect(block.pointer.load(as: UInt64.self) == block.pattern)
+                    #expect(core.allocationSize(of: block.pointer) == block.bucket)
+
+                    let freed = core.free(block.pointer)
+                    #expect(freed)
+                    addresses.remove(UInt(bitPattern: block.pointer))
+                    live[index] = live[live.count - 1]
+                    live.removeLast()
+                }
+            }
+
+            #expect(sawOutOfMemory)
+            for block in live {
+                #expect(block.pointer.load(as: UInt64.self) == block.pattern)
+                let freed = core.free(block.pointer)
+                #expect(freed)
+            }
+            #expect(core.backend.livePages == 0)
         }
     }
 

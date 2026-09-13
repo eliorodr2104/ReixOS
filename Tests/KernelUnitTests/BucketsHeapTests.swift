@@ -26,6 +26,10 @@ import KernelTestSupport
 @Suite("Buckets heap", .serialized)
 struct BucketsHeapTests {
 
+    private struct AllocationWord: RXAllocatable {
+        var value: UInt64 = 0
+    }
+
     @Test("a request is promoted to the next power of two, floored at the smallest bucket")
     func bucketPromotion() {
         withHostHeap(pages: 32) { ram, heap in
@@ -149,6 +153,88 @@ struct BucketsHeapTests {
             heap.kfree(second)
             #expect(frame(of: first, in: ram).heapFreeCount == 3)
             #expect(frame(of: first, in: ram).refCount      == 1)
+        }
+    }
+
+
+    @Test("invalid slab addresses are rejected without changing live allocation state")
+    func invalidSlabAddresses() {
+        withHostHeap(pages: 32) { _, heap in
+            let first  = heap.kmalloc(64)
+            let second = heap.kmalloc(64)
+            first.storeBytes(of: UInt64(0xFEED_FACE_CAFE_BEEF), as: UInt64.self)
+
+            #expect(heap.allocationSize(of: first) == 64)
+            #expect(heap.allocationSize(of: first + 1) == nil)
+            #expect(heap.allocationSize(of: first + 8) == nil)
+
+            let foreign = UnsafeMutableRawPointer.allocate(byteCount: 64, alignment: 64)
+            defer { foreign.deallocate() }
+            #expect(heap.allocationSize(of: foreign) == nil)
+
+            heap.kfree(second)
+            #expect(heap.allocationSize(of: second) == nil)
+            #expect(first.load(as: UInt64.self) == 0xFEED_FACE_CAFE_BEEF)
+
+            let reused = heap.kmalloc(64)
+            #expect(reused == second)
+            #expect(heap.allocationSize(of: reused) == 64)
+            #expect(first.load(as: UInt64.self) == 0xFEED_FACE_CAFE_BEEF)
+        }
+    }
+
+
+    @Test("large allocations accept only their live block head")
+    func largeAllocationValidation() {
+        withHostHeap(pages: 32) { ram, heap in
+            let before = ram.ppm.pointee.allocatedPages
+            let large = heap.kmallocOrNil(8192)!
+
+            #expect(heap.allocationSize(of: large) == 8192)
+            #expect(heap.allocationSize(of: large + 1) == nil)
+            #expect(heap.allocationSize(of: large + 4096) == nil)
+
+            heap.kfree(large)
+            #expect(heap.allocationSize(of: large) == nil)
+            #expect(ram.ppm.pointee.allocatedPages == before)
+        }
+    }
+
+
+    @Test("typed size overflow and invalid capacity fail before fault-injection state is consumed")
+    func typedSizeArithmetic() {
+        withHostHeap(pages: 32) { _, heap in
+            let noInitializedElements = heap.kmallocOrNil(AllocationWord.self)!
+            let freedWithoutDestruction = heap.freeIfValid(noInitializedElements, count: 0)
+            #expect(freedWithoutDestruction)
+
+            let saved = BucketsHeap.failAllocationsAfter
+            BucketsHeap.failAllocationsAfter = 1
+            defer { BucketsHeap.failAllocationsAfter = saved }
+
+            #expect(heap.kmallocOrNil(AllocationWord.self, -1) == nil)
+            #expect(heap.kmallocOrNil(AllocationWord.self, Int.max) == nil)
+            #expect(heap.kmallocOrNil(UInt.max) == nil)
+
+            let allowed = heap.kmallocOrNil(AllocationWord.self)
+            #expect(allowed != nil)
+            let refused = heap.kmallocOrNil(AllocationWord.self)
+            #expect(refused == nil)
+
+            if let allowed {
+                allowed.initialize(to: AllocationWord(value: 0xA110_CA7E))
+                let negativeFree = heap.freeIfValid(allowed, count: -1)
+                #expect(!negativeFree)
+                let overflowedFree = heap.freeIfValid(allowed, count: Int.max)
+                #expect(!overflowedFree)
+                let oversizedFree = heap.freeIfValid(allowed, count: 2)
+                #expect(!oversizedFree)
+                #expect(allowed.pointee.value == 0xA110_CA7E)
+                let validFree = heap.freeIfValid(allowed)
+                #expect(validFree)
+                let duplicateFree = heap.freeIfValid(allowed)
+                #expect(!duplicateFree)
+            }
         }
     }
 

@@ -18,8 +18,9 @@ public struct HostSlabBackend: SlabBackend {
 
     /// Per-page state, keyed by page base address.
     private struct PageState {
-        var shift    : UInt8
-        var freeCount: UInt16
+        var shift         : UInt8
+        var freeCount     : UInt16
+        var allocationBits: UInt16
     }
 
     public private(set) var acquiredPages = 0
@@ -82,37 +83,95 @@ public struct HostSlabBackend: SlabBackend {
     }
 
 
+    public func owns(page: UnsafeMutableRawPointer) -> Bool {
+        states[key(page)] != nil
+    }
+
+
     public mutating func bind(
         page : UnsafeMutableRawPointer,
         shift: UInt8
     ) {
+        let blockCount = Self.pageSize / (1 << Int(shift))
+        let reserved = SlabCore<Self>.reservedBlockCount(forShift: shift)
         states[key(page)] = PageState(
-            shift    : shift,
-            freeCount: UInt16(Self.pageSize / (1 << Int(shift)) - 1)
+            shift         : shift,
+            freeCount     : UInt16(blockCount - reserved),
+            allocationBits: 0
         )
     }
 
 
-    public func shift(ofPage page: UnsafeMutableRawPointer) -> UInt8 {
-        states[key(page)]?.shift ?? 0
+    public func shiftIfOwned(ofPage page: UnsafeMutableRawPointer) -> UInt8? {
+        states[key(page)]?.shift
     }
 
 
-    public mutating func onAllocBlock(page: UnsafeMutableRawPointer) {
-        guard var state = states[key(page)], state.freeCount > 0 else { return }
+    public func isAllocatedBlock(
+        page      : UnsafeMutableRawPointer,
+        blockIndex: Int,
+        shift     : UInt8
+    ) -> Bool {
+        if shift < 8 { return slabPageBitIsSet(page: page, blockIndex: blockIndex) }
+
+        return (states[key(page)]!.allocationBits
+            & (UInt16(1) << UInt16(blockIndex))) != 0
+    }
+
+
+    public mutating func onAllocBlock(
+        page      : UnsafeMutableRawPointer,
+        blockIndex: Int,
+        shift     : UInt8
+    ) -> Bool {
+        guard var state = states[key(page)], state.freeCount > 0 else { return false }
+
+        if shift < 8 {
+            guard slabTransitionPageBit(
+                page        : page,
+                blockIndex  : blockIndex,
+                expectedLive: false
+            ) else { return false }
+        } else {
+            let mask = UInt16(1) << UInt16(blockIndex)
+            guard (state.allocationBits & mask) == 0 else { return false }
+            state.allocationBits |= mask
+        }
 
         state.freeCount -= 1
         states[key(page)] = state
+        return true
     }
 
 
-    public mutating func onFreeBlock(page: UnsafeMutableRawPointer) -> Bool {
-        guard var state = states[key(page)] else { return false }
+    public mutating func onFreeBlock(
+        page      : UnsafeMutableRawPointer,
+        blockIndex: Int,
+        shift     : UInt8
+    ) -> SlabFreeResult {
+        guard var state = states[key(page)] else { return .invalid }
+
+        let blockCount = Self.pageSize / (1 << Int(state.shift))
+        let reserved = SlabCore<Self>.reservedBlockCount(forShift: state.shift)
+        let usableCount = UInt16(blockCount - reserved)
+        guard state.freeCount < usableCount else { return .invalid }
+
+        if shift < 8 {
+            guard slabTransitionPageBit(
+                page        : page,
+                blockIndex  : blockIndex,
+                expectedLive: true
+            ) else { return .invalid }
+        } else {
+            let mask = UInt16(1) << UInt16(blockIndex)
+            guard (state.allocationBits & mask) != 0 else { return .invalid }
+            state.allocationBits &= ~mask
+        }
 
         state.freeCount += 1
         states[key(page)] = state
 
-        return state.freeCount >= UInt16(Self.pageSize / (1 << Int(state.shift)))
+        return state.freeCount == usableCount ? .releasePage : .retained
     }
 
 

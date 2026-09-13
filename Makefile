@@ -259,6 +259,7 @@ host-test: prune-dups
 	$(SWIFT) run SerialRingHarness
 	$(SWIFT) run VTDecoderHarness
 	$(SWIFT) run ShellCatalogHarness
+	$(SWIFT) run SbrkHeapHarness
 	SWIFT=$(SWIFT) sh scripts/test-trace-interaction.sh
 
 # The QEMU scenario matrix: every row in Tests/Scenarios/scenarios.tsv, booted

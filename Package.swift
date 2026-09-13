@@ -188,6 +188,16 @@ let package = Package(
             path             : "Tests/KernelHostShims",
             publicHeadersPath: "include"
         ),
+        .target(
+            name             : "ReixHeapHostShims",
+            path             : "Tests/ReixHeapHostShims",
+            publicHeadersPath: "include"
+        ),
+        .executableTarget(
+            name        : "SbrkHeapHarness",
+            dependencies: ["Reix", "ReixHeapHostShims"],
+            path        : "Tests/SbrkHeapHarness"
+        ),
         .executableTarget(
             name: "TerminalRingHarness",
             dependencies: ["Reix", "ReixABI", "KernelHostShims", "TerminalTestSupport"],

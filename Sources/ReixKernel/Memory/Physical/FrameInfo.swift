@@ -20,11 +20,11 @@
 public struct FrameInfo {
     var refCount : UInt32
 
-    /// Number of still-free blocks on a heap page (only meaningful when
-    /// `heapShift != 0`). `BucketsHeap` bumps it on `kfree` and lowers it on
-    /// allocation; when it reaches the page's block count the whole page is
-    /// empty and is returned to the PPM. 0 for non-heap pages.
-    var heapFreeCount: UInt16
+    /// Compact per-slab-page state. Buckets below 256 bytes keep their free
+    /// count here and put the larger liveness bitmap in reserved page bytes.
+    /// Buckets of 256 bytes and above have at most sixteen blocks, so this word
+    /// is their exact allocation bitmap and their free count is derived.
+    private var heapState: UInt16
 
     var flags: PhysicalPageFlags
 
@@ -61,6 +61,30 @@ public struct FrameInfo {
         set { orderAndShift = (orderAndShift & 0x0F) | ((newValue & 0x0F) << 4) }
     }
 
+    /// Logical free count exposed to heap accounting and host tests regardless
+    /// of which representation `heapState` uses for this bucket.
+    var heapFreeCount: UInt16 {
+        guard heapShift >= 8, heapShift <= 12 else { return heapState }
+
+        let blockCount = UInt16(4096 >> Int(heapShift))
+        let allocated = UInt16(heapState.nonzeroBitCount)
+        return allocated <= blockCount ? blockCount - allocated : 0
+    }
+
+    /// Mutable count storage is deliberately named for the small-bucket case;
+    /// writing a count while `heapState` is a large-bucket bitmap would make the
+    /// same bits mean two incompatible things.
+    var heapSmallFreeCount: UInt16 {
+        get { heapState }
+        set { heapState = newValue }
+    }
+
+    /// Exact liveness mask for buckets with at most sixteen blocks per page.
+    var heapAllocationBits: UInt16 {
+        get { heapState }
+        set { heapState = newValue }
+    }
+
     init(
         refCount     : UInt32,
         order        : UInt8,
@@ -69,14 +93,14 @@ public struct FrameInfo {
         heapFreeCount: UInt16 = 0
     ) {
         self.refCount      = refCount
-        self.heapFreeCount = heapFreeCount
+        self.heapState     = heapShift < 8 ? heapFreeCount : 0
         self.flags         = flags
         self.orderAndShift = (order & 0x0F) | ((heapShift & 0x0F) << 4)
     }
 
     init() {
         self.refCount      = 0
-        self.heapFreeCount = 0
+        self.heapState     = 0
         self.flags         = .none
         self.orderAndShift = 0
     }

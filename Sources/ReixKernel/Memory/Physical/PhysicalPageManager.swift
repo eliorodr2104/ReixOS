@@ -127,7 +127,7 @@ public struct PhysicalPageManager<A: Allocator>: Loggable {
             metadata.pointee.order         = Self.blockInteriorOrder
             metadata.pointee.flags         = .none
             metadata.pointee.heapShift     = 0
-            metadata.pointee.heapFreeCount = 0
+            metadata.pointee.heapAllocationBits = 0
         }
     }
 

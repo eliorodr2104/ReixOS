@@ -15,7 +15,15 @@ struct UserHeap {
     var highWaterBytes: UInt = 0
 
     mutating func alloc(size: UInt, alignment: UInt) -> UnsafeMutableRawPointer? {
-        let need = max(roundUpPow2(max(size, 1)), max(alignment, 1))
+        let requestedSize = max(size, 1)
+        let requestedAlignment = max(alignment, 1)
+        guard (requestedAlignment & (requestedAlignment - 1)) == 0 else { return nil }
+
+        let roundedSize = roundUpPow2(requestedSize)
+        let roundedAlignment = roundUpPow2(requestedAlignment)
+        guard roundedSize != 0, roundedAlignment != 0 else { return nil }
+
+        let need = max(roundedSize, roundedAlignment)
         if need <= 4096 {
             let pointer = slab.alloc(size: need)
             if pointer != nil { recordHighWater() }
@@ -43,11 +51,14 @@ struct UserHeap {
         else { return nil }
         
         let rounded = (size + 4095) & ~UInt(4095)
+        let (nextLargeBytes, overflow) = largeBytes.addingReportingOverflow(rounded)
+        guard !overflow else { return nil }
+
         let base = mmap(size: UInt64(rounded))
         if base == 0 { return nil }
 
         large[slot] = LargeRegion(base: UInt(base), size: rounded)
-        largeBytes += rounded
+        largeBytes = nextLargeBytes
         recordHighWater()
         
         return UnsafeMutableRawPointer(bitPattern: UInt(base))
@@ -66,7 +77,8 @@ struct UserHeap {
         let slabBytes = slab.backend.arenaEnd >= slab.backend.arenaBase
             ? slab.backend.arenaEnd - slab.backend.arenaBase
             : 0
-        highWaterBytes = max(highWaterBytes, slabBytes + largeBytes)
+        let (total, overflow) = slabBytes.addingReportingOverflow(largeBytes)
+        highWaterBytes = max(highWaterBytes, overflow ? UInt.max : total)
     }
 }
 
