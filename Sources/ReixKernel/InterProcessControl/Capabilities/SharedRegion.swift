@@ -7,16 +7,54 @@
 
 public struct SharedRegion: RXObject, ~Copyable {
 
+    /// What the region was minted as, fixed at creation.
+    ///
+    /// Not `deviceVisible`, which answers a different question and changes over
+    /// the region's life. This one never changes: `shmCreate` makes a `.shared`
+    /// and `dmaAlloc` makes a `.dma`, and no path turns one into the other.
+    /// Without it the only record of the kind was the *capability*'s target
+    /// tag, so the object could not check a caller that arrived through the
+    /// wrong door.
+    public enum Kind: UInt8 {
+        case shared
+        case dma
+    }
+
     public static var errorMessageAllocation: StaticString = "Shared Region error allocation"
 
     public var physicalPage: PhysicalPage
+
+    /// How many live holders this region has.
+    ///
+    /// Exactly three things count, and they are counted the same: a capability
+    /// in a process's table, a window in an address space, and a capability in
+    /// flight on an endpoint. The region dies when the number reaches zero,
+    /// which is why a window has to hold one of its own - a process that drops
+    /// its capability and keeps the mapping still holds the frames.
+    ///
+    /// Taken by `RendezvousIPC.retain` (table and in flight),
+    /// `VMAManager.registerRegion` and `VMAList.split` (windows). Given back by
+    /// `RendezvousIPC.release`, `VMAManager.unregister` and `ListRetirement`.
+    /// The frame charge is not this count: see `owner`.
     public var references  : UInt32
-    public var pageCount   : UInt32
+
+    /// Pages of the one contiguous physical block behind this region.
+    ///
+    /// Immutable, and the reason there is no resize: every window and every
+    /// mapper derives its bounds from it, and a size that moves under them is a
+    /// window that outlives its region.
+    public let pageCount   : UInt32
+
+    public let kind        : Kind
 
     /// A device may retain a physical address after its driver dies. Until a
     /// device supervisor can prove reset completion, published DMA frames must
     /// stay allocated for the rest of the boot, even after every CPU mapping
     /// and capability has gone. Ordinary SHM and unpublished DMA remain reclaimable.
+    ///
+    /// A property of what has happened to the region, not of what it is: only a
+    /// `.dma` region can ever be published, but one that never was stays
+    /// reclaimable. `kind` is the immutable half.
     var deviceVisible = false
 
     /// The budget the frames of this region were charged to when it was
@@ -37,11 +75,13 @@ public struct SharedRegion: RXObject, ~Copyable {
         physicalPage: consuming PhysicalPage,
         references  : UInt32,
         pageCount   : UInt32,
+        kind        : Kind = .shared,
         owner       : UnsafeMutablePointer<FrameBudget>? = nil
     ) {
         self.physicalPage = physicalPage
         self.references   = references
         self.pageCount    = pageCount
+        self.kind         = kind
         self.owner        = owner
     }
 

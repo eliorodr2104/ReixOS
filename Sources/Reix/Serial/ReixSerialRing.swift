@@ -11,6 +11,22 @@ public enum ReixSerialRingPop {
 }
 
 /// One page, single producer and single consumer serial ring.
+///
+/// **Producer** the side whose role matches the chunk direction, through
+/// `push`. **Consumer** the other side, through `pop`.
+/// **Publication** the chunk is encoded into its slot, then a release barrier,
+/// then the producer cursor moves by one; the consumer snapshots both cursors,
+/// takes an acquire barrier, decodes, and moves its own cursor last.
+/// **Incomplete record** none is possible: the cursor move is the publication.
+/// A chunk that fails to decode, or whose direction does not match the reader's
+/// role, is `.malformed` and leaves the cursor where it was.
+/// **Peer death** role, token and epoch are checked on every operation, so a
+/// page handed to a new session answers `.stale` instead of replaying the
+/// previous one's bytes.
+///
+/// **Bounds** capacity and record width are fixed and the slot index is taken
+/// modulo the capacity, so no cursor value can address outside the page; a
+/// cursor difference larger than the capacity is refused by `valid`.
 public struct ReixSerialRing {
     private static let producerOffset = 28
     private static let consumerOffset = 32

@@ -27,7 +27,7 @@ public struct ShmCreate: SyscallProvider {
 
     public static let number: SyscallNumber = .shmCreate
 
-    private static let maxPages: UInt64 = 256
+    private static let maxPages: UInt32 = 256
 
     public static func handle(
         frame  : UnsafeMutablePointer<Arch.TrapFrame>,
@@ -42,8 +42,12 @@ public struct ShmCreate: SyscallProvider {
             return
         }
 
-        let pageCount = frame.pointee.x0
-        guard pageCount > 0, pageCount <= Self.maxPages else {
+        guard let pageCount = SyscallABI.count(
+                  frame.pointee.x0,
+                  atMost: Self.maxPages
+              ),
+              pageCount > 0
+        else {
             frame.pointee.x0 = UInt64.max
             frame.pointee.x1 = 0
             return
@@ -53,7 +57,7 @@ public struct ShmCreate: SyscallProvider {
         // note above the type.
         let budget = vmaManager.pointee.budget
 
-        guard chargeFrames(budget, UInt32(truncatingIfNeeded: pageCount)) else {
+        guard chargeFrames(budget, pageCount) else {
             frame.pointee.x0 = UInt64.max
             frame.pointee.x1 = 0
             return
@@ -62,10 +66,10 @@ public struct ShmCreate: SyscallProvider {
         // Allocate the contiguous physical block.
         let physicalPage: PhysicalPage
         do {
-            physicalPage = try context.ppm.pointee.alloc(Int(pageCount * UserSpaceLayout.pageSize))
+            physicalPage = try context.ppm.pointee.alloc(Int(UInt64(pageCount) * UserSpaceLayout.pageSize))
             
         } catch {
-            refundFrames(budget, UInt32(truncatingIfNeeded: pageCount))
+            refundFrames(budget, pageCount)
             frame.pointee.x0 = UInt64.max
             frame.pointee.x1 = 0
             return
@@ -76,7 +80,7 @@ public struct ShmCreate: SyscallProvider {
         )
         zeroDest.initialize(
             repeating: 0,
-            count    : Int(pageCount * UserSpaceLayout.pageSize)
+            count    : Int(UInt64(pageCount) * UserSpaceLayout.pageSize)
         )
 
         let handle: UInt32
@@ -84,7 +88,7 @@ public struct ShmCreate: SyscallProvider {
         switch context.ipc.pointee.createShared(
             for      : current,
             page     : physicalPage,
-            pageCount: UInt32(pageCount)
+            pageCount: pageCount
         ) {
             case .success(let created):
                 handle = created.handle
@@ -92,7 +96,7 @@ public struct ShmCreate: SyscallProvider {
 
             case .failure:
                 // `createShared` has already given the frames back.
-                refundFrames(budget, UInt32(truncatingIfNeeded: pageCount))
+                refundFrames(budget, pageCount)
                 frame.pointee.x0 = UInt64.max
                 frame.pointee.x1 = 0
                 return

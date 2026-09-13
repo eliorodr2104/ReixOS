@@ -5,236 +5,182 @@
  / _, _/  __/ />  </ /_/ /___/ /
 /_/ |_|\___/_/_/|_|\____//____/
 
-  ReixOS 0.1.5 — AArch64 / Embedded Swift
+  ReixOS 0.2.0 / AArch64 / Embedded Swift
   A microkernel written in Swift, for fun.
 ```
 
 # ReixOS
 
-ReixOS is an experimental microkernel written in **Embedded Swift** for the **ARM64 (AArch64)** architecture.
+ReixOS is an experimental microkernel written in Embedded Swift for ARM64.
 
-It began as a personal challenge, a style exercise to push the limits of my Swift knowledge... but it has grown into something with a clear thesis behind it: **bringing Protocol-Oriented Programming (POP) to the bare metal to fix the historical flaws of traditional operating systems.**
+It began as a personal challenge: to understand how far I could push Swift on bare metal and whether I could design a readable kernel without automatically falling back on structures inherited from traditional systems.
 
-Despite its experimental, single-author nature, ReixOS is no longer a toy. It already boots on QEMU, brings up its own physical and virtual memory managers, schedules processes with real context switches, loads ELF binaries into isolated address spaces, and lets those processes talk to each other through a synchronous, capability-based IPC mechanism — including its own **Name Server** and **Process Server**, which already run as ordinary userland processes reached over that IPC. It is small, it is honest about what it can't yet do, but it *runs*.
+That challenge grew into a clear thesis: use Protocol-Oriented Programming as the organizing principle of an entire operating system. Not to erase fifty years of history, but to choose deliberately what is worth keeping and what does not need to follow us forever.
 
----
+ReixOS is not a reimplementation of Unix in Swift. It takes what it finds useful from Unix, L4, Zircon, Plan 9 and capability systems, but it does not treat POSIX or historical compatibility as design constraints.
 
-## The Philosophy
+Today it boots an AArch64 kernel in QEMU, manages physical and virtual memory, runs processes in isolated address spaces, uses synchronous capability-based IPC, and moves the console, input, terminal, bus, disk driver, filesystem and ordinary application loading into userland.
 
-ReixOS is built around a few core, deliberately radical ideas. Each one is a reaction to something I find frustrating about the way traditional operating systems are built.
+And yes, there is a real disk now. The virtio-blk driver runs in userland, RxFS has a journal and transactions, and every access passes through authority that was handed out explicitly during boot.
 
-* **Protocol-Oriented Architecture.** The kernel is strictly modular and built on Swift protocols. Components are decoupled behind interfaces `Allocator`, `SchedulerInterface`, `IPCInterface`, `FileSystemInterface`, `SerialDriver`, `InterruptController`, and more. You can swap the Buddy allocator for a different one without ever touching the Physical Page Manager, because the PPM only knows the `Allocator` protocol, not its implementation. The kernel is composed of replaceable parts, not a monolith of intertwined globals.
+## Technical documentation
 
-* **Human-Readable Systems.** Traditional OS design (Linux included) leans on cryptic syscalls and inscrutable integer error codes. ReixOS exposes everything through high-level, strongly-typed data structures and explicit, named errors. There is no `errno`. A function that can fail says exactly *how* it can fail, in the type system: `PPMError.protectedMemoryViolation`, `IPCError.notEnoughRights`, `FSError.readOnlyFileSystem`. The error *is* the documentation.
+The README introduces the project. The documentation describes the current implementation, the boundaries between components and the parts that are still designs rather than working code.
 
-* **The Anti-Bash Terminal.** In the future, the shell will not parse endless streams of unstructured text and indecipherable flags. It will be built on POP: every terminal module will conform to strict protocols and exchange strongly-typed data instead of raw strings. A pipeline becomes a chain of typed transformations, not a guessing game about what `$1` happened to contain.
+- [Documentation index](Docs/README.md)
+- [System map](Docs/Architecture/System.md)
+- [Kernel](Docs/Kernel/Overview.md)
+- [Userland and the Reix SDK](Docs/Userland/Overview.md)
+- [Services and flows](Docs/Userland/Services.md)
+- [ABI and shared contracts](Docs/ABI/README.md)
+- [Syscalls](Docs/Kernel/Syscalls/README.md)
+- [Application launch](Docs/Userland/ProcessLaunch.md)
+- [Storage and RxFS](Docs/Architecture/Storage.md)
+- [Future concurrency](Docs/Concurrency.md), a proposal that is not yet implemented
 
-* **Absolute Isolation.** A pure microkernel approach where every process is fully isolated not only in its virtual address space, but down at the storage level as well. Every process is its own **container** with its own private filesystem. A central FS manager unifies these private filesystems into one global namespace, and paths make the boundaries explicit: in `/reix::terminal/folder`, `reix` is the device's root container, `::` marks a crossing *into* another container (here, `terminal`), and the slashes navigate folders inside it. You always know when a path leaves your own container and enters someone else's.
+The source remains definitive. These documents describe this checkout and do not promise ABI stability or performance results that have not been measured.
 
-* **The Kernel Does As Little As Possible.** Everything that *can* be a userland process eventually *will* be one, talking to the rest of the system over IPC. This has already begun: the **Name Server** and **Process Server** now run as ordinary userland processes, reached over IPC through thin client SDKs. The kernel keeps only a low-level `spawnProcess` primitive to bootstrap them, plus a `spawnService` capability that the Process Server holds; process- and name-management *policy* lives entirely in userland. The remaining in-kernel conveniences will follow the same path out.
+## Philosophy
 
-* **Flat Process Tree.** Child processes are terminal: they cannot fork or spawn children of their own. The hierarchy is strictly one level deep (Parent → Children). This kills entire classes of complexity and security problems that come from deep, mutable process trees, and it makes the lifecycle of every process easy to reason about.
+### Protocol-oriented architecture
 
----
+The kernel is composed of blocks that depend on Swift protocols rather than concrete implementations. `Allocator`, `SchedulerInterface`, `IPCInterface`, `FileSystemInterface`, `SerialDriver`, `InterruptController` and `KernelArchitecture` make the dependencies between subsystems explicit.
 
-## Influences
+The point is not to use protocols everywhere. The point is to place a boundary where it lets ReixOS replace a policy, test an algorithm on the host or prevent one layer from knowing details that do not belong to it.
 
-ReixOS is not built in a vacuum, and it doesn't pretend to be. It borrows freely:
+`BlockDevice` is the clearest example. ReixFS operates on the same protocol whether it uses an in-memory disk during tests or communicates with the virtio driver through an IPC client.
 
-* **From Unix:** the familiar, pragmatic primitives `brk`/`sbrk`/`mmap` for memory, path-based files, exit codes, a parent→child process model. The things Unix got right and that programmers already understand.
-* **From Fuchsia (Zircon) and the L4 family:** the microkernel discipline a minimal kernel, **capabilities** instead of ambient authority, **synchronous IPC** (L4-style rendezvous) as the fundamental communication primitive, and services pushed out into userland servers.
+### Authority is handed over, not inherited
 
-But ReixOS isn't a clone of any of them. The goal is a single, coherent philosophy of its own: **Protocol-Oriented Programming as the organizing principle of the whole system**, strongly-typed data instead of stringly-typed interfaces, and human-readable structures end to end. Where Unix and L4 disagree, ReixOS picks whichever fits *that* vision and where neither fits, it does its own thing.
+A process does not implicitly gain the right to access the machine. Init receives the initial capabilities from the kernel and gives each service only what it needs.
 
----
+The bus can derive MMIO windows and interrupts. The disk driver receives device, IRQ and DMA authority. The filesystem receives the disk endpoint. An application receives only the capabilities allowed by its launch profile.
 
-## Why Swift?
+Rights can narrow during delegation, never widen.
 
-Writing a kernel in Swift sounds unusual, and that's part of the point. But it isn't a gimmick — there are concrete reasons, and the codebase leans on every one of them.
+### Typed data instead of invisible conventions
 
-**Embedded Swift means no hidden machinery.** ReixOS uses Swift's *Embedded* mode (`-enable-experimental-feature Embedded`). Swift has no garbage collector it never did and here there is **no ARC (Automatic Reference Counting) either**: the entire kernel is built from value types (structs and enums) with zero reference-counted classes, so there is no retain/release traffic and no implicit memory management running underneath you. No heavy runtime, no reflection metadata, no allocations behind your back. The compiler emits tight, freestanding code that links into a bare-metal binary the same way C would but with a far stronger type system on top.
+Errors are named cases, IPC messages have shared contracts, and important resources are represented by types that distinguish identity, authority and local memory.
 
-**Protocols give polymorphism without a vtable tax.** With whole-module optimization and generics specialized at compile time, a `PhysicalPageManager<A: Allocator>` resolves its allocator calls statically. You get clean, swappable abstractions *and* the performance of direct calls. POP is what lets the kernel be modular without paying for it at runtime.
+ReixOS does not use a global contract like `errno`. Each operation preserves its own result and its own failure modes.
 
-**Value types and explicit ownership over raw pointers.** Structs, enums with associated values, and Swift's ownership model let the kernel model hardware and state precisely page table entries, trap frames, VMA nodes with far fewer of the foot-guns that come from hand-rolled C pointer arithmetic. Where raw memory access is genuinely needed, it's confined and explicit rather than pervasive.
+### The kernel does as little as possible
 
-**Typed error handling instead of error codes.** Swift's typed `throws(SomeError)` lets every fallible kernel path declare its exact failure modes in the signature. This is the technical backbone of the "human-readable systems" philosophy: a missing capability, a protected-page violation, or an out-of-frames condition is a named case, checked by the compiler, not a magic `-1` you have to look up.
+The kernel keeps the mechanisms that require privilege: memory, scheduling, processes, IPC, capabilities, interrupts and controlled task construction.
 
-**Memory safety where the metal allows it.** You can't make a kernel fully safe — someone has to poke physical addresses. But Swift lets the *vast majority* of the kernel stay in safe territory, shrinking the unsafe surface down to a handful of clearly-marked bridges to assembly and MMIO.
+Policy lives above that boundary. `SerialServer` owns UART transport, `InputServer` manages input and focus, `VTAdapter` coordinates terminal presentation, `BlockServer` drives the disk, `FileSystemServer` mounts RxFS and `ProcessServer` loads ordinary applications from the filesystem.
 
-### The trade-offs (an honest section)
+The initrd ELF loader remains in the kernel for bootstrap. The ordinary path is separate: `ProcessServer` reads an ELF from `system/programs`, validates it in userland and uses the `task*` syscalls to construct the new process without giving the kernel an RxFS pathname.
 
-Swift on bare metal is not free, and pretending otherwise would be dishonest:
+### Storage isolation
 
-* **No standard library.** Embedded Swift gives you the language, not Foundation or the full stdlib. Anything you'd normally import, you build.
-* **A few C and assembly stubs are unavoidable.** CPU bootstrap, exception vectors, context switching, and MMIO ABI live in `.S` and `.c` files Swift sits on top of them, it doesn't replace them.
-* **The toolchain is experimental.** Embedded Swift is still gated behind experimental feature flags and evolves release to release.
-* **You own the ABI.** Syscall calling conventions, linker layout, and the kernel/userland boundary are all hand-defined. The compiler won't do it for you.
+RxFS uses capability-bounded containers. A client does not receive a global filesystem, but a view with precise rights such as reading, writing, delegation, quota or administration.
 
-The bet ReixOS makes is that these costs are worth paying for a kernel that is dramatically easier to read, refactor, and reason about than its C equivalent.
+Path syntax makes crossings between containers visible. Shared-memory pipes allow data to move without making the two storage spaces visible to each other.
 
----
+A private namespace assembled from multiple containers remains a separate goal from the containers that already exist.
 
-## Architecture Overview
+### A terminal that understands the meaning of input
 
-The codebase is overwhelmingly Swift, dropping to C and assembly only for low-level CPU bootstrapping and ABI requirements. It's organized in layers, each exposing a protocol that the layer above depends on:
+The shell is not built as an interpreter for anonymous byte streams. Its parser, catalog, completion engine, editor and results use typed structures.
 
+The terminal path is divided by responsibility:
+
+```text
+Shell or application
+    -> semantic text surface
+    -> VTAdapter
+    -> ConsoleServer
+    -> SerialServer
+    -> UART
+
+UART
+    -> SerialServer
+    -> VTAdapter
+    -> InputServer
+    -> session that owns focus
 ```
-Sources/ReixKernel/
-├── Arch/aarch64/        # Boot (boot.S), MMU, CPU, exception vectors, context switch
-├── Memory/
-│   ├── Physical/        # PhysicalPageManager + per-frame refcounting
-│   ├── Allocators/      # BuddyAllocator (order-based, intrusive free lists)
-│   ├── Virtual/         # VirtualMemoryManager: TTBR0/TTBR1, ASIDs, 48-bit VA
-│   └── Heap/            # BucketsHeap: power-of-two slab allocator
-├── Process/             # Process, ProcessManager, VMAManager, hot/cold metadata
-├── Scheduler/           # RoundRobin scheduler, queues
-├── InterProcessControl/ # RendezvousIPC, capabilities, endpoints
-├── Syscall/             # RXTask / RXMemory / RXIPC / RXIO
-├── FileSystem/Tar/      # Read-only TAR filesystem from the initrd
-├── Drivers/             # PL011 UART, GICv2 interrupt controller
-├── Platform/ELFParser/  # ELF64 PT_LOAD loader
-└── Diagnostics/         # Subsystem-tagged kernel logging
 
-Sources/Userland/        # Init, Name Server, Console Server, Terminal Server, Shell
-Sources/Reix/            # Userland SDK: syscall wrappers, user heap, service clients
-```
+This separation already exists. The terminal experience and the shell language remain under development.
 
-The key protocols that hold this together `Allocator`, `KernelHeapInterface`, `SchedulerInterface`, `IPCInterface`, `FileSystemInterface`, `VMAStructure`, `SerialDriver`, `InterruptController`, `KernelArchitecture` are what make each box above independently understandable and replaceable.
+## Why Swift
 
----
+Embedded Swift makes it possible to use value types, enums, generics, protocols and typed errors in a freestanding binary, without Foundation or reliance on the full standard library.
 
-## What's Implemented
+With specialization and whole-module optimization, many generic abstractions are resolved statically. This allows subsystems to remain separate without turning every boundary into dynamic dispatch.
 
-The foundational subsystems are in place and working:
+Swift does not make bare metal magically safe. MMIO, page tables, CPU contexts and physical addresses still require unsafe operations. ReixOS tries to confine those operations to the parts that genuinely need them.
 
-**Boot & Architecture**
-* AArch64 bootstrap: EL2→EL1 drop, secondary-core parking, BSS zeroing, exception-vector (VBAR_EL1) install, FP enable, virtual timer setup.
+The same language is also used for build tooling, handler generation and much of the host test suite.
 
-**Memory**
-* **Physical Page Manager** with per-frame metadata and reference counting.
-* **Buddy allocator** with order-based intrusive free lists (4 KiB pages, up to order 11).
-* **Virtual Memory Manager** with separate kernel/user root tables (TTBR1/TTBR0), 16-bit ASIDs, and a 48-bit virtual address space.
-* **VMA tracking** with adjacent-region coalescing, lazy mapping (PTEs filled on first page fault), and a downward-growing user stack.
-* **Bucket/slab kernel heap** carved from the PPM, returning pages when fully freed.
+### Trade-offs
 
-**Processes & Scheduling**
-* Round-robin scheduler with real time-slice preemption (quantum-based) and ready/waiting/terminated queues.
-* Full process model with hot/cold field separation, flat parent→child relationships, and real context switching.
-* ELF64 loader mapping `PT_LOAD` segments page-by-page into isolated address spaces.
-* Immutable, page-aligned segments are mapped read-only straight out of the initrd's resident frames instead of being copied, shared across every process running the same binary.
-* Functional user-space execution from binaries packed in the initrd.
+- Embedded Swift and its toolchain continue to evolve.
+- The project owns its ABI between kernel and userland.
+- Raw memory and hardware require explicit checks that the type system cannot invent.
+- The freestanding path does not have the conveniences normally taken for granted in a Swift program.
+- Assembly and C remain confined to hardware and ABI boundaries where they are necessary.
 
-**System Calls (~22)**
-* **Task:** `exit`, `yield`, `getPID`, `getParentPID`, `parentEndpoint`, `spawnProcess`, `split`.
-* **Memory:** `brk`, `sbrk`, `mmap`, `munmap`.
-* **IPC:** `send`, `receive`, `receiveTimeout`, `call`, `reply`, `replyRecv`, `trySend`, `tryReceive`.
-* **I/O:** `putchar`.
+## What works today
 
-> **Note:** some of these syscalls are scaffolding, not the final design. The Name Server and Process Server have already moved out into userland; `spawnProcess`/`spawnService` remain as the low-level primitives the Process Server is built on, and other in-kernel conveniences will likewise collapse into thin IPC calls to userland servers.
+- AArch64 bootstrap from EL2 to EL1, device tree parsing, GICv2, virtual timer and exception handling.
+- Physical and virtual memory management, ASIDs, VMAs, lazy mapping, page faults and partial copy-on-write support.
+- Preemptive round-robin scheduling, sleep, termination, faults, zombies and process reaping.
+- Rendezvous IPC, calls and replies, attenuable capabilities, badges, shared memory and interrupts delivered to userland.
+- Separate userland services for serial transport, console output, input, terminal presentation, names, the bus, disk and filesystem.
+- A userland virtio-blk driver and RxFS with containers, transactions, journaling, checksums, scrubbing and recovery.
+- A `ProcessServer` that loads supported ELF files from disk, constructs suspended tasks, supplies their environment and returns an attenuated job capability.
+- A typed shell with modules, multiline editing, semantic completion and structured output.
+- Profiling with per-process statistics, a trace ring, sampling and export to Perfetto.
+- Host tests and a QEMU matrix covering boot, low-memory configurations, storage, the terminal and systems without a PMU.
 
-**IPC**
-* Synchronous **rendezvous** message passing: senders block until a receiver is ready and vice-versa.
-* **Capability transfer** — a sender can grant a capability handle across an endpoint.
-* Parent endpoint seeded at spawn and recoverable via the `parentEndpoint()` syscall.
+Details and limits for each block are available in the [technical documentation](Docs/README.md).
 
-**Userland Servers**
-* **Name Server** (userland) registers and looks up capabilities by name, so processes find each other without hardcoded handles.
-* **Process Server** (userland) spawns processes on behalf of others, gated by a `spawn` capability handed to it at boot by `Init`.
-* Thin client SDKs (`NameServerClient`) wrap the raw IPC behind a typed, human-level API.
+## Current limitations
 
-**Userland Heap**
-* A slab allocator over `sbrk`/`brk` (`Sources/Reix/Heap`) now backs `malloc`/`free`, replacing the old C stubs (currently being hardened).
+- The system uses one core. Secondary cores remain parked.
+- Native threads and SMP scheduling are not implemented. The current design is described in [Concurrency](Docs/Concurrency.md).
+- `spawnProcess` remains as the initrd bootstrap loader. Ordinary applications use the userland path, but there is no general launcher for arbitrary paths yet.
+- `ProcessServer` accepts only supported names and profiles, with a defined set of environment capabilities.
+- A private filesystem namespace assembled from multiple containers is not implemented yet.
+- `exec` and parts of the older `split` model are incomplete.
+- Copy-on-write support exists, but does not yet form a complete general model.
+- The QEMU platform used by the project has no IOMMU. A driver authorized to perform DMA therefore belongs to the TCB.
+- There are no signals or futexes.
+- The terminal and shell language continue to evolve.
 
-**Filesystem & Drivers**
-* Read-only **TAR filesystem** parsed from the initrd, with `open`/`close`/`read`/`seek`/`getInfo`.
-* **PL011 UART** serial driver and **GICv2** interrupt controller with a virtual-timer handler.
+## Getting started
 
-**Cross-cutting**
-* Fully **typed, enum-based error handling** across every subsystem no `errno`.
-* Subsystem-tagged kernel logging (`[PPM]`, `[VMM]`, `[IPC]`, …).
-
----
-
-## What's Missing / Known Limitations
-
-In the spirit of being honest about the state of things:
-
-* **Not everything is in userland yet.** The **Name Server** and **Process Server** have moved out and run as userland processes — the headline microkernel milestone — but the kernel still owns the low-level `spawnProcess` primitive and a few bootstrap conveniences. Pushing the remaining policy out of the kernel and slimming those primitives is the ongoing architectural work.
-* **Per-container filesystem isolation** is a design goal, not a reality yet. Today there is a single read-only TAR filesystem; the per-process containerized FS unified under one namespace (the `/reix::container/...` model above) is not implemented.
-* **The userland heap is new and not yet battle-tested.** A slab allocator over `sbrk`/`brk` (`Sources/Reix/Heap`) now backs `malloc`/`free`, replacing the old C stubs, but it's still being stabilized.
-* **The filesystem is read-only** — `write()` is not implemented.
-* **`exec`, `fork`/`split`, and child reaping** exist as syscalls but are incomplete.
-* **Copy-on-write** infrastructure is partly present but not fully connected.
-* **Single-core only.** Secondary cores are parked; there's no SMP scheduling yet.
-* **No signals**, and no IPC abstractions beyond rendezvous (no futexes).
-* **Device-tree parsing** is minimal.
-
----
-
-## Getting Started
-
-You don't need a complex custom toolchain just a recent **Swift toolchain with Embedded Swift support** (developed against Swift 6.3.x), plus LLVM/LLD and QEMU for AArch64. The `Makefile` handles compiling the kernel, building the userland ELFs, packing the initrd, and launching everything under QEMU.
+ReixOS requires a recent Swift toolchain with Embedded Swift support, LLVM/LLD and QEMU for AArch64. The `reix` command plugin builds the kernel and userland, generates assembly handlers, prepares the initrd and starts the virtual machine. The `Makefile` collects the common entry points.
 
 ```bash
 make clean && make run
 ```
 
-This boots `kernel.bin` on `qemu-system-aarch64` (machine `virt`, `cortex-a53`, GICv2) with the initrd attached. You'll see the boot banner, each subsystem coming up with its tagged log line, and the `Init` process starting and spawning its children over IPC all on the serial console.
+To run the host suite and QEMU matrix:
 
-On the serial console you'll see (trimmed):
-
-```text
- [ reix ] ReixOS 0.1.5 / AArch64 / Embedded Swift
- [ reix ] (c) 2026 Eliomar Alejandro Rodriguez Ferrer - GPLv3
-
-[ BOOT  ][PPM ] Physical Page Manager ready.
-[ BOOT  ][VMM ] Virtual Memory Manager ready.
-[ BOOT  ][HEAP] Kernel heap ready.
-[ BOOT  ][GIC ] Generic Interrupt Controller ready.
-[ BOOT  ][FS  ] Internal File System ready.
-[ BOOT  ][PROC] Process Manager ready.
-[ BOOT  ][SCHD] Scheduler ready.
-[ BOOT  ][IPC ] IPC ready.
-[ BOOT  ][SYS ] Syscall Handler ready.
-[ BOOT  ][TIM ] Virtual Timer enabled.
-
-[ INFO  ][KERN] Kernel is running.
-[ INFO  ][PROC] Handing control to user space.
-
-=================================================
-                    USER LAND
-=================================================
-
-[ INIT  ] Hi, this is init process!
-[ INIT  ] Launching Name Server
-[ NS    ] badge request: 1
-[ SERVE ] Terminal Server running
+```bash
+make test
 ```
 
----
+Other useful targets include `make host-test`, `make vm-test`, `make smoke`, `make release` and trace export through `reix trace --export`.
 
 ## Roadmap
 
-The next milestones move ReixOS from "boots and runs user-space" toward a genuinely usable system:
-
-- [x] Processes and context switching
-- [x] CPU scheduler
-- [x] Functional user-space execution
-- [x] Robust heap allocation in the kernel
-- [x] Inter-process communication (rendezvous + capabilities)
-- [x] **Move the Name Server and Process Server into userland** — the main microkernel milestone
-- [ ] Slim the remaining bootstrap primitives (`spawnProcess`) toward pure IPC
-- [ ] Per-container filesystems unified under one namespace (`/reix::container/...`)
-- [x] Userland heap (`malloc`/`free` over `sbrk`/`brk`) — implemented, now hardening
-- [ ] Complete `exec` and child reaping
-- [ ] Writable filesystem
-- [ ] Better I/O handling
-- [ ] POP-based shell implementation
-- [ ] Multicore (SMP) scheduling
-
----
+- [x] Isolated processes and context switching
+- [x] Single-core preemptive scheduling
+- [x] Synchronous IPC and attenuable capabilities
+- [x] Interrupts and disk driver in userland
+- [x] RxFS with journaling, transactions and containers
+- [x] Terminal split into transport, input and presentation
+- [x] Controlled disk-backed application loading through `ProcessServer`
+- [ ] Private namespace assembled from multiple containers
+- [ ] Complete process replacement and reaping semantics
+- [ ] Native kernel threads
+- [ ] Multicore scheduling
+- [ ] Thread waiting primitives
+- [ ] Userland M:N runtime
 
 ## License
 
-ReixOS is released under the **GNU General Public License v3.0**. See [LICENSE](LICENSE) for the full text.
+ReixOS is released under the GNU General Public License v3.0. See [LICENSE](LICENSE) for the full text.

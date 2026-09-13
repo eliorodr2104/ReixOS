@@ -41,7 +41,10 @@ public struct MapDeviceSyscall: SyscallProvider {
               let vmaManager = current.pointee.addressSpace.vmaManager
         else { frame.pointee.x0 = 0; return }
 
-        let handle = UInt32(truncatingIfNeeded: frame.pointee.x0)
+        guard let handle = SyscallABI.handle(frame.pointee.x0) else {
+            frame.pointee.x0 = 0
+            return
+        }
 
         guard let cap = current.pointee.metadata.pointee.capsTable.resolve(handle) else {
             frame.pointee.x0 = 0

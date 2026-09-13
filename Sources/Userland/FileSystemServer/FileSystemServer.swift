@@ -1129,22 +1129,19 @@ public struct FileSystemServer: Service {
 
         let allowed = min(min(asked, fits), FSListEntry.batchLimit)
 
+        // Minted where the entry is written, from the index and generation the
+        // walk holds, so the client's window is never read back. See `entries`.
+        let layout = handleLayout
+
         let found = disk.entries(
             from    : cursor,
             in      : folder,
             into    : window,
-            capacity: allowed
+            capacity: allowed,
+            reference: { object, generation in
+                layout.encode(object: object, generation: generation)
+            }
         )
-
-        // The file system wrote raw object indices, because that is what a
-        // directory entry holds. A client is never given one: an index outlives
-        // the object it named, and the next thing in that slot would answer to
-        // it. So each is replaced by a handle before the reply goes out.
-        for index in 0..<found.count {
-            let at = window.advanced(by: index * FSListEntry.width)
-
-            FSListEntry.rebadge(at, handle(for: FSListEntry.reference(of: at)))
-        }
 
         _ = reply(message: FileOperation.listed(
             found.status,

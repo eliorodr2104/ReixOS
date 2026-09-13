@@ -32,7 +32,10 @@ public struct CapDropSyscall: SyscallProvider {
             return
         }
 
-        let handle = UInt32(truncatingIfNeeded: frame.pointee.x0)
+        guard let handle = SyscallABI.handle(frame.pointee.x0) else {
+            frame.pointee.x0 = UInt64.max
+            return
+        }
 
         if let capability = current.pointee.metadata?.pointee.capsTable.resolve(handle),
            case .task(let control) = capability.target,

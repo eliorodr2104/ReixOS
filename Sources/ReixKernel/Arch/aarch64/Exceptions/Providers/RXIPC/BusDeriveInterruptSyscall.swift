@@ -30,12 +30,10 @@ public struct BusDeriveInterruptSyscall: SyscallProvider {
         frame  : UnsafeMutablePointer<Arch.TrapFrame>,
         context: SyscallContext
     ) {
-        let index = UInt32(truncatingIfNeeded: frame.pointee.x1)
-
         guard let current = Arch.CPU.getCurrentProcess(),
               let metadata = current.pointee.metadata,
               let found = BusAccess.authority(handle: frame.pointee.x0, of: current),
-              frame.pointee.x1 <= UInt64(UInt32.max),
+              let index = SyscallABI.handle(frame.pointee.x1),
               let line = found.bus.pointee.bus.transport(at: index)?.line,
               let set = context.ipc.pointee.heap.pointee.kmallocOrNil(InterruptSet.self)
         else {

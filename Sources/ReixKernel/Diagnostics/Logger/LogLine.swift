@@ -81,17 +81,22 @@ enum LogLine {
     }
 
 
-    /// Closes the line: the SGR reset `heading` said was owed, then `\n`.
+    /// Closes the output: the SGR reset `heading` said was owed, followed by
+    /// `\n` when `newline` is true.
     ///
     /// The reset is per line rather than per run of lines because the wire is
     /// shared. User space writes the same UART from EL0 through
     /// `ConsoleServer`, and a colour left open would bleed into whatever it
     /// printed next.
     @inline(__always)
-    static func trailer(closing colour: Bool, into put: (UInt8) -> Void) {
+    static func trailer(
+        closing  colour: Bool,
+        newline        : Bool = true,
+        into put       : (UInt8) -> Void
+    ) {
         if colour { write(reset, into: put) }
 
-        put(10) // '\n'
+        if newline { put(10) } // '\n'
     }
 
 

@@ -131,13 +131,14 @@ public enum LogSink {
     }
 
 
-    /// Closes the record opened by `beginRecord`.
+    /// Closes the record opened by `beginRecord`, optionally without the
+    /// trailing newline.
     ///
     /// Discriminates on `LogRing.isRecording` instead of on `mode` so a
     /// line that started synchronously still finishes synchronously even if
     /// something flipped the mode halfway through it.
     @inline(never)
-    static func endRecord() {
+    static func endRecord(newline: Bool = true) {
         if LogRing.isRecording {
             LogRing.end()
 
@@ -147,14 +148,15 @@ public enum LogSink {
         }
 
         if teeing {
-            LogLine.trailer(closing: colourOpen) { _logger.kputc($0) }
+            LogLine.trailer(closing: colourOpen, newline: newline) { _logger.kputc($0) }
+
         } else if queueing {
-            LogLine.trailer(closing: colourOpen) { transmitQueue.append($0) }
+            LogLine.trailer(closing: colourOpen, newline: newline) { transmitQueue.append($0) }
             transmitQueue.endRecord()
         }
 
         colourOpen = false
-        queueing = false
+        queueing   = false
     }
 
 

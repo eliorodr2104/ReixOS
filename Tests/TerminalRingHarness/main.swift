@@ -1675,6 +1675,152 @@ check(
     "unchanged-paint patch consumed"
 )
 
+// A producer that writes what no honest producer writes. The region is
+// bordered with a canary, so an index that escaped the window is visible here.
+let hostileBytes  = ReixTextSurfaceTransport.regionBytes
+let hostileGuard  = 256
+let hostileBlock  = UnsafeMutablePointer<UInt8>.allocate(capacity: hostileBytes + 2 * hostileGuard)
+defer { hostileBlock.deallocate() }
+for index in 0..<(hostileBytes + 2 * hostileGuard) { hostileBlock[index] = 0x5A }
+
+let hostilePage = hostileBlock.advanced(by: hostileGuard)
+
+private func hostileBorderIntact() -> Bool {
+    for index in 0..<hostileGuard where hostileBlock[index] != 0x5A { return false }
+    for index in 0..<hostileGuard
+    where hostileBlock[hostileGuard + hostileBytes + index] != 0x5A { return false }
+    return true
+}
+
+check(ReixTextSurfaceRing.initialize(page: hostilePage, token: 91), "hostile proposal")
+check(ReixTextSurfaceRing.accept(page: hostilePage, token: 91, epoch: 92), "hostile accept")
+let hostileProducer = ReixTextSurfaceRing(page: hostilePage, token: 91, epoch: 92)!
+let hostileConsumer = ReixTextSurfaceRing(page: hostilePage, token: 91, epoch: 92)!
+
+let hostileText = Array("hostile".utf8)
+let hostileDescriptor = descriptor(
+    source: 7,
+    severity: .notice,
+    outputKind: .status,
+    payloadKind: .utf8KeyValue,
+    textLength: hostileText.count,
+    cursorColumn: UInt16(hostileText.count)
+)
+
+// A producer cursor further ahead than the ring can hold. The header refuses
+// the pair rather than letting a difference larger than the capacity through.
+check(
+    push(hostileProducer, transaction: 1, descriptor: hostileDescriptor, text: hostileText),
+    "hostile seed push"
+)
+let hostileCursorBefore = cursor(hostilePage, 28).pointee
+cursor(hostilePage, 28).pointee = hostileCursorBefore &+ UInt32(ReixTextSurfaceTransport.capacity) &+ 1
+check(
+    hostileConsumer.popFrame(transaction: 1) { _ in .commit } == .malformed,
+    "a cursor pair wider than the ring is refused"
+)
+check(hostileBorderIntact(), "border intact after a wide cursor pair")
+
+// A counter that has wrapped past zero while the consumer sat still. Same
+// answer, and for the same reason: the difference is what is checked.
+cursor(hostilePage, 28).pointee = 0
+cursor(hostilePage, 32).pointee = 1
+check(
+    hostileConsumer.popFrame(transaction: 1) { _ in .commit } == .malformed,
+    "a wrapped counter pair is refused"
+)
+check(hostileBorderIntact(), "border intact after a wrapped counter pair")
+
+// A batch that announces more records than have been published. Incomplete,
+// not malformed: the producer may still be writing it.
+cursor(hostilePage, 28).pointee = hostileCursorBefore
+cursor(hostilePage, 32).pointee = 0
+let announced = hostilePage.advanced(by: ReixTextSurfaceTransport.headerBytes + 14)
+let savedChunks = UInt16(announced[0]) | UInt16(announced[1]) << 8
+announced[0] = UInt8(truncatingIfNeeded: hostileCursorBefore &+ 1)
+announced[1] = UInt8(truncatingIfNeeded: (hostileCursorBefore &+ 1) >> 8)
+check(
+    hostileConsumer.popFrame(transaction: 1) { _ in .commit } == .incomplete,
+    "a batch longer than what was published is incomplete"
+)
+check(hostileBorderIntact(), "border intact after an overlong batch")
+
+// The payload rewritten after the checksum was taken over it. The batch no
+// longer hashes to what its own records claim, so it is refused whole.
+announced[0] = UInt8(truncatingIfNeeded: savedChunks)
+announced[1] = UInt8(truncatingIfNeeded: savedChunks >> 8)
+let payloadByte = hostilePage.advanced(
+    by: ReixTextSurfaceTransport.headerBytes
+        + ReixTextSurfaceProtocol.recordBytes
+        + ReixTextSurfaceProtocol.headerBytes
+)
+let savedPayload = payloadByte[0]
+payloadByte[0] = savedPayload &+ 1
+check(
+    hostileConsumer.popFrame(transaction: 1) { _ in .commit } == .malformed,
+    "a payload rewritten after the checksum is refused"
+)
+check(hostileBorderIntact(), "border intact after a rewritten payload")
+
+// And the recovery is explicit, never implied by a malformed batch.
+payloadByte[0] = savedPayload
+check(hostileConsumer.recoverMalformed(), "malformed recovery is asked for")
+check(
+    hostileConsumer.popFrame(transaction: 1) { _ in .commit } == .empty,
+    "recovery leaves the ring empty"
+)
+check(hostileBorderIntact(), "border intact after recovery")
+
+// A style span rewritten to reach past the text it styles, after the
+// validation pass. The accessor carries the same bound, so it is refused.
+check(ReixTextSurfaceRing.initialize(page: hostilePage, token: 93), "span proposal")
+check(ReixTextSurfaceRing.accept(page: hostilePage, token: 93, epoch: 94), "span accept")
+let spanProducer = ReixTextSurfaceRing(page: hostilePage, token: 93, epoch: 94)!
+let spanConsumer = ReixTextSurfaceRing(page: hostilePage, token: 93, epoch: 94)!
+
+let spanText = Array("span".utf8)
+let spanDescriptor = descriptor(
+    source: 7,
+    severity: .notice,
+    outputKind: .status,
+    payloadKind: .utf8KeyValue,
+    textLength: spanText.count,
+    styles: 1,
+    cursorColumn: UInt16(spanText.count)
+)
+check(
+    push(
+        spanProducer,
+        transaction: 1,
+        descriptor: spanDescriptor,
+        text: spanText,
+        styles: [ReixTextSurfaceStyleSpan(offset: 0, length: 4, role: .command)!]
+    ),
+    "span push"
+)
+check(
+    spanConsumer.popFrame(transaction: 1) { frame in
+        check(frame.styleSpan(at: 0) != nil, "the span as it was pushed")
+
+        // Rewritten underneath the consumer, between validation and use.
+        let wire = hostilePage.advanced(
+            by: ReixTextSurfaceTransport.headerBytes
+                + ReixTextSurfaceProtocol.recordBytes
+                + ReixTextSurfaceProtocol.headerBytes
+                + spanText.count
+        )
+        wire[4] = 0xFF
+        wire[5] = 0xFF
+
+        check(frame.styleSpan(at: 0) == nil, "a span past the text it styles is refused")
+        check(frame.textByte(at: spanText.count) == nil, "text past its own length is refused")
+
+        return .commit
+    } == .committed,
+    "span frame consumed"
+)
+check(hostileBorderIntact(), "border intact after a rewritten span")
+
 if failures == 0 {
     print("TextSurfaceRingHarness passed \(checks) checks")
 } else {

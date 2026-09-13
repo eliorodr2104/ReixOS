@@ -144,9 +144,13 @@ extension FileSystem {
     /// folder ends, or the disk stops answering - and the three are told apart in
     /// what comes back rather than all being "nothing".
     ///
-    /// The `reference` of each entry is the raw object index. Turning it into a
-    /// handle needs the object's generation, which is a record read and not this
-    /// walk's business: see `FSListEntry.reference`.
+    /// The `reference` of each entry is the raw object index, unless the caller
+    /// supplies `reference` to name it another way. The one caller that does is
+    /// the server, which mints a generation-aware handle instead: the index and
+    /// the generation are both in hand at the moment the entry is written, so
+    /// the value that reaches the wire is chosen once, here, and never read back
+    /// out of the destination. That destination is a client's window, and a
+    /// value read back out of one is a value the client may have chosen.
     ///
     /// Every target is read and asked whether it agrees. The kind used to be
     /// `object(entry.object)?.kind ?? .free`, which invented a fact: a folder
@@ -158,7 +162,8 @@ extension FileSystem {
         from cursor: UInt32,
         in   folder: UInt32,
         into destination: UnsafeMutableRawPointer,
-        capacity   : Int
+        capacity   : Int,
+        reference  : (_ object: UInt32, _ generation: UInt32) -> UInt32 = { object, _ in object }
     ) -> FSListBatchResult {
 
         guard capacity > 0 else {
@@ -242,7 +247,7 @@ extension FileSystem {
                             }
 
                             FSListEntry(
-                                reference: entry.object,
+                                reference: reference(entry.object, target.generation),
                                 kind     : target.kind,
                                 length   : entry.length,
                                 name     : entry.name

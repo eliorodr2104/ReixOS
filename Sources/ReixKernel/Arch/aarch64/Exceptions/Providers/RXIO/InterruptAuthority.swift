@@ -5,6 +5,8 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 22/08/2026.
 //
 
+import ReixABI
+
 /// Turning a handle into the interrupt set it names.
 ///
 /// A file of its own because both interrupt syscalls do it and both have to do
@@ -22,9 +24,9 @@ internal enum InterruptAuthority {
         of process: UnsafeMutablePointer<Process>
     ) -> UnsafeMutablePointer<InterruptSet>? {
 
-        guard handle <= UInt64(UInt32.max),
+        guard let handle   = SyscallABI.handle(handle),
               let metadata   = process.pointee.metadata,
-              let capability = metadata.pointee.capsTable.resolve(UInt32(handle)),
+              let capability = metadata.pointee.capsTable.resolve(handle),
               case .interrupt(let set) = capability.target
         else { return nil }
 

@@ -6,6 +6,31 @@
 //
 
 
+/// The byte ring behind the console, over one shared region.
+///
+/// **Producer** whoever writes, through `push`. **Consumer** whoever reads,
+/// through `pop`, `consumeLine`, `consumeLineChecked`, `consumeAll` or
+/// `consumeAllChecked`.
+/// **Publication** the bytes are copied into the buffer, then a release
+/// barrier, then `tail` moves once for the whole batch. The consumer reads
+/// `head` and `tail` into locals, takes an acquire barrier, reads the bytes
+/// those two locals delimit, and publishes the new `head` last, after the sink
+/// has taken them.
+/// **Incomplete record** the protocol's record is a line, and a line is
+/// complete when a newline is in it: `consumeLine` hands out nothing until one
+/// arrives. `consumeAll` is the deliberate escape from that, for a producer
+/// that fills the ring without ever writing one.
+/// **Peer death** there is no token and no epoch here, and this is the
+/// consequence rather than a gap to fill later: a peer that dies leaves its
+/// bytes queued and the ring simply stops filling. A region handed to a new
+/// session must be `reset` by whoever hands it over, because nothing in the
+/// bytes distinguishes one session's from another's.
+///
+/// **Bounds** `cap` is the largest power of two that fits the region the
+/// consumer mapped, and every index read out of the shared header is masked
+/// with `mask` at the load. So `head` and `tail` name a slot inside the buffer
+/// whatever a hostile peer stores in them: the worst a forged pair buys is a
+/// wrong byte count, never a read outside the window.
 @frozen
 public struct Ring {
 

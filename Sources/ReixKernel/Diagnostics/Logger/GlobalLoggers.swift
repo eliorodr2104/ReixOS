@@ -25,28 +25,34 @@ public func putchar(ch: UInt8) {
 
 // MARK: - kprint
 
-/// Streams `message` followed by a newline, with no severity prefix.
+/// Streams `message` with no severity prefix. A newline is appended unless
+/// `newline` is false.
 ///
 /// `@autoclosure` even though there is no prefix to emit first: the record
 /// has to be open before the interpolation starts pushing bytes, or in
 /// deferred mode the bytes have nowhere to land.
 @inline(__always)
-public func kprint(_ message: @autoclosure () -> LogMessage) {
+public func kprint(
+    _ message: @autoclosure () -> LogMessage,
+    newline : Bool = true
+) {
     LogSink.beginRecord(level: nil, tag: nil)
     _ = message()
-    LogSink.endRecord()
+    LogSink.endRecord(newline: newline)
 }
 
-/// Tagged line: `[LEVEL  ] message`. `message` is an autoclosure so the
-/// prefix streams before the message segments do.
+/// Tagged output: `[LEVEL  ] message`. `message` is an autoclosure so the
+/// prefix streams before the message segments do. A newline is appended unless
+/// `newline` is false.
 @inline(__always)
 public func kprint(
     _ type     : PrintType = .message,
-    _ message  : @autoclosure () -> LogMessage
+    _ message  : @autoclosure () -> LogMessage,
+    newline    : Bool = true
 ) {
     LogSink.beginRecord(level: type, tag: nil)
     _ = message()
-    LogSink.endRecord()
+    LogSink.endRecord(newline: newline)
 }
 
 /// Bare newline. Still a record, so a blank separator line keeps its place

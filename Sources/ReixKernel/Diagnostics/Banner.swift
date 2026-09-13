@@ -14,7 +14,15 @@
 public func printBootBanner() {
     kprint()
     kprint()
-    kprint("[ reix ] ReixOS 0.1.5 / AArch64 / Embedded Swift")
+
+    kprint("[ reix ] ReixOS ", newline: false)
+    ReixVersion.withVersionBuffer { vBuffer in
+        for i in 0..<vBuffer.count {
+            kputc(vBuffer[i])
+        }
+    }
+
+    kprint(" / AArch64 / Embedded Swift")
     kprint("[ reix ] (c) 2026 Eliomar Alejandro Rodriguez Ferrer - GPLv3")
     kprint()
 }

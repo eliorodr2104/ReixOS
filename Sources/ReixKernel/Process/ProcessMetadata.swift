@@ -90,6 +90,17 @@ public struct ProcessMetadata: RXAllocatable {
     /// `ProcessManager.makeMetadata` immediately after this block is allocated.
     public var budget: UnsafeMutablePointer<FrameBudget>!  // 8 Byte
 
+    /// The message this process is parked on a send queue with, if any.
+    ///
+    /// Reached through `Process.pending`, which is what every caller uses. It
+    /// lives here rather than in `Process` because it carries a whole
+    /// capability now: see `PendingMessage`.
+    ///
+    /// Never assign into it piecemeal: replace it whole, or retire it with
+    /// `RendezvousIPC.retirePending`, which is the only thing that also gives
+    /// back the reference the attachment holds.
+    public var pending: PendingMessage? = nil              // 64 Byte
+
 
 
     public init(

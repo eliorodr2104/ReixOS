@@ -32,7 +32,11 @@ public struct DeriveSyscall: SyscallProvider {
             return
         }
 
-        let handle  = UInt32(truncatingIfNeeded: frame.pointee.x0)
+        guard let handle = SyscallABI.handle(frame.pointee.x0) else {
+            frame.pointee.x0 = UInt64(UInt32.max)
+            return
+        }
+
         let session = Badge(truncatingIfNeeded: frame.pointee.x1)
         let rights  = CapRights(rawValue: UInt16(truncatingIfNeeded: frame.pointee.x2))
 

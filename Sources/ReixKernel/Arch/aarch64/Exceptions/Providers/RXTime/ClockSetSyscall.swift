@@ -26,10 +26,8 @@ public struct ClockSetSyscall: SyscallProvider {
     ) {
         guard let current = Arch.CPU.getCurrentProcess(),
               let metadata = current.pointee.metadata,
-              frame.pointee.x1 <= UInt64(UInt32.max),
-              let capability = metadata.pointee.capsTable.resolve(
-                  UInt32(truncatingIfNeeded: frame.pointee.x1)
-              ),
+              let handle = SyscallABI.handle(frame.pointee.x1),
+              let capability = metadata.pointee.capsTable.resolve(handle),
               case .clock = capability.target,
               capability.rights.contains(.write)
         else {

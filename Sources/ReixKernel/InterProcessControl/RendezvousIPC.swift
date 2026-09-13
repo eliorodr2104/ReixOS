@@ -50,6 +50,9 @@ public struct RendezvousIPC: IPCInterface, Loggable {
         }
         
         let endpointPtr = ep
+
+        // Fields of one packed word, not whole-register reads: a syscall that
+        // takes a handle in a register of its own uses `SyscallABI.handle`.
         let grantWord   = frame.x6
         let grantHandle = UInt32(truncatingIfNeeded: grantWord)
         let grantRights = CapRights(rawValue: UInt16(truncatingIfNeeded: grantWord >> 32))
@@ -145,13 +148,32 @@ public struct RendezvousIPC: IPCInterface, Loggable {
 
         guard blocking else { return .failure(.wouldBlock) }
 
+        // The parked message lives in the cold block, so a sender without one
+        // is refused here rather than parked with nowhere to put it.
+        guard currentProcess.pointee.metadata != nil else { return .failure(.noReply) }
+
+        // Resolved now, while the sender's table still says what it said when
+        // the send was made. What is parked is the authority, not the number.
+        var held    : Capability? = nil
+        var rejected = false
+
+        if grantHandle != UInt32.max {
+            switch holdForTransfer(
+                from   : currentProcess,
+                handler: grantHandle,
+                rights : grantRights
+            ) {
+                case .success(let capability): held = capability
+                case .failure                : rejected = true
+            }
+        }
 
         currentProcess.pointee.pending = PendingMessage(
-            message     : Message(from: frame),
-            session     : capability.badge,
-            grant       : grantHandle == UInt32.max ? nil : grantHandle,
-            rights      : grantRights,
-            expectsReply: false
+            message      : Message(from: frame),
+            session      : capability.badge,
+            grant        : held,
+            grantRejected: rejected,
+            expectsReply : false
         )
 
         disarmDeadline(on: currentProcess)
@@ -224,28 +246,16 @@ public struct RendezvousIPC: IPCInterface, Loggable {
 
             let pending = senderProcess.pointee.takePending()
 
-            var transferResult: Result<UInt32, IPCError>? = nil
-            if let pending, let grant = pending.attachment {
-                transferResult = transferCapability(
-                    from   : senderProcess,
-                    handler: grant,
-                    to     : currentProcess,
-                    rights : pending.rights
-                )
-            }
+            // Resolved when the send was made, and held ever since. This only
+            // moves the reference into the receiver's table, or gives it back.
+            var grantRejected = pending?.grantRejected ?? false
+            var handed        = IPCDelivery.noGrant
 
-            var grantRejected = false
-            var handed = IPCDelivery.noGrant
-
-            switch transferResult {
-                case .success(let newGrantHandle):
-                    handed = newGrantHandle
-
-                case .failure(_):
-                    grantRejected = true
-
-                case nil:
-                    break
+            if let held = pending?.grant {
+                switch installHeld(held, into: currentProcess) {
+                    case .success(let newGrantHandle): handed        = newGrantHandle
+                    case .failure                    : grantRejected = true
+                }
             }
 
 
@@ -372,12 +382,14 @@ public struct RendezvousIPC: IPCInterface, Loggable {
             return .failure(.peerDied)
         }
 
+        guard currentProcess.pointee.metadata != nil else { return .failure(.noReply) }
+
         currentProcess.pointee.pending = PendingMessage(
-            message     : Message(from: frame),
-            session     : capability.badge,
-            grant       : nil,
-            rights      : [],
-            expectsReply: true
+            message      : Message(from: frame),
+            session      : capability.badge,
+            grant        : nil,
+            grantRejected: false,
+            expectsReply : true
         )
 
         currentProcess.pointee.status = .blockedOnSend(endpointPtr)
@@ -632,6 +644,7 @@ public struct RendezvousIPC: IPCInterface, Loggable {
                 physicalPage: page,
                 references  : 0,
                 pageCount   : pageCount,
+                kind        : forDevice ? .dma : .shared,
                 owner       : process.pointee.metadata?.pointee.budget
             )
         )
@@ -661,13 +674,23 @@ public struct RendezvousIPC: IPCInterface, Loggable {
         return .success((handle, sharedRegion))
     }
     
-    public mutating func transferCapability(
-        from senderProcess  : UnsafeMutablePointer<Process>,
-             handler        : UInt32,
-        to   receiverProcess: UnsafeMutablePointer<Process>,
-             rights         : CapRights
-        
-    ) -> Result<UInt32, IPCError> {
+    /// Resolve `handler` in `senderProcess`, attenuate it to `rights`, and take
+    /// the reference that keeps its target alive until somebody takes delivery.
+    ///
+    /// The half of a transfer that has to happen *at send time*, not at
+    /// delivery: a message may sit on an endpoint for an unbounded while, and
+    /// over that while the sender can drop the slot, reuse it for something
+    /// else, or die and have its whole table released. A slot number resolved
+    /// later is not the capability that was sent. See `PendingMessage`.
+    ///
+    /// The returned capability owns one reference. Its holder has to hand that
+    /// reference to a table with `installHeld` or give it back with
+    /// `releaseHeld`; nothing else may drop it.
+    mutating func holdForTransfer(
+        from senderProcess: UnsafeMutablePointer<Process>,
+             handler      : UInt32,
+             rights       : CapRights
+    ) -> Result<Capability, IPCError> {
         // A nil metadata means the process is not a live IPC participant;
         // fail the same way an unresolvable capability handle does.
         guard let senderMetadata = senderProcess.pointee.metadata else {
@@ -682,24 +705,77 @@ public struct RendezvousIPC: IPCInterface, Loggable {
             return .failure(.notEnoughRights)
         }
 
-        let effective = Self.attenuatedRights(source: capability.rights, requested: rights)
-        let receiverCap = Capability(
+        let held = Capability(
             target: capability.target,
             badge : capability.badge,
-            rights: effective
+            rights: Self.attenuatedRights(source: capability.rights, requested: rights)
         )
 
+        retain(held)
+
+        return .success(held)
+    }
+
+
+    /// Put a held capability into `receiverProcess`'s table, moving the
+    /// reference `holdForTransfer` took into the table entry.
+    ///
+    /// No retain here, and that is the whole point: the reference already
+    /// exists. A failure gives it back, so the caller is finished with `held`
+    /// either way.
+    mutating func installHeld(
+        _ held: Capability,
+        into   receiverProcess: UnsafeMutablePointer<Process>
+    ) -> Result<UInt32, IPCError> {
+
         guard let receiverMetadata = receiverProcess.pointee.metadata else {
+            releaseHeld(held)
             return .failure(.invalidCapability)
         }
 
-        guard let receiverHandle = receiverMetadata.pointee.capsTable.install(receiverCap) else {
+        guard let receiverHandle = receiverMetadata.pointee.capsTable.install(held) else {
+            releaseHeld(held)
             return .failure(.outOfEndpoints)
         }
 
-        retain(receiverCap)
-
         return .success(receiverHandle)
+    }
+
+
+    /// Give back the reference a held capability carries, for a transfer that
+    /// never arrived.
+    @inline(__always)
+    mutating func releaseHeld(_ held: Capability) {
+        release(held)
+    }
+
+
+    public mutating func transferCapability(
+        from senderProcess  : UnsafeMutablePointer<Process>,
+             handler        : UInt32,
+        to   receiverProcess: UnsafeMutablePointer<Process>,
+             rights         : CapRights
+
+    ) -> Result<UInt32, IPCError> {
+
+        switch holdForTransfer(from: senderProcess, handler: handler, rights: rights) {
+            case .success(let held): return installHeld(held, into: receiverProcess)
+            case .failure(let error): return .failure(error)
+        }
+    }
+
+
+    /// Throw away a parked message, giving back whatever it was carrying.
+    ///
+    /// Every path that ends a wait without delivering comes here: a sender that
+    /// dies parked, a sender let go because nobody can serve its endpoint, a
+    /// process torn down. Without it the reference `holdForTransfer` took would
+    /// outlive the message, and a region nobody maps would stay allocated for
+    /// the rest of the boot.
+    mutating func retirePending(of process: UnsafeMutablePointer<Process>) {
+        guard let parked = process.pointee.takePending() else { return }
+
+        if let held = parked.grant { releaseHeld(held) }
     }
 
 
@@ -865,8 +941,9 @@ public struct RendezvousIPC: IPCInterface, Loggable {
 
             // The message it never got to send. Nothing will read it now, and a
             // pending message on a process queued nowhere is a lie about where
-            // that process is.
-            _ = waiting.pointee.takePending()
+            // that process is. Whatever it was carrying goes back here, since
+            // no receiver will ever take delivery of it.
+            retirePending(of: waiting)
 
             waiting.pointee.context?.pointee.x0 = IPCStatus.peerDied.rawValue
 
@@ -1388,7 +1465,11 @@ public struct RendezvousIPC: IPCInterface, Loggable {
         IrqWaitSyscall.cancelDeadline(on: process)
 
         guard let metadata = process.pointee.metadata else { return }
-        
+
+        // Before the table, because it is not in the table: a parked message
+        // holds a reference of its own. See `PendingMessage`.
+        retirePending(of: process)
+
         for i in 0..<metadata.pointee.capsTable.caps.count where metadata.pointee.capsTable.caps[i] != nil {
             let capability = metadata.pointee.capsTable.caps[i]!
 

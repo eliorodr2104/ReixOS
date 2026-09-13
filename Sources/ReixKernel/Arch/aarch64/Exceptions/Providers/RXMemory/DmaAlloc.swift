@@ -53,7 +53,7 @@ public struct DmaAlloc: SyscallProvider {
 
     public static let number: SyscallNumber = .dmaAlloc
 
-    private static let maxPages: UInt64 = 256
+    private static let maxPages: UInt32 = 256
 
     public static func handle(
         frame  : UnsafeMutablePointer<Arch.TrapFrame>,
@@ -66,8 +66,12 @@ public struct DmaAlloc: SyscallProvider {
             return
         }
 
-        let pageCount = frame.pointee.x0
-        guard pageCount > 0, pageCount <= Self.maxPages else {
+        guard let pageCount = SyscallABI.count(
+                  frame.pointee.x0,
+                  atMost: Self.maxPages
+              ),
+              pageCount > 0
+        else {
             fail(frame)
             return
         }
@@ -80,7 +84,7 @@ public struct DmaAlloc: SyscallProvider {
         // Charged to the creator, like an SHM region: the frames have one owner.
         let budget = vmaManager.pointee.budget
 
-        guard chargeFrames(budget, UInt32(truncatingIfNeeded: pageCount)) else {
+        guard chargeFrames(budget, pageCount) else {
             fail(frame)
             return
         }
@@ -88,11 +92,11 @@ public struct DmaAlloc: SyscallProvider {
         let physicalPage: PhysicalPage
         do {
             physicalPage = try context.ppm.pointee.alloc(
-                Int(pageCount * UserSpaceLayout.pageSize)
+                Int(UInt64(pageCount) * UserSpaceLayout.pageSize)
             )
 
         } catch {
-            refundFrames(budget, UInt32(truncatingIfNeeded: pageCount))
+            refundFrames(budget, pageCount)
             fail(frame)
             return
         }
@@ -103,7 +107,7 @@ public struct DmaAlloc: SyscallProvider {
         // a mismatched alias: without this the device may read what was there
         // before instead of zeros, and a line left dirty may be written back
         // later, on top of whatever the driver has put there since.
-        let bytes = pageCount * UserSpaceLayout.pageSize
+        let bytes = UInt64(pageCount) * UserSpaceLayout.pageSize
 
         let zeroDest: UnsafeMutablePointer<UInt8> = vmaManager.pointee.context.vmm.pointee.physToVirt(
             physicalPage.address
@@ -117,7 +121,7 @@ public struct DmaAlloc: SyscallProvider {
         switch context.ipc.pointee.createShared(
             for      : current,
             page     : physicalPage,
-            pageCount: UInt32(pageCount),
+            pageCount: pageCount,
             forDevice: true
         ) {
             case .success(let created):
@@ -126,7 +130,7 @@ public struct DmaAlloc: SyscallProvider {
 
             case .failure:
                 // `createShared` has already given the frames back.
-                refundFrames(budget, UInt32(truncatingIfNeeded: pageCount))
+                refundFrames(budget, pageCount)
                 fail(frame)
                 return
         }
@@ -161,9 +165,9 @@ public struct DmaAlloc: SyscallProvider {
         handle : UInt64,
         in process: UnsafeMutablePointer<Process>
     ) -> Bool {
-        guard handle <= UInt64(UInt32.max),
+        guard let handle   = SyscallABI.handle(handle),
               let metadata   = process.pointee.metadata,
-              let capability = metadata.pointee.capsTable.resolve(UInt32(handle)),
+              let capability = metadata.pointee.capsTable.resolve(handle),
               case .device = capability.target,
               capability.rights.contains(.dma)
         else { return false }

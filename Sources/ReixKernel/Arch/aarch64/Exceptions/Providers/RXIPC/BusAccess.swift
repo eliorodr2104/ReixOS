@@ -15,9 +15,9 @@ enum BusAccess {
         of process: UnsafeMutablePointer<Process>
     ) -> (bus: UnsafeMutablePointer<BusAuthority>, rights: CapRights)? {
 
-        guard handle <= UInt64(UInt32.max),
+        guard let handle   = SyscallABI.handle(handle),
               let metadata   = process.pointee.metadata,
-              let capability = metadata.pointee.capsTable.resolve(UInt32(handle)),
+              let capability = metadata.pointee.capsTable.resolve(handle),
               case .bus(let bus) = capability.target,
               capability.rights.contains(.derive)
         else { return nil }

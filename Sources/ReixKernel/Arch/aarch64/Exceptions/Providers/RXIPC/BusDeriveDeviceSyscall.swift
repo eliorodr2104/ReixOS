@@ -33,11 +33,9 @@ public struct BusDeriveDeviceSyscall: SyscallProvider {
     ) {
         guard let current = Arch.CPU.getCurrentProcess(),
               let metadata = current.pointee.metadata,
-              frame.pointee.x1 <= UInt64(UInt32.max),
+              let index = SyscallABI.handle(frame.pointee.x1),
               let found = BusAccess.authority(handle: frame.pointee.x0, of: current),
-              let slot  = found.bus.pointee.bus.transport(
-                  at: UInt32(truncatingIfNeeded: frame.pointee.x1)
-              )
+              let slot  = found.bus.pointee.bus.transport(at: index)
         else {
             frame.pointee.x0 = UInt64(UInt32.max)
             return

@@ -29,15 +29,10 @@ public enum ProfileABI {
     }
 
     public static func authorityHandle(_ rawValue: UInt64) -> UInt32? {
-        checkedHandle(rawValue)
+        SyscallABI.handle(rawValue)
     }
 
     public static func attachHandle(_ rawValue: UInt64) -> UInt32? {
-        checkedHandle(rawValue)
-    }
-
-    private static func checkedHandle(_ rawValue: UInt64) -> UInt32? {
-        guard rawValue <= UInt64(UInt32.max) else { return nil }
-        return UInt32(rawValue)
+        SyscallABI.handle(rawValue)
     }
 }

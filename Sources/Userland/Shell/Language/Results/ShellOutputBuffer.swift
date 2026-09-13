@@ -73,7 +73,7 @@ public struct ShellOutputBuffer {
     ) -> Bool {
         guard !overflowed, !failed else { return false }
         guard count > 0 else { return true }
-        var roles = spans
+        let roles = spans
         let delivered = bytes.span.withUnsafeBufferPointer { text in
             roles.span.withUnsafeBufferPointer { marked in
                 withUnsafeTemporaryAllocation(

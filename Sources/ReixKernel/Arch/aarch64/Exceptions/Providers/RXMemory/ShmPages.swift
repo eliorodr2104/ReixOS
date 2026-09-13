@@ -27,10 +27,9 @@ public struct ShmPages: SyscallProvider {
         frame  : UnsafeMutablePointer<Arch.TrapFrame>,
         context: SyscallContext
     ) {
-        guard let current = Arch.CPU.getCurrentProcess(),
-              let cap = current.pointee.metadata.pointee.capsTable.resolve(
-                  UInt32(truncatingIfNeeded: frame.pointee.x0)
-              )
+        guard let handle  = SyscallABI.handle(frame.pointee.x0),
+              let current = Arch.CPU.getCurrentProcess(),
+              let cap = current.pointee.metadata.pointee.capsTable.resolve(handle)
         else { frame.pointee.x0 = 0; return }
 
         switch cap.target {

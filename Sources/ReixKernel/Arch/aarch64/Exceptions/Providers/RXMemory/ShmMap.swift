@@ -29,14 +29,21 @@ public struct ShmMap: SyscallProvider {
               let vmaManager = current.pointee.addressSpace.vmaManager
         else { frame.pointee.x0 = 0; return }
 
-        let handle = UInt32(truncatingIfNeeded: frame.pointee.x0)
+        guard let handle = SyscallABI.handle(frame.pointee.x0) else {
+            frame.pointee.x0 = 0
+            return
+        }
 
         guard let cap = current.pointee.metadata.pointee.capsTable.resolve(handle) else {
             frame.pointee.x0 = 0
             return
         }
 
-        guard case .shared(let region) = cap.target else {
+        // Both halves, because `kind` is set at creation and never moves: a DMA
+        // buffer cannot be mapped as ordinary memory through a mislabelled cap.
+        guard case .shared(let region) = cap.target,
+              region.pointee.kind == .shared
+        else {
             frame.pointee.x0 = 0
             return
         }

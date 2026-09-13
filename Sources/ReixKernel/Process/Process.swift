@@ -81,7 +81,17 @@ public struct Process: RXEntry {
     /// message, and keeping them separate meant every enqueue path had to
     /// remember to reset the ones it did not use. Never assign into it
     /// piecemeal: replace it whole, or retire it with `takePending`.
-    public var pending     : PendingMessage? = nil // 32 Byte -> 21 + 4 + 5 + 1 + 1
+    ///
+    /// Stored in `ProcessMetadata` and reached from here, because it grew a
+    /// whole `Capability` and this struct has to stay in the 256 byte slab
+    /// bucket; see `PendingMessage`. A process with no metadata block is not a
+    /// live IPC participant and has no message to park, which is why the
+    /// accessor answers nil rather than trapping.
+    public var pending: PendingMessage? {
+        get { metadata?.pointee.pending }
+        nonmutating set { metadata?.pointee.pending = newValue }
+    }
+
     public var addressSpace: AddressSpace // 19 Byte -> ((1 + 8) + 8 + 2)
 
     /// Pointer to the cold metadata block. Implicit-unwrapped because the
@@ -155,6 +165,10 @@ public struct Process: RXEntry {
     /// message twice or to clear half of it: taking the whole optional retires
     /// the payload, the grant, the session and the reply expectation together,
     /// so no fragment can survive into the next message this process parks.
+    ///
+    /// The caller now owns the reference the attachment holds, so it must
+    /// install it or release it. A caller that only wants the message gone
+    /// wants `RendezvousIPC.retirePending` instead.
     @inline(__always)
     public mutating func takePending() -> PendingMessage? {
         defer { pending = nil }

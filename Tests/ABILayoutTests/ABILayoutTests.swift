@@ -197,12 +197,13 @@ struct ABILayoutTests {
         #expect(MemoryLayout<Process>.stride         <= 256)
         #expect(MemoryLayout<ProcessMetadata>.stride <= 1024)
 
-        // `Process` holds a `PendingMessage`, which holds a session. Widening
-        // the session took that struct from a thirty-two byte stride to
-        // forty-eight and `Process` over the edge; storing the grant as the
-        // sentinel the wire already uses rather than as an optional took the
-        // five-byte field to four and brought both back.
-        #expect(MemoryLayout<PendingMessage>.stride <= 40)
+        // Forty to sixty-four, because the parked attachment stopped being a
+        // slot number and became the capability itself. See `PendingMessage`.
+        #expect(MemoryLayout<PendingMessage>.stride <= 64)
+        #expect(MemoryLayout<Capability>.stride     == 24)
+
+        // `Process` paid none of it: the message moved to the cold block, which
+        // took 904 to 968 while `Process` went 256 to 216. Same two buckets.
 
         // `ProcessMetadata` says nine bytes padded to sixteen for its own copy.
         // A reason whose payload outgrows an `ExitCode` moves that field.

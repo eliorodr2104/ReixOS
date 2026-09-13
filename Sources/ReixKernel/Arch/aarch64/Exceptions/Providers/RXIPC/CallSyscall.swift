@@ -19,7 +19,10 @@ public struct CallSyscall: SyscallProvider {
         
         guard let currentProcess = Arch.CPU.getCurrentProcess() else { return }
         
-        let handle = UInt32(truncatingIfNeeded: frame.pointee.x0)
+        guard let handle = SyscallABI.handle(frame.pointee.x0) else {
+            frame.pointee.x0 = IPCStatus.invalidCapability.rawValue
+            return
+        }
         guard let metadata = currentProcess.pointee.metadata else {
             frame.pointee.x0 = IPCStatus.invalidCapability.rawValue
             return

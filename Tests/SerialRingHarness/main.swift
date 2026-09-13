@@ -237,10 +237,133 @@ private func consoleFlushOwnership() {
     require(missing == .unregistered, "missing console ring")
 }
 
+/// A peer that writes cursors no honest producer writes.
+///
+/// The region is bordered with a canary so that an index escaping the window
+/// would be visible here rather than merely unlikely. Every case has to end in
+/// a defined refusal and an intact border.
+private func hostileSerial() {
+    let guardBytes = 256
+    let total      = ReixSerialRingTransport.pageBytes + 2 * guardBytes
+    let block      = UnsafeMutablePointer<UInt8>.allocate(capacity: total)
+    defer { block.deallocate() }
+    for index in 0..<total { block[index] = 0x5A }
+
+    let storage = block.advanced(by: guardBytes)
+    for index in 0..<ReixSerialRingTransport.pageBytes { storage[index] = 0 }
+
+    func borderIntact() -> Bool {
+        for index in 0..<guardBytes where block[index] != 0x5A { return false }
+        for index in 0..<guardBytes
+        where block[guardBytes + ReixSerialRingTransport.pageBytes + index] != 0x5A { return false }
+        return true
+    }
+
+    require(ReixSerialRing.initialize(page: storage, role: .writer, token: 31), "hostile proposal")
+    require(ReixSerialRing.accept(page: storage, role: .writer, token: 31, epoch: 5), "hostile accept")
+    let ring = ReixSerialRing(page: storage, role: .writer, token: 31, epoch: 5)!
+    require(ring.push(chunk(7)) == .ok, "hostile seed")
+
+    let producer = UnsafeMutableRawPointer(storage.advanced(by: 28)).assumingMemoryBound(to: UInt32.self)
+    let consumer = UnsafeMutableRawPointer(storage.advanced(by: 32)).assumingMemoryBound(to: UInt32.self)
+
+    // A producer further ahead than the ring can hold. The pair is refused
+    // whole, so no slot index is ever computed from it.
+    producer.pointee = UInt32(ReixSerialRingTransport.capacity) + 1
+    consumer.pointee = 0
+    if case .status(let stale) = ring.pop() {
+        require(stale == .stale, "a cursor pair wider than the ring is stale")
+    } else { fatalError("a cursor pair wider than the ring was consumed") }
+    require(ring.push(chunk(8)) == .stale, "a wide pair refuses a push too")
+    require(ring.freeSlots == nil, "a wide pair has no free slot count")
+    require(borderIntact(), "border intact after a wide cursor pair")
+
+    // The widest pair there is, and a consumer ahead of its producer: the same
+    // answer, because it is the difference that is checked.
+    producer.pointee = UInt32.max
+    consumer.pointee = 0
+    if case .status(let stale) = ring.pop() {
+        require(stale == .stale, "the widest cursor pair is stale")
+    } else { fatalError("the widest cursor pair was consumed") }
+    producer.pointee = 0
+    consumer.pointee = 9
+    if case .status(let stale) = ring.pop() {
+        require(stale == .stale, "a consumer ahead of its producer is stale")
+    } else { fatalError("a consumer ahead of its producer was consumed") }
+    require(borderIntact(), "border intact after a wrapped pair")
+
+    // A window handed to a new session: the epoch in the header no longer
+    // matches the one this side was told, so nothing in it is read as data.
+    producer.pointee = 1
+    consumer.pointee = 0
+    let stalePage = UnsafeMutableRawPointer(storage.advanced(by: 16)).assumingMemoryBound(to: UInt32.self)
+    stalePage.pointee = 99
+    if case .status(let stale) = ring.pop() {
+        require(stale == .stale, "a rewritten epoch is stale")
+    } else { fatalError("a rewritten epoch was consumed") }
+    require(ReixSerialRing(page: storage, role: .writer, token: 31, epoch: 5) == nil, "a stale header builds no ring")
+    require(borderIntact(), "border intact after a rewritten epoch")
+}
+
+
+/// The console ring under the same treatment.
+///
+/// It has no token and no epoch, so the guarantee is narrower and worth
+/// stating: every index is masked at the load, so a forged `head` or `tail`
+/// buys a wrong byte count and never a read outside the window.
+private func hostileConsole() {
+    let regionBytes = 4096
+    let guardBytes  = 256
+    let total       = regionBytes + 2 * guardBytes
+    let block       = UnsafeMutablePointer<UInt8>.allocate(capacity: total)
+    defer { block.deallocate() }
+    for index in 0..<total { block[index] = 0x5A }
+
+    let storage = UnsafeMutableRawPointer(block.advanced(by: guardBytes))
+    for index in 0..<regionBytes { storage.storeBytes(of: UInt8(0), toByteOffset: index, as: UInt8.self) }
+
+    func borderIntact() -> Bool {
+        for index in 0..<guardBytes where block[index] != 0x5A { return false }
+        for index in 0..<guardBytes
+        where block[guardBytes + regionBytes + index] != 0x5A { return false }
+        return true
+    }
+
+    let ring = Ring(base: storage, regionSize: regionBytes)
+    ring.reset()
+    for index in 0..<64 { require(ring.push(UInt8(truncatingIfNeeded: index)), "hostile console seed") }
+
+    // Indices no producer of this ring would publish.
+    storage.storeBytes(of: UInt32.max, toByteOffset: 0, as: UInt32.self)
+    storage.storeBytes(of: UInt32.max - 7, toByteOffset: 4, as: UInt32.self)
+
+    require(ring.count < regionBytes, "a forged pair cannot claim more than the window")
+
+    var spansInside = true
+    let taken = ring.consumeAll { bytes, count in
+        let low  = UInt(bitPattern: bytes)
+        let base = UInt(bitPattern: storage)
+        if low < base + 8 || low + UInt(count) > base + UInt(regionBytes) { spansInside = false }
+    }
+    require(spansInside, "every span handed out is inside the window")
+    require(taken < regionBytes, "a forged pair cannot hand out more than the window")
+    require(borderIntact(), "border intact after forged console indices")
+
+    // And the line scan terminates on them rather than walking off the end.
+    storage.storeBytes(of: UInt32.max, toByteOffset: 0, as: UInt32.self)
+    storage.storeBytes(of: UInt32(0), toByteOffset: 4, as: UInt32.self)
+    _ = ring.nextLineLength()
+    _ = ring.consumeLine { _, _ in }
+    require(borderIntact(), "border intact after a forged line scan")
+}
+
+
 abi()
 ring()
 cursorWrap()
 transfer()
 consoleWrap()
 consoleFlushOwnership()
+hostileSerial()
+hostileConsole()
 print("SerialRingHarness: PASS")

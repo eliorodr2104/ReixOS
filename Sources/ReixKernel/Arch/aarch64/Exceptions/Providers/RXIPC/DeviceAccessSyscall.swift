@@ -27,9 +27,9 @@ enum DeviceAccess {
         of process: UnsafeMutablePointer<Process>
     ) -> UnsafeMutableRawPointer? {
 
-        guard handle <= UInt64(UInt32.max),
+        guard let handle   = SyscallABI.handle(handle),
               let metadata   = process.pointee.metadata,
-              let capability = metadata.pointee.capsTable.resolve(UInt32(handle)),
+              let capability = metadata.pointee.capsTable.resolve(handle),
               case .device(let device) = capability.target,
               capability.rights.contains(right)
         else { return nil }

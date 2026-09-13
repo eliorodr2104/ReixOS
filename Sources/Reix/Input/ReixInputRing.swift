@@ -13,6 +13,26 @@ public enum ReixInputRingPop {
 }
 
 /// One page SPSC record ring used independently for source and consumer.
+///
+/// **Producer** whoever holds the writing end, through `push`.
+/// **Consumer** whoever holds the reading end, through `pop`.
+/// **Publication** the record is encoded into its slot, then a release barrier,
+/// then the producer cursor moves by one. The consumer reads both cursors into
+/// locals, takes an acquire barrier, decodes the slot and only then moves the
+/// consumer cursor.
+/// **Incomplete record** there is none to detect: a slot is published by the
+/// cursor move and never before, so a half-written record is never visible. A
+/// record that decodes to nothing is `.malformed` and the cursor does not move,
+/// which is a ring that has stopped rather than one that skips.
+/// **Peer death** the magic, version, record width, capacity, epoch and token
+/// are checked on every operation, so a page reused by a new session reads as
+/// `.stale`. A peer that simply stops leaves the ring `.empty` or `.full`.
+///
+/// **Bounds** the page is one page and the capacity is fixed, so every slot
+/// address is `header + (cursor % capacity) * recordBytes` and cannot leave it
+/// whatever the cursors hold. `valid` additionally refuses a pair of cursors
+/// whose difference exceeds the capacity, which is what a wrapped or forged
+/// counter looks like from here.
 public struct ReixInputRing {
     public static let pageBytes = 4096
     public static let headerBytes = 64

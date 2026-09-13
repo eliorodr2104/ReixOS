@@ -27,11 +27,12 @@ public struct DmaPhysical: SyscallProvider {
     ) {
         let handle = frame.pointee.x0
 
-        guard handle <= UInt64(UInt32.max),
+        guard let handle   = SyscallABI.handle(handle),
               let current    = Arch.CPU.getCurrentProcess(),
               let metadata   = current.pointee.metadata,
-              let capability = metadata.pointee.capsTable.resolve(UInt32(handle)),
-              case .dma(let region) = capability.target
+              let capability = metadata.pointee.capsTable.resolve(handle),
+              case .dma(let region) = capability.target,
+              region.pointee.kind == .dma
         else {
             frame.pointee.x0 = UInt64.max
             return

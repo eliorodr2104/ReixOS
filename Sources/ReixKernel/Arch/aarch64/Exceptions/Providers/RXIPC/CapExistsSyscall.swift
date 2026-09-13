@@ -21,7 +21,10 @@ public struct CapExistsSyscall: SyscallProvider {
     ) {
         _ = context
 
-        let handle = UInt32(truncatingIfNeeded: frame.pointee.x0)
+        guard let handle = SyscallABI.handle(frame.pointee.x0) else {
+            frame.pointee.x0 = 0
+            return
+        }
 
         if let current = Arch.CPU.getCurrentProcess(),
            current.pointee.metadata.pointee.capsTable.resolve(handle) != nil {

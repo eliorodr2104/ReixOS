@@ -43,10 +43,8 @@ public struct IrqBindSyscall: SyscallProvider {
                   handle: frame.pointee.x0,
                   of    : current
               ),
-              frame.pointee.x1 <= UInt64(UInt32.max),
-              let capability = metadata.pointee.capsTable.resolve(
-                  UInt32(truncatingIfNeeded: frame.pointee.x1)
-              ),
+              let endpointHandle = SyscallABI.handle(frame.pointee.x1),
+              let capability = metadata.pointee.capsTable.resolve(endpointHandle),
               case .endpoint(let endpoint) = capability.target,
 
               // The endpoint has to be one this process can *receive* on. Binding

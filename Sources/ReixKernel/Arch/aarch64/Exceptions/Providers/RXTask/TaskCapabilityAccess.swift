@@ -10,8 +10,7 @@ import ReixABI
 enum TaskCapabilityAccess {
 
     static func handle(_ raw: UInt64) -> UInt32? {
-        guard raw <= UInt64(UInt32.max) else { return nil }
-        return UInt32(raw)
+        SyscallABI.handle(raw)
     }
 
     static func task(

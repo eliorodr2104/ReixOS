@@ -643,6 +643,77 @@ private extension ReixInputRingPop {
 }
 
 
+/// A peer that writes cursors no honest producer writes.
+///
+/// The page is bordered with a canary so that an index escaping the window
+/// would be visible here rather than merely unlikely. Every case has to end in
+/// a defined refusal and an intact border.
+private func hostileInputRing() {
+    let guardBytes = 256
+    let total      = ReixInputRing.pageBytes + 2 * guardBytes
+    let block      = UnsafeMutablePointer<UInt8>.allocate(capacity: total)
+    defer { block.deallocate() }
+    for index in 0..<total { block[index] = 0x5A }
+
+    let page = block.advanced(by: guardBytes)
+
+    func borderIntact() -> Bool {
+        for index in 0..<guardBytes where block[index] != 0x5A { return false }
+        for index in 0..<guardBytes
+        where block[guardBytes + ReixInputRing.pageBytes + index] != 0x5A { return false }
+        return true
+    }
+
+    func cursor(_ offset: Int) -> UnsafeMutablePointer<UInt32> {
+        UnsafeMutableRawPointer(page.advanced(by: offset)).assumingMemoryBound(to: UInt32.self)
+    }
+
+    XCTAssertTrue(ReixInputRing.initialize(page: page, token: 41, epoch: 42), "hostile initialize")
+    guard let ring = ReixInputRing(page: page, token: 41, epoch: 42) else {
+        fail("hostile ring did not open")
+        return
+    }
+
+    XCTAssertEqual(ring.push(ReixInputRecord(kind: .enter, sequence: 1)!), .ok, "hostile seed")
+
+    // A producer further ahead than the ring can hold. The pair is refused
+    // whole, so no slot index is ever computed from it.
+    cursor(28).pointee = UInt32(ReixInputRing.capacity) + 1
+    cursor(32).pointee = 0
+    if case .status(let stale) = ring.pop() {
+        XCTAssertEqual(stale, .stale, "a cursor pair wider than the ring is stale")
+    } else { fail("a cursor pair wider than the ring was consumed") }
+    XCTAssertEqual(ring.push(ReixInputRecord(kind: .enter, sequence: 2)!), .stale, "a wide pair refuses a push")
+    XCTAssertTrue(ring.isFull, "a wide pair reads as full rather than as space")
+    XCTAssertTrue(borderIntact(), "border intact after a wide cursor pair")
+
+    // The widest pair there is, and a consumer ahead of its producer.
+    cursor(28).pointee = UInt32.max
+    cursor(32).pointee = 0
+    if case .status(let stale) = ring.pop() {
+        XCTAssertEqual(stale, .stale, "the widest cursor pair is stale")
+    } else { fail("the widest cursor pair was consumed") }
+    cursor(28).pointee = 0
+    cursor(32).pointee = 11
+    if case .status(let stale) = ring.pop() {
+        XCTAssertEqual(stale, .stale, "a consumer ahead of its producer is stale")
+    } else { fail("a consumer ahead of its producer was consumed") }
+    XCTAssertTrue(borderIntact(), "border intact after a wrapped pair")
+
+    // A header rewritten to claim a capacity the page cannot hold. The fields
+    // are the ones this side was told, not the ones the page now says.
+    cursor(28).pointee = 1
+    cursor(32).pointee = 0
+    page[8] = 0xFF
+    page[9] = 0xFF
+    if case .status(let stale) = ring.pop() {
+        XCTAssertEqual(stale, .stale, "a rewritten capacity is stale")
+    } else { fail("a rewritten capacity was consumed") }
+    XCTAssertNil(ReixInputRing(page: page, token: 41, epoch: 42), "a rewritten header opens no ring")
+    XCTAssertTrue(borderIntact(), "border intact after a rewritten header")
+}
+
+
 private func run(_ name: String, _ body: () throws -> Void) {
     scenario = name
     do {
@@ -670,6 +741,7 @@ run("death and focused reconnect", harness.testDeathReturnsAllBindingsAndFocused
 run("sequence wrap", harness.testSequenceWrapNeverEmitsZeroOrAsynchronousValues)
 run("dead pending source retains live source", harness.testDeadPendingSourceDoesNotReleaseLiveSource)
 run("dead source retains live pending source", harness.testDeadSourceDoesNotReleaseLivePendingSource)
+run("hostile ring cursors", hostileInputRing)
 
 if failures == 0 {
     print("InputRouterHarness passed \(checks) checks")

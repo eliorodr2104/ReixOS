@@ -57,9 +57,25 @@ public struct ReixTextSurfaceFrameView {
         return payloadByte(at: offset + index)
     }
 
+    /// How far into the text a style span may reach.
+    ///
+    /// The same bound `validSpans` applies, kept here so that it travels with
+    /// every read instead of being taken once in a pass of its own. The payload
+    /// stays in the producer's window while this view is alive, so a span read
+    /// after validation is not necessarily the span that was validated; only a
+    /// bound checked at the read can say anything about the one handed out.
+    private var textSpanLimit: UInt32 {
+        descriptor.kind == .snapshot
+            ? descriptor.textLength
+            : UInt32(ReixTextSurfaceFrameDescriptor.maximumTextBytes)
+    }
+
     public func styleSpan(at index: Int) -> ReixTextSurfaceStyleSpan? {
         guard index >= 0, index < Int(descriptor.styleSpanCount) else { return nil }
-        return span(at: Int(descriptor.textLength) + index * ReixTextSurfaceStyleSpan.wireBytes)
+        return bounded(
+            span(at: Int(descriptor.textLength) + index * ReixTextSurfaceStyleSpan.wireBytes),
+            within: textSpanLimit
+        )
     }
 
     public func overlayStyleSpan(at index: Int) -> ReixTextSurfaceStyleSpan? {
@@ -67,7 +83,21 @@ public struct ReixTextSurfaceFrameView {
         let offset = Int(descriptor.textLength)
             + Int(descriptor.styleSpanCount) * ReixTextSurfaceStyleSpan.wireBytes
             + Int(descriptor.overlayLength)
-        return span(at: offset + index * ReixTextSurfaceStyleSpan.wireBytes)
+        return bounded(
+            span(at: offset + index * ReixTextSurfaceStyleSpan.wireBytes),
+            within: UInt32(descriptor.overlayLength)
+        )
+    }
+
+    private func bounded(
+        _ item: ReixTextSurfaceStyleSpan?,
+        within limit: UInt32
+    ) -> ReixTextSurfaceStyleSpan? {
+        guard let item,
+              UInt64(item.offset) + UInt64(item.length) <= UInt64(limit)
+        else { return nil }
+
+        return item
     }
 
     private func span(at offset: Int) -> ReixTextSurfaceStyleSpan? {
@@ -99,6 +129,30 @@ public struct ReixTextSurfaceFrameView {
 }
 
 /// One SPSC region for atomic semantic TextSurface frame transactions.
+///
+/// **Producer** the surface owner, one at a time, through `push`.
+/// **Consumer** the adapter that renders it, one at a time, through `popFrame`.
+/// **Publication** every record of a transaction is written first and the
+/// producer cursor is moved once, after a release barrier; the consumer takes
+/// an acquire barrier after reading the cursors and moves its own cursor only
+/// once the batch has been accepted whole.
+/// **Incomplete record** a batch whose `begin` announces more records than the
+/// cursor difference holds is `.incomplete` and is left alone; one whose chunks,
+/// counts or checksum disagree is `.malformed`, and `recoverMalformed` is the
+/// only thing that skips it, deliberately and out loud.
+/// **Peer death** the token and epoch in the header are checked on every
+/// operation, so a window reused by a new session reads as `.stale` rather than
+/// as somebody else's frames; a peer that dies mid-batch leaves an incomplete
+/// transaction, which is never consumed.
+///
+/// **What a snapshot is here.** The header, the cursors and each record's
+/// fields are read into locals for the length of one operation. The *payload*
+/// is not copied: it is up to sixty-four kilobytes and this runs on a machine
+/// with four megabytes. So a hostile producer can change payload bytes after
+/// the checksum has passed over them, and the consequence is bounded on
+/// purpose: every accessor on `ReixTextSurfaceFrameView` is bounded by the
+/// snapshotted descriptor and by the span limits, so the worst a late mutation
+/// buys is different text or a refused span, never a read outside the window.
 public struct ReixTextSurfaceRing {
     private static let producerOffset = 28
     private static let consumerOffset = 32

@@ -30,7 +30,12 @@ public struct IdentityAliveSyscall: SyscallProvider {
         frame  : UnsafeMutablePointer<Arch.TrapFrame>,
         context: SyscallContext
     ) {
-        let identity = Identity(truncatingIfNeeded: frame.pointee.x0)
+        // Refused rather than narrowed: a truncated identity would answer for
+        // whichever process happens to hold the low thirty-two bits.
+        guard let identity = SyscallABI.count(frame.pointee.x0, atMost: .max) else {
+            frame.pointee.x0 = 0
+            return
+        }
 
         frame.pointee.x0 = context.processManager.pointee.isAlive(identity: identity) ? 1 : 0
     }
