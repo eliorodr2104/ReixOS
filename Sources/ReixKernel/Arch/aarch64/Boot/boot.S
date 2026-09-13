@@ -73,6 +73,11 @@ _start:
     msr     cpacr_el1, x0
     isb
 
+    // Firmware owns these registers before `_start`; Swift must not inherit a
+    // rounding mode or cumulative exception flags chosen outside the kernel.
+    msr     fpcr, xzr
+    msr     fpsr, xzr
+
     ldr     x2, =__bss_start
     add     x2, x2, x19
     ldr     x3, =__bss_end

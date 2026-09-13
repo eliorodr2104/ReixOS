@@ -95,6 +95,64 @@ struct ForkSpawnTests {
             #expect(context.pointee.elr   == 0)
             #expect(context.pointee.spsr  == 0)
             #expect(context.pointee.spel0 == UserSpaceLayout.stackTop)
+            #expect(withUnsafeBytes(of: &context.pointee) {
+                $0[288..<MemoryLayout<Arch.TrapFrame>.size].allSatisfy { $0 == 0 }
+            })
+        }
+    }
+
+
+    @Test("split copies the complete FP/SIMD context into the child")
+    func splitCopiesFPContext() {
+        withProcessManager(pages: 160) { ram, heap, manager in
+            let scheduler = allocateZeroedStorage(KernelScheduler.self)
+            defer { UnsafeMutableRawPointer(scheduler).deallocate() }
+
+            let ipc = UnsafeMutablePointer<KernelIPC>.allocate(capacity: 1)
+            ipc.initialize(to: KernelIPC(ppm: ram.ppm, scheduler: scheduler, heap: heap))
+            defer { ipc.deinitialize(count: 1); ipc.deallocate() }
+
+            guard let parent = try? manager.pointee.spawnProcess() else {
+                Issue.record("could not spawn the split parent")
+                return
+            }
+
+            Arch.CPU.setCurrentProcess(VirtualAddress(UInt(bitPattern: parent)))
+            defer { Arch.CPU.setCurrentProcess(0) }
+
+            var frame = Arch.TrapFrame()
+            withUnsafeMutableBytes(of: &frame) { bytes in
+                for offset in stride(from: 288, to: bytes.count, by: 8) {
+                    bytes.storeBytes(
+                        of: 0xD100_0000_0000_0000 | UInt64(offset / 8),
+                        toByteOffset: offset,
+                        as: UInt64.self
+                    )
+                }
+            }
+            let expected = withUnsafeBytes(of: &frame) { Array($0[288..<$0.count]) }
+
+            SplitProcessSyscall.handle(
+                frame: &frame,
+                context: SyscallContext(
+                    processManager: manager,
+                    scheduler     : scheduler,
+                    ipc           : ipc,
+                    ppm           : ram.ppm
+                )
+            )
+
+            guard frame.x0 != UInt64.max,
+                  let child = parent.pointee.family.findChild(id: frame.x0),
+                  let childContext = child.pointee.context else {
+                Issue.record("split did not publish its child")
+                return
+            }
+
+            let actual = withUnsafeBytes(of: &childContext.pointee) {
+                Array($0[288..<$0.count])
+            }
+            #expect(actual == expected)
         }
     }
 

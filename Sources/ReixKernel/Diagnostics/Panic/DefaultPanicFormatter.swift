@@ -140,9 +140,9 @@ public struct DefaultPanicFormatter: PanicFormatter, Loggable {
         }
 
         PanicConsole.write("  (EC 0x")
-        PanicConsole.writeHex((frame.esr >> 26) & 0x3F)
+        PanicConsole.writeHex((frame.pointee.esr >> 26) & 0x3F)
         PanicConsole.write(", ESR 0x")
-        PanicConsole.writeHex(frame.esr)
+        PanicConsole.writeHex(frame.pointee.esr)
         PanicConsole.write(")")
         PanicConsole.newline()
     }
@@ -153,9 +153,9 @@ public struct DefaultPanicFormatter: PanicFormatter, Loggable {
 
         PanicConsole.field("Address:")
         PanicConsole.write("PC 0x")
-        PanicConsole.writeHex(frame.elr)
+        PanicConsole.writeHex(frame.pointee.elr)
         PanicConsole.write("  FAR 0x")
-        PanicConsole.writeHex(frame.far)
+        PanicConsole.writeHex(frame.pointee.far)
         PanicConsole.newline()
     }
 
@@ -178,7 +178,7 @@ public struct DefaultPanicFormatter: PanicFormatter, Loggable {
             return
         }
 
-        let fromUserSpace = frame.spsr & 0xF == 0
+        let fromUserSpace = frame.pointee.spsr & 0xF == 0
 
         PanicConsole.write(fromUserSpace ? "  EL0" : "  EL1")
 
@@ -192,7 +192,7 @@ public struct DefaultPanicFormatter: PanicFormatter, Loggable {
         }
 
         PanicConsole.write("  PSTATE 0x")
-        PanicConsole.writeHex(frame.spsr)
+        PanicConsole.writeHex(frame.pointee.spsr)
         PanicConsole.newline()
     }
 
@@ -239,27 +239,27 @@ public struct DefaultPanicFormatter: PanicFormatter, Loggable {
 
     // MARK: - State
 
-    private static func emitRegisters(_ frame: Arch.TrapFrame) {
+    private static func emitRegisters(_ frame: UnsafePointer<Arch.TrapFrame>) {
         PanicConsole.rule("registers")
 
-        emitQuad("  x0-x3  : ", frame.x0,  frame.x1,  frame.x2,  frame.x3)
-        emitQuad("  x4-x7  : ", frame.x4,  frame.x5,  frame.x6,  frame.x7)
-        emitQuad("  x8-x11 : ", frame.x8,  frame.x9,  frame.x10, frame.x11)
-        emitQuad("  x12-x15: ", frame.x12, frame.x13, frame.x14, frame.x15)
-        emitQuad("  x16-x19: ", frame.x16, frame.x17, frame.x18, frame.x19)
-        emitQuad("  x20-x23: ", frame.x20, frame.x21, frame.x22, frame.x23)
-        emitQuad("  x24-x27: ", frame.x24, frame.x25, frame.x26, frame.x27)
+        emitQuad("  x0-x3  : ", frame.pointee.x0,  frame.pointee.x1,  frame.pointee.x2,  frame.pointee.x3)
+        emitQuad("  x4-x7  : ", frame.pointee.x4,  frame.pointee.x5,  frame.pointee.x6,  frame.pointee.x7)
+        emitQuad("  x8-x11 : ", frame.pointee.x8,  frame.pointee.x9,  frame.pointee.x10, frame.pointee.x11)
+        emitQuad("  x12-x15: ", frame.pointee.x12, frame.pointee.x13, frame.pointee.x14, frame.pointee.x15)
+        emitQuad("  x16-x19: ", frame.pointee.x16, frame.pointee.x17, frame.pointee.x18, frame.pointee.x19)
+        emitQuad("  x20-x23: ", frame.pointee.x20, frame.pointee.x21, frame.pointee.x22, frame.pointee.x23)
+        emitQuad("  x24-x27: ", frame.pointee.x24, frame.pointee.x25, frame.pointee.x26, frame.pointee.x27)
 
         PanicConsole.write("  x28-x29: 0x")
-        PanicConsole.writeHex(frame.x28)
+        PanicConsole.writeHex(frame.pointee.x28)
         PanicConsole.write(" - 0x")
-        PanicConsole.writeHex(frame.x29)
+        PanicConsole.writeHex(frame.pointee.x29)
         PanicConsole.newline()
 
         PanicConsole.write("  lr(x30): 0x")
-        PanicConsole.writeHex(frame.x30)
+        PanicConsole.writeHex(frame.pointee.x30)
         PanicConsole.write("   sp_el0: 0x")
-        PanicConsole.writeHex(frame.spel0)
+        PanicConsole.writeHex(frame.pointee.spel0)
         PanicConsole.newline()
     }
 
@@ -304,9 +304,9 @@ public struct DefaultPanicFormatter: PanicFormatter, Loggable {
         PanicConsole.newline()
 
         PanicConsole.write("PC 0x")
-        PanicConsole.writeHex(report.frame?.elr ?? 0)
+        PanicConsole.writeHex(report.frame?.pointee.elr ?? 0)
         PanicConsole.write("  FAR 0x")
-        PanicConsole.writeHex(report.frame?.far ?? 0)
+        PanicConsole.writeHex(report.frame?.pointee.far ?? 0)
         PanicConsole.newline()
 
         PanicConsole.write("=== REIX-PANIC END - SYSTEM HALTED ===")

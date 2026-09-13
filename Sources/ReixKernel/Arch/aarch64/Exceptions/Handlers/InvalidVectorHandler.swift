@@ -74,7 +74,6 @@ public func invalidVectorHandler(
 
     let frame = rawFramePointer
         .bindMemory(to: Arch.TrapFrame.self, capacity: 1)
-        .pointee
 
     guard let slot = InvalidVector(rawValue: vector) else {
         Arch.CPU.panic("Unnumbered vector with no handler behind it", fp: frame)

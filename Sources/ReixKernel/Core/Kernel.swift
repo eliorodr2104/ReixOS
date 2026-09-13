@@ -193,6 +193,10 @@ public struct Kernel: Loggable {
 
         Self.info("Kernel is running.")
 
+        #if REIX_FPSIMD_DIAGNOSTIC
+        FPContextDiagnostic.runNestedEL1Probe()
+        #endif
+
         do {
             try jumpUserLand()
         } catch { throw KernelError(error) }

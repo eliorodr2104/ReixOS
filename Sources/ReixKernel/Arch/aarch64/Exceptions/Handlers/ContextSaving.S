@@ -6,6 +6,9 @@
     b \label
 .endm
 
+.equ TRAP_FRAME_SIZE, 816
+.equ FP_STATE_OFFSET, 800
+
 // Reserves the trap frame and branches to \overflow if it does not fit on the
 // kernel stack, for exceptions taken at EL1.
 //
@@ -32,7 +35,7 @@
 // silently wrong the day the two disagree.
 .macro check_kernel_stack overflow
     msr     contextidr_el1, x0
-    sub     sp, sp, #288
+    sub     sp, sp, #TRAP_FRAME_SIZE
     adrp    x0, __stack_bottom
     add     x0, x0, :lo12:__stack_bottom
     cmp     wsp, w0
@@ -52,8 +55,91 @@
     add     x0, x0, :lo12:__exception_stack_top
     mov     sp, x0
     mrs     x0, contextidr_el1
-    sub     sp, sp, #288
+    sub     sp, sp, #TRAP_FRAME_SIZE
 .endm
+
+#ifdef REIX_FPSIMD_DIAGNOSTIC
+// Deliberately destroys every Q register and both FP control registers on an
+// EL1 entry. The isolated guest probe enters WFI with sentinels in all of them;
+// surviving this block proves the nested exception returned from the frame,
+// rather than from the AAPCS64 subset a normal function call would preserve.
+.macro diagnostic_clobber_q register
+    ins     v\register\().d[0], x2
+    ins     v\register\().d[1], x3
+    add     x2, x2, #1
+    add     x3, x3, #1
+.endm
+
+.macro diagnostic_clobber_nested_fpsimd
+    // This check runs on EL0 and EL1 entries at the last instruction boundary
+    // before Swift. A diagnostic handler turns a recorded failure into a panic.
+    mrs     x1, fpcr
+    mrs     x2, fpsr
+    orr     x1, x1, x2
+    cbz     x1, 7f
+    adrp    x0, fpsimd_diagnostic_environment_failure
+    add     x0, x0, :lo12:fpsimd_diagnostic_environment_failure
+    mov     x1, #1
+    str     x1, [x0]
+7:
+    ldr     x0, [sp, #256]
+    and     x0, x0, #0xF
+    cmp     x0, #5
+    b.ne    9f
+
+    adrp    x0, fpsimd_diagnostic_nested_status
+    add     x0, x0, :lo12:fpsimd_diagnostic_nested_status
+    mov     x1, #1
+    str     x1, [x0]
+
+    movz    x2, #0x1100, lsl #48
+    movz    x3, #0xA500, lsl #48
+    diagnostic_clobber_q 0
+    diagnostic_clobber_q 1
+    diagnostic_clobber_q 2
+    diagnostic_clobber_q 3
+    diagnostic_clobber_q 4
+    diagnostic_clobber_q 5
+    diagnostic_clobber_q 6
+    diagnostic_clobber_q 7
+    diagnostic_clobber_q 8
+    diagnostic_clobber_q 9
+    diagnostic_clobber_q 10
+    diagnostic_clobber_q 11
+    diagnostic_clobber_q 12
+    diagnostic_clobber_q 13
+    diagnostic_clobber_q 14
+    diagnostic_clobber_q 15
+    diagnostic_clobber_q 16
+    diagnostic_clobber_q 17
+    diagnostic_clobber_q 18
+    diagnostic_clobber_q 19
+    diagnostic_clobber_q 20
+    diagnostic_clobber_q 21
+    diagnostic_clobber_q 22
+    diagnostic_clobber_q 23
+    diagnostic_clobber_q 24
+    diagnostic_clobber_q 25
+    diagnostic_clobber_q 26
+    diagnostic_clobber_q 27
+    diagnostic_clobber_q 28
+    diagnostic_clobber_q 29
+    diagnostic_clobber_q 30
+    diagnostic_clobber_q 31
+
+    mov     x2, #0x03000000
+    msr     fpcr, x2
+    mov     x3, #0x1F
+    movk    x3, #0x0800, lsl #16
+    msr     fpsr, x3
+
+    // Leave the environment promised to the Swift handler intact after the
+    // deliberate damage. Q registers have no analogous control state.
+    msr     fpcr, xzr
+    msr     fpsr, xzr
+9:
+.endm
+#endif
 
 // Completes the trap frame the entry stub started, and leaves x0 pointing at it
 // with x1 carrying whatever the stub put in x0.
@@ -89,6 +175,43 @@
     stp     x0, x1,   [sp, #248]
     stp     x2, x3,   [sp, #264]
     str     x4,       [sp, #280]
+
+    // Save the complete architectural FP/SIMD state before the first Swift
+    // instruction can use it. The offsets are the appended portion of
+    // AArch64TrapFrame; the earlier GPR/system layout remains unchanged.
+    stp     q0, q1,    [sp, #288]
+    stp     q2, q3,    [sp, #320]
+    stp     q4, q5,    [sp, #352]
+    stp     q6, q7,    [sp, #384]
+    stp     q8, q9,    [sp, #416]
+    stp     q10, q11,  [sp, #448]
+    stp     q12, q13,  [sp, #480]
+    stp     q14, q15,  [sp, #512]
+    stp     q16, q17,  [sp, #544]
+    stp     q18, q19,  [sp, #576]
+    stp     q20, q21,  [sp, #608]
+    stp     q22, q23,  [sp, #640]
+    stp     q24, q25,  [sp, #672]
+    stp     q26, q27,  [sp, #704]
+    stp     q28, q29,  [sp, #736]
+    stp     q30, q31,  [sp, #768]
+
+    mrs     x0, fpcr
+    mrs     x1, fpsr
+    str     x0,         [sp, #FP_STATE_OFFSET]
+    str     x1,         [sp, #(FP_STATE_OFFSET + 8)]
+
+    // Every Swift handler starts from one deterministic FP environment. A
+    // nested EL1 exception preserves the interrupted kernel FP/SIMD state in
+    // its own frame, clears FPCR/FPSR for its handler, and restores the saved
+    // environment before resuming the interrupted kernel code.
+    msr     fpcr, xzr
+    msr     fpsr, xzr
+
+#ifdef REIX_FPSIMD_DIAGNOSTIC
+    diagnostic_clobber_nested_fpsimd
+#endif
+
     mov     x1,       x5
 
     mov     x0, sp
@@ -141,13 +264,13 @@ _evt_start:
 // --- Handler Implementations ---
 
 sync_handler_el0:
-    sub     sp, sp, #288
+    sub     sp, sp, #TRAP_FRAME_SIZE
     stp     x0, x1,   [sp, #0]
     mov     x0, #1       // 1 = Sync
     b       save_context_after_x0_x1
 
 irq_handler_el0:
-    sub     sp, sp, #288
+    sub     sp, sp, #TRAP_FRAME_SIZE
     stp     x0, x1,   [sp, #0]
     mov     x0, #0       // 0 = IRQ
     b       save_context_after_x0_x1
@@ -165,8 +288,7 @@ sync_handler_el1:
 .L_sync_el1_overflow:
     switch_to_exception_stack
     stp     x0, x1,   [sp, #0]
-    mov     x0, #1
-    b       save_context_after_x0_x1
+    b       report_kernel_stack_overflow
 
 irq_handler_el1:
     check_kernel_stack .L_irq_el1_overflow
@@ -177,8 +299,19 @@ irq_handler_el1:
 .L_irq_el1_overflow:
     switch_to_exception_stack
     stp     x0, x1,   [sp, #0]
-    mov     x0, #0
-    b       save_context_after_x0_x1
+    b       report_kernel_stack_overflow
+
+
+// Returning from an EL1 overflow would strand SP_EL1 on the exception stack:
+// that register is not part of the architectural exception state restored by
+// eret. Save the complete interrupted context for the report and fail closed.
+report_kernel_stack_overflow:
+    save_trap_frame
+    bl      swift_kernel_stack_overflow
+
+.L_kernel_stack_overflow_halt:
+    wfi
+    b       .L_kernel_stack_overflow_halt
 
 
 // The slot ids are the contract with `swift_invalid_vector`, and are spelled
@@ -220,6 +353,28 @@ save_context_after_x0_x1:
     bl      swift_exception_handler
 
     // RESTORE CONTEXT
+    ldp     q0, q1,    [sp, #288]
+    ldp     q2, q3,    [sp, #320]
+    ldp     q4, q5,    [sp, #352]
+    ldp     q6, q7,    [sp, #384]
+    ldp     q8, q9,    [sp, #416]
+    ldp     q10, q11,  [sp, #448]
+    ldp     q12, q13,  [sp, #480]
+    ldp     q14, q15,  [sp, #512]
+    ldp     q16, q17,  [sp, #544]
+    ldp     q18, q19,  [sp, #576]
+    ldp     q20, q21,  [sp, #608]
+    ldp     q22, q23,  [sp, #640]
+    ldp     q24, q25,  [sp, #672]
+    ldp     q26, q27,  [sp, #704]
+    ldp     q28, q29,  [sp, #736]
+    ldp     q30, q31,  [sp, #768]
+
+    ldr     x2,         [sp, #FP_STATE_OFFSET]
+    ldr     x3,         [sp, #(FP_STATE_OFFSET + 8)]
+    msr     fpcr, x2
+    msr     fpsr, x3
+
     ldp     x0, x1,   [sp, #248]
     ldp     x2, x3,   [sp, #264]
     ldr     x4,       [sp, #280]
@@ -245,5 +400,5 @@ save_context_after_x0_x1:
     ldp     x28, x29, [sp, #224]
     ldr     x30,      [sp, #240]
 
-    add     sp, sp, #288
+    add     sp, sp, #TRAP_FRAME_SIZE
     eret

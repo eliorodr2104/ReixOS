@@ -69,6 +69,8 @@ public struct VirtualTimerInterruptHandler: InterruptHandler {
             return
         }
 
-        current.pointee.context?.pointee = frame.pointee
+        if let savedContext = current.pointee.context {
+            Arch.TrapFrame.copy(from: frame, to: savedContext)
+        }
     }
 }

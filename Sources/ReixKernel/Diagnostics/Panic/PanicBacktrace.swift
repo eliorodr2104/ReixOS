@@ -38,16 +38,16 @@ enum PanicBacktrace {
     /// moment of the trap points at the frame of the function that faulted,
     /// so its own entry and its caller's return address are not on the chain
     /// and would otherwise be missing from the trace.
-    static func emit(_ frame: Arch.TrapFrame) {
+    static func emit(_ frame: UnsafePointer<Arch.TrapFrame>) {
         PanicConsole.rule("backtrace")
 
         var index = 0
 
-        emitFrame(&index, frame.elr, "PC/ELR")
-        emitFrame(&index, frame.x30, "LR/x30")
+        emitFrame(&index, frame.pointee.elr, "PC/ELR")
+        emitFrame(&index, frame.pointee.x30, "LR/x30")
 
         FrameWalker.walk(
-            from : frame.x29,
+            from : frame.pointee.x29,
             limit: frameLimit - index
         ) { returnAddress in
             emitFrame(&index, returnAddress, nil)

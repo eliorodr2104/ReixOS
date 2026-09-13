@@ -12,6 +12,7 @@ import PackageDescription
 /// (0xKSor, thanks)
 let isFreestanding         = ProcessInfo.processInfo.environment["FREESTANDING"] == "1"
 let isTerminalProfile      = ProcessInfo.processInfo.environment["TERMINAL_PROFILE"] == "1"
+let isFPSIMDDiagnostic     = ProcessInfo.processInfo.environment["REIX_FPSIMD_DIAGNOSTIC"] == "1"
 let reixPluginDependencies : [Target.Dependency] = isFreestanding ? [] : ["ReixApp"]
 
 // @_extern stays on in both modes so the editor resolves the @_extern(c) shims.
@@ -40,6 +41,11 @@ if isFreestanding {
 var terminalProfile = bareMetal
 if isFreestanding && isTerminalProfile {
     terminalProfile.append(.define("REIX_TERMINAL_PROFILE"))
+}
+
+var kernelSettings = terminalProfile
+if isFreestanding && isFPSIMDDiagnostic {
+    kernelSettings.append(.define("REIX_FPSIMD_DIAGNOSTIC"))
 }
 
 /// Non-Swift files that live under `Sources/ReixKernel` but are not part of the
@@ -106,7 +112,7 @@ let package = Package(
             dependencies : ["ReixABI"],
             path         : "Sources/ReixKernel",
             exclude      : kernelNativeExclude,
-            swiftSettings: terminalProfile
+            swiftSettings: kernelSettings
         ),
 
         // Userland apps: one ELF each, depend only on Reix.

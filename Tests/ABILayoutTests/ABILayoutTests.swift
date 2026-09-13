@@ -20,6 +20,118 @@ import ReixABI
 @Suite("ABI layout")
 struct ABILayoutTests {
 
+    private struct GuardedTrapFrame {
+        var before: UInt64 = 0x1122_3344_5566_7788
+        var frame = AArch64TrapFrame()
+        var after: UInt64 = 0x8877_6655_4433_2211
+    }
+
+    @Test("the AArch64 trap frame matches the exception assembly layout")
+    func trapFrameLayout() {
+        // GPR and exception-register offsets are intentionally unchanged. The
+        // complete FP/SIMD image is appended so existing diagnostics keep
+        // decoding the same words while ContextSaving.S gains the missing state.
+        #expect(MemoryLayout<AArch64TrapFrame>.offset(of: \AArch64TrapFrame.x0)    == 0)
+        #expect(MemoryLayout<AArch64TrapFrame>.offset(of: \AArch64TrapFrame.x30)  == 240)
+        #expect(MemoryLayout<AArch64TrapFrame>.offset(of: \AArch64TrapFrame.elr)  == 248)
+        #expect(MemoryLayout<AArch64TrapFrame>.offset(of: \AArch64TrapFrame.spsr) == 256)
+        #expect(MemoryLayout<AArch64TrapFrame>.offset(of: \AArch64TrapFrame.esr)  == 264)
+        #expect(MemoryLayout<AArch64TrapFrame>.offset(of: \AArch64TrapFrame.far)  == 272)
+        #expect(MemoryLayout<AArch64TrapFrame>.offset(of: \AArch64TrapFrame.spel0) == 280)
+
+        let qWords: [WritableKeyPath<AArch64TrapFrame, UInt64>] = [
+            \AArch64TrapFrame.q0Low,   \AArch64TrapFrame.q0High,
+            \AArch64TrapFrame.q1Low,   \AArch64TrapFrame.q1High,
+            \AArch64TrapFrame.q2Low,   \AArch64TrapFrame.q2High,
+            \AArch64TrapFrame.q3Low,   \AArch64TrapFrame.q3High,
+            \AArch64TrapFrame.q4Low,   \AArch64TrapFrame.q4High,
+            \AArch64TrapFrame.q5Low,   \AArch64TrapFrame.q5High,
+            \AArch64TrapFrame.q6Low,   \AArch64TrapFrame.q6High,
+            \AArch64TrapFrame.q7Low,   \AArch64TrapFrame.q7High,
+            \AArch64TrapFrame.q8Low,   \AArch64TrapFrame.q8High,
+            \AArch64TrapFrame.q9Low,   \AArch64TrapFrame.q9High,
+            \AArch64TrapFrame.q10Low, \AArch64TrapFrame.q10High,
+            \AArch64TrapFrame.q11Low, \AArch64TrapFrame.q11High,
+            \AArch64TrapFrame.q12Low, \AArch64TrapFrame.q12High,
+            \AArch64TrapFrame.q13Low, \AArch64TrapFrame.q13High,
+            \AArch64TrapFrame.q14Low, \AArch64TrapFrame.q14High,
+            \AArch64TrapFrame.q15Low, \AArch64TrapFrame.q15High,
+            \AArch64TrapFrame.q16Low, \AArch64TrapFrame.q16High,
+            \AArch64TrapFrame.q17Low, \AArch64TrapFrame.q17High,
+            \AArch64TrapFrame.q18Low, \AArch64TrapFrame.q18High,
+            \AArch64TrapFrame.q19Low, \AArch64TrapFrame.q19High,
+            \AArch64TrapFrame.q20Low, \AArch64TrapFrame.q20High,
+            \AArch64TrapFrame.q21Low, \AArch64TrapFrame.q21High,
+            \AArch64TrapFrame.q22Low, \AArch64TrapFrame.q22High,
+            \AArch64TrapFrame.q23Low, \AArch64TrapFrame.q23High,
+            \AArch64TrapFrame.q24Low, \AArch64TrapFrame.q24High,
+            \AArch64TrapFrame.q25Low, \AArch64TrapFrame.q25High,
+            \AArch64TrapFrame.q26Low, \AArch64TrapFrame.q26High,
+            \AArch64TrapFrame.q27Low, \AArch64TrapFrame.q27High,
+            \AArch64TrapFrame.q28Low, \AArch64TrapFrame.q28High,
+            \AArch64TrapFrame.q29Low, \AArch64TrapFrame.q29High,
+            \AArch64TrapFrame.q30Low, \AArch64TrapFrame.q30High,
+            \AArch64TrapFrame.q31Low, \AArch64TrapFrame.q31High,
+        ]
+
+        for (index, keyPath) in qWords.enumerated() {
+            #expect(MemoryLayout<AArch64TrapFrame>.offset(of: keyPath) == 288 + index * 8)
+        }
+
+        #expect(MemoryLayout<AArch64TrapFrame>.offset(of: \AArch64TrapFrame.fpcr) == 800)
+        #expect(MemoryLayout<AArch64TrapFrame>.offset(of: \AArch64TrapFrame.fpsr) == 808)
+        #expect(MemoryLayout<AArch64TrapFrame>.size   == 816)
+        #expect(MemoryLayout<AArch64TrapFrame>.stride == 816)
+
+        // A context that has never run must reveal no register state from the
+        // kernel, firmware, or the slab block's previous owner.
+        var fresh = AArch64TrapFrame()
+        #expect(withUnsafeBytes(of: &fresh) { $0.allSatisfy { $0 == 0 } })
+
+        // The fixed-width copy is the switch/split mechanism. Give every word
+        // a distinct nonzero value so truncation at any GPR, system register,
+        // vector half, or FP control word is observable.
+        withUnsafeMutableBytes(of: &fresh) { bytes in
+            for index in 0..<(bytes.count / MemoryLayout<UInt64>.size) {
+                bytes.storeBytes(
+                    of          : 0xA500_0000_0000_0000 | UInt64(index + 1),
+                    toByteOffset: index * MemoryLayout<UInt64>.size,
+                    as          : UInt64.self
+                )
+            }
+        }
+        let expected = withUnsafeBytes(of: &fresh) { Array($0) }
+
+        var guarded = GuardedTrapFrame()
+        withUnsafePointer(to: &fresh) { source in
+            withUnsafeMutablePointer(to: &guarded.frame) { destination in
+                AArch64TrapFrame.copy(from: source, to: destination)
+            }
+        }
+        #expect(withUnsafeBytes(of: &guarded.frame) { Array($0) } == expected)
+        #expect(withUnsafeBytes(of: &fresh) { Array($0) } == expected)
+        #expect(guarded.before == 0x1122_3344_5566_7788)
+        #expect(guarded.after  == 0x8877_6655_4433_2211)
+
+        // The helper explicitly accepts an identical source/destination; it
+        // must be a no-op because scheduler fast paths can converge on one
+        // process context.
+        withUnsafeMutablePointer(to: &guarded.frame) { frame in
+            AArch64TrapFrame.copy(from: UnsafePointer(frame), to: frame)
+        }
+        #expect(withUnsafeBytes(of: &guarded.frame) { Array($0) } == expected)
+        #expect(guarded.before == 0x1122_3344_5566_7788)
+        #expect(guarded.after  == 0x8877_6655_4433_2211)
+    }
+
+    @Test("panic reports borrow trap frames instead of embedding register images")
+    func panicReportLayout() {
+        // `Arch.CPU.panic` is inlined into allocation, VM, IPC, and scheduler
+        // guards. Keeping the frame behind a pointer prevents those callers
+        // from reserving an 816-byte optional payload on every normal path.
+        #expect(MemoryLayout<PanicReport>.stride <= 64)
+    }
+
     @Test("the TextSurface transport holds one maximum snapshot atomically")
     func textSurfaceTransportLayout() {
         #expect(ReixTextSurfaceTransport.pages == 3)

@@ -21,16 +21,24 @@ public struct YieldSyscall: SyscallProvider {
         context: SyscallContext
     ) {
 
-        var outgoingRoot: PhysicalAddress? = nil
-
-        if let current = Arch.CPU.getCurrentProcess() {
-            current.pointee.context?.pointee = frame.pointee
-            outgoingRoot = current.pointee.addressSpace.rootTablePhysical
-        }
+        let current      = Arch.CPU.getCurrentProcess()
+        let outgoingRoot = current?.pointee.addressSpace.rootTablePhysical
 
         if let trapFrame = context.scheduler.pointee.yield() {
+            let next = Arch.CPU.getCurrentProcess()
 
-            if let next = Arch.CPU.getCurrentProcess() {
+            // A one-process ready queue rotates back to the frame already on
+            // the exception stack. Scheduler accounting still happened, but
+            // no architectural context or address space changed.
+            if next == current {
+                return
+            }
+
+            if let current, let savedContext = current.pointee.context {
+                Arch.TrapFrame.copy(from: frame, to: savedContext)
+            }
+
+            if let next {
                 let incomingRoot = next.pointee.addressSpace.rootTablePhysical
 
                 if incomingRoot != outgoingRoot {
@@ -40,9 +48,12 @@ public struct YieldSyscall: SyscallProvider {
                     )
                 }
             }
-            frame.pointee = trapFrame.pointee
+            Arch.TrapFrame.copy(from: trapFrame, to: frame)
 
         } else {
+            if let current, let savedContext = current.pointee.context {
+                Arch.TrapFrame.copy(from: frame, to: savedContext)
+            }
             Arch.CPU.setCurrentProcess(0)
             Arch.CPU.idleLoop()
         }

@@ -96,6 +96,7 @@ struct ReixPlugin: CommandPlugin {
         let work      = context.pluginWorkDirectoryURL
         let release   = arguments.contains("--release")
         let doRun     = arguments.contains("run")
+        let fpsimdDiagnostic = ProcessInfo.processInfo.environment["REIX_FPSIMD_DIAGNOSTIC"] == "1"
         let config    = release ? "release" : "debug"
         let buildRoot = ProcessInfo.processInfo.environment["REIX_BUILD_PATH"] ?? ".build-freestanding"
         let buildDir  = root.appending(path: "\(buildRoot)/\(triple)/\(config)")
@@ -115,18 +116,24 @@ struct ReixPlugin: CommandPlugin {
             return
         }
 
+        let activeKernelNative = kernelNative + (fpsimdDiagnostic
+            ? ["Tests/GuestProbes/FPContextNested.S"]
+            : [])
+
         func obj(_ src: String) -> URL { work.appending(path: (src as NSString).lastPathComponent + ".o") }
 
         let cFlags = ["-target", triple, "-ffreestanding", "-O2", "-nostdlib",
                       "-fno-stack-protector", "-ISources/ReixKernel/Platform/DeviceTree", "-g"]
         func compile(_ src: String) throws {
             let isAsm = src.hasSuffix(".S")
-            let args = (isAsm ? ["-target", triple] : cFlags)
+            let args = (isAsm
+                ? ["-target", triple] + (fpsimdDiagnostic ? ["-DREIX_FPSIMD_DIAGNOSTIC"] : [])
+                : cFlags)
                 + ["-c", root.appending(path: src).path, "-o", obj(src).path]
             try run(clang, args, cwd: root)
         }
-        for s in kernelNative + reixNative { try compile(s) }
-        print("✓ native compiled (\(kernelNative.count + reixNative.count) files)")
+        for s in activeKernelNative + reixNative { try compile(s) }
+        print("✓ native compiled (\(activeKernelNative.count + reixNative.count) files)")
 
         var generatedObjs: [URL] = []
         for (name, source) in generatedKernelAsm() {
@@ -217,7 +224,7 @@ struct ReixPlugin: CommandPlugin {
         try run(lld, [
             "-T", root.appending(path: "linker.ld").path, "--nmagic",
             "-o", kernelElf.path,
-        ] + kernelNative.map { obj($0).path } + generatedObjs.map { $0.path } + [
+        ] + activeKernelNative.map { obj($0).path } + generatedObjs.map { $0.path } + [
             initrdObj.path,
             "--start-group",
             buildDir.appending(path: "libKernel.a").path,

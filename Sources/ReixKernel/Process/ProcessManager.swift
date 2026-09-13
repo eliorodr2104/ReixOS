@@ -439,7 +439,7 @@ public struct ProcessManager: RXAllocatable, Loggable {
                 )
             }
             
-            frame.pointee = trapFrame.pointee
+            Arch.TrapFrame.copy(from: trapFrame, to: frame)
             
         } else {
             Arch.CPU.setCurrentProcess(0)
@@ -842,7 +842,7 @@ public struct ProcessManager: RXAllocatable, Loggable {
     /// Allocate the trap frame of a process that has not run yet.
     ///
     /// Shared by both spawn paths, which differ only in `entry` and `stack`.
-    /// Out of line because `Arch.TrapFrame()` is 288 bytes built on the stack
+    /// Out of line because `Arch.TrapFrame()` is 816 bytes built on the stack
     /// and then copied into the allocation.
     @inline(never)
     private mutating func makeTrapFrame(

@@ -27,8 +27,9 @@ public struct SplitProcessSyscall: SyscallProvider {
             return
         }
 
-        childProcess.pointee.context!.pointee    = frame.pointee
-        childProcess.pointee.context!.pointee.x0 = 0
+        let childContext = childProcess.pointee.context!
+        Arch.TrapFrame.copy(from: frame, to: childContext)
+        childContext.pointee.x0 = 0
 
         let childMetadata  = childProcess.pointee.metadata!
         let parentMetadata = currentProcess.pointee.metadata!

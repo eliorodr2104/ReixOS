@@ -8,8 +8,9 @@
 
 /// Represents the CPU execution context saved during an exception or interrupt.
 ///
-/// This structure captures the full state of the General Purpose Registers (GPRs)
-/// and critical System Registers at the moment a trap occurs.
+/// This structure captures the full architectural state that can be changed by
+/// kernel code: the general-purpose registers, Q0 through Q31, FPCR/FPSR and
+/// the critical exception System Registers.
 ///
 /// - Important: The memory layout of this struct must exactly match the order in
 /// which registers are pushed onto the stack by the assembly exception vector code.
@@ -56,6 +57,58 @@ public struct AArch64TrapFrame: RXAllocatable {
     /// Stack Pointer for Exception Level 0 (SP_EL0).
     /// Used to track the user-space stack pointer during a syscall or interrupt.
     public var spel0: UInt64
+
+    /// Full 128-bit FP/SIMD register state. Each register is stored low word
+    /// first, matching a little-endian `stp qN, qN+1` in the vector entry.
+    public var q0Low,   q0High,  q1Low,   q1High : UInt64
+    public var q2Low,   q2High,  q3Low,   q3High : UInt64
+    public var q4Low,   q4High,  q5Low,   q5High : UInt64
+    public var q6Low,   q6High,  q7Low,   q7High : UInt64
+    public var q8Low,   q8High,  q9Low,   q9High : UInt64
+    public var q10Low, q10High, q11Low,  q11High: UInt64
+    public var q12Low, q12High, q13Low,  q13High: UInt64
+    public var q14Low, q14High, q15Low,  q15High: UInt64
+    public var q16Low, q16High, q17Low,  q17High: UInt64
+    public var q18Low, q18High, q19Low,  q19High: UInt64
+    public var q20Low, q20High, q21Low,  q21High: UInt64
+    public var q22Low, q22High, q23Low,  q23High: UInt64
+    public var q24Low, q24High, q25Low,  q25High: UInt64
+    public var q26Low, q26High, q27Low,  q27High: UInt64
+    public var q28Low, q28High, q29Low,  q29High: UInt64
+    public var q30Low, q30High, q31Low,  q31High: UInt64
+
+    /// Floating-point control and cumulative status for the interrupted code.
+    public var fpcr: UInt64
+    public var fpsr: UInt64
+
+    /// Copies one complete saved context without lowering the aggregate
+    /// assignment to the kernel's byte-at-a-time `memmove` implementation.
+    ///
+    /// Trap frames are either separate allocations (process context versus
+    /// exception stack) or the exact same frame. Partially overlapping frames
+    /// are not a valid input. Keeping this operation here ties its fixed-width
+    /// word loop to the layout it copies and gives every scheduler path the
+    /// same bounded implementation.
+    @inline(never)
+    public static func copy(
+        from source     : UnsafePointer<Self>,
+        to   destination: UnsafeMutablePointer<Self>
+    ) {
+        guard source != UnsafePointer(destination) else { return }
+
+        let wordCount = MemoryLayout<Self>.size / MemoryLayout<UInt64>.size
+
+        source.withMemoryRebound(to: UInt64.self, capacity: wordCount) { sourceWords in
+            destination.withMemoryRebound(to: UInt64.self, capacity: wordCount) { destinationWords in
+                var index = 0
+                while index < wordCount {
+                    destinationWords[index]     = sourceWords[index]
+                    destinationWords[index + 1] = sourceWords[index + 1]
+                    index &+= 2
+                }
+            }
+        }
+    }
     
     /// Initializes a blank trap frame with all registers set to zero.
     public init() {
@@ -69,5 +122,24 @@ public struct AArch64TrapFrame: RXAllocatable {
         self.x28 = 0; self.x29 = 0; self.x30 = 0
         
         self.elr = 0; self.spsr = 0; self.esr = 0; self.far = 0; self.spel0 = 0
+
+        self.q0Low  = 0; self.q0High  = 0; self.q1Low  = 0; self.q1High  = 0
+        self.q2Low  = 0; self.q2High  = 0; self.q3Low  = 0; self.q3High  = 0
+        self.q4Low  = 0; self.q4High  = 0; self.q5Low  = 0; self.q5High  = 0
+        self.q6Low  = 0; self.q6High  = 0; self.q7Low  = 0; self.q7High  = 0
+        self.q8Low  = 0; self.q8High  = 0; self.q9Low  = 0; self.q9High  = 0
+        self.q10Low = 0; self.q10High = 0; self.q11Low = 0; self.q11High = 0
+        self.q12Low = 0; self.q12High = 0; self.q13Low = 0; self.q13High = 0
+        self.q14Low = 0; self.q14High = 0; self.q15Low = 0; self.q15High = 0
+        self.q16Low = 0; self.q16High = 0; self.q17Low = 0; self.q17High = 0
+        self.q18Low = 0; self.q18High = 0; self.q19Low = 0; self.q19High = 0
+        self.q20Low = 0; self.q20High = 0; self.q21Low = 0; self.q21High = 0
+        self.q22Low = 0; self.q22High = 0; self.q23Low = 0; self.q23High = 0
+        self.q24Low = 0; self.q24High = 0; self.q25Low = 0; self.q25High = 0
+        self.q26Low = 0; self.q26High = 0; self.q27Low = 0; self.q27High = 0
+        self.q28Low = 0; self.q28High = 0; self.q29Low = 0; self.q29High = 0
+        self.q30Low = 0; self.q30High = 0; self.q31Low = 0; self.q31High = 0
+
+        self.fpcr = 0; self.fpsr = 0
     }
 }

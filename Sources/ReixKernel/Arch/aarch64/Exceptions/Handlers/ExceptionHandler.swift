@@ -36,6 +36,10 @@ public func exceptionVirtualTableHandler(
         capacity: 1
     )
 
+    #if REIX_FPSIMD_DIAGNOSTIC
+    FPContextDiagnostic.requireCanonicalEnvironment()
+    #endif
+
     let frameAddress = UInt(bitPattern: rawFramePointer)
 
     KernelStack.noteEntry(at: frameAddress, frame: framePointer)
@@ -45,6 +49,34 @@ public func exceptionVirtualTableHandler(
     guard Kernel.scheduler.pointee.needsResched else { return }
 
     performPendingSwitch(frame: framePointer, at: frameAddress)
+}
+
+
+/// Fails closed when an EL1 exception cannot reserve its frame on the kernel
+/// stack.
+///
+/// The vector has already moved the complete frame to the exception stack
+/// before calling here. Returning would make the exception return resume with
+/// SP_EL1 still anchored to that emergency stack, because AArch64 does not save
+/// SP_EL1 in the trap frame. The borrowed pointer remains valid until the panic
+/// action halts the core.
+@_cdecl("swift_kernel_stack_overflow")
+public func kernelStackOverflowHandler(
+    rawFramePointer: UnsafeMutableRawPointer
+) {
+    let frame = rawFramePointer.bindMemory(
+        to      : Arch.TrapFrame.self,
+        capacity: 1
+    )
+
+    #if REIX_FPSIMD_DIAGNOSTIC
+    FPContextDiagnostic.requireCanonicalEnvironment()
+    #endif
+
+    Arch.CPU.panic(
+        "Kernel stack overflow (insufficient room for an exception frame)",
+        fp: frame
+    )
 }
 
 
@@ -112,15 +144,36 @@ func performPendingSwitch(
 
     guard returningToEL0 || current == nil else { return }
 
-    var outgoingRoot: PhysicalAddress? = nil
-
-    if let current {
-        current.pointee.context?.pointee = frame.pointee
-        outgoingRoot = current.pointee.addressSpace.rootTablePhysical
-    }
+    let outgoingRoot = current?.pointee.addressSpace.rootTablePhysical
 
     guard let nextProcess = Kernel.scheduler.pointee.selectNextTask() else {
+        if let current, let savedContext = current.pointee.context {
+            Arch.TrapFrame.copy(from: frame, to: savedContext)
+        }
         return
+    }
+
+    guard let nextContext = nextProcess.pointee.context else {
+        Arch.CPU.panic(
+            report: PanicReport(
+                reason: "Ready process has no saved context (broken invariant)",
+                frame : frame,
+                pid   : nextProcess.pointee.pid
+            ),
+            formattedBy: DefaultPanicFormatter.self,
+            finishedBy : HaltPanicAction.self
+        )
+    }
+
+    // The scheduler still rotates the ready queue and charges CPU time when a
+    // lone runnable process yields. Its live exception frame is already the
+    // context to resume, so copying it out and straight back changes no state.
+    if nextProcess == current {
+        return
+    }
+
+    if let current, let savedContext = current.pointee.context {
+        Arch.TrapFrame.copy(from: frame, to: savedContext)
     }
 
     let incomingRoot = nextProcess.pointee.addressSpace.rootTablePhysical
@@ -132,19 +185,7 @@ func performPendingSwitch(
         )
     }
 
-    guard let nextContext = nextProcess.pointee.context else {
-        Arch.CPU.panic(
-            report: PanicReport(
-                reason: "Ready process has no saved context (broken invariant)",
-                frame : frame.pointee,
-                pid   : nextProcess.pointee.pid
-            ),
-            formattedBy: DefaultPanicFormatter.self,
-            finishedBy : HaltPanicAction.self
-        )
-    }
-
-    frame.pointee = nextContext.pointee
+    Arch.TrapFrame.copy(from: nextContext, to: frame)
 }
 
 
@@ -195,30 +236,30 @@ func handleExceptionType(
                     if exceptionClass == 0x25, isStackGuardFault(at: frame.far) {
                         Arch.CPU.panic(
                             "Kernel stack overflow (fault inside the kernel stack guard page)",
-                            fp: frame
+                            fp: framePointer
                         )
                     }
 
-                    Arch.CPU.panic("Kernel Space Abort", fp: frame)
+                    Arch.CPU.panic("Kernel Space Abort", fp: framePointer)
                     
                 case 0x3C: // BRK
                     if frame.spsr & 0xF == 0 {
                         Kernel.syscallHandler.pointee.killCurrent(frame: framePointer, reason: .illegalInstruction)
                     } else {
-                        Arch.CPU.panic("Breakpoint", exc: .breakpoint, fp: frame)
+                        Arch.CPU.panic("Breakpoint", exc: .breakpoint, fp: framePointer)
                     }
                     
                 case 0x00: // UDF
                     if frame.spsr & 0xF == 0 {
                         Kernel.syscallHandler.pointee.killCurrent(frame: framePointer, reason: .illegalInstruction)
                
-                    } else { Arch.CPU.panic(exc: .unknown, fp: frame) }
+                    } else { Arch.CPU.panic(exc: .unknown, fp: framePointer) }
                     
                 default:
                     if frame.spsr & 0xF == 0 {
                         Kernel.syscallHandler.pointee.killCurrent(frame: framePointer, reason: .illegalInstruction)
                     } else {
-                        Arch.CPU.panic("EXC Unknown, Exception Class: ", fp: frame)
+                        Arch.CPU.panic("EXC Unknown, Exception Class: ", fp: framePointer)
                     }
             }
     }
