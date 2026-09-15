@@ -360,6 +360,103 @@ public struct BuildPipeline: Sendable {
     }
 
 
+    /// Provisions the ordinary programs into RxFS, which a boot needs and an
+    /// image does not: `reix build` stops at `disk`, `reix run` adds this.
+    ///
+    /// Deliberately offline, and it is the guest's own file system code that
+    /// runs here. FREESTANDING has to be cleared rather than merely unset:
+    /// `ReixApp` is a host product, and Package.swift drops the host targets
+    /// from the graph whenever the variable says 1.
+    public var programs: PhaseRunner.Step {
+        .init(phase: .programs, why: "\(Self.diskApps.joined(separator: " and ")) into \(Self.outputDir)/disk.img") { _ in
+            try run(toolchain.swift, ["run", "ReixApp", "install", "--format-if-blank",
+                                      "--disk", diskImage.path]
+                + Self.diskApps.map { stripped.appending(path: "\($0).elf").path },
+                environment: ["FREESTANDING": ""])
+            return .done("\(Self.diskApps.count) programs installed")
+        }
+    }
+
+
+    // MARK: - The one-program loop
+
+    /// Link and strip exactly one already-compiled application.
+    ///
+    /// Not a phase, and deliberately outside `steps()`: it never opens kernel.bin
+    /// or initrd.tar, which is what makes their unchanged hashes a mechanical
+    /// release gate rather than a promise. The `app-` and `App.` prefixes keep
+    /// its objects apart from the full build's in the shared `.reix/objects`.
+    @discardableResult
+    public func linkApp(_ app: String) throws -> String {
+        guard Self.apps.contains(app) else {
+            throw ReixError.tool("usage: reix app link <\(Self.apps.joined(separator: "|"))> [--release]")
+        }
+
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: stripped, withIntermediateDirectories: true)
+
+        var libraries = ["lib\(app)", "libReix", "libReixABI"]
+        if app == "Shell"         { libraries.append("libShellLanguage") }
+        if app == "ProcessServer" { libraries.append("libProcessServerCore") }
+
+        let missing = libraries
+            .map { buildDir.appending(path: "\($0).a") }
+            .filter { !FileManager.default.fileExists(atPath: $0.path) }
+        guard missing.isEmpty else {
+            throw ReixError.tool(
+                "missing app libraries: \(missing.map(\.lastPathComponent).joined(separator: ", "))"
+            )
+        }
+
+        func appObject(_ source: String) -> URL {
+            work.appending(path: "app-" + (source as NSString).lastPathComponent + ".o")
+        }
+
+        for source in Self.reixNative {
+            let nativeFlags = source.hasSuffix(".c")
+                ? ["-target", Self.triple, "-ffreestanding", "-O2", "-nostdlib",
+                   "-fno-stack-protector", "-ISources/ReixKernel/Platform/DeviceTree", "-g"]
+                : ["-target", Self.triple]
+            try run(toolchain.clang, nativeFlags + [
+                "-c", root.appending(path: source).path,
+                "-o", appObject(source).path,
+            ])
+        }
+
+        var generated: [URL] = []
+        for (name, source) in generatedUserlandAsm() {
+            let assembly = work.appending(path: "App." + name)
+            try source.write(to: assembly, atomically: true, encoding: .utf8)
+            let output = work.appending(path: "App." + name + ".o")
+            try run(toolchain.clang, ["-target", Self.triple,
+                                      "-c", assembly.path, "-o", output.path])
+            generated.append(output)
+        }
+
+        let elf              = out.appending(path: "\(app).elf")
+        let groupedLibraries = libraries.map { buildDir.appending(path: "\($0).a").path }
+        var linkArguments    = [
+            "-T", root.appending(path: "user.ld").path,
+            "-z", "max-page-size=4096",
+            "--gc-sections",
+            "-o", elf.path,
+        ]
+        linkArguments.append(contentsOf: Self.reixNative.map { appObject($0).path })
+        linkArguments.append(contentsOf: generated.map(\.path))
+        linkArguments.append(contentsOf: [
+            "--whole-archive", buildDir.appending(path: "lib\(app).a").path,
+            "--no-whole-archive", "--start-group",
+        ])
+        linkArguments.append(contentsOf: groupedLibraries.dropFirst())
+        linkArguments.append("--end-group")
+        try run(toolchain.lld, linkArguments)
+
+        try run(toolchain.objcopy, ["--strip-all", elf.path,
+                                    stripped.appending(path: "\(app).elf").path])
+        return "\(app).elf"
+    }
+
+
     // MARK: - What the phases are made of
 
     /// The `.a` files the links consume. The compile phase produces them, so a
@@ -426,11 +523,20 @@ public struct BuildPipeline: Sendable {
     /// Runs an external tool and appends everything it wrote to `.reix/build.log`.
     /// Throws on a non-zero exit code, carrying the tool's own output.
     @discardableResult
-    func run(_ tool: String, _ args: [String], checkExit: Bool = true) throws -> Int32 {
+    func run(
+        _ tool     : String,
+        _ args     : [String],
+        checkExit  : Bool = true,
+        environment: [String: String] = [:]
+    ) throws -> Int32 {
         let process = Process()
         process.executableURL       = URL(fileURLWithPath: tool)
         process.arguments           = args
         process.currentDirectoryURL = root
+        if !environment.isEmpty {
+            process.environment = ProcessInfo.processInfo.environment
+                .merging(environment) { _, new in new }
+        }
 
         let pipe = Pipe()
         process.standardOutput = pipe

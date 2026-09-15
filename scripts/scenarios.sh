@@ -185,17 +185,16 @@ check_forbidden() {
 
 # post=trace-boot: the kernel's own account of the boot, cross-checked against
 # the console's. Init dumps the trace ring to the serial port; the decoder lives
-# in the `reix` plugin, and every one of the eleven TraceBootPhase ids has to
-# come back out of it in order.
+# in the `reix` CLI, and every one of the eleven TraceBootPhase ids has to come
+# back out of it in order.
 #
-# FREESTANDING selects the bare-metal flags in Package.swift and is cleared here
-# for the same reason `make host-test` clears it: this is a host toolchain run.
+# The CLI is its own package and reads no build flags of the kernel's, so
+# nothing has to be cleared from the environment around it.
 post_trace_boot() {
     pt_log=$1
     pt_out=$2
 
-    if ! FREESTANDING= "$SWIFT" package --allow-writing-to-package-directory \
-            reix trace "$pt_log" --boot > "$pt_out" 2>&1; then
+    if ! "$PACKAGE_ROOT/reix" trace "$pt_log" --boot > "$pt_out" 2>/dev/null; then
         printf 'the reix trace decoder failed, see %s' "$pt_out"
         return 1
     fi
@@ -227,8 +226,7 @@ post_trace_boot() {
     # right shape. Not a JSON parser: the point is to catch a decoder that
     # crashed or wrote nothing, which is the way this quietly stops working.
     pt_json="${pt_out%.txt}.json"
-    if ! FREESTANDING= "$SWIFT" package --allow-writing-to-package-directory \
-            reix trace "$pt_log" --export "$pt_json" > /dev/null 2>&1; then
+    if ! "$PACKAGE_ROOT/reix" trace "$pt_log" --export "$pt_json" > /dev/null 2>&1; then
         printf 'the trace exporter failed'
         return 1
     fi
@@ -613,9 +611,7 @@ post_terminal_baseline() {
     ptb_json="${ptb_out%.txt}.json"
     ptb_manifest="${ptb_out%-terminal-baseline.txt}-run-manifest.json"
 
-    if ! FREESTANDING= "$SWIFT" package --package-path "$PACKAGE_ROOT" \
-            --disable-sandbox --allow-writing-to-package-directory \
-            reix trace "$ptb_log" --interaction > "$ptb_out" 2>&1; then
+    if ! "$PACKAGE_ROOT/reix" trace "$ptb_log" --interaction > "$ptb_out" 2>/dev/null; then
         printf 'the terminal interaction decoder failed, see %s' "$ptb_out"
         return 1
     fi

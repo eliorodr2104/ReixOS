@@ -8,13 +8,11 @@ terminal_manifest="$root/Tests/Fixtures/trace/terminal-baseline-manifest.json"
 work=$(mktemp -d "${TMPDIR:-/tmp}/reix-trace-interaction.XXXXXX")
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 
-swift_bin=${SWIFT:-swift}
 interaction="$work/interaction.txt"
 exported="$work/interaction.json"
 
 cd "$root"
-"$swift_bin" package --package-path "$root" --disable-sandbox \
-    --allow-writing-to-package-directory reix trace "$fixture" --interaction > "$interaction"
+"$root/reix" trace "$fixture" --interaction > "$interaction"
 grep -Fx 'interaction groups=4 invalid=3' "$interaction"
 expected_interaction='interaction correlation=1 serial_delivery_to_decoded=10.00us '
 expected_interaction="${expected_interaction}"'decoded_to_shell=10.00us shell_to_editor=10.00us '
@@ -28,8 +26,7 @@ grep -Fx "$expected_interaction" "$interaction"
 grep -F 'interaction correlation=2 serial_delivery_to_decoded=10.00us decoded_to_shell=unavailable' "$interaction"
 grep -F 'interaction correlation=3 serial_delivery_to_decoded=unavailable' "$interaction"
 grep -F 'interaction correlation=4 serial_delivery_to_decoded=unavailable' "$interaction" | grep -F 'duplicate=1'
-"$swift_bin" package --package-path "$root" --disable-sandbox \
-    --allow-writing-to-package-directory reix trace "$fixture" --export "$exported"
+"$root/reix" trace "$fixture" --export "$exported"
 python3 - "$exported" <<'PY'
 import json, sys
 events = json.load(open(sys.argv[1]))['traceEvents']
@@ -42,8 +39,7 @@ PY
 
 terminal_interaction="$work/terminal-interaction.txt"
 terminal_json="$work/terminal-baseline.json"
-"$swift_bin" package --package-path "$root" --disable-sandbox \
-    --allow-writing-to-package-directory reix trace "$terminal_fixture" --interaction > "$terminal_interaction"
+"$root/reix" trace "$terminal_fixture" --interaction > "$terminal_interaction"
 python3 "$root/scripts/terminal-baseline-report.py" \
     "$terminal_fixture" "$terminal_interaction" "$terminal_manifest" "$terminal_json"
 python3 - "$terminal_json" <<'PY'

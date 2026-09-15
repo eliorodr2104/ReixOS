@@ -5,10 +5,12 @@
 
 import Foundation
 
-/// Address resolution, shared by the `--profile` trace view and, later, the
-/// `symbolize` subcommand. Lifted verbatim out of the plugin; only the plugin
-/// diagnostics changed.
+/// Address resolution, shared by the `--profile` trace view and the `symbolize`
+/// subcommand. Lifted verbatim out of the plugin; only the plugin diagnostics
+/// changed.
 let symbolizer: String = "/opt/homebrew/opt/llvm/bin/llvm-symbolizer"
+
+let clipboard: String = "/usr/bin/pbpaste"
 
 /// Where to look for `swift-demangle`, best first: the installed toolchain,
 /// then swiftly's shim. Optional: without it the report still resolves, it
@@ -18,6 +20,118 @@ private let demanglers: [String] = [
     "/Library/Developer/Toolchains/swift-latest.xctoolchain/usr/bin/swift-demangle",
     NSHomeDirectory() + "/.swiftly/bin/swift-demangle",
 ]
+
+
+/// The `symbolize` subcommand.
+///
+/// A panic report leaves the device as a list of bare addresses. It has to: the
+/// kernel carries no symbol table, because its .symtab is ~52 KB and the 4 MB
+/// target cannot spend that on names it never reads itself. So the report prints
+/// Fuchsia symbolizer markup, `{{{bt:0:0x40081138}}}`, beside every raw address,
+/// which costs nothing on device, and resolution happens here.
+///
+///     reix symbolize panic.txt                  # a captured log
+///     reix symbolize                            # the clipboard
+///
+/// The clipboard is read directly. Under the plugin it needed
+/// `--disable-sandbox`, because the plugin sandbox denied the pasteboard
+/// lookup; a plain host process has no such sandbox. Still not stdin, which
+/// stays free for a future pipe.
+///
+/// `.reix/kernel.elf` is the right input and is always available: only the
+/// userland ELFs are stripped, and only the copies that go into the initrd.
+public func symbolize(root: URL, arguments: [String]) throws {
+    let elf = elfArgument(arguments)
+        ?? root.appending(path: ".reix/kernel.elf")
+
+    guard FileManager.default.fileExists(atPath: elf.path) else {
+        throw ReixError.tool("""
+        No kernel image at \(elf.path).
+        Build it first, or point the subcommand somewhere else:
+            reix symbolize --elf <path/to/kernel.elf>
+        Point at a different llvm-symbolizer the same way:
+            reix symbolize --symbolizer <path/to/llvm-symbolizer>
+        """)
+    }
+
+    let report = try readReport(arguments, cwd: root)
+
+    let markup  = try NSRegularExpression(pattern: #"\{\{\{bt:[0-9]+:0x([0-9a-fA-F]+)\}\}\}"#)
+    let matches = markup.matches(in: report, range: NSRange(report.startIndex..., in: report))
+
+    guard !matches.isEmpty else {
+        print(report, terminator: "")
+        FileHandle.standardError.write(Data(
+            "warning: No {{{bt:N:0xADDR}}} markup found in the report.\n".utf8
+        ))
+        return
+    }
+
+    let source    = report as NSString
+    var addresses: [String] = []
+
+    for match in matches {
+        let address = "0x" + source.substring(with: match.range(at: 1)).lowercased()
+
+        if !addresses.contains(address) { addresses.append(address) }
+    }
+
+    let resolved = try resolve(addresses, using: resolvedSymbolizer(arguments), in: elf, cwd: root)
+
+    // Back to front: every replacement invalidates the offsets of the matches
+    // that follow it, and none of the ones that precede it.
+    var output = report
+    for match in matches.reversed() {
+        let address = "0x" + source.substring(with: match.range(at: 1)).lowercased()
+
+        guard let name = resolved[address],
+              let range = Range(match.range, in: output)
+        else { continue }
+
+        output.replaceSubrange(range, with: name)
+    }
+
+    print(output, terminator: "")
+}
+
+
+/// The report itself: a file if one was named, the clipboard otherwise.
+private func readReport(_ arguments: [String], cwd: URL) throws -> String {
+    var positional: String?
+    var index      = 1 // arguments[0] is the subcommand
+
+    while index < arguments.count {
+        if arguments[index] == "--elf" || arguments[index] == "--symbolizer" {
+            index += 2
+            continue
+        }
+
+        positional = arguments[index]
+        break
+    }
+
+    guard let positional else {
+        do {
+            return try capture(clipboard, [], cwd: cwd)
+        } catch {
+            throw ReixError.tool("""
+            Could not read the clipboard (\(clipboard)). Name a file instead:
+                reix symbolize panic.txt
+            """)
+        }
+    }
+
+    return try String(contentsOf: URL(fileURLWithPath: positional), encoding: .utf8)
+}
+
+
+private func elfArgument(_ arguments: [String]) -> URL? {
+    guard let flag = arguments.firstIndex(of: "--elf"),
+          flag + 1 < arguments.count
+    else { return nil }
+
+    return URL(fileURLWithPath: arguments[flag + 1])
+}
 
 
 /// Address to `function at file:line`, one `llvm-symbolizer` invocation for

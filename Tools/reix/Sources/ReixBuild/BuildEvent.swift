@@ -5,9 +5,11 @@
 
 import Foundation
 
-/// The six things a Phase 1 build does, in the order it does them.
+/// The things a build does, in the order it does them. `programs` is the only
+/// one a plain `reix build` skips: it provisions the disk and so belongs to a
+/// boot, not to an image.
 public enum Phase: String, CaseIterable, Sendable {
-    case prune, compile, native, userland, image, disk
+    case prune, compile, native, userland, image, disk, programs
 }
 
 /// Everything that crosses the line between doing the work and drawing it.

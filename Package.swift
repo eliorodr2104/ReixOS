@@ -76,7 +76,7 @@ if isFreestanding && isRuntimeStackDiagnostic {
 }
 
 /// Non-Swift files that live under `Sources/ReixKernel` but are not part of the
-/// kernel's Swift module: the `reix` plugin compiles them with clang. SPM forbids
+/// kernel's Swift module: the `reix` CLI compiles them with clang. SPM forbids
 /// mixing Swift and C/asm in one target, so they are excluded here.
 let kernelNativeExclude: [String] = [
     "Arch/aarch64/Boot/boot.S",

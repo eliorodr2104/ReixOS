@@ -83,7 +83,7 @@ public enum TraceDecoder {
 
         guard let logPath else {
             throw ReixError.tool("""
-            Usage: swift package reix trace <logfile> [--boot|--raw|--profile|--interaction]
+            Usage: reix trace <logfile> [--boot|--raw|--profile|--interaction]
                        [--export <out.json>]   writes a Chrome Trace Event file,
                                                which ui.perfetto.dev opens
                        [--symbolizer <path>]   (only consulted by --profile)

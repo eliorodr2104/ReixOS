@@ -1,8 +1,7 @@
-# Thin convenience wrapper around the SwiftPM build + the `reix` plugin.
+# Thin convenience wrapper around the `reix` CLI in Tools/reix.
 #
-#   SPM            compiles the Swift modules into static libraries (.a)
-#   reix plugin    links kernel.bin + initrd.tar from those libraries
-#   this Makefile  ties them together and boots QEMU
+#   reix           compiles the modules, then links kernel.bin + initrd.tar
+#   this Makefile  names the profiles, provisions the disk and boots QEMU
 #
 # Every artifact lands in $(OUT) — nothing is written to the project root.
 #
@@ -35,17 +34,16 @@
 SWIFTLY_SWIFT := $(wildcard $(HOME)/.swiftly/bin/swift)
 SWIFT       ?= $(if $(SWIFTLY_SWIFT),$(SWIFTLY_SWIFT),swift)
 TRIPLE      := aarch64-none-none-elf
-PLUGIN      := --allow-writing-to-package-directory reix
-# Output directory used by the plugin. Keep in sync with `outputDir` in
-# Plugins/reix/plugin.swift and with the QEMU arguments in the Xcode scheme.
+# Output directory used by the CLI. Keep in sync with `outputDir` in
+# Tools/reix/Sources/ReixBuild/BuildPipeline.swift and with the QEMU arguments
+# in the Xcode scheme.
 OUT         := .reix
 # SwiftPM build tree. The profiling image needs its own graph because Package.swift
 # derives compile defines from TERMINAL_PROFILE and SwiftPM does not key its
 # manifest cache on arbitrary environment variables.
-# Keep bare-metal products out of SwiftPM's host/plugin build database. `reix
-# app install` is a host executable and may run immediately before a cross
-# rebuild; sharing one scratch tree makes llbuild reuse registrations for the
-# wrong graph.
+# Keep bare-metal products out of SwiftPM's host build database. `ReixApp` is a
+# host executable and may run immediately before a cross rebuild; sharing one
+# scratch tree makes llbuild reuse registrations for the wrong graph.
 #
 # One tree per boot mode: see BOOT_MODE below.
 BUILD_PATH  ?= .build-freestanding-$(BOOT_MODE)
@@ -78,9 +76,9 @@ export BOOT_MODE
 # both the trace's pmuSection records and userland's PMUSection read. Without it
 # the kernel leaves profiling counters disabled and continues booting.
 #
-# Keep this string in sync with the QEMU_FLAGS default in scripts/smoke.sh, with
-# the `reix run` command in Plugins/reix/plugin.swift and with the Xcode scheme:
-# four places boot this kernel and all four have to give it the same machine.
+# QemuMachine.swift in Tools/reix is the canonical definition. Keep this string
+# in sync with it, with the QEMU_FLAGS default in scripts/smoke.sh and with the
+# Xcode scheme: four places boot this kernel and all four have to agree.
 QEMU        ?= qemu-system-aarch64
 QEMU_FLAGS  := -machine virt,gic-version=2 -cpu cortex-a53,pmu=on -nographic
 
@@ -100,23 +98,9 @@ QEMU_DISK    = -drive file=$(DISK),if=none,format=raw,id=reixdisk \
 # here used before this knob existed; `make run MEM=8M` overrides it.
 MEM         ?=
 
-# Puts the terminal back when the guest ends, however it ends.
-#
-# The guest parks its cursor just after `reix❯ ` and turns on bracketed paste
-# and the keyboard protocol, and turns neither off: Ctrl-A X gives it no chance
-# to. The next build then draws around a row nobody owns any more, which is
-# where the stray prompt in the middle of somebody's build output came from.
-#
-# Erase to the end of the *screen*, not the end of the line. Everything above the
-# cursor is the boot log and is history worth keeping; everything at or below it
-# is screen the guest drew and nobody owns any more, and a later build draws
-# around those rows rather than over them. Then the two modes off. A terminal
-# that knows neither ignores both.
-RESTORE_TERMINAL := printf "\r\033[J\033[?2004l\033[<u"
-
 # Where the guest finds the initrd. `qemu` hands the archive over with -initrd;
-# `embedded` passes no -initrd and leaves the kernel with the copy the plugin
-# links into kernel.bin under `.initrd`.
+# `embedded` passes no -initrd and leaves the kernel with the copy the image
+# phase links into kernel.bin under `.initrd`.
 #
 # This is a knob and not a detail because QEMU decides the layout: it drops an
 # -initrd halfway up RAM and then 2 MiB-aligns the generated DTB after it, so
@@ -130,6 +114,11 @@ INITRD_MODE ?= qemu
 # INITRD_MODE per target, and a := here would have resolved them away first.
 QEMU_MEM     = $(if $(MEM),-m $(MEM))
 QEMU_INITRD  = $(if $(filter embedded,$(INITRD_MODE)),,-initrd $(OUT)/initrd.tar)
+
+# The same two knobs as the CLI spells them. QEMU_FLAGS and QEMU_DISK have no
+# counterpart here: `reix run` builds that part of the line from QemuMachine.
+REIX_MEM     = $(if $(MEM),--mem $(MEM))
+REIX_INITRD  = $(if $(filter embedded,$(INITRD_MODE)),--embedded-initrd)
 
 # Selects the bare-metal flags in Package.swift (Embedded, -wmo, strict-align…).
 # Required for the cross build; when unset, SourceKit/Xcode index for the host
@@ -178,29 +167,25 @@ image:
 release:
 	@SWIFT=$(SWIFT) REIX_BUILD_PATH=$(BUILD_PATH) ./reix build --release
 
-# Boot in QEMU (Ctrl-A X to quit). qemu runs here, not inside the plugin sandbox.
-# Boot what is already built. No compiler, no plugin, no installer: the loop
-# for changing one userland program is `make app APP=Shell` and then this,
-# which never opens kernel.bin or initrd.tar and so cannot rebuild them.
+# Boot in QEMU (Ctrl-A X to quit). The disk marker, the refusal to boot twice
+# over one image and the terminal restore all live in the CLI now, signals
+# included; the recipes below only name the profile.
+#
+# `boot` compiles nothing and installs nothing: the loop for changing one
+# userland program is `make app APP=Shell` and then this, which never opens
+# kernel.bin or initrd.tar and so cannot rebuild them.
 #
 # A running guest owns the disk. `make app` refuses while it does, and it is
 # right to: the image under a live QEMU is a file two writers disagree about.
 # Stop the guest (`shell.halt()` inside it, or Ctrl-A X) before installing.
 boot:
-	@test -f $(OUT)/kernel.bin || { echo "no $(OUT)/kernel.bin: run make first" >&2; exit 1; }
-	@live="$(DISK).live"; test ! -e "$$live" || { echo "disk already in use: $$live" >&2; exit 1; }; \
-	  : > "$$live"; trap 'trap "" EXIT HUP INT TERM; rm -f "$$live"; $(RESTORE_TERMINAL)' EXIT HUP INT TERM; \
-	  $(QEMU) $(QEMU_FLAGS) $(QEMU_MEM) $(QEMU_DISK) -kernel $(OUT)/kernel.bin $(QEMU_INITRD)
+	@SWIFT=$(SWIFT) REIX_BUILD_PATH=$(BUILD_PATH) ./reix boot $(REIX_MEM) $(REIX_INITRD)
 
-run: programs
-	@live="$(DISK).live"; test ! -e "$$live" || { echo "disk already in use: $$live" >&2; exit 1; }; \
-	  : > "$$live"; trap 'trap "" EXIT HUP INT TERM; rm -f "$$live"; $(RESTORE_TERMINAL)' EXIT HUP INT TERM; \
-	  $(QEMU) $(QEMU_FLAGS) $(QEMU_MEM) $(QEMU_DISK) -kernel $(OUT)/kernel.bin $(QEMU_INITRD)
+run:
+	@SWIFT=$(SWIFT) REIX_BUILD_PATH=$(BUILD_PATH) ./reix run $(REIX_MEM) $(REIX_INITRD)
 
-run-release: programs-release
-	@live="$(DISK).live"; test ! -e "$$live" || { echo "disk already in use: $$live" >&2; exit 1; }; \
-	  : > "$$live"; trap 'trap "" EXIT HUP INT TERM; rm -f "$$live"; $(RESTORE_TERMINAL)' EXIT HUP INT TERM; \
-	  $(QEMU) $(QEMU_FLAGS) $(QEMU_MEM) $(QEMU_DISK) -kernel $(OUT)/kernel.bin $(QEMU_INITRD)
+run-release:
+	@SWIFT=$(SWIFT) REIX_BUILD_PATH=$(BUILD_PATH) ./reix run --release $(REIX_MEM) $(REIX_INITRD)
 
 # Headless boot smoke test: no human at the serial port, script watches the
 # log for the SHM-OK line (success) or a panic/SHM-FAIL (failure) instead.
@@ -240,8 +225,8 @@ programs-release: release disk
 APP ?= Shell
 app: disk
 	@FREESTANDING=1 $(SWIFT) build --triple $(TRIPLE) --scratch-path $(BUILD_PATH) -q
-	@FREESTANDING=1 REIX_BUILD_PATH=$(BUILD_PATH) $(SWIFT) package -q $(PLUGIN) app link $(APP)
-	@FREESTANDING= $(SWIFT) package -q $(PLUGIN) app install --format-if-blank \
+	@SWIFT=$(SWIFT) FREESTANDING=1 REIX_BUILD_PATH=$(BUILD_PATH) ./reix app link $(APP)
+	@FREESTANDING= $(SWIFT) run ReixApp install --format-if-blank \
 		--disk $(DISK) $(OUT)/stripped/$(APP).elf
 
 # The 4 MiB floor the project targets, as a target rather than a hand-typed
