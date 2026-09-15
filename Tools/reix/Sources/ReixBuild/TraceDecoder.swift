@@ -1,4 +1,3 @@
-import PackagePlugin
 import Foundation
 
 /// Host-side decoder for the kernel's trace ring dump.
@@ -42,7 +41,7 @@ import Foundation
 ///        procExit (0x0802, a=pid)
 ///   0x09 interactionMark (0x0900, info=InteractionTracePoint, a=correlation,
 ///        b=value)
-enum TraceDecoder {
+public enum TraceDecoder {
 
     // MARK: - Entry point
 
@@ -50,7 +49,7 @@ enum TraceDecoder {
     /// logfile path plus an optional `--boot`/`--raw`/`--profile`/`--interaction` flag.
     /// `root` is the package directory, needed by `--profile` to find
     /// `.reix/kernel.elf` and the per-process `.reix/<Name>` ELFs.
-    static func run(arguments: [String], root: URL) throws {
+    public static func run(arguments: [String], root: URL) throws {
         let rest = Array(arguments.dropFirst())
         let mode: Mode = rest.contains("--export") ? .export
             : rest.contains("--interaction") ? .interaction
@@ -83,21 +82,19 @@ enum TraceDecoder {
         }
 
         guard let logPath else {
-            Diagnostics.error("""
+            throw ReixError.tool("""
             Usage: swift package reix trace <logfile> [--boot|--raw|--profile|--interaction]
                        [--export <out.json>]   writes a Chrome Trace Event file,
                                                which ui.perfetto.dev opens
                        [--symbolizer <path>]   (only consulted by --profile)
             """)
-            return
         }
 
         let text: String
         do {
             text = try String(contentsOf: URL(fileURLWithPath: logPath), encoding: .utf8)
         } catch {
-            Diagnostics.error("Could not read \(logPath): \(error)")
-            return
+            throw ReixError.tool("Could not read \(logPath): \(error)")
         }
 
         let lines = text.components(separatedBy: .newlines)
@@ -106,23 +103,24 @@ enum TraceDecoder {
         do {
             extraction = try extractLastBlock(from: lines)
         } catch let error as ExtractionError {
-            Diagnostics.error(error.description)
-            return
+            throw ReixError.tool(error.description)
         }
 
         if let warning = extraction.danglingWarning {
-            Diagnostics.warning(warning)
+            FileHandle.standardError.write(Data(("warning: " + warning + "\n").utf8))
         }
 
         let block = extraction.block
         if extraction.malformedCount > 0 {
-            Diagnostics.warning("\(extraction.malformedCount) malformed trace line(s) skipped.")
+            FileHandle.standardError.write(Data((
+                "warning: \(extraction.malformedCount) malformed trace line(s) skipped.\n"
+            ).utf8))
         }
         if block.declaredCount != UInt64(block.events.count) {
-            Diagnostics.warning("""
+            FileHandle.standardError.write(Data(("warning: " + """
             Block declared count=\(block.declaredCount) but \(block.events.count) event(s) \
             parsed; the difference is malformed or skipped lines within the block.
-            """)
+            """ + "\n").utf8))
         }
 
         switch mode {
@@ -134,11 +132,10 @@ enum TraceDecoder {
 
             case .export:
                 guard let exportPath else {
-                    Diagnostics.error("--export needs a path to write to.")
-                    return
+                    throw ReixError.tool("--export needs a path to write to.")
                 }
 
-                export(block, to: exportPath)
+                try export(block, to: exportPath)
         }
     }
 
@@ -890,14 +887,13 @@ extension TraceDecoder {
 extension TraceDecoder {
 
     private static func printProfile(_ block: TraceBlock, root: URL, arguments: [String]) {
-        let names  = pidNames(block)
-        let plugin = ReixPlugin()
+        let names = pidNames(block)
 
         printSampleCounts(block, names: names)
         print("")
-        printKernelProfile(block, root: root, arguments: arguments, plugin: plugin)
+        printKernelProfile(block, root: root, arguments: arguments)
         print("")
-        printUserProfile(block, names: names, root: root, arguments: arguments, plugin: plugin)
+        printUserProfile(block, names: names, root: root, arguments: arguments)
         print("")
         printPMUSummary(block)
     }
@@ -970,7 +966,7 @@ extension TraceDecoder {
     }
 
     private static func printKernelProfile(
-        _ block: TraceBlock, root: URL, arguments: [String], plugin: ReixPlugin
+        _ block: TraceBlock, root: URL, arguments: [String]
     ) {
         print("Kernel (EL1) profile:")
 
@@ -986,16 +982,16 @@ extension TraceDecoder {
         }
 
         let top = Array(counts.sorted { $0.value > $1.value }.prefix(10))
-        let elf = root.appending(path: plugin.outputDir).appending(path: "kernel.elf")
+        let elf = root.appending(path: ".reix").appending(path: "kernel.elf")
 
-        printResolvedAddresses(top, elf: elf, arguments: arguments, root: root, plugin: plugin, indent: "  ")
+        printResolvedAddresses(top, elf: elf, arguments: arguments, root: root, indent: "  ")
     }
 
 
     // MARK: EL0 per-pid profile
 
     private static func printUserProfile(
-        _ block: TraceBlock, names: [UInt32: String], root: URL, arguments: [String], plugin: ReixPlugin
+        _ block: TraceBlock, names: [UInt32: String], root: URL, arguments: [String]
     ) {
         print("EL0 profile by pid:")
 
@@ -1028,8 +1024,8 @@ extension TraceDecoder {
 
             // the unstripped ELF the build leaves at .reix/<name> (only the
             // initrd copies under .reix/stripped/ lose their symbols).
-            let elf = root.appending(path: plugin.outputDir).appending(path: name)
-            printResolvedAddresses(top, elf: elf, arguments: arguments, root: root, plugin: plugin, indent: "    ")
+            let elf = root.appending(path: ".reix").appending(path: name)
+            printResolvedAddresses(top, elf: elf, arguments: arguments, root: root, indent: "    ")
         }
     }
 
@@ -1045,7 +1041,6 @@ extension TraceDecoder {
         elf        : URL,
         arguments  : [String],
         root       : URL,
-        plugin     : ReixPlugin,
         indent     : String
     ) {
         func raw() {
@@ -1054,7 +1049,7 @@ extension TraceDecoder {
             }
         }
 
-        let tool = plugin.resolvedSymbolizer(arguments)
+        let tool = resolvedSymbolizer(arguments)
         guard FileManager.default.isExecutableFile(atPath: tool) else {
             raw()
             print("\(indent)(no llvm-symbolizer found; point to one with --symbolizer <path>)")
@@ -1068,7 +1063,7 @@ extension TraceDecoder {
         }
 
         let hexAddresses = addresses.map { "0x" + String($0.key, radix: 16) }
-        guard let resolved = try? plugin.resolve(hexAddresses, using: tool, in: elf, cwd: root) else {
+        guard let resolved = try? resolve(hexAddresses, using: tool, in: elf, cwd: root) else {
             raw()
             print("\(indent)(symbol resolution failed against \(elf.path))")
             return

@@ -16,7 +16,6 @@ let isFPSIMDDiagnostic     = ProcessInfo.processInfo.environment["REIX_FPSIMD_DI
 let isRuntimeDiagnostic    = ProcessInfo.processInfo.environment["REIX_RUNTIME_DIAGNOSTIC"] == "1"
 let isRuntimeStackDiagnostic = ProcessInfo.processInfo.environment["REIX_RUNTIME_STACK_DIAGNOSTIC"] == "1"
 let isPerformanceGate       = ProcessInfo.processInfo.environment["REIX_PERFORMANCE_GATES"] == "1"
-let reixPluginDependencies : [Target.Dependency] = isFreestanding ? [] : ["ReixApp"]
 let performanceTestSettings: [SwiftSetting] = isPerformanceGate
     ? [.define("REIX_PERFORMANCE_GATES")]
     : []
@@ -348,20 +347,6 @@ let package = Package(
             dependencies: ["Kernel", "ReixABI", "KernelHostShims", "KernelTestSupport"],
             path        : "Tests/KernelUnitTests"
         ),
-    ]) + [
-        // Bare-metal orchestrator: link + objcopy + tar + qemu over the .a files
-        // produced by `FREESTANDING=1 swift build --triple aarch64-none-none-elf`.
-        .plugin(
-            name: "reix",
-            capability: .command(
-                intent: .custom(verb: "reix", description: "Link kernel.bin + initrd.tar from the SPM modules (optionally run QEMU)"),
-                permissions: [
-                    .writeToPackageDirectory(reason: "writes kernel.elf/kernel.bin/*.elf/initrd.tar into .reix/")
-                ]
-            ),
-            dependencies: reixPluginDependencies,
-            path: "Plugins/reix"
-        ),
-    ],
+    ]),
     swiftLanguageModes: [.v5]
 )

@@ -18,16 +18,21 @@ import Foundation
 /// `@pad` is itself a well-formed member (typeflag '0', real name, real size)
 /// rather than raw zero bytes: `TarFileSystem.findFile` treats a zero name
 /// byte as end-of-archive, so padding has to walk like any other entry.
-enum UstarWriter {
+public enum UstarWriter {
 
-    struct Member {
+    public struct Member {
         let name: String
         let data: Data
+
+        public init(name: String, data: Data) {
+            self.name = name
+            self.data = data
+        }
     }
 
     /// Bytes of a ustar archive holding `members` in order, followed by the
     /// two zero blocks that mark end-of-archive.
-    static func write(members: [Member]) -> Data {
+    public static func write(members: [Member]) -> Data {
         var archive = Data()
 
         for member in members {
@@ -52,7 +57,7 @@ enum UstarWriter {
     /// own bookkeeping, so it actually catches a broken writer instead of
     /// just echoing its assumptions back. `@pad` fillers are exempt: their
     /// job is to shift the *next* header, not to be aligned themselves.
-    static func verifyPageAlignment(_ archive: Data) -> Bool {
+    public static func verifyPageAlignment(_ archive: Data) -> Bool {
         let base = archive.startIndex
         var offset = 0
 

@@ -402,7 +402,7 @@ private func serialHandlers() -> [AsmRoutine] {
 }
 
 /// The generated kernel assembly files (filename, rendered source).
-func generatedKernelAsm() -> [(name: String, source: String)] {
+public func generatedKernelAsm() -> [(name: String, source: String)] {
     [
         ("CpuHandlers.gen.S",        renderAsmFile(cpuHandlers())),
         ("AArch64MMUHandlers.gen.S", renderAsmFile(mmuHandlers())),
@@ -579,7 +579,7 @@ private func reixRoutines() -> [AsmRoutine] {
 }
 
 /// The generated userland assembly files (filename, rendered source).
-func generatedUserlandAsm() -> [(name: String, source: String)] {
+public func generatedUserlandAsm() -> [(name: String, source: String)] {
     [
         ("ReixAsm.gen.S", renderAsmFile(reixRoutines())),
     ]

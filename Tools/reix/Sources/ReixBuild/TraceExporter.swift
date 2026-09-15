@@ -5,7 +5,6 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 22/08/2026.
 //
 
-import PackagePlugin
 import Foundation
 
 /// Writes a decoded trace block as a Chrome Trace Event file.
@@ -27,10 +26,9 @@ import Foundation
 /// says less than the `--profile` view already prints.
 extension TraceDecoder {
 
-    static func export(_ block: TraceBlock, to path: String) {
+    static func export(_ block: TraceBlock, to path: String) throws {
         guard let origin = block.events.first?.ts else {
-            Diagnostics.error("nothing to export: the block holds no events.")
-            return
+            throw ReixError.tool("nothing to export: the block holds no events.")
         }
 
         var out     = Writer(block: block, origin: origin)
@@ -71,8 +69,7 @@ extension TraceDecoder {
             )
 
         } catch {
-            Diagnostics.error("could not write \(path): \(error)")
-            return
+            throw ReixError.tool("could not write \(path): \(error)")
         }
 
         print("Wrote \(path) (\(out.count) events).")
