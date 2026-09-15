@@ -62,6 +62,9 @@ public struct Kernel: Loggable {
     /// else. Reordering two constructions here reorders two lines on the serial
     /// console, which is this project's regression test: there is no list of
     /// expected boot messages left anywhere to keep in step with the code.
+    ///
+    /// Whether those lines reach the console at all is `KernelBootPresentation`
+    /// and the image's `BootMode`; whether they are recorded is not.
     public static func boot(dtbRawAddress: PhysicalAddress) {
 
         do {
@@ -87,7 +90,7 @@ public struct Kernel: Loggable {
                 HaltPanicAction.execute()
             }
 
-            printBootBanner()
+            KernelBootPresentation.begin()
 
             #if REIX_RUNTIME_STACK_DIAGNOSTIC
             KernelRuntimeDiagnostic.triggerStackFailure()
@@ -186,8 +189,6 @@ public struct Kernel: Loggable {
 
             Arch.PMU.initialize()
 
-            kprint()
-
         } catch { internalPanic(error) }
 
 
@@ -215,15 +216,17 @@ public struct Kernel: Loggable {
     }
 
 
-    /// Files one bring-up milestone into the trace side table.
+    /// Files one bring-up milestone into the trace side table, and offers it to
+    /// the presentation, which prints one only in `verbose` and only for the
+    /// three phases that close a macro phase.
     ///
-    /// Records and prints nothing: the boot log is this project's regression
-    /// test and a new line in it would be a failure. The ids are fixed by
-    /// `TraceBootPhase` and not by this sequence of calls, so reordering two
-    /// constructions here moves the events and never renames them.
+    /// The ids are fixed by `TraceBootPhase` and not by this sequence of calls,
+    /// so reordering two constructions here moves the events and never renames
+    /// them.
     @inline(__always)
     private static func bootPhase(_ phase: UInt16) {
         Trace.emitBootPhase(phase)
+        KernelBootPresentation.phase(phase)
     }
 
 
@@ -233,9 +236,7 @@ public struct Kernel: Loggable {
     }
 
     private static func jumpUserLand() throws (ProcessManagerError) {
-        
-        ProcessManager.info("Starting process launch test.")
-        
+
         let firstProcessPath: StaticString = "Init.elf"
         let firstProcessPathPtr = UnsafeRawPointer(
             firstProcessPath.utf8Start
@@ -313,7 +314,6 @@ public struct Kernel: Loggable {
         }
 
         ProcessManager.info("Handing control to user space.")
-        kprint()
 
         let trapFramePtr = firstProcess.pointee.context!
 
@@ -322,18 +322,9 @@ public struct Kernel: Loggable {
             VirtualAddress(UInt(bitPattern: firstProcess))
         )
 
-        
-        kprint("=================================================")
-        kprint()
-        kprint("                    USER LAND                    ")
-        kprint()
-        kprint("=================================================")
-        kprint()
-
-
-        // Last kernel statement before EL0: from here the timer tick exists to
-        // drain the ring, and no kernel line still has to beat user space out.
-        LogSink.mode = .deferred
+        // Last kernel statement before EL0. Init announces the userland macro
+        // phase from the other side of the `eret`.
+        KernelBootPresentation.handOver()
 
         bootPhase(TraceBootPhase.firstUser)
 

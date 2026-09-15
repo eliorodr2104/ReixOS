@@ -21,10 +21,26 @@ let performanceTestSettings: [SwiftSetting] = isPerformanceGate
     ? [.define("REIX_PERFORMANCE_GATES")]
     : []
 
+/// The boot profile the whole image is compiled for: `standard`, `verbose` or
+/// `diagnostic`. It reaches every module, kernel and userland alike, because
+/// `BootMode.current` in ReixABI reads the define below.
+///
+/// An unknown value stops the build here, before a single file is compiled.
+/// SwiftPM does not key its manifest cache on arbitrary environment variables,
+/// so the Makefile also gives each mode its own scratch path; without that a
+/// mode switch would silently reuse the previous mode's objects.
+let bootModeName = ProcessInfo.processInfo.environment["BOOT_MODE"] ?? "standard"
+let bootModeDefine: String? = switch bootModeName {
+    case "standard"  : nil
+    case "verbose"   : "REIX_BOOT_VERBOSE"
+    case "diagnostic": "REIX_BOOT_DIAGNOSTIC"
+    default: fatalError("BOOT_MODE must be standard, verbose or diagnostic, got '\(bootModeName)'")
+}
+
 // @_extern stays on in both modes so the editor resolves the @_extern(c) shims.
 var bareMetal: [SwiftSetting] = [
     .enableExperimentalFeature("Extern"),
-]
+] + (bootModeDefine.map { [SwiftSetting.define($0)] } ?? [])
 if isFreestanding {
     bareMetal += [
         .enableExperimentalFeature("Embedded"),

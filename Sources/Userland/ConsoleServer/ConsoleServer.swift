@@ -37,7 +37,7 @@ public struct ConsoleServer: Service {
 
         self.serialWriter = writer
 
-        print("[ SERVE ] Console Server running")
+        UserBootPresentation.ready("[ SERVE ] Console Server running")
     }
 
     public mutating func handle(

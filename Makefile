@@ -10,10 +10,12 @@
 #   make            build the bootable image (debug)
 #   make build      alias for the above (Xcode's legacy target passes $(ACTION))
 #   make test       run the host unit tests, then the QEMU scenario matrix
+#   make boot-modes build and boot all three BOOT_MODE profiles, checking each
+#                   one prints what its contract says and no more
 #   make host-test  host unit tests plus the terminal transport harness
 #   make vm-test    only the QEMU scenario matrix
 #   make terminal-baseline-4m  run the instrumented terminal baseline at 4 MiB
-#   make run        build + boot in QEMU
+#   make run        build + boot in QEMU (BOOT_MODE=standard unless overridden)
 #   make boot       boot what is already built, compiling nothing
 #   make release    build + boot the optimized image
 #   make smoke      build + boot headless, pass/fail on the serial log
@@ -44,7 +46,32 @@ OUT         := .reix
 # app install` is a host executable and may run immediately before a cross
 # rebuild; sharing one scratch tree makes llbuild reuse registrations for the
 # wrong graph.
-BUILD_PATH  ?= .build-freestanding
+#
+# One tree per boot mode: see BOOT_MODE below.
+BUILD_PATH  ?= .build-freestanding-$(BOOT_MODE)
+
+# How much of its own bring-up the image says out loud. See BootMode in ReixABI:
+#   standard    the banner, then the shell. What `make run` boots.
+#   verbose     the five macro phases of the boot, and nothing else.
+#   diagnostic  one line per subsystem, kernel and userland. What the smoke
+#               tests and the QEMU matrix boot, because their markers are
+#               those lines.
+#
+# Presentation only. None of the three enables a self-test, fault injection or
+# profiling the other two lack; REIX_RUNTIME_DIAGNOSTIC and its neighbours are
+# separate knobs and stay that way.
+#
+# Checked here rather than by the compiler so a typo costs no build at all. The
+# mode is part of BUILD_PATH above because SwiftPM does not key its manifest
+# cache on arbitrary environment variables: one scratch tree per mode is what
+# makes `make run BOOT_MODE=verbose` recompile instead of relinking yesterday's
+# objects.
+BOOT_MODE   ?= standard
+ifeq ($(filter $(BOOT_MODE),standard verbose diagnostic),)
+$(error BOOT_MODE must be standard, verbose or diagnostic, got '$(BOOT_MODE)')
+endif
+export BOOT_MODE
+
 # QEMU: resolved from PATH by default (Homebrew on macOS, distro package on Linux).
 #
 # `pmu=on` gives the guest a PMUv3 block, which the kernel enables at boot and
@@ -73,6 +100,20 @@ QEMU_DISK    = -drive file=$(DISK),if=none,format=raw,id=reixdisk \
 # here used before this knob existed; `make run MEM=8M` overrides it.
 MEM         ?=
 
+# Puts the terminal back when the guest ends, however it ends.
+#
+# The guest parks its cursor just after `reix❯ ` and turns on bracketed paste
+# and the keyboard protocol, and turns neither off: Ctrl-A X gives it no chance
+# to. The next build then draws around a row nobody owns any more, which is
+# where the stray prompt in the middle of somebody's build output came from.
+#
+# Erase to the end of the *screen*, not the end of the line. Everything above the
+# cursor is the boot log and is history worth keeping; everything at or below it
+# is screen the guest drew and nobody owns any more, and a later build draws
+# around those rows rather than over them. Then the two modes off. A terminal
+# that knows neither ignores both.
+RESTORE_TERMINAL := printf "\r\033[J\033[?2004l\033[<u"
+
 # Where the guest finds the initrd. `qemu` hands the archive over with -initrd;
 # `embedded` passes no -initrd and leaves the kernel with the copy the plugin
 # links into kernel.bin under `.initrd`.
@@ -95,7 +136,7 @@ QEMU_INITRD  = $(if $(filter embedded,$(INITRD_MODE)),,-initrd $(OUT)/initrd.tar
 # instead and get working code intelligence.
 export FREESTANDING := 1
 
-.PHONY: all build image release app programs programs-release run boot run-release run-4m smoke smoke-4m test host-test performance-test vm-test terminal-baseline-4m disk prune-dups clean-image clean
+.PHONY: all build image release app programs programs-release run boot run-release run-4m smoke smoke-4m test host-test performance-test vm-test boot-modes terminal-baseline-4m disk prune-dups clean-image clean
 
 all: image
 
@@ -131,12 +172,12 @@ prune-dups:
 
 # Build all modules, then link the image via the plugin.
 image: prune-dups
-	$(SWIFT) build --triple $(TRIPLE) --scratch-path $(BUILD_PATH)
-	REIX_BUILD_PATH=$(BUILD_PATH) $(SWIFT) package $(PLUGIN)
+	@$(SWIFT) build --triple $(TRIPLE) --scratch-path $(BUILD_PATH) -q
+	@REIX_BUILD_PATH=$(BUILD_PATH) $(SWIFT) package $(PLUGIN)
 
 release: prune-dups
-	$(SWIFT) build --triple $(TRIPLE) -c release --scratch-path $(BUILD_PATH)
-	REIX_BUILD_PATH=$(BUILD_PATH) $(SWIFT) package $(PLUGIN) --release
+	@$(SWIFT) build --triple $(TRIPLE) -c release --scratch-path $(BUILD_PATH) -q
+	@REIX_BUILD_PATH=$(BUILD_PATH) $(SWIFT) package $(PLUGIN) --release
 
 # Boot in QEMU (Ctrl-A X to quit). qemu runs here, not inside the plugin sandbox.
 # Boot what is already built. No compiler, no plugin, no installer: the loop
@@ -149,21 +190,25 @@ release: prune-dups
 boot:
 	@test -f $(OUT)/kernel.bin || { echo "no $(OUT)/kernel.bin: run make first" >&2; exit 1; }
 	@live="$(DISK).live"; test ! -e "$$live" || { echo "disk already in use: $$live" >&2; exit 1; }; \
-	  : > "$$live"; trap 'rm -f "$$live"' EXIT HUP INT TERM; \
+	  : > "$$live"; trap 'trap "" EXIT HUP INT TERM; rm -f "$$live"; $(RESTORE_TERMINAL)' EXIT HUP INT TERM; \
 	  $(QEMU) $(QEMU_FLAGS) $(QEMU_MEM) $(QEMU_DISK) -kernel $(OUT)/kernel.bin $(QEMU_INITRD)
 
 run: programs
 	@live="$(DISK).live"; test ! -e "$$live" || { echo "disk already in use: $$live" >&2; exit 1; }; \
-	  : > "$$live"; trap 'rm -f "$$live"' EXIT HUP INT TERM; \
+	  : > "$$live"; trap 'trap "" EXIT HUP INT TERM; rm -f "$$live"; $(RESTORE_TERMINAL)' EXIT HUP INT TERM; \
 	  $(QEMU) $(QEMU_FLAGS) $(QEMU_MEM) $(QEMU_DISK) -kernel $(OUT)/kernel.bin $(QEMU_INITRD)
 
 run-release: programs-release
 	@live="$(DISK).live"; test ! -e "$$live" || { echo "disk already in use: $$live" >&2; exit 1; }; \
-	  : > "$$live"; trap 'rm -f "$$live"' EXIT HUP INT TERM; \
+	  : > "$$live"; trap 'trap "" EXIT HUP INT TERM; rm -f "$$live"; $(RESTORE_TERMINAL)' EXIT HUP INT TERM; \
 	  $(QEMU) $(QEMU_FLAGS) $(QEMU_MEM) $(QEMU_DISK) -kernel $(OUT)/kernel.bin $(QEMU_INITRD)
 
 # Headless boot smoke test: no human at the serial port, script watches the
 # log for the SHM-OK line (success) or a panic/SHM-FAIL (failure) instead.
+#
+# `diagnostic` because the markers this watches for are the per-subsystem
+# readiness lines, which are exactly what the other two modes leave out.
+smoke: BOOT_MODE := diagnostic
 smoke: programs
 	QEMU=$(QEMU) QEMU_FLAGS='$(QEMU_FLAGS) $(QEMU_DISK)' MEM='$(MEM)' \
 	    INITRD_MODE='$(INITRD_MODE)' OUT=$(OUT) scripts/smoke.sh
@@ -178,11 +223,11 @@ $(DISK):
 # mounts. This is deliberately offline: the importer refuses $(DISK).live, and
 # every managed QEMU path below creates that marker before opening the image.
 programs: image disk
-	FREESTANDING= $(SWIFT) package $(PLUGIN) app install --format-if-blank \
+	@FREESTANDING= $(SWIFT) package -q $(PLUGIN) app install --format-if-blank \
 		--disk $(DISK) $(OUT)/stripped/Shell.elf $(OUT)/stripped/Top.elf
 
 programs-release: release disk
-	FREESTANDING= $(SWIFT) package $(PLUGIN) app install --format-if-blank \
+	@FREESTANDING= $(SWIFT) package -q $(PLUGIN) app install --format-if-blank \
 		--disk $(DISK) $(OUT)/stripped/Shell.elf $(OUT)/stripped/Top.elf
 
 # One-program development loop. Example: `make app APP=Shell` recompiles,
@@ -195,9 +240,9 @@ programs-release: release disk
 # either way; what it costs is the kernel's objects, not a rebuild of them.
 APP ?= Shell
 app: disk
-	FREESTANDING=1 $(SWIFT) build --triple $(TRIPLE) --scratch-path $(BUILD_PATH)
-	FREESTANDING=1 REIX_BUILD_PATH=$(BUILD_PATH) $(SWIFT) package $(PLUGIN) app link $(APP)
-	FREESTANDING= $(SWIFT) package $(PLUGIN) app install --format-if-blank \
+	@FREESTANDING=1 $(SWIFT) build --triple $(TRIPLE) --scratch-path $(BUILD_PATH) -q
+	@FREESTANDING=1 REIX_BUILD_PATH=$(BUILD_PATH) $(SWIFT) package -q $(PLUGIN) app link $(APP)
+	@FREESTANDING= $(SWIFT) package -q $(PLUGIN) app install --format-if-blank \
 		--disk $(DISK) $(OUT)/stripped/$(APP).elf
 
 # The 4 MiB floor the project targets, as a target rather than a hand-typed
@@ -282,11 +327,20 @@ performance-test:
 # and a target-specific variable applies to a target's prerequisites too, so
 # clearing it would break the cross build. The one post-check that needs a host
 # toolchain clears it around its own `swift` call instead.
+vm-test: BOOT_MODE := diagnostic
 vm-test: programs
 	QEMU=$(QEMU) QEMU_FLAGS='$(QEMU_FLAGS) $(QEMU_DISK)' SWIFT=$(SWIFT) OUT=$(OUT) \
 	    scripts/scenarios.sh
 
+# The three boot profiles, each built and booted to the same shell prompt, each
+# checked against what its own mode is allowed to print. Not part of `test`: it
+# is two extra cross builds, and vm-test already covers the diagnostic image.
+boot-modes:
+	QEMU=$(QEMU) QEMU_FLAGS='$(QEMU_FLAGS) $(QEMU_DISK)' OUT=$(OUT) MAKE='$(MAKE)' \
+	    DISK=$(DISK) scripts/boot-modes.sh
+
 terminal-baseline-4m: export TERMINAL_PROFILE := 1
+terminal-baseline-4m: BOOT_MODE  := diagnostic
 terminal-baseline-4m: BUILD_PATH := .build-terminal-profile
 # Same disk + StorageCheck + Shell.help/exit workload as the normal mixed row.
 # The instrumented image additionally emits the metric snapshot.
@@ -298,4 +352,4 @@ clean-image:
 	rm -rf $(OUT)
 
 clean: clean-image
-	rm -rf .build .build-freestanding .build-terminal-profile
+	rm -rf .build .build-freestanding .build-freestanding-* .build-terminal-profile

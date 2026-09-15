@@ -150,11 +150,13 @@ public struct BlockServer: Service {
             exit(code: 1)
         }
 
-        print("[ DISK  ] serving ", terminator: "")
-        printDec(device.sectorCount, terminator: "")
-        print(" sectors of ", terminator: "")
-        printDec(device.sectorSize, terminator: "")
-        print(" bytes")
+        if UserBootPresentation.showsServices {
+            print("[ DISK  ] serving ", terminator: "")
+            printDec(device.sectorCount, terminator: "")
+            print(" sectors of ", terminator: "")
+            printDec(device.sectorSize, terminator: "")
+            print(" bytes")
+        }
     }
 
 
@@ -270,8 +272,11 @@ public struct BlockServer: Service {
     ///
     /// The matrix reads both with a post-check rather than requiring one as a
     /// marker: which line of another process's output these land between is a
-    /// race, and a marker chain is an ordered subsequence.
+    /// race, and a marker chain is an ordered subsequence. It also reads them in
+    /// `diagnostic`, which is the only mode this instrumentation exists in.
     private mutating func noteDepth() {
+
+        guard UserBootPresentation.showsServices else { return }
 
         if requests.deepestHeld > reportedDepth {
             reportedDepth = requests.deepestHeld

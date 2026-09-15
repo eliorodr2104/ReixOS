@@ -41,7 +41,7 @@ public struct ProcessServer: Service {
     }
 
     public mutating func run() {
-        print("[ PSRV  ] ProcessServer running")
+        UserBootPresentation.ready("[ PSRV  ] ProcessServer running")
 
         while true {
             if var request = receive(

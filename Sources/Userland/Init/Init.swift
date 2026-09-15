@@ -9,7 +9,8 @@ import Reix
 @_cdecl("_start")
 public func main() {
 
-    print("[ INIT  ] Hi, this is init process!\n")
+    UserBootPresentation.ready("[ INIT  ] Hi, this is init process!")
+    UserBootPresentation.milestone(.userland)
 
     // The machine boots not knowing the date. There is no battery clock here
     // and no network to ask, so somebody has to say, and init is the only one
@@ -101,7 +102,7 @@ public func main() {
 
     Console.attach(console: consoleEndpoint)
 
-    print("[ INIT  ] Console attached, launching Name Server")
+    UserBootPresentation.ready("[ INIT  ] Console attached, launching Name Server")
 
     let nameServer = launch(
         "NameServer.elf",
@@ -122,11 +123,15 @@ public func main() {
     // a stats reader has no business dumping the trace ring over the console.
     sleep(for: .milliseconds(800))
 
-    print("")
-    print("============ PROFILE DUMP ============")
-    print("\n")
+    // The whole trace ring over the console, which is hundreds of lines and the
+    // noisiest thing this machine prints. Only `diagnostic` asks for it.
+    if UserBootPresentation.showsServices {
+        print("")
+        print("============ PROFILE DUMP ============")
+        print("\n")
 
-    profileDump(authority: profiler)
+        profileDump(authority: profiler)
+    }
 
     #if REIX_TERMINAL_PROFILE
     // Start the terminal workload with an empty ring so traceLost belongs to
@@ -383,7 +388,12 @@ public func main() {
         _ = capDrop(disk)
     }
 
-    if let machine {
+    // The storage stack end to end, copy-on-write, and the frame budget. A test
+    // suite rather than a boot step, so only the mode whose job is answering
+    // questions runs it: the others reach the shell without the twenty-five
+    // `[ CHECK ]` lines, the seconds they cost, or the fault the NX check
+    // provokes on purpose and the kernel is right to report.
+    if let machine, UserBootPresentation.showsServices {
         startStorageCheck(
             machine    : machine,
             environment: terminalEnvironment,
@@ -512,7 +522,7 @@ public func main() {
             return nil
         }
 
-        print("[ INIT  ] ProcessServer endpoint ready")
+        UserBootPresentation.ready("[ INIT  ] ProcessServer endpoint ready")
         return endpoint
     }
 
@@ -529,7 +539,8 @@ public func main() {
             return nil
         }
 
-        print("[ INIT  ] Shell.elf reached Ready")
+        UserBootPresentation.ready("[ INIT  ] Shell.elf reached Ready")
+        UserBootPresentation.milestone(.session)
         return job
     }
 

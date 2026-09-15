@@ -153,7 +153,7 @@ public struct FileSystemServer: Service {
             Self.stop()
         }
 
-        print("[ FS    ] disk found, mounting")
+        UserBootPresentation.ready("[ FS    ] disk found, mounting")
 
         // One scratch allocation, used by whichever of the two doors is taken.
         let scratch = Self.scratch()
@@ -181,10 +181,12 @@ public struct FileSystemServer: Service {
         let free = self.disk.freeBlocksResult()
         guard free.status == .ok else { Self.stop() }
 
-        print("[ FS    ] mounted, ", terminator: "")
-        printDec(UInt64(free.value), terminator: "")
-        print(" blocks free", terminator: "")
-        print(self.disk.wasDirty ? ", disk was not unmounted cleanly" : ", clean")
+        if UserBootPresentation.showsServices {
+            print("[ FS    ] mounted, ", terminator: "")
+            printDec(UInt64(free.value), terminator: "")
+            print(" blocks free", terminator: "")
+            print(self.disk.wasDirty ? ", disk was not unmounted cleanly" : ", clean")
+        }
 
         handRootToParent()
     }

@@ -39,6 +39,7 @@ playground.xcworkspace
 
 .build/
 .build-freestanding/
+.build-freestanding-*/
 .build-terminal-profile/
 
 # reix plugin output (kernel.elf/kernel.bin/*.elf/initrd.tar)

@@ -34,10 +34,10 @@ public func main() {
         exit(code: 1)
     }
 
+    // No blank line either side. The greeting is the second half of the header
+    // the kernel's banner opened, and the prompt is the third.
     ShellOutput.begin()
-    print("")
     print("ReixOS shell. Type Shell.help() to see what this understands.")
-    print("")
     guard ShellOutput.flush(to: &terminal) else {
         exit(code: 1)
     }

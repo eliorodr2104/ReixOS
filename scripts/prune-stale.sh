@@ -30,7 +30,11 @@
 #
 # Environment:
 #   BUILD   build directory   (default: .build)
-#   ROOTS   source roots      (default: "Sources Tests Plugins", plus $BUILD)
+#   ROOTS   source roots      (default: "Sources Tests Plugins Tools", plus $BUILD)
+#
+# `Tools` is not optional: leaving it out made every object of the `ReixApp`
+# host tool look orphaned, so this wiped the build directory on every single
+# run and each one paid for a full rebuild of it.
 #
 # Exit code is always 0: this is hygiene, not a check, and a tree with nothing
 # built yet is a perfectly good starting point.
@@ -38,7 +42,7 @@
 set -u
 
 BUILD="${BUILD:-.build}"
-ROOTS="${ROOTS:-Sources Tests Plugins}"
+ROOTS="${ROOTS:-Sources Tests Plugins Tools}"
 
 [ -d "$BUILD" ] || exit 0
 

@@ -79,7 +79,7 @@ public struct VTAdapter: Service {
             print("[ SERVE ] VT Adapter could not enable terminal modes")
             exit(code: 1)
         }
-        print("[ SERVE ] VT Adapter running")
+        UserBootPresentation.ready("[ SERVE ] VT Adapter running")
     }
 
     public mutating func handle(_ operation: VTAdapterOperation, request: inout ReceivedMessage) {

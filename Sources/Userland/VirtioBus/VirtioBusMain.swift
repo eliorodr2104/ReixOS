@@ -24,12 +24,14 @@ public func main() {
     var block: VirtioBus.Transport? = nil
 
     VirtioBus.walk(bus: bus) { transport in
-        print("[ BUS   ] slot ", terminator: "")
-        printDec(UInt64(transport.slot), terminator: "")
-        print(" version ", terminator: "")
-        printDec(transport.version, terminator: "")
-        print("  ", terminator: "")
-        print(VirtioBus.name(of: transport.deviceID))
+        if UserBootPresentation.showsServices {
+            print("[ BUS   ] slot ", terminator: "")
+            printDec(UInt64(transport.slot), terminator: "")
+            print(" version ", terminator: "")
+            printDec(transport.version, terminator: "")
+            print("  ", terminator: "")
+            print(VirtioBus.name(of: transport.deviceID))
+        }
 
         guard transport.deviceID == blockDevice, block == nil else { return false }
 
@@ -177,9 +179,11 @@ private func checkDisk(_ endpoint: UInt32) -> Bool {
         return false
     }
 
-    print("[ BUS   ] disk ready, ", terminator: "")
-    printDec(disk.sectorCount, terminator: "")
-    print(" sectors")
+    if UserBootPresentation.showsServices {
+        print("[ BUS   ] disk ready, ", terminator: "")
+        printDec(disk.sectorCount, terminator: "")
+        print(" sectors")
+    }
 
     let size = Int(disk.sectorSize)
 
@@ -202,7 +206,7 @@ private func checkDisk(_ endpoint: UInt32) -> Bool {
             return false
         }
 
-        print("[ BUS   ] two sectors read, one past the end refused")
+        UserBootPresentation.ready("[ BUS   ] two sectors read, one past the end refused")
 
         return checkRun(&disk)
     }
@@ -257,9 +261,11 @@ private func checkRun(_ disk: inout BlockClient) -> Bool {
 
             guard refusedWhenAskedDirectly(disk, count: run + 1) else { return false }
 
-            print("[ BUS   ] read ", terminator: "")
-            printDec(run, terminator: "")
-            print(" sectors in one request")
+            if UserBootPresentation.showsServices {
+                print("[ BUS   ] read ", terminator: "")
+                printDec(run, terminator: "")
+                print(" sectors in one request")
+            }
             return true
         }
     }

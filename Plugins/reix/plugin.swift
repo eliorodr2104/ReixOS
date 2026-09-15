@@ -105,6 +105,14 @@ struct ReixPlugin: CommandPlugin {
         let buildRoot = ProcessInfo.processInfo.environment["REIX_BUILD_PATH"] ?? ".build-freestanding"
         let buildDir  = root.appending(path: "\(buildRoot)/\(triple)/\(config)")
 
+        // The mode is compiled into the libraries this links, not decided here.
+        // It is read anyway so a wrong value stops the link as loudly as it
+        // stops the compile, and so the boot that follows says which it is.
+        let bootMode = try bootMode()
+        print("")
+        print("Reix · \(bootMode)\(release ? " · release" : "")")
+        print("")
+
         let out = root.appending(path: outputDir)
         try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
 
@@ -140,7 +148,7 @@ struct ReixPlugin: CommandPlugin {
             try run(clang, args, cwd: root)
         }
         for s in activeKernelNative + reixNative { try compile(s) }
-        print("✓ native compiled (\(activeKernelNative.count + reixNative.count) files)")
+        let nativeCount = activeKernelNative.count + reixNative.count
 
         var generatedObjs: [URL] = []
         for (name, source) in generatedKernelAsm() {
@@ -150,7 +158,6 @@ struct ReixPlugin: CommandPlugin {
             try run(clang, ["-target", triple, "-c", src.path, "-o", o.path], cwd: root)
             generatedObjs.append(o)
         }
-        print("✓ generated asm (\(generatedObjs.count) files)")
 
         var reixGeneratedObjs: [URL] = []
         for (name, source) in generatedUserlandAsm() {
@@ -160,7 +167,7 @@ struct ReixPlugin: CommandPlugin {
             try run(clang, ["-target", triple, "-c", src.path, "-o", o.path], cwd: root)
             reixGeneratedObjs.append(o)
         }
-        print("✓ generated userland asm (\(reixGeneratedObjs.count) files)")
+        say("native", "\(nativeCount + generatedObjs.count + reixGeneratedObjs.count) objects")
 
         let reixObjs = reixNative.map { obj($0).path } + reixGeneratedObjs.map { $0.path }
         for app in apps {
@@ -184,7 +191,6 @@ struct ReixPlugin: CommandPlugin {
                 "--end-group",
             ], cwd: root)
         }
-        print("✓ \(apps.count) userland ELFs")
 
         // The initrd stays resident for the whole boot, so it carries stripped
         // copies: Init.elf is 1.3 MB unstripped, of which 25 KB is PT_LOAD.
@@ -197,7 +203,7 @@ struct ReixPlugin: CommandPlugin {
                               out.appending(path: "\(app).elf").path,
                               strippedDir.appending(path: "\(app).elf").path], cwd: root)
         }
-        print("✓ \(apps.count) stripped (bootstrap + disk programs)")
+        say("userland", "\(apps.count) programs")
 
         let initrd = out.appending(path: "initrd.tar")
         // Written by UstarWriter, not /usr/bin/tar: it page-aligns each
@@ -212,7 +218,6 @@ struct ReixPlugin: CommandPlugin {
             throw ReixError.tool("initrd.tar: a member's data is not 4096-aligned")
         }
         try archive.write(to: initrd)
-        print("✓ \(outputDir)/initrd.tar (\(archive.count) bytes; Shell/Top excluded)")
 
         // The archive goes into the kernel image too, which is why the link
         // below happens here and not before the userland ELFs were packed.
@@ -225,7 +230,6 @@ struct ReixPlugin: CommandPlugin {
         """.write(to: initrdAsm, atomically: true, encoding: .utf8)
         let initrdObj = work.appending(path: "Initrd.gen.S.o")
         try run(clang, ["-target", triple, "-c", initrdAsm.path, "-o", initrdObj.path], cwd: root)
-        print("✓ initrd embedded in the kernel image")
 
         let kernelElf = out.appending(path: "kernel.elf")
         try run(lld, [
@@ -241,7 +245,9 @@ struct ReixPlugin: CommandPlugin {
 
         let kernelBin = out.appending(path: "kernel.bin")
         try run(objcopy, ["-O", "binary", kernelElf.path, kernelBin.path], cwd: root)
-        print("✓ \(outputDir)/kernel.bin")
+
+        let imageBytes = (try? Data(contentsOf: kernelBin).count) ?? 0
+        say("image", "kernel \(size(imageBytes)) · initrd \(size(archive.count))")
 
         if doRun {
             // Keep these in sync with QEMU_FLAGS in the Makefile, with
@@ -258,10 +264,12 @@ struct ReixPlugin: CommandPlugin {
                 qemuArgs += ["-initrd", initrd.path]
             }
 
-            print("→ qemu (Ctrl-A X to quit)")
+            print("")
+            say("qemu", "Ctrl-A X to quit")
+            print("")
             try run(qemu, qemuArgs, cwd: root, inheritIO: true)
         } else {
-            print("To run:  swift package --allow-writing-to-package-directory reix run")
+            print("")
         }
     }
 
@@ -345,7 +353,33 @@ struct ReixPlugin: CommandPlugin {
 
         let installed = stripped.appending(path: "\(app).elf")
         try run(objcopy, ["--strip-all", elf.path, installed.path], cwd: root)
-        print("✓ linked disk program \(outputDir)/stripped/\(app).elf")
+        say("linked", "\(app).elf")
+    }
+
+    /// One aligned line of the build report.
+    ///
+    /// Two columns and nothing else. A build says what it made, not the order it
+    /// went about making it in, and a reader scanning for the thing that changed
+    /// finds it in the same column every time.
+    func say(_ label: String, _ detail: String) {
+        print("  " + label.padding(toLength: 12, withPad: " ", startingAt: 0) + detail)
+    }
+
+    /// Bytes as a terminal-width quantity, which is what a reader wants to
+    /// compare between two builds.
+    func size(_ bytes: Int) -> String {
+        bytes < 1024 ? "\(bytes) B" : "\((bytes + 512) / 1024) KiB"
+    }
+
+    /// The boot profile this image was compiled for, refusing anything that is
+    /// not one of the three. Keep in step with `BootMode` in ReixABI and with
+    /// BOOT_MODE in the Makefile.
+    func bootMode() throws -> String {
+        let mode = ProcessInfo.processInfo.environment["BOOT_MODE"] ?? "standard"
+        guard ["standard", "verbose", "diagnostic"].contains(mode) else {
+            throw ReixError.tool("BOOT_MODE must be standard, verbose or diagnostic, got '\(mode)'")
+        }
+        return mode
     }
 
     /// The word after `flag`, when the argument list carries one.

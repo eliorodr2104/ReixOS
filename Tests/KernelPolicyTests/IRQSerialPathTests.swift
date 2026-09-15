@@ -66,6 +66,48 @@ struct IRQSerialPathTests {
         #expect(lines.contains { $0.hasPrefix("[TRACE-DROP] omitted=") })
         #expect(lines.contains("[TRACE] end count=\(events.count)"))
     }
+
+
+    /// What a quiet boot owes the ring, and what it does not owe the wire.
+    ///
+    /// `.recordOnly` is the sink a `standard` or `verbose` boot runs under, so
+    /// the bring-up lines have to be there for a panic to quote and have to be
+    /// there as history: a record the drain still owed would be counted lost
+    /// when it was evicted, and the report would claim it dropped lines the
+    /// mode had decided never to print.
+    @Test("recordOnly keeps the boot as history and owes the wire nothing")
+    func recordOnlyKeepsHistoryWithoutQueueing() {
+        LogSink.mode = .recordOnly
+        defer { LogSink.mode = .synchronous }
+
+        LogRing.clearLost()
+
+        // Past the ring's own capacity, so the early ones are evicted while the
+        // test is still running and eviction is what counts a record lost.
+        for _ in 0..<256 {
+            kprint(.boot, "a bring-up line nobody is going to see")
+        }
+
+        #expect(!LogRing.hasPending)
+        #expect(LogRing.lost == 0)
+
+        var last: LogRing.Record? = nil
+        LogRing.forEachRecord { last = $0 }
+
+        guard let record = last else {
+            Issue.record("the ring kept nothing")
+            return
+        }
+
+        var payload: [UInt8] = []
+        for index in 0..<record.payloadLength {
+            payload.append(LogRing.payloadByte(record, index))
+        }
+
+        #expect(record.level == LogLevel.boot.rawValue)
+        #expect(String(decoding: payload, as: UTF8.self)
+                == "a bring-up line nobody is going to see")
+    }
 }
 
 

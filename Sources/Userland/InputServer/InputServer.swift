@@ -19,7 +19,7 @@ public struct InputServer: Service {
 
     public init(environment: Environment, endpoint: UInt32) {
         self.endpoint = endpoint
-        print("[ SERVE ] Input Server running")
+        UserBootPresentation.ready("[ SERVE ] Input Server running")
     }
 
     public mutating func handle(_ operation: ReixInputServerOperation, request: inout ReceivedMessage) {

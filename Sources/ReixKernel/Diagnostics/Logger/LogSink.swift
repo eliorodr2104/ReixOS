@@ -35,6 +35,18 @@ public enum LogSink {
         /// Into `LogRing` only, to be flushed later by `drain(budget:)`.
         case deferred
 
+        /// Into `LogRing` as history, and nowhere else, ever.
+        ///
+        /// What a `standard` or `verbose` boot runs under: the subsystems
+        /// keep announcing themselves, the records stay for a panic to quote,
+        /// and the console sees only the lines the mode did ask for. Unlike
+        /// `.deferred` nothing is owed to a later drain, so these records are
+        /// never printed by anybody.
+        ///
+        /// Warnings, errors and panics write through regardless. A mode is a
+        /// presentation choice and never a reason to lose one of those.
+        case recordOnly
+
         /// Straight out, recording nothing.
         ///
         /// The panic path, and only it. The report reads the ring while it
@@ -46,7 +58,8 @@ public enum LogSink {
     /// Boots `.synchronous`: IRQs are masked for the whole of `Kernel.boot`,
     /// so nothing could drain a ring before the first `eret` anyway, and the
     /// boot log, which is this project's regression test, has to reach the
-    /// wire in statement order. `Kernel` flips this to `.deferred` on the
+    /// wire in statement order. `KernelBootPresentation` owns every change to
+    /// it from there: `.recordOnly` for a quiet boot, then `.deferred` on the
     /// last instruction before user space starts.
     public static var mode: Mode = .synchronous
 
@@ -142,9 +155,9 @@ public enum LogSink {
         if LogRing.isRecording {
             LogRing.end()
 
-            // Written through as it was built, so the drain owes it nothing:
-            // the ring keeps it as history, not as output still pending.
-            if teeing || queueing { LogRing.markFlushed() }
+            // Written through as it was built, or never owed at all, so the
+            // ring keeps it as history and not as output still pending.
+            if teeing || queueing || mode == .recordOnly { LogRing.markFlushed() }
         }
 
         if teeing {
@@ -173,6 +186,7 @@ public enum LogSink {
         switch mode {
             case .synchronous: true
             case .deferred   : !teeing
+            case .recordOnly : true
             case .direct     : false
         }
     }
@@ -181,12 +195,31 @@ public enum LogSink {
     /// Whether this line also has to be on the wire before the next
     /// instruction retires.
     ///
-    /// True in every mode but `.deferred`, and true even there for a panic:
-    /// a panic runs when there may be nobody left alive to drain the ring,
-    /// so it can never be left sitting in one.
+    /// True in every mode but `.deferred` and `.recordOnly`, and true even
+    /// there for a panic: a panic runs when there may be nobody left alive to
+    /// drain the ring, so it can never be left sitting in one.
     @inline(__always)
     private static func writesThrough(_ level: LogLevel?) -> Bool {
-        mode != .deferred || level == .panic
+        switch mode {
+            case .synchronous: true
+            case .direct     : true
+            case .deferred   : level == .panic
+            case .recordOnly : isTrouble(level)
+        }
+    }
+
+
+    /// Whether a line reports something going wrong, which is the one thing a
+    /// quiet boot is not allowed to swallow.
+    ///
+    /// `.boot` sorts *above* `.error`, so this is a membership test and not a
+    /// threshold: the bring-up lines are exactly what `.recordOnly` is for.
+    @inline(__always)
+    private static func isTrouble(_ level: LogLevel?) -> Bool {
+        switch level {
+            case .warning, .error, .panic: true
+            default                      : false
+        }
     }
 
 

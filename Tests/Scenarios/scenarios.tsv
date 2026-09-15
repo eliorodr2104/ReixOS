@@ -37,6 +37,11 @@
 #              the post_* functions in scripts/scenarios.sh.
 #   expect     `pass`, `xfail:<reason>`, or `skip-if:<condition>`
 #
+# Every row boots the `diagnostic` image: `make vm-test` sets BOOT_MODE, and the
+# per-subsystem readiness lines the chains below are built from are exactly what
+# the other two profiles leave out. The three profiles are compared against each
+# other by `make boot-modes`, not here.
+#
 # On the marker sets, both of which are deliberately narrow:
 #   * A healthy boot prints no `[ ERROR ]` line at all, verified against every
 #     configuration below, so the level tag itself is forbidden rather than any
