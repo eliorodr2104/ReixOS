@@ -1,0 +1,508 @@
+//
+//  BuildPipeline.swift
+//  ReixOS
+//
+
+import Foundation
+
+/// Every byte every tool wrote, always, whether the build succeeded or not.
+/// The dashboard curates the screen; this is what it curated away.
+public final class BuildLog: @unchecked Sendable {
+    private let handle: FileHandle
+    private let lock = NSLock()
+
+    public init(at url: URL) throws {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        FileManager.default.createFile(atPath: url.path, contents: nil)
+        handle = try FileHandle(forWritingTo: url)
+    }
+
+    public func write(_ text: String) {
+        lock.lock(); defer { lock.unlock() }
+        try? handle.write(contentsOf: Data(text.utf8))
+    }
+}
+
+
+/// The six phases of a build, as steps the engine can run.
+///
+/// This is the plugin's `performCommand`, rearranged: the work is identical and
+/// the gate that says so is the sha256 of kernel.bin and initrd.tar. What
+/// changed is that each phase now says what it is about to do before doing it,
+/// and that the compile the Makefile used to run is now phase two rather than a
+/// prerequisite the plugin could only check for.
+///
+/// Every artifact lands in `.reix/` at the package root, object files included:
+/// the plugin wrote those into SwiftPM's sandboxed work directory, which no
+/// longer exists, so `.reix/objects/` takes its place.
+public struct BuildPipeline: Sendable {
+
+    public struct Options: Sendable {
+        public var release  : Bool
+        public var bootMode : String
+        public var buildPath: String
+
+        public init(release: Bool = false, bootMode: String = "standard", buildPath: String? = nil) {
+            self.release   = release
+            self.bootMode  = bootMode
+            self.buildPath = buildPath ?? ".build-freestanding-\(bootMode)"
+        }
+    }
+
+    static let triple    = "aarch64-none-none-elf"
+    static let outputDir = ".reix"
+    static let diskSize  = "16M"
+
+    static let apps = [
+        "Init",
+        "NameServer",
+        "ConsoleServer",
+        "SerialServer",
+        "InputServer",
+        "VTAdapter",
+        "Top",
+        "Shell",
+        "VirtioBus",
+        "BlockServer",
+        "FileSystemServer",
+        "StorageCheck",
+        "ProcessServer",
+    ]
+
+    /// Ordinary programs are linked and stripped beside the image, outside the
+    /// bootstrap archive. `reix app install` provisions these into RxFS before
+    /// QEMU opens the disk.
+    static let diskApps = ["Shell", "Top"]
+
+    static let kernelNative = [
+        "Native/kernel/KernelRuntimeABI.c",
+        "Sources/ReixKernel/Arch/aarch64/Boot/boot.S",
+        "Sources/ReixKernel/Arch/aarch64/ContextSwitch/ContextSwitch.S",
+        "Sources/ReixKernel/Arch/aarch64/Exceptions/Handlers/ContextSaving.S",
+    ]
+
+    static let reixNative = [
+        "Native/reix/UserRuntimeABI.c",
+        "Native/reix/AsmSyscall.S",
+    ]
+
+    let root     : URL
+    let options  : Options
+    let toolchain: Toolchain
+    let log      : BuildLog
+
+    public init(root: URL, options: Options) throws {
+        guard ["standard", "verbose", "diagnostic"].contains(options.bootMode) else {
+            throw ReixError.tool(
+                "BOOT_MODE must be standard, verbose or diagnostic, got '\(options.bootMode)'"
+            )
+        }
+
+        self.root      = root
+        self.options   = options
+        self.toolchain = try Toolchain.discover()
+        self.log       = try BuildLog(at: root.appending(path: Self.outputDir + "/build.log"))
+    }
+
+    public func steps() -> [PhaseRunner.Step] {
+        [prune, compile, native, userland, image, disk]
+    }
+
+
+    // MARK: - Where things live
+
+    var out      : URL { root.appending(path: Self.outputDir) }
+    var work     : URL { out.appending(path: "objects") }
+    var stripped : URL { out.appending(path: "stripped") }
+    var diskImage: URL { out.appending(path: "disk.img") }
+
+    var buildDir: URL {
+        root.appending(path: "\(options.buildPath)/\(Self.triple)/\(options.release ? "release" : "debug")")
+    }
+
+    /// The two probe knobs the plugin read from the environment. Separate from
+    /// BOOT_MODE on purpose: they add sources, where BOOT_MODE only adds output.
+    var fpsimdDiagnostic: Bool {
+        ProcessInfo.processInfo.environment["REIX_FPSIMD_DIAGNOSTIC"] == "1"
+    }
+
+    var runtimeDiagnostic: Bool {
+        ProcessInfo.processInfo.environment["REIX_RUNTIME_DIAGNOSTIC"] == "1"
+            || ProcessInfo.processInfo.environment["REIX_RUNTIME_STACK_DIAGNOSTIC"] == "1"
+    }
+
+    var activeKernelNative: [String] {
+        Self.kernelNative
+            + (fpsimdDiagnostic ? ["Tests/GuestProbes/FPContextNested.S"] : [])
+            + (runtimeDiagnostic ? ["Tests/GuestProbes/KernelRuntimeProbe.c"] : [])
+    }
+
+    /// Object paths are a function of the source list and nothing else, which is
+    /// what lets a later phase link what an earlier one compiled without state.
+    func object(_ source: String) -> URL {
+        work.appending(path: (source as NSString).lastPathComponent + ".o")
+    }
+
+    var generatedKernelObjects  : [URL] { generatedKernelAsm().map   { work.appending(path: $0.name + ".o") } }
+    var generatedUserlandObjects: [URL] { generatedUserlandAsm().map { work.appending(path: $0.name + ".o") } }
+
+
+    // MARK: - The phases
+
+    var prune: PhaseRunner.Step {
+        .init(phase: .prune, why: "iCloud conflict copies and orphaned objects") { _ in
+            let copies = conflictCopies()
+            for copy in copies { try? FileManager.default.removeItem(at: copy) }
+
+            // Neither script's exit code is a build failure: prune-icloud reports 1
+            // when it kept a copy that differs, which is for a human, not the build.
+            for script in ["scripts/prune-icloud.sh", "scripts/prune-stale.sh"] {
+                try run("/bin/sh", [script], checkExit: false)
+            }
+
+            return .done(copies.isEmpty ? "nothing to prune" : "\(copies.count) conflict copies removed")
+        }
+    }
+
+    var compile: PhaseRunner.Step {
+        .init(
+            phase: .compile,
+            why  : "\(Self.triple) · BOOT_MODE=\(options.bootMode)\(options.release ? " · release" : "")"
+        ) { sink in
+            var tracker = ProgressTracker()
+            let clock   = ContinuousClock()
+
+            // The names SwiftPM said it was compiling, not its `[n/m]` total: that
+            // total counts llbuild tasks, of which a module is several.
+            var modules = Set<String>()
+
+            try stream(
+                toolchain.swift,
+                ["build", "--triple", Self.triple,
+                 "--scratch-path", options.buildPath]
+                    + (options.release ? ["-c", "release"] : []),
+                environment: ["FREESTANDING": "1", "BOOT_MODE": options.bootMode]
+            ) { line in
+                switch tracker.ingest(line, at: clock.now) {
+                    case .bar(let done, let total, let detail):
+                        if let module = Self.compiling(detail) { modules.insert(module) }
+                        sink(.progress(.compile, done: done, total: total, now: detail))
+                    case .spinner(let last):
+                        sink(.progress(.compile, done: 0, total: 0, now: last))
+                }
+            }
+
+            // A tree with nothing to do prints no `Compiling` line at all, which is
+            // not the same as having compiled zero modules out of some total.
+            return .done(modules.isEmpty ? "nothing to rebuild" : "\(modules.count) modules")
+        }
+    }
+
+    var native: PhaseRunner.Step {
+        .init(
+            phase: .native,
+            why  : "clang · \(activeKernelNative.count + Self.reixNative.count) sources and the generated assembly"
+        ) { sink in
+            try requireLibraries()
+            try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+
+            let cFlags = ["-target", Self.triple, "-ffreestanding", "-O2", "-nostdlib",
+                          "-fno-stack-protector", "-ISources/ReixKernel/Platform/DeviceTree", "-g"]
+
+            func compileSource(_ src: String) throws {
+                let isAsm = src.hasSuffix(".S")
+                let diagnosticCFlags = src.hasSuffix("KernelRuntimeProbe.c")
+                    ? ["-fstack-protector-all"]
+                    : []
+                let args = (isAsm
+                    ? ["-target", Self.triple] + (fpsimdDiagnostic ? ["-DREIX_FPSIMD_DIAGNOSTIC"] : [])
+                    : cFlags + diagnosticCFlags)
+                    + ["-c", root.appending(path: src).path, "-o", object(src).path]
+                try run(toolchain.clang, args)
+            }
+
+            let sources   = activeKernelNative + Self.reixNative
+            let generated = generatedKernelAsm() + generatedUserlandAsm()
+            let total     = sources.count + generated.count
+            var done      = 0
+
+            for source in sources {
+                sink(.progress(.native, done: done, total: total,
+                               now: (source as NSString).lastPathComponent))
+                try compileSource(source)
+                done += 1
+            }
+
+            for (name, source) in generated {
+                sink(.progress(.native, done: done, total: total, now: name))
+                let assembly = work.appending(path: name)
+                try source.write(to: assembly, atomically: true, encoding: .utf8)
+                try run(toolchain.clang, ["-target", Self.triple,
+                                          "-c", assembly.path,
+                                          "-o", work.appending(path: name + ".o").path])
+                done += 1
+            }
+
+            return .done("\(total) objects")
+        }
+    }
+
+    var userland: PhaseRunner.Step {
+        .init(
+            phase: .userland,
+            why  : "ld.lld and llvm-objcopy · \(Self.apps.count) programs"
+        ) { sink in
+            // The initrd stays resident for the whole boot, so it carries stripped
+            // copies: Init.elf is 1.3 MB unstripped, of which 25 KB is PT_LOAD.
+            try FileManager.default.createDirectory(at: stripped, withIntermediateDirectories: true)
+
+            let reixObjects = Self.reixNative.map { object($0).path }
+                + generatedUserlandObjects.map(\.path)
+
+            for (index, app) in Self.apps.enumerated() {
+                sink(.progress(.userland, done: index, total: Self.apps.count, now: app))
+
+                try run(toolchain.lld, [
+                    "-T", root.appending(path: "user.ld").path,
+
+                    // lld defaults maxPageSize to 64 KiB on AArch64 and aligns the first
+                    // section's file offset to it; user.ld's ALIGN(4096) is virtual only.
+                    "-z", "max-page-size=4096",
+                    "--gc-sections",
+
+                    "-o", out.appending(path: "\(app).elf").path,
+                ] + reixObjects + [
+                    "--whole-archive", buildDir.appending(path: "lib\(app).a").path, "--no-whole-archive",
+                    "--start-group",
+                    buildDir.appending(path: "libReix.a").path,
+                    buildDir.appending(path: "libReixABI.a").path,
+                    buildDir.appending(path: "libShellLanguage.a").path,
+                    buildDir.appending(path: "libProcessServerCore.a").path,
+                    "--end-group",
+                ])
+
+                // --strip-all, not --strip-debug: `.swift_ast` is not DWARF and is 67%
+                // of the file. Safe, ElfParser reads the header and program headers.
+                try run(toolchain.objcopy, ["--strip-all",
+                                            out.appending(path: "\(app).elf").path,
+                                            stripped.appending(path: "\(app).elf").path])
+            }
+
+            return .done("\(Self.apps.count) programs")
+        }
+    }
+
+    var image: PhaseRunner.Step {
+        .init(phase: .image, why: "initrd.tar, then kernel.elf and kernel.bin") { sink in
+            let initrd = out.appending(path: "initrd.tar")
+
+            // Written by UstarWriter, not /usr/bin/tar: it page-aligns each member's
+            // data, which the initrd page-sharing design depends on.
+            let initrdApps = Self.apps.filter { !Self.diskApps.contains($0) }
+            let members    = try initrdApps.map {
+                UstarWriter.Member(name: "\($0).elf",
+                                   data: try Data(contentsOf: stripped.appending(path: "\($0).elf")))
+            }
+            let archive = UstarWriter.write(members: members)
+            guard UstarWriter.verifyPageAlignment(archive) else {
+                throw ReixError.tool("initrd.tar: a member's data is not 4096-aligned")
+            }
+            try archive.write(to: initrd)
+            sink(.progress(.image, done: 1, total: 3, now: "initrd.tar"))
+
+            // The archive goes into the kernel image too, which is why the link below
+            // happens here; linker.ld brackets it with _initrd_start/_initrd_end.
+            let initrdAsm = work.appending(path: "Initrd.gen.S")
+            try """
+            // Generated by the reix plugin. See the .initrd section in linker.ld.
+                .section .initrd, "a", %progbits
+                .incbin "\(initrd.path)"
+            """.write(to: initrdAsm, atomically: true, encoding: .utf8)
+            let initrdObj = work.appending(path: "Initrd.gen.S.o")
+            try run(toolchain.clang, ["-target", Self.triple,
+                                      "-c", initrdAsm.path, "-o", initrdObj.path])
+
+            let kernelElf = out.appending(path: "kernel.elf")
+            sink(.progress(.image, done: 2, total: 3, now: "kernel.elf"))
+            try run(toolchain.lld, [
+                "-T", root.appending(path: "linker.ld").path, "--nmagic",
+                "-o", kernelElf.path,
+            ] + activeKernelNative.map { object($0).path } + generatedKernelObjects.map(\.path) + [
+                initrdObj.path,
+                "--start-group",
+                buildDir.appending(path: "libKernel.a").path,
+                buildDir.appending(path: "libReixABI.a").path,
+                "--end-group",
+            ])
+
+            let kernelBin = out.appending(path: "kernel.bin")
+            sink(.progress(.image, done: 3, total: 3, now: "kernel.bin"))
+            try run(toolchain.objcopy, ["-O", "binary", kernelElf.path, kernelBin.path])
+
+            let imageBytes = (try? Data(contentsOf: kernelBin).count) ?? 0
+            return .done("kernel \(size(imageBytes)) · initrd \(size(archive.count))")
+        }
+    }
+
+    /// Created when missing and never migrated, so a volume formatted by one
+    /// boot is mounted by the next. Provisioning programs into it is a separate
+    /// command and stays that way: it runs the guest's own file system code.
+    var disk: PhaseRunner.Step {
+        .init(phase: .disk, why: "\(Self.diskSize) raw image at \(Self.outputDir)/disk.img") { _ in
+            guard !FileManager.default.fileExists(atPath: diskImage.path) else {
+                return .skipped("\(Self.outputDir)/disk.img is already there")
+            }
+            try run(toolchain.qemuImg, ["create", "-f", "raw", diskImage.path, Self.diskSize])
+            return .done("\(Self.diskSize) raw image created")
+        }
+    }
+
+
+    // MARK: - What the phases are made of
+
+    /// The `.a` files the links consume. The compile phase produces them, so a
+    /// gap here means the module graph moved under the build, not a stale tree.
+    func requireLibraries() throws {
+        let names = ["libKernel", "libReixABI", "libReix", "libShellLanguage", "libProcessServerCore"]
+            + Self.apps.map { "lib\($0)" }
+
+        let missing = names
+            .map { buildDir.appending(path: "\($0).a") }
+            .filter { !FileManager.default.fileExists(atPath: $0.path) }
+
+        guard missing.isEmpty else {
+            throw ReixError.tool("""
+            Missing libraries in \(buildDir.path):
+            \(missing.map { "  - " + $0.lastPathComponent }.joined(separator: "\n"))
+            """)
+        }
+    }
+
+    /// The `Thing 2.swift` copies iCloud leaves in the artifact trees, found the
+    /// way the Makefile's prune-dups target finds them.
+    func conflictCopies() -> [URL] {
+        let manager = FileManager.default
+        var found  : [URL] = []
+
+        for directory in [out, root.appending(path: options.buildPath)] {
+            guard let walk = manager.enumerator(at: directory, includingPropertiesForKeys: nil)
+            else { continue }
+
+            for case let url as URL in walk where Self.isConflictCopy(url.lastPathComponent) {
+                found.append(url)
+            }
+        }
+        return found
+    }
+
+    /// A space, then digits, then the extension if there is one. The space is
+    /// what keeps a real `Top2.elf` out of this.
+    static func isConflictCopy(_ name: String) -> Bool {
+        let stem = (name as NSString).deletingPathExtension
+
+        guard let space = stem.lastIndex(of: " ") else { return false }
+        let tail = stem[stem.index(after: space)...]
+
+        return !tail.isEmpty && tail.allSatisfy(\.isNumber)
+    }
+
+    /// The module named by `Compiling <Module> <File>.swift`, and nothing from
+    /// the archiving, wrapping and file-list lines that share its counter.
+    static func compiling(_ detail: String) -> String? {
+        let prefix = "Compiling "
+
+        guard detail.hasPrefix(prefix) else { return nil }
+        return detail.dropFirst(prefix.count).split(separator: " ").first.map(String.init)
+    }
+
+    /// Bytes as a terminal-width quantity, which is what a reader wants to
+    /// compare between two builds.
+    func size(_ bytes: Int) -> String {
+        bytes < 1024 ? "\(bytes) B" : "\((bytes + 512) / 1024) KiB"
+    }
+
+    /// Runs an external tool and appends everything it wrote to `.reix/build.log`.
+    /// Throws on a non-zero exit code, carrying the tool's own output.
+    @discardableResult
+    func run(_ tool: String, _ args: [String], checkExit: Bool = true) throws -> Int32 {
+        let process = Process()
+        process.executableURL       = URL(fileURLWithPath: tool)
+        process.arguments           = args
+        process.currentDirectoryURL = root
+
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError  = pipe
+
+        try process.run()
+        let captured = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+
+        let output = String(data: captured, encoding: .utf8) ?? ""
+        log.write("$ \(tool) \(args.joined(separator: " "))\n" + output)
+
+        guard !checkExit || process.terminationStatus == 0 else {
+            throw ReixError.tool(
+                "\((tool as NSString).lastPathComponent) exit=\(process.terminationStatus)\n\(output)"
+            )
+        }
+        return process.terminationStatus
+    }
+
+    /// `run` for the one tool whose output is worth reading as it arrives.
+    ///
+    /// Line by line rather than in one gulp at the end, because a compile is the
+    /// phase long enough for silence to be indistinguishable from a hang. Every
+    /// line still reaches the log, and a failure carries the whole transcript.
+    func stream(
+        _ tool     : String,
+        _ args     : [String],
+        environment: [String: String],
+        onLine     : (String) -> Void
+    ) throws {
+        let process = Process()
+        process.executableURL       = URL(fileURLWithPath: tool)
+        process.arguments           = args
+        process.currentDirectoryURL = root
+        process.environment         = ProcessInfo.processInfo.environment
+            .merging(environment) { _, new in new }
+
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError  = pipe
+
+        log.write("$ \(tool) \(args.joined(separator: " "))\n")
+        try process.run()
+
+        var transcript = ""
+        func take(_ line: String) {
+            transcript += line + "\n"
+            log.write(line + "\n")
+            onLine(line)
+        }
+
+        let handle = pipe.fileHandleForReading
+        var buffer = Data()
+
+        while true {
+            let chunk = handle.availableData
+            if chunk.isEmpty { break }
+            buffer.append(chunk)
+
+            while let newline = buffer.firstIndex(of: 0x0A) {
+                take(String(decoding: buffer[buffer.startIndex..<newline], as: UTF8.self))
+                buffer = Data(buffer[buffer.index(after: newline)...])
+            }
+        }
+        if !buffer.isEmpty { take(String(decoding: buffer, as: UTF8.self)) }
+        process.waitUntilExit()
+
+        guard process.terminationStatus == 0 else {
+            throw ReixError.tool(
+                "\((tool as NSString).lastPathComponent) exit=\(process.terminationStatus)\n\(transcript)"
+            )
+        }
+    }
+}

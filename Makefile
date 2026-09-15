@@ -170,14 +170,13 @@ prune-dups:
 	@sh scripts/prune-icloud.sh || true
 	@sh scripts/prune-stale.sh
 
-# Build all modules, then link the image via the plugin.
-image: prune-dups
-	@$(SWIFT) build --triple $(TRIPLE) --scratch-path $(BUILD_PATH) -q
-	@REIX_BUILD_PATH=$(BUILD_PATH) $(SWIFT) package $(PLUGIN)
+# Prune, compile and link, all of it inside the `reix` CLI. It replaces both the
+# bare `swift build` and the command plugin, which no longer exists.
+image:
+	@SWIFT=$(SWIFT) REIX_BUILD_PATH=$(BUILD_PATH) ./reix build
 
-release: prune-dups
-	@$(SWIFT) build --triple $(TRIPLE) -c release --scratch-path $(BUILD_PATH) -q
-	@REIX_BUILD_PATH=$(BUILD_PATH) $(SWIFT) package $(PLUGIN) --release
+release:
+	@SWIFT=$(SWIFT) REIX_BUILD_PATH=$(BUILD_PATH) ./reix build --release
 
 # Boot in QEMU (Ctrl-A X to quit). qemu runs here, not inside the plugin sandbox.
 # Boot what is already built. No compiler, no plugin, no installer: the loop
@@ -223,11 +222,11 @@ $(DISK):
 # mounts. This is deliberately offline: the importer refuses $(DISK).live, and
 # every managed QEMU path below creates that marker before opening the image.
 programs: image disk
-	@FREESTANDING= $(SWIFT) package -q $(PLUGIN) app install --format-if-blank \
+	@FREESTANDING= $(SWIFT) run ReixApp install --format-if-blank \
 		--disk $(DISK) $(OUT)/stripped/Shell.elf $(OUT)/stripped/Top.elf
 
 programs-release: release disk
-	@FREESTANDING= $(SWIFT) package -q $(PLUGIN) app install --format-if-blank \
+	@FREESTANDING= $(SWIFT) run ReixApp install --format-if-blank \
 		--disk $(DISK) $(OUT)/stripped/Shell.elf $(OUT)/stripped/Top.elf
 
 # One-program development loop. Example: `make app APP=Shell` recompiles,
