@@ -5,4 +5,4 @@
 
 import ReixBuild
 
-print("reix \(ReixBuild.version)")
+print("reix")
