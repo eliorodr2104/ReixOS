@@ -224,6 +224,9 @@ enum ReixApp {
         }
 
         let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
-        print("installed system/programs/\(name)  \(bytes.count) bytes  sha256 \(digest)")
+        let kib    = (bytes.count + 512) / 1024
+        print("  " + "installed".padding(toLength: 12, withPad: " ", startingAt: 0)
+              + name.padding(toLength: 14, withPad: " ", startingAt: 0)
+              + "\(kib) KiB  \(digest.prefix(12))")
     }
 }

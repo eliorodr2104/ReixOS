@@ -1,0 +1,18 @@
+#!/bin/sh
+#
+# reix
+# ReixOS
+#
+# Builds the build front end, then hands it the command line. SwiftTUI needs
+# Swift 6.3+, and a bare `swift` on PATH may be Xcode's older toolchain, so the
+# toolchain is resolved the same way the Makefile resolves it.
+
+set -e
+root=$(cd "$(dirname "$0")" && pwd)
+
+if [ -z "${SWIFT:-}" ]; then
+    if [ -x "$HOME/.swiftly/bin/swift" ]; then SWIFT="$HOME/.swiftly/bin/swift"; else SWIFT=swift; fi
+fi
+
+"$SWIFT" build -q --package-path "$root/Tools/reix" --product reix
+exec "$root/Tools/reix/.build/debug/reix" "$@"

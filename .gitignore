@@ -82,3 +82,6 @@ fastlane/report.xml
 fastlane/Preview.html
 fastlane/screenshots/**/*.png
 fastlane/test_output
+
+# Build front end scratch tree (Tools/reix is its own package).
+Tools/reix/.build/
