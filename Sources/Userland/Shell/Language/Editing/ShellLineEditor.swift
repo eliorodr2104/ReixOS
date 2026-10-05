@@ -6,12 +6,26 @@
 //
 
 import ReixABI
+#if !hasFeature(Embedded)
+import Darwin
+#endif
 
-@_silgen_name("malloc")
+#if hasFeature(Embedded)
+@_extern(c, "reix_malloc")
 private func shellEditorMalloc(_ size: UInt) -> UnsafeMutableRawPointer?
 
-@_silgen_name("free")
+@_extern(c, "reix_free")
 private func shellEditorFree(_ pointer: UnsafeMutableRawPointer?)
+#else
+private func shellEditorMalloc(_ size: UInt) -> UnsafeMutableRawPointer? {
+    guard size <= UInt(Int.max) else { return nil }
+    return Darwin.malloc(Int(size))
+}
+
+private func shellEditorFree(_ pointer: UnsafeMutableRawPointer?) {
+    Darwin.free(pointer)
+}
+#endif
 
 /// Adds candidates that require live authority or state, synchronously, to the
 /// bounded static result. The pointers are borrowed only for this call.

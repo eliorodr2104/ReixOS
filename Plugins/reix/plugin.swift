@@ -52,12 +52,14 @@ struct ReixPlugin: CommandPlugin {
     let diskApps = ["Shell", "Top"]
 
     let kernelNative = [
+        "Native/kernel/KernelRuntimeABI.c",
         "Sources/ReixKernel/Arch/aarch64/Boot/boot.S",
         "Sources/ReixKernel/Arch/aarch64/ContextSwitch/ContextSwitch.S",
         "Sources/ReixKernel/Arch/aarch64/Exceptions/Handlers/ContextSaving.S",
     ]
 
     let reixNative = [
+        "Native/reix/UserRuntimeABI.c",
         "Native/reix/AsmSyscall.S",
     ]
 
@@ -97,6 +99,8 @@ struct ReixPlugin: CommandPlugin {
         let release   = arguments.contains("--release")
         let doRun     = arguments.contains("run")
         let fpsimdDiagnostic = ProcessInfo.processInfo.environment["REIX_FPSIMD_DIAGNOSTIC"] == "1"
+        let runtimeDiagnostic = ProcessInfo.processInfo.environment["REIX_RUNTIME_DIAGNOSTIC"] == "1"
+            || ProcessInfo.processInfo.environment["REIX_RUNTIME_STACK_DIAGNOSTIC"] == "1"
         let config    = release ? "release" : "debug"
         let buildRoot = ProcessInfo.processInfo.environment["REIX_BUILD_PATH"] ?? ".build-freestanding"
         let buildDir  = root.appending(path: "\(buildRoot)/\(triple)/\(config)")
@@ -116,9 +120,9 @@ struct ReixPlugin: CommandPlugin {
             return
         }
 
-        let activeKernelNative = kernelNative + (fpsimdDiagnostic
-            ? ["Tests/GuestProbes/FPContextNested.S"]
-            : [])
+        let activeKernelNative = kernelNative
+            + (fpsimdDiagnostic ? ["Tests/GuestProbes/FPContextNested.S"] : [])
+            + (runtimeDiagnostic ? ["Tests/GuestProbes/KernelRuntimeProbe.c"] : [])
 
         func obj(_ src: String) -> URL { work.appending(path: (src as NSString).lastPathComponent + ".o") }
 
@@ -126,9 +130,12 @@ struct ReixPlugin: CommandPlugin {
                       "-fno-stack-protector", "-ISources/ReixKernel/Platform/DeviceTree", "-g"]
         func compile(_ src: String) throws {
             let isAsm = src.hasSuffix(".S")
+            let diagnosticCFlags = src.hasSuffix("KernelRuntimeProbe.c")
+                ? ["-fstack-protector-all"]
+                : []
             let args = (isAsm
                 ? ["-target", triple] + (fpsimdDiagnostic ? ["-DREIX_FPSIMD_DIAGNOSTIC"] : [])
-                : cFlags)
+                : cFlags + diagnosticCFlags)
                 + ["-c", root.appending(path: src).path, "-o", obj(src).path]
             try run(clang, args, cwd: root)
         }
@@ -295,8 +302,11 @@ struct ReixPlugin: CommandPlugin {
         }
 
         for source in reixNative {
-            try run(clang, [
-                "-target", triple,
+            let nativeFlags = source.hasSuffix(".c")
+                ? ["-target", triple, "-ffreestanding", "-O2", "-nostdlib",
+                   "-fno-stack-protector", "-ISources/ReixKernel/Platform/DeviceTree", "-g"]
+                : ["-target", triple]
+            try run(clang, nativeFlags + [
                 "-c", root.appending(path: source).path,
                 "-o", object(source).path,
             ], cwd: root)

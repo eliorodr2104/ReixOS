@@ -28,7 +28,7 @@ public struct BucketsHeap: KernelHeapInterface, Loggable {
     }
 
     public mutating func kmalloc(
-        _ size: UInt,
+        _ size      : UInt,
         errorMessage: StaticString = "Kmalloc Failed"
     ) -> UnsafeMutableRawPointer {
         allocBytes(size, errorMessage)
@@ -51,6 +51,36 @@ public struct BucketsHeap: KernelHeapInterface, Loggable {
     @inline(__always)
     public mutating func kmallocOrNil(_ size: UInt) -> UnsafeMutableRawPointer? {
         allocBytesOrNil(size)
+    }
+
+    /// Failable C-runtime allocation with an explicit absolute alignment.
+    ///
+    /// The returned pointer remains the allocator's block head, so the ordinary
+    /// `kfree` contract releases it without side metadata. A buddy block is aligned
+    /// relative to RAM's base; the final address check is therefore required even
+    /// when its size is at least `alignment`.
+    @inline(never)
+    mutating func kmallocAlignedOrNil(
+        _ size   : UInt,
+        alignment: UInt
+    ) -> UnsafeMutableRawPointer? {
+        guard alignment > 0,
+              (alignment & (alignment - 1)) == 0
+        else { return nil }
+
+        guard let pointer = allocBytesOrNil(
+            max(
+                max(size, 1),
+                alignment
+            )
+        ) else { return nil }
+
+        guard UInt(bitPattern: pointer) & (alignment - 1) == 0 else {
+            kfree(pointer)
+            return nil
+        }
+
+        return pointer
     }
 
     /// Typed counterpart of `kmallocOrNil`, mirroring `kmalloc<Object>`.

@@ -89,6 +89,10 @@ public struct Kernel: Loggable {
 
             printBootBanner()
 
+            #if REIX_RUNTIME_STACK_DIAGNOSTIC
+            KernelRuntimeDiagnostic.triggerStackFailure()
+            #endif
+
             self.ppm = try PhysicalPageManager<BuddyAllocator>()
             bootPhase(TraceBootPhase.ppmReady)
 
@@ -114,6 +118,10 @@ public struct Kernel: Loggable {
             heapPtr.initialize(to: BucketsHeap(ppmPtr: &ppm!))
             self.heap = heapPtr
             bootPhase(TraceBootPhase.heapReady)
+
+            #if REIX_RUNTIME_DIAGNOSTIC
+            KernelRuntimeDiagnostic.run(ppm: &ppm!)
+            #endif
 
 
             let gicPtr = heap.pointee.kmalloc(GICv2.self)
