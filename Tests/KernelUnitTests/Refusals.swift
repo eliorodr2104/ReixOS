@@ -36,6 +36,9 @@ func refusal(_ body: () throws -> Void) -> String {
             case .invalidRefCount         : "invalidRefCount"
             case .pageOrderMismatch       : "pageOrderMismatch"
             case .frameNotBlockHead       : "frameNotBlockHead"
+            case .invalidFrameAddress     : "invalidFrameAddress"
+            case .frameNotAllocated       : "frameNotAllocated"
+            case .referenceCountOverflow  : "referenceCountOverflow"
         }
 
     } catch let error as VMAError {

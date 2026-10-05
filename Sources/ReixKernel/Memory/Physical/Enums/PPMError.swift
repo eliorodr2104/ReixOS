@@ -14,9 +14,19 @@ public enum PPMError: KernelFatal {
     case invalidRefCount        (_ count : Int)
     case pageOrderMismatch      (expected: UInt8, provided: UInt8)
 
+    /// The address is outside the complete 4 KiB frames described by the
+    /// metadata array, or is not aligned to a frame boundary.
+    case invalidFrameAddress    (_ address: PhysicalAddress)
+
+    /// The metadata names a free frame rather than a live block currently
+    /// owned by the allocator client. Reserved frames have their own refusal.
+    case frameNotAllocated
+
+    /// Retaining would wrap the fixed-width counter back to zero.
+    case referenceCountOverflow
+
     /// A per-address operation was handed a frame that is not the first of its
-    /// block. The offending address is logged where it is detected, so no payload
-    /// is carried here.
+    /// block. No payload is needed because the caller already owns the request.
     case frameNotBlockHead
 
     /// Every case is a plain literal, and `.allocationFailed` spells the
@@ -68,6 +78,15 @@ public enum PPMError: KernelFatal {
 
             case .frameNotBlockHead:
                 "PPM Error: frame is inside a multi-page block, not its head."
+
+            case .invalidFrameAddress:
+                "PPM Error: frame address is outside RAM or is not page aligned."
+
+            case .frameNotAllocated:
+                "PPM Error: frame is not a live allocator-owned block."
+
+            case .referenceCountOverflow:
+                "PPM Error: frame reference count is saturated."
         }
     }
 }

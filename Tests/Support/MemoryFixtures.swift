@@ -6,6 +6,12 @@
 
 @testable import Kernel
 
+public struct PMMStateSnapshot: Equatable {
+    public let metadata     : [UInt8]
+    public let allocator    : [UInt8]
+    public let allocatedPages: UInt64
+}
+
 /// A host stand-in for RAM, with the bookkeeping the buddy allocator and the
 /// physical page manager keep beside it.
 ///
@@ -194,12 +200,13 @@ public final class HostRAM {
     ///   second. The seam checks all three and traps rather than letting a reclaim
     ///   donate frames the allocator already holds.
     public func installLiveManager(
-        deviceTree: (start: PhysicalAddress, end: PhysicalAddress)? = nil
+        deviceTree    : (start: PhysicalAddress, end: PhysicalAddress)? = nil,
+        reportedRAMSize: UInt64? = nil
     ) {
         ppm.pointee = KernelPPM(
             hostAllocator : buddy,
             ramStart      : base,
-            ramSize       : size,
+            ramSize       : reportedRAMSize ?? size,
             framesMetadata: frames,
             deviceTree    : deviceTree
         )
@@ -242,8 +249,37 @@ public final class HostRAM {
         refCount   : UInt32
     ) {
         setFrame(
-            FrameInfo(refCount: refCount, order: 0, flags: .none),
+            FrameInfo(refCount: refCount, order: 0, flags: .allocatorOwned),
             at: physical
+        )
+    }
+
+
+    /// Byte-exact state protected by a rejected PPM operation: frame metadata,
+    /// bitmap, free-list heads and in-arena free-list nodes, plus accounting.
+    public func pmmStateSnapshot() -> PMMStateSnapshot {
+        let metadata = Array(UnsafeRawBufferPointer(
+            start: UnsafeRawPointer(frames),
+            count: pages * MemoryLayout<FrameInfo>.stride
+        ))
+
+        var allocator = Array(UnsafeRawBufferPointer(
+            start: UnsafeRawPointer(bitmap),
+            count: (pages + 7) / 8
+        ))
+        allocator.append(contentsOf: UnsafeRawBufferPointer(
+            start: UnsafeRawPointer(freeLists),
+            count: BuddyAllocator.freeListsBytes
+        ))
+        allocator.append(contentsOf: UnsafeRawBufferPointer(
+            start: UnsafeRawPointer(arena),
+            count: Int(size)
+        ))
+
+        return PMMStateSnapshot(
+            metadata     : metadata,
+            allocator    : allocator,
+            allocatedPages: ppm.pointee.allocatedPages
         )
     }
 

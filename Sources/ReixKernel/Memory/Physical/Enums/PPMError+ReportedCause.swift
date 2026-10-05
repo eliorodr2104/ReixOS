@@ -60,6 +60,9 @@ extension PPMError {
             case .invalidRefCount         : .managerFault
             case .pageOrderMismatch       : .managerFault
             case .frameNotBlockHead       : .requestRejected
+            case .invalidFrameAddress     : .requestRejected
+            case .frameNotAllocated       : .requestRejected
+            case .referenceCountOverflow  : .requestRejected
         }
     }
 }

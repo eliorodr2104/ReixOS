@@ -89,5 +89,98 @@ struct UserBufferIsolationTests {
             #expect(bytes[0] == 0x5A)
         }
     }
+
+    @Test("a saturated anonymous frame aborts clone before publishing a child mapping")
+    func saturatedCloneReference() {
+        withProcessManager(pages: 128) { ram, _, manager in
+            guard let parent = try? manager.pointee.spawnProcess(),
+                  let child = try? manager.pointee.spawnProcess(),
+                  let parentVMA = parent.pointee.addressSpace.vmaManager,
+                  let childVMA = child.pointee.addressSpace.vmaManager,
+                  let address = try? parentVMA.pointee.mmapAnonymous(
+                    size: 4096, permissions: [.read, .write, .user]
+                  )
+            else { Issue.record("could not create saturated clone fixture"); return }
+
+            Arch.CPU.setCurrentProcess(UInt64(UInt(bitPattern: parent)))
+            defer { Arch.CPU.setCurrentProcess(0) }
+
+            guard UserMemory.validateRegion(
+                addr: address, size: 1, permissions: [.read, .write, .user]
+            ), let original = ram.vmm.pointee.physicalAddressOf(
+                rootTable: parent.pointee.addressSpace.rootTablePhysical,
+                virtual  : address
+            ) else { Issue.record("missing parent page"); return }
+
+            var metadata = ram.frame(at: original)
+            metadata.refCount = UInt32.max
+            ram.setFrame(metadata, at: original)
+
+            var failed = false
+            do {
+                try childVMA.pointee.cloneRegions(from: parentVMA.pointee)
+            } catch {
+                failed = true
+            }
+
+            #expect(failed)
+            #expect(ram.ppm.pointee.refCount(of: original) == UInt32.max)
+            #expect(ram.vmm.pointee.physicalAddressOf(
+                rootTable: child.pointee.addressSpace.rootTablePhysical,
+                virtual  : address
+            ) == nil)
+            #expect(ram.vmm.pointee.physicalAddressOf(
+                rootTable: parent.pointee.addressSpace.rootTablePhysical,
+                virtual  : address
+            ) == original)
+        }
+    }
+
+    @Test("a COW fault refuses a backing with no live PMM reference")
+    func copyOnWriteRejectsUnownedBacking() {
+        withProcessManager(pages: 128) { ram, _, manager in
+            guard let parent = try? manager.pointee.spawnProcess(),
+                  let child = try? manager.pointee.spawnProcess(),
+                  let parentVMA = parent.pointee.addressSpace.vmaManager,
+                  let childVMA = child.pointee.addressSpace.vmaManager,
+                  let address = try? parentVMA.pointee.mmapAnonymous(
+                    size: 4096, permissions: [.read, .write, .user]
+                  )
+            else { Issue.record("could not create invalid COW fixture"); return }
+
+            Arch.CPU.setCurrentProcess(UInt64(UInt(bitPattern: parent)))
+            defer { Arch.CPU.setCurrentProcess(0) }
+
+            guard UserMemory.validateRegion(
+                addr: address, size: 1, permissions: [.read, .write, .user]
+            ), let original = ram.vmm.pointee.physicalAddressOf(
+                rootTable: parent.pointee.addressSpace.rootTablePhysical,
+                virtual  : address
+            ) else { Issue.record("missing parent page"); return }
+
+            do {
+                try childVMA.pointee.cloneRegions(from: parentVMA.pointee)
+            } catch {
+                Issue.record("clone failed: \(error)")
+                return
+            }
+
+            var metadata = ram.frame(at: original)
+            metadata.refCount = 0
+            ram.setFrame(metadata, at: original)
+            let before = ram.pmmStateSnapshot()
+            let handled = childVMA.pointee.handlePageFault(
+                at   : address,
+                cause: .permission
+            )
+
+            #expect(!handled)
+            #expect(ram.pmmStateSnapshot() == before)
+            #expect(ram.vmm.pointee.physicalAddressOf(
+                rootTable: child.pointee.addressSpace.rootTablePhysical,
+                virtual  : address
+            ) == original)
+        }
+    }
 }
 }

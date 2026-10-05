@@ -96,7 +96,11 @@ extension VMAManager {
 
         let flags = vma.permissions.toPageFlags()
 
-        if context.ppm.pointee.refCount(of: phys) == 1 {
+        let references = context.ppm.pointee.refCount(of: phys)
+
+        guard references > 0 else { return false }
+
+        if references == 1 {
 
             do {
                 try context.vmm.pointee.protectUserPage(

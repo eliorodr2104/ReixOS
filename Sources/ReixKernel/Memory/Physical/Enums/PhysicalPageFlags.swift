@@ -20,4 +20,11 @@ public struct PhysicalPageFlags: OptionSet {
     /// straight from the buddy as an order-N frame, bypassing the slab.
     /// `BucketsHeap.kfree` keys off this bit to return the whole block.
     public static let heapLarge = PhysicalPageFlags(rawValue: 1 << 4)
+
+    /// Internal allocator ownership state. A zero reference count cannot carry
+    /// this meaning: block interiors deliberately have no references, while a
+    /// corrupt head can lose its last reference before it reaches the buddy.
+    /// Keeping the state in a spare flag bit preserves `FrameInfo`'s 8-byte
+    /// stride and leaves the all-zero pattern meaning "free".
+    static let allocatorOwned = PhysicalPageFlags(rawValue: 1 << 5)
 }

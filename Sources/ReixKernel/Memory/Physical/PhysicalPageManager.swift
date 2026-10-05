@@ -46,16 +46,22 @@ public struct PhysicalPageManager<A: Allocator>: Loggable {
     /// Order written on every frame of a block except its first, so a frame that
     /// is not a block head can be told apart from one that is.
     ///
-    /// A reserved order and not a new `PhysicalPageFlags` bit, because `release` has
-    /// to load `order` anyway to rebuild the `PhysicalPage` it frees: testing that
-    /// one register is free, where a `flags` test would add a load to the path every
-    /// anonymous page fault takes. `BuddyAllocator.maxOrder` is 11 and its
-    /// `blockSize` rejects anything above it, so no real block can carry this value
-    /// and no valid `release` can ever be refused by mistake.
-    ///
-    /// 15 rather than `UInt8.max`: `FrameInfo` keeps `order` in a nibble, and this
-    /// is the largest value that nibble holds.
+    /// `FrameInfo` keeps `order` in a nibble, so 15 is its largest representable
+    /// value. `BuddyAllocator.maxOrder` is 11 and rejects anything above it, which
+    /// leaves 15 reserved for interiors and distinct from every real block order.
     private static var blockInteriorOrder: UInt8 { 15 }
+
+    private static var pageSize: UInt64 { 4096 }
+
+    /// Flags a caller may attach to an allocator-owned block. `.reserved` is a
+    /// boot ownership state, and the upper bits include the manager's private
+    /// allocator state, so neither may enter through `alloc`.
+    private static var allocationFlagMask: UInt8 {
+        PhysicalPageFlags.kernel.rawValue
+        | PhysicalPageFlags.user.rawValue
+        | PhysicalPageFlags.dirty.rawValue
+        | PhysicalPageFlags.heapLarge.rawValue
+    }
 
 
     /// - Note: `mutating` for the accounting alone. Every call site reaches the
@@ -67,27 +73,53 @@ public struct PhysicalPageManager<A: Allocator>: Loggable {
         heapShift: UInt8 = 0
     ) throws(PPMError) -> PhysicalPage {
 
+        guard bytes > 0 else {
+            throw .allocationFailed(reason: .bytesNotValid(bytes))
+        }
+
+        guard flag.rawValue & ~Self.allocationFlagMask == 0 else {
+            throw .invalidFlags
+        }
+
         guard framesMetadata != nil else {
             throw .metadataInconsistency
         }
 
+        guard allocatedPages <= totalPages else {
+            throw .metadataInconsistency
+        }
+
+        let frame: PhysicalPage
         do {
-            let frame         = try allocator.alloc(bytes)
-            let indexMetadata = Int((frame.address - ramStart) / 4096)
+            frame = try allocator.alloc(bytes)
+        } catch {
+            throw .allocationFailed(reason: error)
+        }
 
-            let metadata = framesMetadata!.advanced(by: indexMetadata)
-            metadata.pointee.refCount  = 1
-            metadata.pointee.order     = frame.order
-            metadata.pointee.flags     = flag
-            metadata.pointee.heapShift = heapShift
+        let indexMetadata = try metadataIndex(for: frame.address)
+        guard let blockPages = validBlockPageCount(
+            headIndex: indexMetadata,
+            order    : frame.order
+        ), blockPages <= totalPages - allocatedPages else {
+            throw .metadataInconsistency
+        }
 
-            markInteriorFrames(after: indexMetadata, order: frame.order)
+        let metadata = framesMetadata!.advanced(by: indexMetadata)
+        guard metadata.pointee.refCount == 0,
+              !metadata.pointee.flags.contains(.allocatorOwned),
+              !metadata.pointee.flags.contains(.reserved)
+        else { throw .metadataInconsistency }
 
-            allocatedPages &+= UInt64(1) << UInt64(frame.order)
+        metadata.pointee.refCount  = 1
+        metadata.pointee.order     = frame.order
+        metadata.pointee.flags     = flag.union(.allocatorOwned)
+        metadata.pointee.heapShift = heapShift
 
-            return frame
+        markInteriorFrames(after: indexMetadata, order: frame.order)
 
-        } catch { throw .allocationFailed(reason: error) }
+        allocatedPages += blockPages
+
+        return frame
 
     }
 
@@ -102,15 +134,9 @@ public struct PhysicalPageManager<A: Allocator>: Loggable {
     /// corruption and not a leak. Marking the interior is what turns it into
     /// `.frameNotBlockHead`.
     ///
-    /// It is a landmine rather than a live bug: no current caller feeds an interior
-    /// address (see `release`), and a second, incidental guard stands in front of it
-    /// anyway, `free` rejecting `refCount == 0`, which every frame coming out of the
-    /// buddy has. Both of those are properties of today's call sites, not of this
-    /// type, which is exactly why the check belongs here.
-    ///
-    /// `refCount` is left at 0 deliberately. An interior frame is not something
-    /// anybody may hold a reference to, and 0 keeps that incidental guard standing
-    /// alongside the explicit one instead of replacing it.
+    /// `refCount` stays 0 because references belong to the block head. The private
+    /// allocator-owned flag is still stamped on interiors, keeping allocator state
+    /// independent from the counter while `order` supplies the head/interior test.
     ///
     /// `1 ..< (1 << order)` is empty for an order-0 block, so the single-page path,
     /// which every anonymous page fault takes, pays the loop's first bound check and
@@ -120,12 +146,14 @@ public struct PhysicalPageManager<A: Allocator>: Loggable {
         after headIndex: Int,
         order          : UInt8
     ) {
+        let interiorFlags = PhysicalPageFlags.allocatorOwned
+
         for offset in 1..<(1 << Int(order)) {
             let metadata = framesMetadata!.advanced(by: headIndex + offset)
 
             metadata.pointee.refCount      = 0
             metadata.pointee.order         = Self.blockInteriorOrder
-            metadata.pointee.flags         = .none
+            metadata.pointee.flags         = interiorFlags
             metadata.pointee.heapShift     = 0
             metadata.pointee.heapAllocationBits = 0
         }
@@ -145,48 +173,16 @@ public struct PhysicalPageManager<A: Allocator>: Loggable {
         _ page        : consuming PhysicalPage,
         allowProtected: Bool
     ) throws(PPMError) {
-        guard framesMetadata != nil else {
-            throw .metadataInconsistency
-        }
-        
-        let indexMetadata = Int((page.address - ramStart) / 4096)
-        var metadata = framesMetadata![indexMetadata]
-        let flag = metadata.flags
-        
-        guard metadata.refCount > 0 else {
-            throw .invalidRefCount(Int(metadata.refCount))
-        }
-        
-        guard metadata.order == page.order else {
-            throw .pageOrderMismatch(expected: page.order, provided: metadata.order)
-        }
-        
-        if allowProtected {
-            guard !flag.contains(.reserved) else {
-                throw .protectedMemoryViolation
-            }
-            
-        } else {
-            guard !flag.contains(.kernel), !flag.contains(.reserved) else {
-                throw .protectedMemoryViolation
-            }
-        }
+        let address = page.address
+        let order   = page.order
+        let index   = try metadataIndex(for: address)
 
-        metadata.refCount -= 1
-        
-        let releasedPages = UInt64(1) << UInt64(page.order)
-
-        do {
-            if metadata.refCount == 0 {
-                metadata.flags = .none
-                try allocator.free(page)
-
-                allocatedPages &-= releasedPages
-            }
-
-            framesMetadata![indexMetadata] = metadata
-            
-        } catch { throw .allocationFailed(reason: error) }
+        try releaseValidated(
+            address       : address,
+            order         : order,
+            metadataIndex : index,
+            allowProtected: allowProtected
+        )
     }
     
     
@@ -202,18 +198,23 @@ public struct PhysicalPageManager<A: Allocator>: Loggable {
     
     /// Adds a reference to the frame backing `address`.
     ///
-    /// The bound check is not dressing: `address - ramStart` underflows into a
-    /// huge `UInt64` for anything below `ramStart`, and an address at or past
-    /// `ramEnd` indexes off the end of `framesMetadata`. The COW path feeds
-    /// physical addresses straight out of page tables, so a stray value has to
-    /// fault here rather than corrupt the metadata array.
+    /// The address must name an aligned, complete frame and the metadata must name
+    /// a live allocator-owned block head. A free, reserved or interior frame is not
+    /// referenceable. Saturation is refused instead of wrapping to zero.
     public mutating func retain(_ address: PhysicalAddress) throws(PPMError) {
-        guard address >= ramStart, address < ramStart + ramSize else {
-            throw .invalidRefCount(Int(bitPattern: UInt(address)))
+        let index    = try metadataIndex(for: address)
+        let metadata = framesMetadata!.advanced(by: index)
+
+        _ = try validatedLiveBlock(
+            metadata: metadata.pointee,
+            headIndex: index
+        )
+
+        guard metadata.pointee.refCount < UInt32.max else {
+            throw .referenceCountOverflow
         }
 
-        let indexMetadata = Int((address - ramStart) / 4096)
-        framesMetadata!.advanced(by: indexMetadata).pointee.refCount += 1
+        metadata.pointee.refCount += 1
     }
     
     /// Drops a reference to the frame backing `address`, which has to be the head
@@ -226,50 +227,43 @@ public struct PhysicalPageManager<A: Allocator>: Loggable {
     /// necessary: an interior address would rebuild a block of the wrong size and
     /// hand it to the buddy allocator.
     ///
-    /// It throws rather than panicking because every current call site is a teardown
-    /// or an unwind that has nothing to roll back, and killing the machine over a
-    /// frame is a worse outcome than losing it. The error is logged here all the
-    /// same, since each of those call sites reaches this through `try?`: without the
-    /// line the frame would go quietly missing, which is the failure mode this is
-    /// meant to end.
+    /// Bounds, alignment, ownership, count and block extent are validated before
+    /// the allocator or metadata is mutated. It throws because teardown callers
+    /// deliberately treat a rejected frame as a bounded leak rather than a panic.
     public mutating func release(_ address: PhysicalAddress) throws(PPMError) {
-        
-        guard address >= ramStart, address < ramStart + ramSize else {
-            throw .invalidRefCount(Int(bitPattern: UInt(address)))
-        }
-        
-        let meta  = framesMetadata!.advanced(by: Int((address - ramStart) / 4096))
-        let order = meta.pointee.order
+        let index = try metadataIndex(for: address)
+        let order = framesMetadata!.advanced(by: index).pointee.order
 
-        guard order != Self.blockInteriorOrder else {
-            Self.error("release of 0x\(hex: address) refused: frame is inside a block, not its head.")
-            throw .frameNotBlockHead
-        }
-
-        try free(PhysicalPage(address: address, order: order))
+        try releaseValidated(
+            address       : address,
+            order         : order,
+            metadataIndex : index,
+            allowProtected: false
+        )
     }
 
 
     /// References held on the frame backing `address`.
     ///
-    /// An out-of-range address reports `0`, which callers read as "not shared",
-    /// rather than running past the metadata array. Same bounding rationale as
-    /// `retain`.
-    ///
-    /// An interior frame of a block reports `0` too, and is left non-throwing on
-    /// purpose. Signalling it here would mean either a signature the one caller,
-    /// `VMAManager.serviceFault`, cannot use, or a `flags`/`order` load on the path
-    /// every copy-on-write fault takes. Neither is worth it, because `0` is already
-    /// the conservative answer: `serviceFault` reads it as "shared" and takes a
-    /// private copy, and the `release` it then performs on the old frame is the call
-    /// that reports the interior address and refuses.
+    /// Invalid, free, reserved, zero-reference and interior frames report `0`
+    /// without reading outside the metadata array. COW treats that value as an
+    /// invalid backing and refuses the fault; it is never a request to copy bytes
+    /// from an unowned frame.
     public mutating func refCount(of address: PhysicalAddress) -> UInt32 {
-        guard address >= ramStart, address < ramStart + ramSize else {
-            return 0
-        }
+        guard let index = frameIndex(for: address),
+              let framesMetadata
+        else { return 0 }
 
-        let indexMetadata = Int((address - ramStart) / 4096)
-        return framesMetadata!.advanced(by: indexMetadata).pointee.refCount
+        let metadata = framesMetadata.advanced(by: index).pointee
+
+        guard metadata.order != Self.blockInteriorOrder,
+              metadata.flags.contains(.allocatorOwned),
+              !metadata.flags.contains(.reserved),
+              metadata.refCount > 0,
+              validBlockPageCount(headIndex: index, order: metadata.order) != nil
+        else { return 0 }
+
+        return metadata.refCount
     }
 
 
@@ -341,6 +335,160 @@ public struct PhysicalPageManager<A: Allocator>: Loggable {
 
     // MARK: - Helpers
 
+    /// Returns an index only for the base of a complete 4 KiB RAM frame.
+    /// Arithmetic is relative to `ramStart`, so a wrapped RAM end cannot turn an
+    /// invalid address into a metadata access.
+    @inline(__always)
+    private func frameIndex(for address: PhysicalAddress) -> Int? {
+        guard address >= ramStart else { return nil }
+
+        let offset = address - ramStart
+        guard address & (Self.pageSize - 1) == 0,
+              offset  & (Self.pageSize - 1) == 0
+        else { return nil }
+
+        let index = offset / Self.pageSize
+        guard index < ramSize >> 12 else { return nil }
+
+        return Int(index)
+    }
+
+
+    /// Bounds and alignment are established before the metadata pointer is
+    /// inspected. This order is the safety boundary for every throwing public
+    /// per-frame operation.
+    @inline(__always)
+    private func metadataIndex(for address: PhysicalAddress) throws(PPMError) -> Int {
+        guard let index = frameIndex(for: address) else {
+            throw .invalidFrameAddress(address)
+        }
+
+        guard framesMetadata != nil else {
+            throw .metadataInconsistency
+        }
+
+        return index
+    }
+
+
+    /// Checks that an order representable by `FrameInfo` names a whole block rooted
+    /// at `headIndex`. No block walk is needed, so single-head validation remains
+    /// O(1). A concrete allocator may impose a lower maximum; its returned metadata
+    /// is trusted, and its `free` remains the authority for that backend limit.
+    @inline(__always)
+    private func validBlockPageCount(
+        headIndex: Int,
+        order    : UInt8
+    ) -> UInt64? {
+        guard order < Self.blockInteriorOrder else { return nil }
+
+        let blockPages = UInt64(1) << UInt64(order)
+        let index      = UInt64(headIndex)
+        let frameCount = ramSize >> 12
+
+        guard index & (blockPages - 1) == 0,
+              index < frameCount,
+              blockPages <= frameCount - index
+        else { return nil }
+
+        return blockPages
+    }
+
+
+    /// Validates metadata state shared by retain, release and the final free.
+    /// Reference count and allocator ownership are separate checks on purpose.
+    @inline(__always)
+    private func validatedLiveBlock(
+        metadata : FrameInfo,
+        headIndex: Int
+    ) throws(PPMError) -> UInt64 {
+        guard metadata.order != Self.blockInteriorOrder else {
+            throw .frameNotBlockHead
+        }
+
+        guard !metadata.flags.contains(.reserved) else {
+            throw .protectedMemoryViolation
+        }
+
+        guard metadata.flags.contains(.allocatorOwned) else {
+            throw .frameNotAllocated
+        }
+
+        guard metadata.refCount > 0 else {
+            throw .invalidRefCount(Int(metadata.refCount))
+        }
+
+        guard let blockPages = validBlockPageCount(
+            headIndex: headIndex,
+            order    : metadata.order
+        ) else { throw .metadataInconsistency }
+
+        return blockPages
+    }
+
+
+    /// Drops one validated reference. All public-input checks finish before the
+    /// allocator or any metadata byte is mutated.
+    @inline(__always)
+    private mutating func releaseValidated(
+        address       : PhysicalAddress,
+        order         : UInt8,
+        metadataIndex : Int,
+        allowProtected: Bool
+    ) throws(PPMError) {
+        let metadataPointer = framesMetadata!.advanced(by: metadataIndex)
+        var metadata        = metadataPointer.pointee
+
+        let releasedPages = try validatedLiveBlock(
+            metadata : metadata,
+            headIndex: metadataIndex
+        )
+
+        guard metadata.order == order else {
+            throw .pageOrderMismatch(expected: metadata.order, provided: order)
+        }
+
+        if !allowProtected, metadata.flags.contains(.kernel) {
+            throw .protectedMemoryViolation
+        }
+
+        if metadata.refCount > 1 {
+            metadata.refCount -= 1
+            metadataPointer.pointee = metadata
+            return
+        }
+
+        guard allocatedPages >= releasedPages else {
+            throw .metadataInconsistency
+        }
+
+        do {
+            try allocator.free(PhysicalPage(address: address, order: order))
+        } catch {
+            throw .allocationFailed(reason: error)
+        }
+
+        clearBlockMetadata(
+            headIndex: metadataIndex,
+            pageCount: Int(releasedPages)
+        )
+        allocatedPages -= releasedPages
+    }
+
+
+    /// Restores the zero/free state of the whole block after the buddy accepted
+    /// its last reference. Invalid requests never reach this loop.
+    private func clearBlockMetadata(
+        headIndex: Int,
+        pageCount: Int
+    ) {
+        let cleared = FrameInfo()
+
+        for offset in 0..<pageCount {
+            framesMetadata!.advanced(by: headIndex + offset).pointee = cleared
+        }
+    }
+
     private func setRangeMetadata(
         from: PhysicalAddress,
         to  : PhysicalAddress,
@@ -351,31 +499,27 @@ public struct PhysicalPageManager<A: Allocator>: Loggable {
         let end   = Int((to   - ramStart) / 4096)
         
         for i in start..<end {
-            var frame = framesMetadata![i]
-            
-            frame.refCount  = 1
-            frame.flags     = flag
-                
-            framesMetadata![i] = frame
+            framesMetadata![i] = FrameInfo(
+                refCount: 1,
+                order   : 0,
+                flags   : flag
+            )
         }
     }
 
 
-    /// Puts a range's frames back into the state a frame the buddy holds free is
-    /// in, which is the zero `FrameInfo` every frame starts life with.
-    ///
-    /// Deliberately not `setRangeMetadata(flag: .none)`: that writes
-    /// `refCount = 1`, which is what an owned frame looks like, and `free` would
-    /// then let the next holder drop a reference nobody ever took.
+    /// Puts every frame in the range back into its complete zero/free state,
+    /// clearing references, allocator ownership and any prior heap metadata.
     private func clearRangeMetadata(
         from: PhysicalAddress,
         to  : PhysicalAddress
     ) {
         let start = Int((from - ramStart) / 4096)
         let end   = Int((to   - ramStart) / 4096)
+        let cleared = FrameInfo()
 
         for i in start..<end {
-            framesMetadata![i] = FrameInfo()
+            framesMetadata![i] = cleared
         }
     }
 
@@ -501,12 +645,21 @@ extension PhysicalPageManager where A == BuddyAllocator {
         self.ramStart             = Kernel.platformInfo.ram.base
         self.ramSize              = Kernel.platformInfo.ram.size
 
+        let (ramEnd, ramEndOverflow) = ramStart.addingReportingOverflow(ramSize)
+        guard !ramEndOverflow,
+              ramStart & (Self.pageSize - 1) == 0,
+              ramSize >= Self.pageSize
+        else { throw .initRamError }
+
         self.totalPages           = Kernel.platformInfo.ram.size / 4096
         self.allocatedPages       = 0
 
-        let ramEnd                = Kernel.platformInfo.ram.base + Kernel.platformInfo.ram.size
-
         let totalPages            = Kernel.platformInfo.ram.size / 4096
+
+        let (dtbEnd, dtbEndOverflow) = Kernel.platformInfo.dtbBase.addingReportingOverflow(
+            UInt64(Kernel.platformInfo.dtbSize)
+        )
+        guard !dtbEndOverflow else { throw .initRamError }
 
         // One arena, page rounded once at `reservedEnd` and not between its parts.
         // The metadata leads because its size is the only one measured in pages.
@@ -559,7 +712,7 @@ extension PhysicalPageManager where A == BuddyAllocator {
             ),
             ReservedRange(
                 from        : Kernel.platformInfo.dtbBase,
-                to          : Kernel.platformInfo.dtbBase + UInt64(Kernel.platformInfo.dtbSize),
+                to          : dtbEnd,
                 ramLow      : ramStart,
                 ramHigh     : ramEnd,
                 isDeviceTree: true
@@ -725,6 +878,11 @@ extension PhysicalPageManager {
         framesMetadata: UnsafeMutablePointer<FrameInfo>?,
         deviceTree    : (start: PhysicalAddress, end: PhysicalAddress)? = nil
     ) {
+        precondition(
+            ramStart & (Self.pageSize - 1) == 0,
+            "host RAM starts between physical frame boundaries"
+        )
+
         if let given = deviceTree {
             precondition(
                 given.start < given.end,
