@@ -154,6 +154,14 @@ public struct ProcessManager: RXAllocatable, Loggable {
                     throw .allocationPageFailed(error)
                 }
 
+                let stackBytes: UnsafeMutablePointer<UInt8> = vmm.pointee.physToVirt(
+                    stackPage.address
+                )
+                stackBytes.initialize(
+                    repeating: 0,
+                    count    : Int(UserSpaceLayout.pageSize)
+                )
+
                 do {
                     try vmm.pointee.mapUserPage(
                         addressSpace: addressSpace,
