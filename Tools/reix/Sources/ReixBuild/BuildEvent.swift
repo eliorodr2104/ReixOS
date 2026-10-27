@@ -17,9 +17,13 @@ public enum Phase: String, CaseIterable, Sendable {
 /// `why` carries what a phase is about to do and on what, stated before the
 /// work rather than after it. It is the difference between a progress bar and
 /// a report a reader can act on.
+///
+/// `output` is one line a tool wrote, the same line `.reix/build.log` receives,
+/// so there is one account of what a tool said and two readers of it.
 public enum BuildEvent: Sendable {
     case began   (Phase, why: String)
     case progress(Phase, done: Int, total: Int, now: String)
+    case output  (Phase, line: String)
     case ended   (Phase, summary: String, elapsed: Duration)
     case skipped (Phase, because: String)
     case failed  (Phase, output: String)
@@ -28,6 +32,7 @@ public enum BuildEvent: Sendable {
         switch self {
             case .began   (let p, _)      : return p
             case .progress(let p, _, _, _): return p
+            case .output  (let p, _)      : return p
             case .ended   (let p, _, _)   : return p
             case .skipped (let p, _)      : return p
             case .failed  (let p, _)      : return p

@@ -26,6 +26,12 @@ import Foundation
         #expect(FlatRenderer.line(for: .progress(.compile, done: 9, total: 79, now: "Shell")) == nil)
     }
 
+    /// The dashboard's live tail reads these. Printing them here would put a
+    /// tool's whole transcript into the stdout the shell scripts parse.
+    @Test func aToolsOwnLinesAreSilentToo() {
+        #expect(FlatRenderer.line(for: .output(.compile, line: "[9/79] Compiling Shell")) == nil)
+    }
+
     @Test func aSkippedPhaseSaysWhyItWasSkipped() {
         let line = FlatRenderer.line(for: .skipped(.compile, because: "already up to date"))
         #expect(line == "  compile     skipped, already up to date")

@@ -28,6 +28,7 @@ let package = Package(
             dependencies: [
                 "ReixBuild",
                 .product(name: "SwiftTUI", package: "swift-tui"),
+                .product(name: "SwiftTUICLI", package: "swift-tui"),
             ]
         ),
 

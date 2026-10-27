@@ -56,6 +56,41 @@ public enum QemuMachine {
 
         for number in [SIGHUP, SIGINT, SIGTERM] { signal(number, restore) }
     }
+
+
+    /// Waits for a spawned guest that owns the terminal, and takes it back.
+    ///
+    /// Foundation spawns with `POSIX_SPAWN_SETPGROUP` and pgroup 0, so the child
+    /// leads a new process group that is not the terminal's foreground one. QEMU
+    /// with `-nographic` drives the terminal, and both `tcsetattr` and a read
+    /// from a background group stop the caller (SIGTTOU, SIGTTIN). Measured: the
+    /// guest sat in state `T` forever, printing nothing and seeing no key, so
+    /// Ctrl-A X could not reach it. The Makefile's shell recipe never hit this
+    /// because job control put QEMU in the foreground group for free.
+    ///
+    /// Rejected: respawning this one process with `posix_spawn`. It would spell
+    /// the group out rather than infer it, and buy nothing, since the child can
+    /// still reach the terminal before the parent's `tcsetpgrp` either way.
+    public static func waitInForeground(_ guest: Process) {
+        guard isatty(STDIN_FILENO) == 1 else { return guest.waitUntilExit() }
+
+        let ours   = getpgrp()
+        let theirs = guest.processIdentifier
+
+        // `tcsetpgrp` from outside the foreground group raises SIGTTOU on the
+        // caller, which is precisely what the second call below would do.
+        let previous = signal(SIGTTOU, SIG_IGN)
+        tcsetpgrp(STDIN_FILENO, theirs)
+
+        // A child that touched the terminal first is already stopped, and going
+        // foreground does not resume it. Nothing to do if it never stopped.
+        killpg(theirs, SIGCONT)
+
+        guest.waitUntilExit()
+
+        tcsetpgrp(STDIN_FILENO, ours)
+        signal(SIGTTOU, previous)
+    }
 }
 
 /// Async-signal-safe, which is the whole constraint: `unlink`, `write`, `signal`

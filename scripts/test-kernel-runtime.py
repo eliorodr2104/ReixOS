@@ -26,6 +26,11 @@ import time
 
 
 TRIPLE = "aarch64-none-none-elf"
+
+# The build front end is a host tool, not part of the snapshot under test, so
+# the checkout's own shim runs it with the workspace as its working directory.
+REIX = Path(__file__).resolve().parent.parent / "reix"
+
 PASS_PREFIX = "[ RUNTIME ABI PASS ] hash=0x"
 PAGE_FAILURE = "runtime ABI diagnostic: heap pages not restored"
 STACK_FAILURE = "stack protector: kernel stack corruption detected"
@@ -112,11 +117,7 @@ def build_and_link(
         log=evidence / f"{mode}-cross-build.log",
     )
     run_logged(
-        [
-            swift, "package", "--disable-sandbox",
-            "--scratch-path", f"build-plugin-{mode}",
-            "--allow-writing-to-package-directory", "reix",
-        ],
+        [str(REIX), "build", "--no-compile"],
         cwd=workspace,
         environment={**environment, "REIX_BUILD_PATH": build_path},
         log=evidence / f"{mode}-link.log",
@@ -198,11 +199,11 @@ def archive_stack_object(
     mode: str,
     objdump: str,
 ) -> dict[str, str]:
-    matches = list((workspace / f"build-plugin-{mode}").rglob("KernelRuntimeProbe.c.o"))
-    if len(matches) != 1:
-        raise RuntimeError(f"expected one stack diagnostic object, found {len(matches)}")
+    probe = workspace / ".reix/objects/KernelRuntimeProbe.c.o"
+    if not probe.is_file():
+        raise RuntimeError(f"no stack diagnostic object at {probe}")
     archived = evidence / f"{mode}-KernelRuntimeProbe.c.o"
-    shutil.copy2(matches[0], archived)
+    shutil.copy2(probe, archived)
     disassembly = evidence / f"{mode}-KernelRuntimeProbe.objdump.txt"
     with disassembly.open("wb") as output:
         subprocess.run([objdump, "-dr", str(archived)], check=True, stdout=output)
@@ -245,6 +246,7 @@ def main() -> int:
 
     base_environment = {
         **os.environ,
+        "SWIFT": swift,
         "FREESTANDING": "1",
         "CLANG_MODULE_CACHE_PATH": str(evidence / "module-cache-clang"),
         "SWIFTPM_MODULECACHE_OVERRIDE": str(evidence / "module-cache-swift"),

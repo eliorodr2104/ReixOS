@@ -21,6 +21,9 @@ usage: reix <command> [options]
     --release           optimized build
     --boot-mode <mode>  standard | verbose | diagnostic
     --build-path <path> SwiftPM scratch tree
+    --no-compile        link and pack what is already built
+    --plain             one line per phase, never the dashboard
+    --verbose           --plain, and every byte every tool writes, on stderr
 
   run                   build, provision the disk, then boot it in QEMU
     --mem <size>        guest RAM, machine default when omitted
@@ -52,7 +55,9 @@ func attempt(_ body: () throws -> Void) -> Never {
 let options = BuildPipeline.Options(
     release  : arguments.contains("--release"),
     bootMode : value(of: "--boot-mode")  ?? ProcessInfo.processInfo.environment["BOOT_MODE"] ?? "standard",
-    buildPath: value(of: "--build-path") ?? ProcessInfo.processInfo.environment["REIX_BUILD_PATH"]
+    buildPath: value(of: "--build-path") ?? ProcessInfo.processInfo.environment["REIX_BUILD_PATH"],
+    verbose  : arguments.contains("--verbose"),
+    compile  : !arguments.contains("--no-compile")
 )
 
 // A bare `reix` builds, which is the command this front end exists for. Every
@@ -97,11 +102,17 @@ switch verb {
 do {
     let pipeline = try BuildPipeline(root: root, options: options)
 
-    // Task 7 swaps this for the dashboard when stdout is a terminal. Until then
-    // a terminal gets the one line it can redraw, and a pipe gets the report.
+    // A terminal gets the one line it can redraw, and a pipe gets the report.
+    // The two lifeboat flags opt out of cursor control, not just the dashboard.
     let interactive = isatty(FileHandle.standardOutput.fileDescriptor) == 1
+        && !arguments.contains("--plain")
+        && !arguments.contains("--verbose")
 
     let sink = EventSink { event in
+        // The tool's own lines belong to the log and to `--verbose`, which echoes
+        // them on stderr. Nothing here, so this stdout stays what scripts parse.
+        if case .output = event { return }
+
         if case .progress(let phase, let done, let total, let now) = event {
             guard interactive, total > 0 else { return }
             let label = phase.rawValue.padding(toLength: 12, withPad: " ", startingAt: 0)
@@ -122,7 +133,15 @@ do {
         default    : pipeline.steps()
     }
 
-    let ok = await PhaseRunner.run(steps, into: sink)
+    // Whoever is reading decides: a person at a terminal gets the dashboard,
+    // anything that scrapes the output keeps the lines it already parses.
+    let dashboard = interactive
+        && !steps.isEmpty
+        && ProcessInfo.processInfo.environment["CI"] == nil
+
+    let ok = dashboard
+        ? await Dashboard.run(steps, options: options, root: root)
+        : await PhaseRunner.run(steps, into: sink)
     guard ok else { exit(1) }
     guard verb != "build" else { exit(0) }
 
@@ -158,11 +177,13 @@ do {
 
     // The guest writes to this descriptor too, and a buffer nobody flushed would
     // land after everything it prints, or vanish entirely if a signal ends us.
-    print("\n  qemu        Ctrl-A X to quit\n")
+    //
+    // Nothing is announced here. The summary card is the last thing the build
+    // says, and the guest's own banner is the next thing on screen.
     fflush(stdout)
 
     try qemu.run()
-    qemu.waitUntilExit()
+    QemuMachine.waitInForeground(qemu)
     try? FileManager.default.removeItem(at: live)
 
     // The normal exit. A signal takes the other path, in releaseOnSignal, which

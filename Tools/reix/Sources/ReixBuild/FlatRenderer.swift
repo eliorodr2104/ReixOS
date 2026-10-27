@@ -28,8 +28,9 @@ public enum FlatRenderer {
                 // Never reflowed and never truncated: it is the thing being read.
                 return column(phase) + "FAILED\n" + output
 
-            case .progress:
-                // Nothing here can redraw a line, so a count would just be noise.
+            case .progress, .output:
+                // Nothing here can redraw a line, so a count would just be noise,
+                // and the tool's own lines are what `--verbose` and the log carry.
                 return nil
         }
     }

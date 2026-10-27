@@ -9,19 +9,25 @@ import Foundation
 /// The dashboard curates the screen; this is what it curated away.
 public final class BuildLog: @unchecked Sendable {
     private let handle: FileHandle
+    private let echo  : Bool
     private let lock = NSLock()
 
-    public init(at url: URL) throws {
+    /// `echo` is `--verbose`: the same bytes, on standard error as they land.
+    /// Standard error because standard output carries the report the scripts
+    /// parse, and a lifeboat that capsizes the log-scrapers is not one.
+    public init(at url: URL, echo: Bool = false) throws {
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true
         )
         FileManager.default.createFile(atPath: url.path, contents: nil)
-        handle = try FileHandle(forWritingTo: url)
+        handle    = try FileHandle(forWritingTo: url)
+        self.echo = echo
     }
 
     public func write(_ text: String) {
         lock.lock(); defer { lock.unlock() }
         try? handle.write(contentsOf: Data(text.utf8))
+        if echo { FileHandle.standardError.write(Data(text.utf8)) }
     }
 }
 
@@ -43,11 +49,24 @@ public struct BuildPipeline: Sendable {
         public var release  : Bool
         public var bootMode : String
         public var buildPath: String
+        public var verbose  : Bool
 
-        public init(release: Bool = false, bootMode: String = "standard", buildPath: String? = nil) {
+        /// False links and packs whatever is already in `buildPath`. The probe
+        /// harnesses need it: they doctor a static archive we must not rebuild.
+        public var compile  : Bool
+
+        public init(
+            release  : Bool = false,
+            bootMode : String = "standard",
+            buildPath: String? = nil,
+            verbose  : Bool = false,
+            compile  : Bool = true
+        ) {
             self.release   = release
             self.bootMode  = bootMode
             self.buildPath = buildPath ?? ".build-freestanding-\(bootMode)"
+            self.verbose   = verbose
+            self.compile   = compile
         }
     }
 
@@ -103,11 +122,16 @@ public struct BuildPipeline: Sendable {
         self.root      = root
         self.options   = options
         self.toolchain = try Toolchain.discover()
-        self.log       = try BuildLog(at: root.appending(path: Self.outputDir + "/build.log"))
+        // `--verbose` echoes exactly what the log receives, so the two cannot
+        // disagree. `stream` is line live, `run` echoes when its tool finishes.
+        self.log = try BuildLog(
+            at  : root.appending(path: Self.outputDir + "/build.log"),
+            echo: options.verbose
+        )
     }
 
     public func steps() -> [PhaseRunner.Step] {
-        [prune, compile, native, userland, image, disk]
+        [prune] + (options.compile ? [compile] : []) + [native, userland, image, disk]
     }
 
 
@@ -152,19 +176,15 @@ public struct BuildPipeline: Sendable {
     // MARK: - The phases
 
     var prune: PhaseRunner.Step {
-        .init(phase: .prune, why: "iCloud conflict copies and orphaned objects") { _ in
-            let copies = conflictCopies()
-            for copy in copies { try? FileManager.default.removeItem(at: copy) }
-
-            // Neither script's exit code is a build failure: prune-icloud reports 1
-            // when it kept a copy that differs, which is for a human, not the build.
-            for script in ["scripts/prune-icloud.sh", "scripts/prune-stale.sh"] {
-                try run("/bin/sh", [script], checkExit: false)
-            }
-
-            return .done(copies.isEmpty ? "nothing to prune" : "\(copies.count) conflict copies removed")
+        .init(phase: .prune, why: "objects whose source is gone") { sink in
+            // The script's exit code is not a build failure: it reports what it
+            // found for a human, and finding nothing is the normal case.
+            try run("/bin/sh", ["scripts/prune-stale.sh"], checkExit: false,
+                    tail: tail(sink, .prune))
+            return .done("stale objects checked")
         }
     }
+
 
     var compile: PhaseRunner.Step {
         .init(
@@ -183,7 +203,8 @@ public struct BuildPipeline: Sendable {
                 ["build", "--triple", Self.triple,
                  "--scratch-path", options.buildPath]
                     + (options.release ? ["-c", "release"] : []),
-                environment: ["FREESTANDING": "1", "BOOT_MODE": options.bootMode]
+                environment: ["FREESTANDING": "1", "BOOT_MODE": options.bootMode],
+                tail: tail(sink, .compile)
             ) { line in
                 switch tracker.ingest(line, at: clock.now) {
                     case .bar(let done, let total, let detail):
@@ -220,7 +241,7 @@ public struct BuildPipeline: Sendable {
                     ? ["-target", Self.triple] + (fpsimdDiagnostic ? ["-DREIX_FPSIMD_DIAGNOSTIC"] : [])
                     : cFlags + diagnosticCFlags)
                     + ["-c", root.appending(path: src).path, "-o", object(src).path]
-                try run(toolchain.clang, args)
+                try run(toolchain.clang, args, tail: tail(sink, .native))
             }
 
             let sources   = activeKernelNative + Self.reixNative
@@ -241,7 +262,8 @@ public struct BuildPipeline: Sendable {
                 try source.write(to: assembly, atomically: true, encoding: .utf8)
                 try run(toolchain.clang, ["-target", Self.triple,
                                           "-c", assembly.path,
-                                          "-o", work.appending(path: name + ".o").path])
+                                          "-o", work.appending(path: name + ".o").path],
+                        tail: tail(sink, .native))
                 done += 1
             }
 
@@ -281,13 +303,14 @@ public struct BuildPipeline: Sendable {
                     buildDir.appending(path: "libShellLanguage.a").path,
                     buildDir.appending(path: "libProcessServerCore.a").path,
                     "--end-group",
-                ])
+                ], tail: tail(sink, .userland))
 
                 // --strip-all, not --strip-debug: `.swift_ast` is not DWARF and is 67%
                 // of the file. Safe, ElfParser reads the header and program headers.
                 try run(toolchain.objcopy, ["--strip-all",
                                             out.appending(path: "\(app).elf").path,
-                                            stripped.appending(path: "\(app).elf").path])
+                                            stripped.appending(path: "\(app).elf").path],
+                        tail: tail(sink, .userland))
             }
 
             return .done("\(Self.apps.count) programs")
@@ -322,7 +345,8 @@ public struct BuildPipeline: Sendable {
             """.write(to: initrdAsm, atomically: true, encoding: .utf8)
             let initrdObj = work.appending(path: "Initrd.gen.S.o")
             try run(toolchain.clang, ["-target", Self.triple,
-                                      "-c", initrdAsm.path, "-o", initrdObj.path])
+                                      "-c", initrdAsm.path, "-o", initrdObj.path],
+                    tail: tail(sink, .image))
 
             let kernelElf = out.appending(path: "kernel.elf")
             sink(.progress(.image, done: 2, total: 3, now: "kernel.elf"))
@@ -335,11 +359,12 @@ public struct BuildPipeline: Sendable {
                 buildDir.appending(path: "libKernel.a").path,
                 buildDir.appending(path: "libReixABI.a").path,
                 "--end-group",
-            ])
+            ], tail: tail(sink, .image))
 
             let kernelBin = out.appending(path: "kernel.bin")
             sink(.progress(.image, done: 3, total: 3, now: "kernel.bin"))
-            try run(toolchain.objcopy, ["-O", "binary", kernelElf.path, kernelBin.path])
+            try run(toolchain.objcopy, ["-O", "binary", kernelElf.path, kernelBin.path],
+                    tail: tail(sink, .image))
 
             let imageBytes = (try? Data(contentsOf: kernelBin).count) ?? 0
             return .done("kernel \(size(imageBytes)) · initrd \(size(archive.count))")
@@ -350,11 +375,12 @@ public struct BuildPipeline: Sendable {
     /// boot is mounted by the next. Provisioning programs into it is a separate
     /// command and stays that way: it runs the guest's own file system code.
     var disk: PhaseRunner.Step {
-        .init(phase: .disk, why: "\(Self.diskSize) raw image at \(Self.outputDir)/disk.img") { _ in
+        .init(phase: .disk, why: "\(Self.diskSize) raw image at \(Self.outputDir)/disk.img") { sink in
             guard !FileManager.default.fileExists(atPath: diskImage.path) else {
                 return .skipped("\(Self.outputDir)/disk.img is already there")
             }
-            try run(toolchain.qemuImg, ["create", "-f", "raw", diskImage.path, Self.diskSize])
+            try run(toolchain.qemuImg, ["create", "-f", "raw", diskImage.path, Self.diskSize],
+                    tail: tail(sink, .disk))
             return .done("\(Self.diskSize) raw image created")
         }
     }
@@ -368,11 +394,11 @@ public struct BuildPipeline: Sendable {
     /// `ReixApp` is a host product, and Package.swift drops the host targets
     /// from the graph whenever the variable says 1.
     public var programs: PhaseRunner.Step {
-        .init(phase: .programs, why: "\(Self.diskApps.joined(separator: " and ")) into \(Self.outputDir)/disk.img") { _ in
+        .init(phase: .programs, why: "\(Self.diskApps.joined(separator: " and ")) into \(Self.outputDir)/disk.img") { sink in
             try run(toolchain.swift, ["run", "ReixApp", "install", "--format-if-blank",
                                       "--disk", diskImage.path]
                 + Self.diskApps.map { stripped.appending(path: "\($0).elf").path },
-                environment: ["FREESTANDING": ""])
+                environment: ["FREESTANDING": ""], tail: tail(sink, .programs))
             return .done("\(Self.diskApps.count) programs installed")
         }
     }
@@ -477,33 +503,6 @@ public struct BuildPipeline: Sendable {
         }
     }
 
-    /// The `Thing 2.swift` copies iCloud leaves in the artifact trees, found the
-    /// way the Makefile's prune-dups target finds them.
-    func conflictCopies() -> [URL] {
-        let manager = FileManager.default
-        var found  : [URL] = []
-
-        for directory in [out, root.appending(path: options.buildPath)] {
-            guard let walk = manager.enumerator(at: directory, includingPropertiesForKeys: nil)
-            else { continue }
-
-            for case let url as URL in walk where Self.isConflictCopy(url.lastPathComponent) {
-                found.append(url)
-            }
-        }
-        return found
-    }
-
-    /// A space, then digits, then the extension if there is one. The space is
-    /// what keeps a real `Top2.elf` out of this.
-    static func isConflictCopy(_ name: String) -> Bool {
-        let stem = (name as NSString).deletingPathExtension
-
-        guard let space = stem.lastIndex(of: " ") else { return false }
-        let tail = stem[stem.index(after: space)...]
-
-        return !tail.isEmpty && tail.allSatisfy(\.isNumber)
-    }
 
     /// The module named by `Compiling <Module> <File>.swift`, and nothing from
     /// the archiving, wrapping and file-list lines that share its counter.
@@ -520,6 +519,12 @@ public struct BuildPipeline: Sendable {
         bytes < 1024 ? "\(bytes) B" : "\((bytes + 512) / 1024) KiB"
     }
 
+    /// A phase's line tap, for the dashboard's live tail. A closure and not the
+    /// sink itself: `run` has no phase of its own, and `linkApp` has no sink.
+    func tail(_ sink: EventSink, _ phase: Phase) -> (String) -> Void {
+        { sink(.output(phase, line: $0)) }
+    }
+
     /// Runs an external tool and appends everything it wrote to `.reix/build.log`.
     /// Throws on a non-zero exit code, carrying the tool's own output.
     @discardableResult
@@ -527,7 +532,8 @@ public struct BuildPipeline: Sendable {
         _ tool     : String,
         _ args     : [String],
         checkExit  : Bool = true,
-        environment: [String: String] = [:]
+        environment: [String: String] = [:],
+        tail       : ((String) -> Void)? = nil
     ) throws -> Int32 {
         let process = Process()
         process.executableURL       = URL(fileURLWithPath: tool)
@@ -549,6 +555,10 @@ public struct BuildPipeline: Sendable {
         let output = String(data: captured, encoding: .utf8) ?? ""
         log.write("$ \(tool) \(args.joined(separator: " "))\n" + output)
 
+        // Buffered, not line live: `readDataToEndOfFile` above waits for the tool
+        // to finish, so the tail gets these in one burst. These tools are brief.
+        if let tail { for line in output.split(separator: "\n") { tail(String(line)) } }
+
         guard !checkExit || process.terminationStatus == 0 else {
             throw ReixError.tool(
                 "\((tool as NSString).lastPathComponent) exit=\(process.terminationStatus)\n\(output)"
@@ -566,6 +576,7 @@ public struct BuildPipeline: Sendable {
         _ tool     : String,
         _ args     : [String],
         environment: [String: String],
+        tail       : ((String) -> Void)? = nil,
         onLine     : (String) -> Void
     ) throws {
         let process = Process()
@@ -586,6 +597,7 @@ public struct BuildPipeline: Sendable {
         func take(_ line: String) {
             transcript += line + "\n"
             log.write(line + "\n")
+            tail?(line)
             onLine(line)
         }
 

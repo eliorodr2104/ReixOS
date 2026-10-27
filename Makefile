@@ -22,7 +22,7 @@
 #   make smoke-4m   the headless version of the above
 #   make clean-image  remove only $(OUT), keep the compiled modules
 #   make clean      remove $(OUT) and the SwiftPM build directory
-#   make prune-dups remove iCloud conflict copies from the build and source trees
+#   make prune-stale remove objects whose source is gone
 
 # Toolchain discovery. Override either on the command line if needed:
 #     make SWIFT=/path/to/swift QEMU=/path/to/qemu-system-aarch64
@@ -125,7 +125,7 @@ REIX_INITRD  = $(if $(filter embedded,$(INITRD_MODE)),--embedded-initrd)
 # instead and get working code intelligence.
 export FREESTANDING := 1
 
-.PHONY: all build image release app programs programs-release run boot run-release run-4m smoke smoke-4m test host-test performance-test vm-test boot-modes terminal-baseline-4m disk prune-dups clean-image clean
+.PHONY: all build image release app programs programs-release run boot run-release run-4m smoke smoke-4m test host-test performance-test vm-test boot-modes terminal-baseline-4m disk prune-stale clean-image clean
 
 all: image
 
@@ -134,29 +134,12 @@ all: image
 # the integration work either way instead of relying on that detail.
 build: image
 
-# Drop the "<name> 2.ext" copies iCloud leaves behind in the build trees.
+# Remove objects whose source is gone.
 #
-# This package lives under a synced ~/Documents, so every build rewrites several
-# megabytes that the file provider is trying to upload; when the two race it
-# keeps both versions and renames one. They are regenerable artifacts, but a
-# stale copy is indistinguishable from a real one when reading the output
-# directory by hand, and one of them was read as current during an audit.
-#
-# The pattern requires a space before the digit on purpose: a name that ends in a
-# digit, like `Top2.elf` would, is a real target and a broader glob would delete
-# it. `find` rather than a shell glob because a non-matching glob aborts the
-# recipe.
-#
-# Two shapes, and both are needed. Files may or may not have an extension
-# (`debug 2.yaml`, but also `plugins 2`), so the name pattern cannot require a
-# dot. Directories have to be removed with `rm -rf`: `-delete` refuses a
-# non-empty one, and `.build` conflict copies are routinely whole trees
-# (`checkouts 2`, `ReixKernel 2.build`). `-prune` stops the walk from descending
-# into a tree that is about to go away.
-prune-dups:
-	@find $(OUT) $(BUILD_PATH) -depth -name "* [0-9]" -o -name "* [0-9].*" 2>/dev/null \
-	    | while IFS= read -r dup; do rm -rf "$$dup"; done || true
-	@sh scripts/prune-icloud.sh || true
+# SwiftPM keeps the compiled object of a deleted or renamed source, and the
+# archive keeps it as a member, so the linker is handed the same type twice and
+# reports `duplicate symbol` against a file that is not in the tree any more.
+prune-stale:
 	@sh scripts/prune-stale.sh
 
 # Prune, compile and link, all of it inside the `reix` CLI. It replaces both the
@@ -207,11 +190,11 @@ $(DISK):
 # mounts. This is deliberately offline: the importer refuses $(DISK).live, and
 # every managed QEMU path below creates that marker before opening the image.
 programs: image disk
-	@FREESTANDING= $(SWIFT) run ReixApp install --format-if-blank \
+	@FREESTANDING= $(SWIFT) run -q ReixApp install --format-if-blank \
 		--disk $(DISK) $(OUT)/stripped/Shell.elf $(OUT)/stripped/Top.elf
 
 programs-release: release disk
-	@FREESTANDING= $(SWIFT) run ReixApp install --format-if-blank \
+	@FREESTANDING= $(SWIFT) run -q ReixApp install --format-if-blank \
 		--disk $(DISK) $(OUT)/stripped/Shell.elf $(OUT)/stripped/Top.elf
 
 # One-program development loop. Example: `make app APP=Shell` recompiles,
@@ -226,7 +209,7 @@ APP ?= Shell
 app: disk
 	@FREESTANDING=1 $(SWIFT) build --triple $(TRIPLE) --scratch-path $(BUILD_PATH) -q
 	@SWIFT=$(SWIFT) FREESTANDING=1 REIX_BUILD_PATH=$(BUILD_PATH) ./reix app link $(APP)
-	@FREESTANDING= $(SWIFT) run ReixApp install --format-if-blank \
+	@FREESTANDING= $(SWIFT) run -q ReixApp install --format-if-blank \
 		--disk $(DISK) $(OUT)/stripped/$(APP).elf
 
 # The 4 MiB floor the project targets, as a target rather than a hand-typed
@@ -258,6 +241,9 @@ smoke-4m: smoke
 # tests inside one suite, never two suites against each other. Each of those
 # suites repeats this above its @Suite so the flag is not "optimised" away.
 #
+# Tools/reix is its own package, so the root `swift test` cannot see it. Its
+# suite runs here, from the same target, because nothing else would run it.
+#
 # swift-testing appends its own suffix to --xunit-output, so the report lands in
 # $(OUT)/test-results-swift-testing.xml. `swift test` exits non-zero on failure,
 # which is what fails this target.
@@ -280,9 +266,10 @@ smoke-4m: smoke
 test: host-test vm-test
 
 host-test: FREESTANDING :=
-host-test: prune-dups
+host-test: prune-stale
 	@mkdir -p $(OUT)
 	$(SWIFT) test --no-parallel --xunit-output $(OUT)/test-results.xml
+	$(SWIFT) test --package-path Tools/reix
 	$(SWIFT) run TerminalRingHarness
 	$(SWIFT) run InputRouterHarness
 	$(SWIFT) run SerialRingHarness

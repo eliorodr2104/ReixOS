@@ -26,6 +26,11 @@ import time
 
 
 TRIPLE = "aarch64-none-none-elf"
+
+# The build front end is a host tool, not part of the snapshot under test, so
+# the checkout's own shim runs it with the workspace as its working directory.
+REIX = Path(__file__).resolve().parent.parent / "reix"
+
 MODES = ("candidate", "mutation")
 PASS_MARKER = "[ PAGE ZERO PASS ] bytes=4096"
 FAIL_MARKER = "[ PAGE ZERO FAIL ] nonzero-stack-byte"
@@ -285,6 +290,7 @@ def main() -> int:
     original = process_manager.read_text()
     environment = {
         **os.environ,
+        "SWIFT": swift,
         "FREESTANDING": "1",
         "CLANG_MODULE_CACHE_PATH": str(evidence / "module-cache-clang"),
         "SWIFTPM_MODULECACHE_OVERRIDE": str(evidence / "module-cache-swift"),
@@ -309,11 +315,7 @@ def main() -> int:
         )
         replace_init(workspace, evidence, clang, llvm_ar, build_path, mode)
         run_logged(
-            [
-                swift, "package", "--disable-sandbox",
-                "--scratch-path", f"build-plugin-{mode}",
-                "--allow-writing-to-package-directory", "reix",
-            ],
+            [str(REIX), "build", "--no-compile"],
             cwd=workspace,
             environment={**environment, "REIX_BUILD_PATH": build_path},
             log=evidence / f"{mode}-link.log",

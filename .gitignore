@@ -85,3 +85,6 @@ fastlane/test_output
 
 # Build front end scratch tree (Tools/reix is its own package).
 Tools/reix/.build/
+
+# The structural gate baseline: the one kernel.bin the repo keeps on purpose.
+!Tests/Fixtures/build-baseline/kernel.bin

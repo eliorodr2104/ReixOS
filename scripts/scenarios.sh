@@ -194,10 +194,15 @@ post_trace_boot() {
     pt_log=$1
     pt_out=$2
 
-    if ! "$PACKAGE_ROOT/reix" trace "$pt_log" --boot > "$pt_out" 2>/dev/null; then
+    # The shim's build noise must stay out of the parsed stdout, but the
+    # decoder's own error is the diagnosis, so a failure folds it back in.
+    if ! "$PACKAGE_ROOT/reix" trace "$pt_log" --boot > "$pt_out" 2>"$pt_out.err"; then
+        cat "$pt_out.err" >> "$pt_out"
+        rm -f "$pt_out.err"
         printf 'the reix trace decoder failed, see %s' "$pt_out"
         return 1
     fi
+    rm -f "$pt_out.err"
 
     pt_prev=0
     for pt_phase in ppmReady vmmReady heapReady gicReady fsReady pmReady \
@@ -611,10 +616,15 @@ post_terminal_baseline() {
     ptb_json="${ptb_out%.txt}.json"
     ptb_manifest="${ptb_out%-terminal-baseline.txt}-run-manifest.json"
 
-    if ! "$PACKAGE_ROOT/reix" trace "$ptb_log" --interaction > "$ptb_out" 2>/dev/null; then
+    # Same split as post_trace_boot: build noise off the parsed stdout, the
+    # decoder's own error kept in the file the message names.
+    if ! "$PACKAGE_ROOT/reix" trace "$ptb_log" --interaction > "$ptb_out" 2>"$ptb_out.err"; then
+        cat "$ptb_out.err" >> "$ptb_out"
+        rm -f "$ptb_out.err"
         printf 'the terminal interaction decoder failed, see %s' "$ptb_out"
         return 1
     fi
+    rm -f "$ptb_out.err"
 
     ptb_qemu_version=$("$QEMU" --version 2>/dev/null | awk 'NR == 1 { print; exit }')
     [ -n "$ptb_qemu_version" ] || ptb_qemu_version=unavailable
