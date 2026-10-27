@@ -205,9 +205,16 @@ programs-release: release disk
 # target compiles its objects without archiving the `.a` files, so the link
 # step below would take a fresh app and stale libraries. It is incremental
 # either way; what it costs is the kernel's objects, not a rebuild of them.
+#
+# `--build-system native` is the engine every SwiftPM before 6.4 used without
+# being asked. 6.4's default, Swift Build, treats this triple as Darwin: it
+# archives the ELF objects with Apple's libtool, which drops each one as "not a
+# mach-o", and links with ld64 flags that ld.lld rejects. Remove the flag, here
+# and in BuildPipeline's compile phase, once a swift-build release builds
+# $(TRIPLE) from macOS. Host builds are unaffected and keep the default.
 APP ?= Shell
 app: disk
-	@FREESTANDING=1 $(SWIFT) build --triple $(TRIPLE) --scratch-path $(BUILD_PATH) -q
+	@FREESTANDING=1 $(SWIFT) build --build-system native --triple $(TRIPLE) --scratch-path $(BUILD_PATH) -q
 	@SWIFT=$(SWIFT) FREESTANDING=1 REIX_BUILD_PATH=$(BUILD_PATH) ./reix app link $(APP)
 	@FREESTANDING= $(SWIFT) run -q ReixApp install --format-if-blank \
 		--disk $(DISK) $(OUT)/stripped/$(APP).elf

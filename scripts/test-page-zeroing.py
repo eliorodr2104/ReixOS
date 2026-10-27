@@ -97,7 +97,9 @@ def instrument_process_manager(source: str, *, omit_zeroing: bool) -> str:
                 do {
                     stackPage = try ppm.pointee.alloc(4096)
                 } catch {
-                    destroyPartialAddressSpace(&addressSpace)
+                    refundFrames(budget, 1)
+                    destroyPartialAddressSpace(&addressSpace, budget: budget)
+                    freeMetadata(metadataPtr)
                     throw .allocationPageFailed(error)
                 }
 
@@ -306,7 +308,10 @@ def main() -> int:
         build_path = f"build-cross-{mode}"
         run_logged(
             [
-                swift, "build", "--disable-sandbox", "--triple", TRIPLE,
+                # Swift Build cannot build this triple from macOS; the Makefile `app`
+                # target says why and when `native` can go.
+                swift, "build", "--build-system", "native", "--disable-sandbox",
+                "--triple", TRIPLE,
                 "--scratch-path", build_path,
             ],
             cwd=workspace,

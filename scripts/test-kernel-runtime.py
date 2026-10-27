@@ -109,7 +109,10 @@ def build_and_link(
     environment = {**base_environment, diagnostic: "1"}
     run_logged(
         [
-            swift, "build", "--disable-sandbox", "--triple", TRIPLE,
+            # Swift Build cannot build this triple from macOS; the Makefile `app`
+            # target says why and when `native` can go.
+            swift, "build", "--build-system", "native", "--disable-sandbox",
+            "--triple", TRIPLE,
             "--scratch-path", build_path,
         ],
         cwd=workspace,
@@ -244,10 +247,13 @@ def main() -> int:
     manifest_path = evidence / "initial-manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 
+    # The PASS line is an ordinary kprint, which a `standard` boot records but
+    # never puts on the wire; only `diagnostic` keeps every line on the serial.
     base_environment = {
         **os.environ,
         "SWIFT": swift,
         "FREESTANDING": "1",
+        "BOOT_MODE": "diagnostic",
         "CLANG_MODULE_CACHE_PATH": str(evidence / "module-cache-clang"),
         "SWIFTPM_MODULECACHE_OVERRIDE": str(evidence / "module-cache-swift"),
     }

@@ -198,9 +198,11 @@ public struct BuildPipeline: Sendable {
             // total counts llbuild tasks, of which a module is several.
             var modules = Set<String>()
 
+            // Swift Build archives ELF with Darwin libtool and links with ld64 flags.
+            // Drop `native` once a swift-build release builds this triple from macOS.
             try stream(
                 toolchain.swift,
-                ["build", "--triple", Self.triple,
+                ["build", "--build-system", "native", "--triple", Self.triple,
                  "--scratch-path", options.buildPath]
                     + (options.release ? ["-c", "release"] : []),
                 environment: ["FREESTANDING": "1", "BOOT_MODE": options.bootMode],
