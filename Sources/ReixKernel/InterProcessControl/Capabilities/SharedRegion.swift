@@ -72,14 +72,15 @@ public struct SharedRegion: RXObject, ~Copyable {
 
     public let kind        : Kind
 
-    /// A device may retain a physical address after its driver dies. Until a
-    /// device supervisor can prove reset completion, published DMA frames must
-    /// stay allocated for the rest of the boot, even after every CPU mapping
-    /// and capability has gone. Ordinary SHM and unpublished DMA remain reclaimable.
+    /// A device may retain a physical address after its driver dies. Published
+    /// DMA frames therefore stay allocated after every CPU mapping and
+    /// capability has gone, on `DmaQuarantine`, until a holder of the device
+    /// declares it reset. Ordinary SHM and unpublished DMA go straight back.
     ///
     /// A property of what has happened to the region, not of what it is: only a
     /// `.dma` region can ever be published, but one that never was stays
-    /// reclaimable. `kind` is the immutable half.
+    /// reclaimable. `kind` is the immutable half. The declared reset is the one
+    /// thing that clears it, because it is what makes it false.
     var deviceVisible = false
 
     /// Extents in use, the inline ones first and then the spill's.
@@ -99,6 +100,19 @@ public struct SharedRegion: RXObject, ~Copyable {
     /// whenever a region it created does.
     var owner: UnsafeMutablePointer<FrameBudget>? = nil
 
+    /// The base of the device window a `.dma` region was minted through, fixed
+    /// at creation. Zero, and never read, for a `.shared` one.
+    ///
+    /// Not an isolation boundary. With no IOMMU any device the holder can drive
+    /// reaches the buffer, so this does not say who may transfer into it: it
+    /// says which device's reset releases it from `DmaQuarantine`. The base
+    /// alone is the key because windows are carved only as the device tree
+    /// declared them, and two distinct windows never share one.
+    public let device: PhysicalAddress
+
+    /// The next region on `DmaQuarantine`'s list, while this one is on it.
+    var nextQuarantined: UnsafeMutablePointer<SharedRegion>? = nil
+
     /// Extents past the inline ones, from the kernel heap, `nil` until a
     /// region needs more than its cell holds.
     ///
@@ -108,17 +122,19 @@ public struct SharedRegion: RXObject, ~Copyable {
     /// spill is at most sixteen bytes, slab rounding included, per 4 KiB paid for.
     private var spill: UnsafeMutablePointer<PhysicalExtent>? = nil
 
-    /// Twelve, where eight would do for the plain binary decomposition of any
+    /// Ten, where eight would do for the plain binary decomposition of any
     /// count up to `ShmCreate.maxPages` (255 is eight one bits).
     ///
-    /// The header above is 32 bytes and eight extents make it 96, which the
-    /// slab rounds up to 128 anyway. The four slots after them are therefore
-    /// free, and they absorb a few orders split by fragmentation before a
-    /// region has to spill.
-    private var extents: InlineArray<12, PhysicalExtent>
+    /// The header above is 48 bytes and eight extents make it 112, which the
+    /// slab rounds up to 128 anyway. The two slots after them are therefore
+    /// free, and they absorb an order or two split by fragmentation before a
+    /// region has to spill. They were four until `device` and the quarantine
+    /// link took sixteen bytes, which is what keeps the cell at 128.
+    private var extents: InlineArray<10, PhysicalExtent>
 
 
-    /// A region over one block the caller already holds.
+    /// A region over one block the caller already holds, a `.dma` one when it
+    /// names the `device` window it was minted through.
     ///
     /// The only way a `.dma` region is made, so a DMA buffer is one extent by
     /// construction and `dmaPhysical` has a single address to answer.
@@ -126,12 +142,13 @@ public struct SharedRegion: RXObject, ~Copyable {
         physicalPage: consuming PhysicalPage,
         references  : UInt32,
         pageCount   : UInt32,
-        kind        : Kind = .shared,
+        device      : PhysicalAddress? = nil,
         owner       : UnsafeMutablePointer<FrameBudget>? = nil
     ) {
         self.references  = references
         self.pageCount   = pageCount
-        self.kind        = kind
+        self.kind        = device == nil ? .shared : .dma
+        self.device      = device ?? 0
         self.owner       = owner
         self.extents     = InlineArray(repeating: PhysicalExtent(address: 0, order: 0))
         self.extents[0]  = PhysicalExtent(
@@ -151,6 +168,7 @@ public struct SharedRegion: RXObject, ~Copyable {
         self.references = references
         self.pageCount  = pageCount
         self.kind       = .shared
+        self.device     = 0
         self.owner      = owner
         self.extents    = InlineArray(repeating: PhysicalExtent(address: 0, order: 0))
     }
@@ -303,12 +321,13 @@ public struct SharedRegion: RXObject, ~Copyable {
     }
 
 
-    /// Consumes the region after its last owner drops it. Reclaimable frames go
-    /// back to the PPM; device-visible frames remain quarantined. The caller
-    /// frees the region's slab storage in either case.
+    /// Consumes the region after its last owner drops it, giving every frame
+    /// back to the PPM and the spill to the heap. The caller frees the region's
+    /// slab storage.
     ///
-    /// A quarantined region is a `.dma` one, which is a single extent and never
-    /// has a spill, so leaving it alone leaves nothing on the heap either.
+    /// A device-visible region is refused and keeps its frames. It never gets
+    /// here: `releaseSharedRegion` puts it on `DmaQuarantine` instead, and that
+    /// clears the flag once the device is declared reset.
     public consuming func releaseFrames(
         ppm : UnsafeMutablePointer<KernelPPM>,
         heap: UnsafeMutablePointer<KernelHeap>
@@ -334,8 +353,9 @@ func retainSharedRegion(_ region: UnsafeMutablePointer<SharedRegion>) {
 /// window still holds every frame, and refunding it there is how a loop of
 /// create, map and drop would hold memory it never paid for.
 ///
-/// Quarantined DMA frames are never given back to the allocator, so their
-/// charge is not given back either.
+/// Quarantined DMA frames do not go back to the allocator with the region, so
+/// their charge is not given back either. `DmaQuarantine` is the kernel's own
+/// account of them and answers to no budget.
 @inline(__always)
 func disownSharedRegion(
     _ region: UnsafeMutablePointer<SharedRegion>,
@@ -375,6 +395,12 @@ func releaseSharedRegion(
 
     // The region is dying, so the charge ends here whoever holds the budget.
     disownSharedRegion(region, heap: heap)
+
+    // A device may still write there: the cell is kept, frames and all.
+    guard !region.pointee.deviceVisible else {
+        DmaQuarantine.admit(region)
+        return nil
+    }
 
     let failure = region.move().releaseFrames(ppm: ppm, heap: heap)
     heap.pointee.kfree(UnsafeMutableRawPointer(region))

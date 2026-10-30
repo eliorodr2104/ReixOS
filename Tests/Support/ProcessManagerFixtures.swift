@@ -19,8 +19,10 @@ public func withProcessManager(
         let saved = PPMBackend.physicalOffset
         PPMBackend.physicalOffset = 0
         ProcessStatsIndex.reset()
+        DmaQuarantine.reset()
         defer {
             ProcessStatsIndex.reset()
+            DmaQuarantine.reset()
             Arch.CPU.setCurrentProcess(0)
             PPMBackend.physicalOffset = saved
         }

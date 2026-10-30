@@ -10,9 +10,11 @@ import ReixABI
 /// `dmaAlloc(pageCount, deviceHandle)` syscall provider.
 ///
 /// Charged to the creator like an SHM region, with one difference: a buffer
-/// `dmaPhysical` has published is quarantined for the rest of the boot, so its
-/// charge is never refunded either. A driver that restarts in a loop pays for
-/// every buffer it leaves behind.
+/// `dmaPhysical` has published outlives its last holder on `DmaQuarantine`
+/// until `dmaReclaim` declares its device reset, so its charge is never
+/// refunded either. A driver that restarts in a loop pays for every buffer it
+/// leaves behind, and the frames return to the machine only when a successor
+/// resets the device and says so.
 ///
 /// Hands back a physically contiguous, non-cacheable buffer mapped into the
 /// caller, and a capability that names it. Two registers on the way out, like
@@ -36,10 +38,17 @@ import ReixABI
 /// - `.dma` is a right of its own, so holding a device window is no longer
 ///   enough. The console holds one and cannot mint a buffer; the disk driver's
 ///   window says `.dma` because the process that handed it over said so.
-/// - Which device is still not checked, and cannot be. Without an IOMMU nothing
-///   scopes a transfer, so a buffer minted through one window can be read by any
-///   device the holder can reach. Binding the two would be bookkeeping that
-///   looks like a boundary, which is worse than the honest gate.
+/// - Which device transfers into the buffer is still not checked, and cannot
+///   be. Without an IOMMU nothing scopes a transfer, so a buffer minted through
+///   one window can be read by any device the holder can reach.
+/// - The buffer does record the window it was minted through, and that record
+///   is not a boundary either. It answers one question: which device's reset
+///   makes the buffer safe to free once nobody holds it (`dmaReclaim`). It does
+///   not stop another device the holder drives from reaching the buffer, and it
+///   does not stop a holder from declaring a reset that never happened. A
+///   holder that hands a buffer to a device other than the one it was minted
+///   through, and then declares the first one reset, frees memory the second
+///   may still write, and nothing here can tell.
 ///
 /// Real isolation is an SMMU: stream IDs, a translation table per device, and
 /// invalidation. That is the answer and it is not this file. Until then the set
@@ -78,7 +87,7 @@ public struct DmaAlloc: SyscallProvider {
             return
         }
 
-        guard mayTransfer(handle: frame.pointee.x1, in: current) else {
+        guard let window = transferWindow(handle: frame.pointee.x1, in: current) else {
             fail(frame)
             return
         }
@@ -124,7 +133,7 @@ public struct DmaAlloc: SyscallProvider {
             for      : current,
             page     : physicalPage,
             pageCount: pageCount,
-            forDevice: true
+            device   : window.address
         ) {
             case .success(let created):
                 handle = created.handle
@@ -154,25 +163,26 @@ public struct DmaAlloc: SyscallProvider {
     }
 
 
-    /// Whether `handle` names a device window this process may transfer through.
+    /// The device window `handle` names, when this process may transfer
+    /// through it. `dmaReclaim` asks the same question.
     ///
     /// `.dma` and not merely `.write`. Writing a device's registers drives that
     /// device; a physical address is the whole of memory, and the two are only
     /// the same authority for a device that transfers. This used to accept any
     /// device window at all, with any rights on it, so a read-only diagnostic
     /// window over a UART opened the door as wide as a disk controller did.
-    private static func mayTransfer(
+    static func transferWindow(
         handle : UInt64,
         in process: UnsafeMutablePointer<Process>
-    ) -> Bool {
+    ) -> DeviceRegion? {
         guard let handle   = SyscallABI.handle(handle),
               let metadata   = process.pointee.metadata,
               let capability = metadata.pointee.capsTable.resolve(handle),
-              case .device = capability.target,
+              case .device(let window) = capability.target,
               capability.rights.contains(.dma)
-        else { return false }
+        else { return nil }
 
-        return true
+        return window
     }
 
 

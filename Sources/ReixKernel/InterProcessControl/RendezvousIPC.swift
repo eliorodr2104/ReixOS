@@ -661,7 +661,8 @@ public struct RendezvousIPC: IPCInterface, Loggable {
 
 
     /// A region over one block the caller already allocated, which is how a
-    /// DMA buffer stays physically contiguous.
+    /// DMA buffer stays physically contiguous. Naming the `device` window makes
+    /// it a `.dma` region bound to that device.
     ///
     /// - Note: the region's frames are charged to `process` by the syscall that
     ///   allocated them; the owner recorded here is what gives them back.
@@ -669,7 +670,7 @@ public struct RendezvousIPC: IPCInterface, Loggable {
         for process  : UnsafeMutablePointer<Process>,
             page     : consuming PhysicalPage,
             pageCount: UInt32,
-            forDevice: Bool = false
+            device   : PhysicalAddress? = nil
     ) -> Result<(
         handle: UInt32,
         region: UnsafeMutablePointer<SharedRegion>
@@ -686,7 +687,7 @@ public struct RendezvousIPC: IPCInterface, Loggable {
                 physicalPage: page,
                 references  : 0,
                 pageCount   : pageCount,
-                kind        : forDevice ? .dma : .shared,
+                device      : device,
                 owner       : process.pointee.metadata?.pointee.budget
             )
         )

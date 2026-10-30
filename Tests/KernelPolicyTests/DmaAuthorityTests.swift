@@ -316,7 +316,7 @@ struct DmaAuthorityTests {
         }
     }
 
-    @Test("published DMA survives its last owner until device quiescence can be proved")
+    @Test("published DMA survives its last owner until its device is declared reset")
     func publishedDMACannotBeRecycled() {
         for publish in [false, true] {
             withCaller { ram, caller, ipc, context in
@@ -325,7 +325,7 @@ struct DmaAuthorityTests {
                 }
                 let physical = page.address
                 guard case .success(let created) = ipc.pointee.createShared(
-                    for: caller, page: page, pageCount: 1, forDevice: true
+                    for: caller, page: page, pageCount: 1, device: 0x0900_0000
                 ) else { Issue.record("could not create DMA capability"); return }
                 if publish {
                     var query = Arch.TrapFrame()

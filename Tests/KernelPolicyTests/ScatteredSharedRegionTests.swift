@@ -300,7 +300,7 @@ struct ScatteredSharedRegionTests {
             let references = budget(of: creator).pointee.references
 
             // The region's own cell is served, its spill is not: sixteen
-            // single frames are four more than the cell holds.
+            // single frames are six more than the cell holds.
             KernelHeap.failAllocationsAfter = 1
             defer { KernelHeap.failAllocationsAfter = nil }
 
@@ -437,7 +437,7 @@ struct ScatteredSharedRegionTests {
                 let region = created.region
                 let pages  = frames(of: region)
 
-                // Twenty single frames: twelve in the cell, eight spilled.
+                // Twenty single frames: ten in the cell, ten spilled.
                 #expect(region.pointee.extentCount == 20)
                 #expect(held(by: region) == 20)
                 #expect(Set(pages).count == 20)
