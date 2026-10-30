@@ -63,7 +63,8 @@ public struct SharedRegion: RXObject, ~Copyable {
 
     /// Pages of the region, and exactly the frames it holds: a `.shared` region
     /// is made of blocks that sum to it. A `.dma` buffer is the one exception,
-    /// a single block that may round past it.
+    /// a single block that may round past it, and the charge follows the block
+    /// and not this number: see `framesHeld`.
     ///
     /// Immutable, and the reason there is no resize: every window and every
     /// mapper derives its bounds from it, and a size that moves under them is a
@@ -171,6 +172,14 @@ public struct SharedRegion: RXObject, ~Copyable {
         self.device     = 0
         self.owner      = owner
         self.extents    = InlineArray(repeating: PhysicalExtent(address: 0, order: 0))
+    }
+
+
+    /// The frames the region holds, which is what its creator is charged for:
+    /// `pageCount` for a `.shared` region, and the whole block for a `.dma`
+    /// one, whose single block may round past `pageCount`.
+    var framesHeld: UInt32 {
+        kind == .dma ? extent(0).pages : pageCount
     }
 
 
@@ -364,7 +373,7 @@ func disownSharedRegion(
     guard let owner = region.pointee.owner else { return }
 
     if !region.pointee.deviceVisible {
-        refundFrames(owner, region.pointee.pageCount)
+        refundFrames(owner, region.pointee.framesHeld)
     }
 
     region.pointee.owner = nil

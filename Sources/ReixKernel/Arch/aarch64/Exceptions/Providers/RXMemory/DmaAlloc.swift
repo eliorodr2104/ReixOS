@@ -56,10 +56,12 @@ import ReixABI
 /// and today it has one name on it.
 ///
 /// The frames come from one buddy block, which is what makes them contiguous,
-/// rounded up to a power of two as a single block has to be. `shmCreate` no
-/// longer allocates this way: its regions are exact and may be scattered, and
-/// only a buffer made here is a region of one extent, whose address may be
-/// asked for.
+/// rounded up to a power of two as a single block has to be. The charge is the
+/// whole block: a seven-page buffer holds eight frames and costs eight. It used
+/// to cost seven, which let every buffer hold a frame its budget never saw.
+/// `shmCreate` no longer allocates this way: its regions are exact and may be
+/// scattered, and only a buffer made here is a region of one extent, whose
+/// address may be asked for.
 public struct DmaAlloc: SyscallProvider {
 
     public static let number: SyscallNumber = .dmaAlloc
@@ -93,9 +95,11 @@ public struct DmaAlloc: SyscallProvider {
         }
 
         // Charged to the creator, like an SHM region: the frames have one owner.
+        // The whole block and not the request, and before the allocator is asked.
         let budget = vmaManager.pointee.budget
+        let frames = Self.blockFrames(pageCount)
 
-        guard chargeFrames(budget, pageCount) else {
+        guard chargeFrames(budget, frames) else {
             fail(frame)
             return
         }
@@ -103,11 +107,11 @@ public struct DmaAlloc: SyscallProvider {
         let physicalPage: PhysicalPage
         do {
             physicalPage = try context.ppm.pointee.alloc(
-                Int(UInt64(pageCount) * UserSpaceLayout.pageSize)
+                Int(UInt64(frames) * UserSpaceLayout.pageSize)
             )
 
         } catch {
-            refundFrames(budget, pageCount)
+            refundFrames(budget, frames)
             fail(frame)
             return
         }
@@ -141,7 +145,7 @@ public struct DmaAlloc: SyscallProvider {
 
             case .failure:
                 // `createShared` has already given the frames back.
-                refundFrames(budget, pageCount)
+                refundFrames(budget, frames)
                 fail(frame)
                 return
         }
@@ -183,6 +187,15 @@ public struct DmaAlloc: SyscallProvider {
         else { return nil }
 
         return window
+    }
+
+
+    /// The frames of the one buddy block `pageCount` pages are served from:
+    /// the next power of two, as the allocator rounds. `pageCount` is at least
+    /// one and at most `maxPages`, so the shift cannot overflow.
+    @inline(__always)
+    private static func blockFrames(_ pageCount: UInt32) -> UInt32 {
+        UInt32(1) << UInt32(32 - (pageCount - 1).leadingZeroBitCount)
     }
 
 

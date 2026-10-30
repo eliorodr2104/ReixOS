@@ -742,6 +742,82 @@ struct FrameBudgetTests {
     }
 
 
+    /// A buffer is one buddy block, and a block is a power of two. Charging the
+    /// request instead of the block let every seven-page buffer hold a frame
+    /// its creator never paid for.
+    @Test("a DMA buffer is charged the whole block it holds, and every refund is that block")
+    func dmaBufferIsChargedItsBlock() {
+        withRegionCaller { ram, _, _, ipc, caller, context in
+            guard let device = caller.pointee.metadata.pointee.capsTable.install(
+                Capability(
+                    target: .device(DeviceRegion(address: 0x0900_0000, size: 4096)),
+                    badge : Badge(0),
+                    rights: [.read, .write, .dma]
+                )
+            ) else {
+                Issue.record("could not install the device capability")
+                return
+            }
+
+            // Kept alive, so the tables under the windows below already exist
+            // and every charge measured here is a block's alone.
+            guard createRegion(pages: 1, context, device: device) != nil else { return }
+
+            let before = charged(caller)
+
+            guard let buffer     = createRegion(pages: 7, context, device: device),
+                  let capability = caller.pointee.metadata.pointee.capsTable.resolve(buffer.handle),
+                  case .dma(let region) = capability.target
+            else { return }
+
+            #expect(region.pointee.extent(0).order == 3)
+            #expect(charged(caller) == before + 8)
+
+            _ = ipc.pointee.releaseCapability(buffer.handle, of: caller)
+
+            #expect((try? caller.pointee.addressSpace.vmaManager?.pointee.munmapRegion(
+                addr: buffer.address,
+                size: Self.page * 7
+            )) == .completed)
+
+            #expect(charged(caller) == before)
+
+            // `dmaAlloc(7)` as the caller, answering whether it was served.
+            func request() -> Bool {
+                var frame = Arch.TrapFrame()
+                frame.x0 = 7
+                frame.x1 = UInt64(device)
+                DmaAlloc.handle(frame: &frame, context: context)
+                return frame.x0 != UInt64.max
+            }
+
+            // Room for the request and not for the block: refused before the
+            // allocator is asked.
+            let ceiling = limit(caller)
+            setLimit(before + 7, on: caller)
+
+            let snapshot = ram.pmmStateSnapshot()
+            #expect(!request())
+            #expect(ram.pmmStateSnapshot() == snapshot)
+            #expect(charged(caller) == before)
+
+            setLimit(ceiling, on: caller)
+
+            // A block the PPM refuses, then a cell the heap refuses: both after
+            // the charge, and both give back exactly what it took.
+            PPMFaultInjection.failAllocationsAfter = 0
+            #expect(!request())
+            PPMFaultInjection.failAllocationsAfter = nil
+            #expect(charged(caller) == before)
+
+            KernelHeap.failAllocationsAfter = 0
+            #expect(!request())
+            KernelHeap.failAllocationsAfter = nil
+            #expect(charged(caller) == before)
+        }
+    }
+
+
     // MARK: - Failure in the middle
 
     @Test("a fault that fails after its charge leaves the charge where it was")
