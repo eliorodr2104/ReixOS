@@ -8,6 +8,7 @@
 import Testing
 @testable import Kernel
 import KernelHostShims
+import KernelTestSupport
 
 /// `TraceRing`, `TraceExport`'s attachment and the shim's barrier counter are
 /// all global, and `.serialized` only orders this suite's own tests.
@@ -121,6 +122,114 @@ struct TraceExportBatchTests {
             #expect(page_table_barrier_count() == 0)
         }
     }
+
+    @Test("a record that straddles two scattered pages lands half in each")
+    func straddleAcrossScatteredPages() {
+        withScatteredRegion { _, _, region in
+            let ring   = TraceExport.linearPage(1, of: region, linearOffset: 0)
+            let second = TraceExport.linearPage(2, of: region, linearOffset: 0)
+
+            // What sits right after page 1 in physical memory is somebody
+            // else's frame, and must not be written.
+            let neighbour = ring + 4096
+            let untouched = Array(UnsafeRawBufferPointer(start: neighbour, count: 32))
+
+            // Slot 127 starts at byte 4080 of a two-page ring.
+            var batch = TraceExportBatch(
+                ring: ring, region: region, linearOffset: 0, producer: 127, mask: 127
+            )
+            batch.append(TraceEvent(timestamp: 71, code: 72, info: 73, pid: 74, a: 75, b: 76))
+            batch.publish()
+
+            #expect(ring.load(fromByteOffset: 4080, as: UInt64.self) == 71)
+            #expect(ring.load(fromByteOffset: 4088, as: UInt16.self) == 72)
+            #expect(ring.load(fromByteOffset: 4090, as: UInt16.self) == 73)
+            #expect(ring.load(fromByteOffset: 4092, as: UInt32.self) == 74)
+            #expect(second.load(fromByteOffset: 0, as: UInt64.self) == 75)
+            #expect(second.load(fromByteOffset: 8, as: UInt64.self) == 76)
+            #expect(ring.load(fromByteOffset: 0, as: UInt32.self) == 128)
+
+            #expect(Array(UnsafeRawBufferPointer(start: neighbour, count: 32)) == untouched)
+        }
+    }
+
+
+    @Test("an export attached to a scattered region fills its whole ring")
+    func pumpIntoScatteredRegion() {
+        withScatteredRegion { ram, heap, region in
+            let manager = allocateZeroedStorage(ProcessManager.self)
+            defer { UnsafeMutableRawPointer(manager).deallocate() }
+
+            TraceRing.reset()
+            defer { TraceRing.reset() }
+
+            #expect(TraceExport.attach(
+                backing: region,
+                linearOffset: 0,
+                ppm: ram.ppm,
+                heap: heap,
+                processManager: manager
+            ))
+            defer { TraceExport.detach(pid: 0) }
+
+            let ring   = TraceExport.linearPage(1, of: region, linearOffset: 0)
+            let second = TraceExport.linearPage(2, of: region, linearOffset: 0)
+
+            // 8160 bytes of records hold 255, and the capacity is 128 of them.
+            for round in 0..<8 {
+                for index in 0..<16 {
+                    let value = UInt64(round * 16 + index)
+                    TraceRing.append(TraceEvent(timestamp: value, a: 1000 + value, b: 2000 + value))
+                }
+                TraceExport.pump()
+            }
+
+            #expect(ring.load(fromByteOffset: 0, as: UInt32.self) == 128)
+
+            // The record in slot 127 straddles the page boundary.
+            #expect(ring.load(fromByteOffset: 4080, as: UInt64.self) == 127)
+            #expect(second.load(fromByteOffset: 0, as: UInt64.self) == 1127)
+            #expect(second.load(fromByteOffset: 8, as: UInt64.self) == 2127)
+
+            // And slot 126, the last that does not.
+            #expect(ring.load(fromByteOffset: 4048, as: UInt64.self) == 126)
+            #expect(ring.load(fromByteOffset: 4064, as: UInt64.self) == 1126)
+        }
+    }
+
+
+    /// A three-page region whose pages are three single frames, none next to
+    /// another, out of an arena left with no free block larger than a frame.
+    private func withScatteredRegion(
+        _ body: (HostRAM, UnsafeMutablePointer<KernelHeap>, UnsafeMutablePointer<SharedRegion>) -> Void
+    ) {
+        withProcessManager(pages: 64) { ram, heap, _ in
+            ram.checkerboard()
+            let baseline = ram.ppm.pointee.allocatedPages
+
+            let region = UnsafeMutablePointer<SharedRegion>.allocate(capacity: 1)
+            region.initialize(to: SharedRegion(references: 1, pageCount: 3))
+            defer { region.deallocate() }
+
+            do { try region.pointee.allocateFrames(ppm: ram.ppm, heap: heap) }
+            catch { Issue.record("could not allocate the region: \(error)"); return }
+
+            #expect(region.pointee.extentCount == 3)
+            for page in UInt32(0)..<3 {
+                let address = region.pointee.physicalAddress(ofPage: page)
+                for other in UInt32(0)..<3 where other != page {
+                    let distance = Int64(bitPattern: address &- region.pointee.physicalAddress(ofPage: other))
+                    #expect(distance.magnitude > 4096)
+                }
+            }
+
+            body(ram, heap, region)
+
+            #expect(region.move().releaseFrames(ppm: ram.ppm, heap: heap) == nil)
+            #expect(ram.ppm.pointee.allocatedPages == baseline)
+        }
+    }
+
 
     /// A two-page region over host memory, one block, with the ring on page 1.
     private func withRing(
