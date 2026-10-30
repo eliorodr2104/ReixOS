@@ -621,6 +621,48 @@ public struct RendezvousIPC: IPCInterface, Loggable {
         return .success(parentEndpointHandle)
     }
     
+    /// An ordinary shared region of `pageCount` frames, wherever the PPM has
+    /// them. See `SharedRegion.allocateFrames`.
+    ///
+    /// - Note: the region's frames are charged to `process` by the syscall that
+    ///   asked for them; the owner recorded here is what gives them back.
+    public mutating func createShared(
+        for process  : UnsafeMutablePointer<Process>,
+            pageCount: UInt32
+    ) -> Result<(
+        handle: UInt32,
+        region: UnsafeMutablePointer<SharedRegion>
+    ), IPCError> {
+
+        guard let sharedRegion = heap.pointee.kmallocOrNil(SharedRegion.self) else {
+            return .failure(.outOfEndpoints)
+        }
+
+        sharedRegion.initialize(
+            to: SharedRegion(
+                references: 0,
+                pageCount : pageCount,
+                owner     : process.pointee.metadata?.pointee.budget
+            )
+        )
+
+        do {
+            try sharedRegion.pointee.allocateFrames(ppm: ppm, heap: heap)
+
+        } catch {
+            // `allocateFrames` has already given back every frame it took.
+            heap.pointee.kfree(UnsafeMutableRawPointer(sharedRegion))
+
+            return .failure(.outOfEndpoints)
+        }
+
+        return install(sharedRegion, for: process)
+    }
+
+
+    /// A region over one block the caller already allocated, which is how a
+    /// DMA buffer stays physically contiguous.
+    ///
     /// - Note: the region's frames are charged to `process` by the syscall that
     ///   allocated them; the owner recorded here is what gives them back.
     public mutating func createShared(
@@ -649,15 +691,29 @@ public struct RendezvousIPC: IPCInterface, Loggable {
             )
         )
 
+        return install(sharedRegion, for: process)
+    }
+
+
+    /// Hands `process` the one capability a fresh region starts with, or frees
+    /// the region whole.
+    private mutating func install(
+        _   sharedRegion: UnsafeMutablePointer<SharedRegion>,
+        for process     : UnsafeMutablePointer<Process>
+    ) -> Result<(
+        handle: UInt32,
+        region: UnsafeMutablePointer<SharedRegion>
+    ), IPCError> {
+
         let capability = Capability(
-            target: forDevice ? .dma(sharedRegion) : .shared(sharedRegion),
+            target: sharedRegion.pointee.kind == .dma ? .dma(sharedRegion) : .shared(sharedRegion),
             badge : Badge(0),
             rights: [.send, .receive, .grant, .read, .write]
         )
 
         guard let handle = process.pointee.metadata.pointee.capsTable.install(capability) else {
-            if let failure = sharedRegion.move().releaseFrame(ppm: ppm) {
-                Self.error("shared region unwound with no capability installed but its frame was refused, \(failure.description)")
+            if let failure = sharedRegion.move().releaseFrames(ppm: ppm, heap: heap) {
+                Self.error("shared region unwound with no capability installed but one of its frames was refused, \(failure.description)")
             }
 
             heap.pointee.kfree(UnsafeMutableRawPointer(sharedRegion))

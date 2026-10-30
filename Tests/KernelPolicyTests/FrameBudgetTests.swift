@@ -452,11 +452,9 @@ struct FrameBudgetTests {
             guard let capability = caller.pointee.metadata.pointee.capsTable.resolve(region.handle),
                   case .shared(let shared) = capability.target,
                   let second = try? vma.pointee.mapRegion(
-                    physicalBase: shared.pointee.physicalPage.address,
-                    pageCount   : 4,
-                    kind        : .shared,
-                    permissions : [.read, .write, .user],
-                    sharedRegion: shared
+                    shared,
+                    kind       : .shared,
+                    permissions: [.read, .write, .user]
                   )
             else {
                 Issue.record("could not open a second window")
@@ -541,7 +539,7 @@ struct FrameBudgetTests {
             // Disowned rather than freed: the keeper still has it.
             #expect(charged(caller) == 0)
             #expect(shared.pointee.owner == nil)
-            #expect(ram.ppm.pointee.refCount(of: shared.pointee.physicalPage.address) > 0)
+            #expect(ram.ppm.pointee.refCount(of: shared.pointee.physicalAddress(ofPage: 0)) > 0)
             #expect(ram.ppm.pointee.allocatedPages <= frames)
 
             // And the region's later death refunds nobody.
@@ -595,7 +593,7 @@ struct FrameBudgetTests {
 
             #expect(charged(caller) == 0)
             #expect(shared.pointee.owner == nil)
-            #expect(ram.ppm.pointee.refCount(of: shared.pointee.physicalPage.address) > 0)
+            #expect(ram.ppm.pointee.refCount(of: shared.pointee.physicalAddress(ofPage: 0)) > 0)
 
             Arch.CPU.setCurrentProcess(0)
             manager.pointee.releaseProcess(caller)
@@ -637,7 +635,7 @@ struct FrameBudgetTests {
 
             #expect(charged(caller) == 0)
             #expect(shared.pointee.owner == nil)
-            #expect(ram.ppm.pointee.refCount(of: shared.pointee.physicalPage.address) > 0)
+            #expect(ram.ppm.pointee.refCount(of: shared.pointee.physicalAddress(ofPage: 0)) > 0)
 
             Arch.CPU.setCurrentProcess(0)
             manager.pointee.releaseProcess(caller)
@@ -684,7 +682,7 @@ struct FrameBudgetTests {
 
             #expect(shared.pointee.owner != nil)
 
-            let regionPhysical = shared.pointee.physicalPage.address
+            let regionPhysical = shared.pointee.physicalAddress(ofPage: 0)
             let cell           = budget(of: caller)
 
             Arch.CPU.setCurrentProcess(0)

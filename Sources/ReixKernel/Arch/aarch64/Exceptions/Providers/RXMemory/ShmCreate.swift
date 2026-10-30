@@ -14,6 +14,9 @@ import ReixABI
 /// a time. A mapper of somebody else's region pays nothing: the frames have one
 /// owner, and it is the one that minted them.
 ///
+/// The region holds exactly `pageCount` frames, the charge, as blocks that may
+/// lie anywhere in physical memory: see `SharedRegion.allocateFrames`.
+///
 /// This is a two-register syscall: `x0` carries the capability handle and `x1`
 /// the base virtual address the region was mapped at. The userland wrapper goes
 /// through `_asm_spawn`, which stores `x1` into the result buffer
@@ -63,31 +66,10 @@ public struct ShmCreate: SyscallProvider {
             return
         }
 
-        // Allocate the contiguous physical block.
-        let physicalPage: PhysicalPage
-        do {
-            physicalPage = try context.ppm.pointee.alloc(Int(UInt64(pageCount) * UserSpaceLayout.pageSize))
-            
-        } catch {
-            refundFrames(budget, pageCount)
-            frame.pointee.x0 = UInt64.max
-            frame.pointee.x1 = 0
-            return
-        }
-
-        let zeroDest: UnsafeMutablePointer<UInt8> = vmaManager.pointee.context.vmm.pointee.physToVirt(
-            physicalPage.address
-        )
-        zeroDest.initialize(
-            repeating: 0,
-            count    : Int(UInt64(pageCount) * UserSpaceLayout.pageSize)
-        )
-
         let handle: UInt32
         let region: UnsafeMutablePointer<SharedRegion>
         switch context.ipc.pointee.createShared(
             for      : current,
-            page     : physicalPage,
             pageCount: pageCount
         ) {
             case .success(let created):
@@ -102,13 +84,23 @@ public struct ShmCreate: SyscallProvider {
                 return
         }
 
+        for index in 0..<Int(region.pointee.extentCount) {
+            let extent = region.pointee.extent(index)
+
+            let zeroDest: UnsafeMutablePointer<UInt8> = vmaManager.pointee.context.vmm.pointee.physToVirt(
+                extent.address
+            )
+            zeroDest.initialize(
+                repeating: 0,
+                count    : Int(UInt64(extent.pages) * UserSpaceLayout.pageSize)
+            )
+        }
+
         do {
             let regionAddress = try vmaManager.pointee.mapRegion(
-                physicalBase: region.pointee.physicalPage.address,
-                pageCount   : Int(pageCount),
-                kind        : .shared,
-                permissions : [.read, .write, .user],
-                sharedRegion: region
+                region,
+                kind       : .shared,
+                permissions: [.read, .write, .user]
             )
 
             frame.pointee.x0 = UInt64(handle)

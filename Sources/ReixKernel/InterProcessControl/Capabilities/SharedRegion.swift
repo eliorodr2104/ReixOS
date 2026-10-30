@@ -5,6 +5,31 @@
 //  Created by Eliomar on 24/06/2026.
 //
 
+/// One buddy block behind a shared region: `1 << order` frames from `address`.
+///
+/// One word and not two. A block head is page aligned, so the low twelve bits
+/// of its address are always zero, and the order (at most the buddy's maximum,
+/// 11) fits in them. At sixteen bytes an extent would push a region with its
+/// inline extents out of the 128-byte slab class and into the 256-byte one.
+public struct PhysicalExtent: RXAllocatable {
+
+    private static var orderMask: UInt64 { 0xFFF }
+
+    private let word: UInt64
+
+    init(
+        address: PhysicalAddress,
+        order  : UInt8
+    ) {
+        self.word = address | UInt64(order)
+    }
+
+    var address: PhysicalAddress { word & ~Self.orderMask }
+    var order  : UInt8           { UInt8(truncatingIfNeeded: word & Self.orderMask) }
+    var pages  : UInt32          { UInt32(1) << UInt32(order) }
+}
+
+
 public struct SharedRegion: RXObject, ~Copyable {
 
     /// What the region was minted as, fixed at creation.
@@ -22,8 +47,6 @@ public struct SharedRegion: RXObject, ~Copyable {
 
     public static var errorMessageAllocation: StaticString = "Shared Region error allocation"
 
-    public var physicalPage: PhysicalPage
-
     /// How many live holders this region has.
     ///
     /// Exactly three things count, and they are counted the same: a capability
@@ -38,7 +61,9 @@ public struct SharedRegion: RXObject, ~Copyable {
     /// The frame charge is not this count: see `owner`.
     public var references  : UInt32
 
-    /// Pages of the one contiguous physical block behind this region.
+    /// Pages of the region, and exactly the frames it holds: a `.shared` region
+    /// is made of blocks that sum to it. A `.dma` buffer is the one exception,
+    /// a single block that may round past it.
     ///
     /// Immutable, and the reason there is no resize: every window and every
     /// mapper derives its bounds from it, and a size that moves under them is a
@@ -57,6 +82,9 @@ public struct SharedRegion: RXObject, ~Copyable {
     /// reclaimable. `kind` is the immutable half.
     var deviceVisible = false
 
+    /// Extents in use, the inline ones first and then the spill's.
+    private(set) var extentCount: UInt16 = 0
+
     /// The budget the frames of this region were charged to when it was
     /// created, with one hold taken on it. `nil` once the charge has ended.
     ///
@@ -71,6 +99,29 @@ public struct SharedRegion: RXObject, ~Copyable {
     /// whenever a region it created does.
     var owner: UnsafeMutablePointer<FrameBudget>? = nil
 
+    /// Extents past the inline ones, from the kernel heap, `nil` until a
+    /// region needs more than its cell holds.
+    ///
+    /// Not charged to the creator's `FrameBudget`, like the region's own cell
+    /// and every VMA node: kernel-heap metadata is bounded by what it describes.
+    /// Here the bound is tight: a slot covers at least one charged frame, so the
+    /// spill is at most sixteen bytes, slab rounding included, per 4 KiB paid for.
+    private var spill: UnsafeMutablePointer<PhysicalExtent>? = nil
+
+    /// Twelve, where eight would do for the plain binary decomposition of any
+    /// count up to `ShmCreate.maxPages` (255 is eight one bits).
+    ///
+    /// The header above is 32 bytes and eight extents make it 96, which the
+    /// slab rounds up to 128 anyway. The four slots after them are therefore
+    /// free, and they absorb a few orders split by fragmentation before a
+    /// region has to spill.
+    private var extents: InlineArray<12, PhysicalExtent>
+
+
+    /// A region over one block the caller already holds.
+    ///
+    /// The only way a `.dma` region is made, so a DMA buffer is one extent by
+    /// construction and `dmaPhysical` has a single address to answer.
     public init(
         physicalPage: consuming PhysicalPage,
         references  : UInt32,
@@ -78,27 +129,194 @@ public struct SharedRegion: RXObject, ~Copyable {
         kind        : Kind = .shared,
         owner       : UnsafeMutablePointer<FrameBudget>? = nil
     ) {
-        self.physicalPage = physicalPage
-        self.references   = references
-        self.pageCount    = pageCount
-        self.kind         = kind
-        self.owner        = owner
+        self.references  = references
+        self.pageCount   = pageCount
+        self.kind        = kind
+        self.owner       = owner
+        self.extents     = InlineArray(repeating: PhysicalExtent(address: 0, order: 0))
+        self.extents[0]  = PhysicalExtent(
+            address: physicalPage.address,
+            order  : physicalPage.order
+        )
+        self.extentCount = 1
     }
+
+
+    /// A `.shared` region with no frames yet. `allocateFrames` gives it its own.
+    public init(
+        references: UInt32,
+        pageCount : UInt32,
+        owner     : UnsafeMutablePointer<FrameBudget>? = nil
+    ) {
+        self.references = references
+        self.pageCount  = pageCount
+        self.kind       = .shared
+        self.owner      = owner
+        self.extents    = InlineArray(repeating: PhysicalExtent(address: 0, order: 0))
+    }
+
+
+    /// Extent `index`, counted across the inline ones and the spill.
+    @inline(__always)
+    func extent(_ index: Int) -> PhysicalExtent {
+        index < extents.count ? extents[index] : spill![index - extents.count]
+    }
+
+
+    /// Where page `page` of the region lives.
+    ///
+    /// Pages are numbered across the extents in order, so a window over the
+    /// region is contiguous in virtual memory whatever the frames are in
+    /// physical memory. Only a `.dma` region promises the second.
+    func physicalAddress(ofPage page: UInt32) -> PhysicalAddress {
+        var first: UInt32 = 0
+
+        for index in 0..<Int(extentCount) {
+            let extent = extent(index)
+
+            if page - first < extent.pages {
+                return extent.address + UInt64(page - first) * UserSpaceLayout.pageSize
+            }
+
+            first += extent.pages
+        }
+
+        Arch.CPU.panic("shared region page out of range")
+    }
+
+
+    /// Takes exactly `pageCount` frames from `ppm` as buddy blocks, largest
+    /// first.
+    ///
+    /// Five pages are a block of four and a block of one, never the eight a
+    /// single block rounds up to. A block of the order the decomposition wants
+    /// may not exist even when enough frames are free, so a refused order is
+    /// split into the next one down, to order zero if it has to be: these
+    /// frames need not be contiguous. A DMA buffer's must, and it is never made
+    /// here.
+    ///
+    /// All or nothing. On a refusal every block already taken goes back to the
+    /// PPM and the spill to the heap, so the caller is left an empty cell.
+    mutating func allocateFrames(
+        ppm : UnsafeMutablePointer<KernelPPM>,
+        heap: UnsafeMutablePointer<KernelHeap>
+    ) throws(PPMError) {
+        guard kind == .shared, extentCount == 0, pageCount > 0 else {
+            throw .allocationFailed(reason: .bytesNotValid(Int(pageCount)))
+        }
+
+        var remaining = pageCount
+
+        // Free memory only shrinks while this runs, so an order refused once is
+        // refused again, and every larger one with it: the order never climbs.
+        var order = UInt8(31 - remaining.leadingZeroBitCount)
+
+        while remaining > 0 {
+            while UInt32(1) << UInt32(order) > remaining { order -= 1 }
+
+            let block: PhysicalPage
+            do {
+                block = try ppm.pointee.alloc(Int(UserSpaceLayout.pageSize) << Int(order))
+
+            } catch {
+                guard order > 0 else {
+                    _ = giveBack(ppm: ppm, heap: heap)
+                    throw error
+                }
+
+                order -= 1
+                continue
+            }
+
+            let extent = PhysicalExtent(address: block.address, order: block.order)
+
+            guard append(extent, owed: remaining, heap: heap) else {
+                try? ppm.pointee.free(block)
+                _ = giveBack(ppm: ppm, heap: heap)
+                throw .allocationFailed(reason: .fullMemory)
+            }
+
+            remaining -= extent.pages
+        }
+    }
+
+
+    /// Records `extent`, spilling to the heap once the cell is full.
+    ///
+    /// `owed` is what is left to allocate, this extent included. Every extent
+    /// covers at least one frame, so that many slots hold every extent still to
+    /// come, and the spill sized here never has to grow.
+    private mutating func append(
+        _ extent: PhysicalExtent,
+        owed    : UInt32,
+        heap    : UnsafeMutablePointer<KernelHeap>
+    ) -> Bool {
+        let index = Int(extentCount)
+
+        if index < extents.count {
+            extents[index] = extent
+
+        } else {
+            if spill == nil {
+                guard let storage = heap.pointee.kmallocOrNil(
+                    PhysicalExtent.self,
+                    Int(owed)
+                ) else { return false }
+
+                spill = storage
+            }
+
+            spill!.advanced(by: index - extents.count).initialize(to: extent)
+        }
+
+        extentCount += 1
+        return true
+    }
+
+
+    /// Every extent back to the PPM and the spill back to the heap, leaving the
+    /// region with no frames. The first refusal is reported, and the remaining
+    /// extents are still given back.
+    private mutating func giveBack(
+        ppm : UnsafeMutablePointer<KernelPPM>,
+        heap: UnsafeMutablePointer<KernelHeap>
+    ) -> PPMError? {
+        var failure: PPMError? = nil
+
+        for index in 0..<Int(extentCount) {
+            let extent = extent(index)
+
+            do {
+                try ppm.pointee.free(PhysicalPage(address: extent.address, order: extent.order))
+
+            } catch {
+                if failure == nil { failure = error }
+            }
+        }
+
+        if let spill { heap.pointee.kfree(UnsafeMutableRawPointer(spill)) }
+
+        spill       = nil
+        extentCount = 0
+
+        return failure
+    }
+
 
     /// Consumes the region after its last owner drops it. Reclaimable frames go
     /// back to the PPM; device-visible frames remain quarantined. The caller
     /// frees the region's slab storage in either case.
-    public consuming func releaseFrame(
-        ppm: UnsafeMutablePointer<KernelPPM>
+    ///
+    /// A quarantined region is a `.dma` one, which is a single extent and never
+    /// has a spill, so leaving it alone leaves nothing on the heap either.
+    public consuming func releaseFrames(
+        ppm : UnsafeMutablePointer<KernelPPM>,
+        heap: UnsafeMutablePointer<KernelHeap>
     ) -> PPMError? {
 
         guard !deviceVisible else { return nil }
 
-        do {
-            try ppm.pointee.free(physicalPage)
-            return nil
-
-        } catch { return error }
+        return giveBack(ppm: ppm, heap: heap)
     }
 }
 
@@ -158,7 +376,7 @@ func releaseSharedRegion(
     // The region is dying, so the charge ends here whoever holds the budget.
     disownSharedRegion(region, heap: heap)
 
-    let failure = region.move().releaseFrame(ppm: ppm)
+    let failure = region.move().releaseFrames(ppm: ppm, heap: heap)
     heap.pointee.kfree(UnsafeMutableRawPointer(region))
     return failure
 }

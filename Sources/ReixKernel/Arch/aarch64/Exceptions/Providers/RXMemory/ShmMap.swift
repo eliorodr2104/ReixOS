@@ -57,11 +57,9 @@ public struct ShmMap: SyscallProvider {
 
         do {
             let vaddr = try vmaManager.pointee.mapRegion(
-                physicalBase: region.pointee.physicalPage.address,
-                pageCount   : Int(region.pointee.pageCount),
-                kind        : .shared,
-                permissions : permissions,
-                sharedRegion: region
+                region,
+                kind       : .shared,
+                permissions: permissions
             )
             frame.pointee.x0 = vaddr
             

@@ -129,20 +129,19 @@ public struct ProfileControlSyscall: SyscallProvider {
               cap.rights.contains([.read, .write])
         else { return false }
 
-        let pageCount = region.pointee.pageCount
-        guard pageCount >= 2 else { return false }
+        guard region.pointee.pageCount >= 2 else { return false }
 
-        let physical = region.pointee.physicalPage.address
-        guard physical <= VirtualMemoryManager.maxPhysicalAddress else { return false }
+        // Every block, because the pages of one are not where the next one's are.
+        for index in 0..<Int(region.pointee.extentCount) {
+            let extent = region.pointee.extent(index)
+            let last   = extent.address + (UInt64(extent.pages) - 1) * UserSpaceLayout.pageSize
 
-        guard let base = UnsafeMutableRawPointer(
-            bitPattern: UInt(physical + VirtualMemoryManager.physicalOffset)
-        ) else { return false }
+            guard last <= VirtualMemoryManager.maxPhysicalAddress else { return false }
+        }
 
         return TraceExport.attach(
-            base          : base,
             backing       : region,
-            pageCount     : pageCount,
+            linearOffset  : VirtualMemoryManager.physicalOffset,
             ppm           : context.ppm,
             heap          : context.ipc.pointee.heap,
             processManager: context.processManager

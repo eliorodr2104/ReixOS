@@ -7,36 +7,69 @@
 
 import ReixABI
 
+/// One tick's records on their way into the export ring, published with one
+/// barrier and one cursor store at the end.
+///
+/// The ring starts at page 1 of the export region and is contiguous only in
+/// the region's own numbering: each of its pages may be anywhere in physical
+/// memory, so every address past the first page is resolved through the
+/// region's extents and never computed from another page's.
 struct TraceExportBatch {
     static let tailOffset    = 0
     static let recordsOffset = 16
     static let recordSize    = 32
 
-    private let ring   : UnsafeMutableRawPointer
-    private let mask   : UInt32
-    private var pending: UInt32 = 0
+    /// The region page the ring starts on. Page 0 is the stats snapshot.
+    static let firstPage: UInt32 = 1
+
+    private static let pageSize = Int(UserSpaceLayout.pageSize)
+
+    private let ring        : UnsafeMutableRawPointer
+    private let region      : UnsafeMutablePointer<SharedRegion>
+    private let linearOffset: UInt64
+    private let mask        : UInt32
+    private var pending     : UInt32 = 0
+
+    /// The ring page the last store landed on and where it is, so a tick
+    /// resolves a page once rather than once per record.
+    private var cachedPage: Int
+    private var cachedBase: UnsafeMutableRawPointer
 
     private(set) var producer: UInt32
 
+    /// `ring` is the linear-map address of the ring's first page, which holds
+    /// the header; `linearOffset` turns any other page of `region` into one.
     init(
-        ring    : UnsafeMutableRawPointer,
-        producer: UInt32,
-        mask    : UInt32
+        ring        : UnsafeMutableRawPointer,
+        region      : UnsafeMutablePointer<SharedRegion>,
+        linearOffset: UInt64,
+        producer    : UInt32,
+        mask        : UInt32
     ) {
-        self.ring     = ring
-        self.producer = producer
-        self.mask     = mask
+        self.ring         = ring
+        self.region       = region
+        self.linearOffset = linearOffset
+        self.producer     = producer
+        self.mask         = mask
+        self.cachedPage   = 0
+        self.cachedBase   = ring
     }
 
+    /// A record starts 16 bytes past a 32-byte boundary, so one in every 128
+    /// straddles two pages. Its two halves never do: each starts on a 16-byte
+    /// boundary and is 16 bytes long, so each is stored through its own page.
     mutating func append(_ event: TraceEvent) {
         let offset = Self.recordsOffset + Int(producer & mask) * Self.recordSize
 
-        ring.storeBytes(of: event.timestamp, toByteOffset: offset,      as: UInt64.self)
-        ring.storeBytes(of: event.code,      toByteOffset: offset +  8, as: UInt16.self)
-        ring.storeBytes(of: event.info,      toByteOffset: offset + 10, as: UInt16.self)
-        ring.storeBytes(of: event.pid,       toByteOffset: offset + 12, as: UInt32.self)
-        ring.storeBytes(of: event.a,         toByteOffset: offset + 16, as: UInt64.self)
-        ring.storeBytes(of: event.b,         toByteOffset: offset + 24, as: UInt64.self)
+        let head = address(ofRingByte: offset)
+        head.storeBytes(of: event.timestamp, toByteOffset: 0,  as: UInt64.self)
+        head.storeBytes(of: event.code,      toByteOffset: 8,  as: UInt16.self)
+        head.storeBytes(of: event.info,      toByteOffset: 10, as: UInt16.self)
+        head.storeBytes(of: event.pid,       toByteOffset: 12, as: UInt32.self)
+
+        let tail = address(ofRingByte: offset + 16)
+        tail.storeBytes(of: event.a,         toByteOffset: 0,  as: UInt64.self)
+        tail.storeBytes(of: event.b,         toByteOffset: 8,  as: UInt64.self)
 
         producer &+= 1
         pending  &+= 1
@@ -48,6 +81,23 @@ struct TraceExportBatch {
         Arch.MMU.pageTableBarrier()
         ring.storeBytes(of: producer, toByteOffset: Self.tailOffset, as: UInt32.self)
         pending = 0
+    }
+
+    /// Where byte `offset` of the ring is, through the page it falls on.
+    @inline(__always)
+    private mutating func address(ofRingByte offset: Int) -> UnsafeMutableRawPointer {
+        let page = offset / Self.pageSize
+
+        if page != cachedPage {
+            cachedPage = page
+            cachedBase = TraceExport.linearPage(
+                Self.firstPage + UInt32(page),
+                of          : region,
+                linearOffset: linearOffset
+            )
+        }
+
+        return cachedBase + offset % Self.pageSize
     }
 }
 
@@ -63,6 +113,10 @@ struct TraceExportBatch {
 /// `profileControl(.attachExport, handle)`, and the reader polls it.
 ///
 /// ## The region
+///
+/// The region is numbered in pages and nothing more: `shmCreate` makes it out
+/// of blocks that may lie anywhere in physical memory, so the kernel reaches
+/// each page through the region's extents and never one page from another.
 ///
 /// Page 0 is a stats snapshot behind a seqlock:
 ///
@@ -153,6 +207,14 @@ enum TraceExport {
     /// address space is installed.
     private static var region: UnsafeMutableRawPointer? = nil
 
+    /// Page 1 of the attached region, where the ring header is, through the
+    /// same linear map. Only meaningful while `region` is set.
+    private static var ring: UnsafeMutableRawPointer? = nil
+
+    /// What turns a physical address of the region into a pointer to it: the
+    /// linear map's offset on the machine.
+    private static var linearOffset: UInt64 = 0
+
     /// The process whose capability names the attached region, `0` when nobody
     /// is attached. No process is ever numbered zero, so a pid can never match
     /// an unattached exporter.
@@ -186,13 +248,13 @@ enum TraceExport {
 
     // MARK: - Attach
 
-    /// Retains `backing` as the export region and starts publishing through `base`.
+    /// Retains `backing` as the export region and starts publishing into it.
     ///
-    /// `base` is the kernel's linear-map window on the region's frames and
-    /// `pageCount` its length, both already validated by the caller against
-    /// the capability that named it. The PPM, the heap and the process manager
-    /// come from the syscall context rather than from `Kernel`, so the tick
-    /// reads exactly the instances the syscall layer was built with.
+    /// `linearOffset` is what turns a physical address of `backing` into a
+    /// kernel pointer, already validated by the caller against every extent of
+    /// the region the capability named. The PPM, the heap and the process
+    /// manager come from the syscall context rather than from `Kernel`, so the
+    /// tick reads exactly the instances the syscall layer was built with.
     ///
     /// A second attach replaces the first without ceremony. There is one
     /// consumer, and a kernel that refused would leave a process that died
@@ -206,13 +268,13 @@ enum TraceExport {
     /// last used for. The export cursor starts at "now": see
     /// `TraceRing.currentHead`.
     static func attach(
-        base          : UnsafeMutableRawPointer,
         backing       : UnsafeMutablePointer<SharedRegion>,
-        pageCount     : UInt32,
+        linearOffset  : UInt64,
         ppm           : UnsafeMutablePointer<KernelPPM>,
         heap          : UnsafeMutablePointer<KernelHeap>,
         processManager: UnsafeMutablePointer<ProcessManager>
     ) -> Bool {
+        let pageCount = backing.pointee.pageCount
         guard pageCount >= 2 else { return false }
 
         let pageSize  = Int(UserSpaceLayout.pageSize)
@@ -225,7 +287,8 @@ enum TraceExport {
         retainSharedRegion(backing)
         detachCurrent()
 
-        let ring = base + pageSize
+        let base = linearPage(0, of: backing, linearOffset: linearOffset)
+        let ring = linearPage(TraceExportBatch.firstPage, of: backing, linearOffset: linearOffset)
 
         clear(base, bytes: pageSize)
 
@@ -245,8 +308,10 @@ enum TraceExport {
         Self.sequence     = 0
         Self.exportCursor = TraceRing.currentHead
 
-        Self.owner   = Arch.CPU.getCurrentProcess()?.pointee.pid ?? 0
-        Self.backing = backing
+        Self.owner        = Arch.CPU.getCurrentProcess()?.pointee.pid ?? 0
+        Self.backing      = backing
+        Self.ring         = ring
+        Self.linearOffset = linearOffset
 
         // One refresh now, so a reader that polls immediately finds an even
         // `seq` and real numbers instead of a page of zeroes for 320 ms.
@@ -254,6 +319,19 @@ enum TraceExport {
         Self.region = base
 
         return true
+    }
+
+
+    /// Page `page` of `region` through the linear map that `linearOffset` names.
+    @inline(__always)
+    static func linearPage(
+        _  page        : UInt32,
+        of region      : UnsafeMutablePointer<SharedRegion>,
+        linearOffset   : UInt64
+    ) -> UnsafeMutableRawPointer {
+        UnsafeMutableRawPointer(
+            bitPattern: UInt(region.pointee.physicalAddress(ofPage: page) + linearOffset)
+        )!
     }
 
 
@@ -282,9 +360,11 @@ enum TraceExport {
         let releasedPPM     = ppm
         let releasedHeap    = heap
 
-        region = nil
-        backing = nil
-        owner  = 0
+        region       = nil
+        ring         = nil
+        backing      = nil
+        owner        = 0
+        linearOffset = 0
 
         ringCapacity = 0
         ringMask     = 0
@@ -361,11 +441,11 @@ enum TraceExport {
     ///   invariant `TraceRing` states, and the reason no cursor here is atomic.
     @inline(never)
     static func pump() {
-        guard let base = region else { return }
+        guard let base = region, let ring, let backing else { return }
 
         ticks &+= 1
 
-        drainEvents(into: base + Int(UserSpaceLayout.pageSize))
+        drainEvents(into: ring, of: backing)
 
         guard ticks % statsPeriod == 0 else { return }
 
@@ -402,7 +482,10 @@ enum TraceExport {
     ///   here may derive a length or an address from it. The subtraction is
     ///   clamped and the slot index is masked, both of which stay in range for
     ///   every value the consumer could put there.
-    private static func drainEvents(into ring: UnsafeMutableRawPointer) {
+    private static func drainEvents(
+        into ring  : UnsafeMutableRawPointer,
+        of   region: UnsafeMutablePointer<SharedRegion>
+    ) {
         let consumer = ring.load(fromByteOffset: ringHeadOffset, as: UInt32.self)
         let used     = producer &- consumer
         let free     = used >= ringCapacity ? 0 : Int(ringCapacity &- used)
@@ -411,7 +494,13 @@ enum TraceExport {
         let want      = occupancy > UInt32(baseEventBudget) ? catchUpEventBudget : baseEventBudget
         let budget    = free < want ? free : want
 
-        var batch = TraceExportBatch(ring: ring, producer: producer, mask: ringMask)
+        var batch = TraceExportBatch(
+            ring        : ring,
+            region      : region,
+            linearOffset: linearOffset,
+            producer    : producer,
+            mask        : ringMask
+        )
 
         // Called even with a budget of zero: a reader that is not keeping up
         // still has to be told how much of the stream it has lost.

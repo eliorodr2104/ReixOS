@@ -38,7 +38,8 @@ public struct DmaPhysical: SyscallProvider {
             return
         }
 
+        // Page 0 is the whole buffer's base: a `.dma` region is one extent.
         region.pointee.deviceVisible = true
-        frame.pointee.x0 = region.pointee.physicalPage.address
+        frame.pointee.x0 = region.pointee.physicalAddress(ofPage: 0)
     }
 }

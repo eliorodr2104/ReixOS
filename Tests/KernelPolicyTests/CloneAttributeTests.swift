@@ -103,15 +103,22 @@ struct CloneAttributeTests {
                   let childVMA  = child.pointee.addressSpace.vmaManager
             else { Issue.record("could not spawn the pair"); return }
 
-            let base = physicalBase ?? region!.pointee.physicalPage.address
+            let mapped = if let region {
+                try? parentVMA.pointee.mapRegion(
+                    region,
+                    kind       : kind,
+                    permissions: permissions
+                )
+            } else {
+                try? parentVMA.pointee.mapRegion(
+                    physicalBase: physicalBase!,
+                    pageCount   : 1,
+                    kind        : kind,
+                    permissions : permissions
+                )
+            }
 
-            guard let address = try? parentVMA.pointee.mapRegion(
-                physicalBase: base,
-                pageCount   : 1,
-                kind        : kind,
-                permissions : permissions,
-                sharedRegion: region
-            ) else { Issue.record("could not map the \(kind) region"); return }
+            guard let address = mapped else { Issue.record("could not map the \(kind) region"); return }
 
             guard let before = descriptor(
                 ram,

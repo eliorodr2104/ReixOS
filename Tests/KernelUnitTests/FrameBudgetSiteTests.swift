@@ -66,8 +66,10 @@ struct FrameBudgetSiteTests {
         "Sources/ReixKernel/Platform/ELFParser/ElfParser.swift": (1, .process),
 
         // Regions, charged to the process that created them for as long as it
-        // holds them.
-        "Sources/ReixKernel/Arch/aarch64/Exceptions/Providers/RXMemory/ShmCreate.swift": (1, .process),
+        // holds them: `shmCreate` charges before `allocateFrames` takes the
+        // blocks, and a DMA buffer is the one block `dmaAlloc` takes itself.
+        // A region's extent spill is kernel heap, not a frame: see `spill`.
+        "Sources/ReixKernel/InterProcessControl/Capabilities/SharedRegion.swift"       : (1, .process),
         "Sources/ReixKernel/Arch/aarch64/Exceptions/Providers/RXMemory/DmaAlloc.swift" : (1, .process),
     ]
 

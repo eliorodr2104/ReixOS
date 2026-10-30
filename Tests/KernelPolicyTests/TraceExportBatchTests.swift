@@ -17,86 +17,80 @@ extension KernelPolicyTestRoot {
 struct TraceExportBatchTests {
     @Test("zero records leave the tail unpublished")
     func zero() {
-        let ring = UnsafeMutableRawPointer.allocate(byteCount: 160, alignment: 16)
-        defer { ring.deallocate() }
+        withRing { ring, region in
+            ring.storeBytes(of: UInt32(9), toByteOffset: 0, as: UInt32.self)
+            reset_page_table_barrier_count()
 
-        ring.initializeMemory(as: UInt8.self, repeating: 0, count: 160)
-        ring.storeBytes(of: UInt32(9), toByteOffset: 0, as: UInt32.self)
-        reset_page_table_barrier_count()
+            var batch = TraceExportBatch(ring: ring, region: region, linearOffset: 0, producer: 9, mask: 3)
+            batch.publish()
 
-        var batch = TraceExportBatch(ring: ring, producer: 9, mask: 3)
-        batch.publish()
-
-        #expect(ring.load(fromByteOffset: 0, as: UInt32.self) == 9)
-        #expect(page_table_barrier_count() == 0)
+            #expect(ring.load(fromByteOffset: 0, as: UInt32.self) == 9)
+            #expect(page_table_barrier_count() == 0)
+        }
     }
 
     @Test("partial batch remains hidden until one final publication")
     func partial() {
-        let ring = UnsafeMutableRawPointer.allocate(byteCount: 160, alignment: 16)
-        defer { ring.deallocate() }
+        withRing { ring, region in
+            reset_page_table_barrier_count()
 
-        ring.initializeMemory(as: UInt8.self, repeating: 0, count: 160)
-        reset_page_table_barrier_count()
+            var batch = TraceExportBatch(ring: ring, region: region, linearOffset: 0, producer: 0, mask: 3)
+            batch.append(TraceEvent(timestamp: 11, code: 12, info: 13, pid: 14, a: 15, b: 16))
+            batch.append(TraceEvent(timestamp: 21, code: 22, info: 23, pid: 24, a: 25, b: 26))
+            batch.append(TraceEvent(timestamp: 31, code: 32, info: 33, pid: 34, a: 35, b: 36))
 
-        var batch = TraceExportBatch(ring: ring, producer: 0, mask: 3)
-        batch.append(TraceEvent(timestamp: 11, code: 12, info: 13, pid: 14, a: 15, b: 16))
-        batch.append(TraceEvent(timestamp: 21, code: 22, info: 23, pid: 24, a: 25, b: 26))
-        batch.append(TraceEvent(timestamp: 31, code: 32, info: 33, pid: 34, a: 35, b: 36))
+            #expect(ring.load(fromByteOffset: 0, as: UInt32.self) == 0)
+            #expect(page_table_barrier_count() == 0)
+            #expect(ring.load(fromByteOffset: 16, as: UInt64.self) == 11)
+            #expect(ring.load(fromByteOffset: 48, as: UInt64.self) == 21)
+            #expect(ring.load(fromByteOffset: 80, as: UInt64.self) == 31)
 
-        #expect(ring.load(fromByteOffset: 0, as: UInt32.self) == 0)
-        #expect(page_table_barrier_count() == 0)
-        #expect(ring.load(fromByteOffset: 16, as: UInt64.self) == 11)
-        #expect(ring.load(fromByteOffset: 48, as: UInt64.self) == 21)
-        #expect(ring.load(fromByteOffset: 80, as: UInt64.self) == 31)
+            batch.publish()
 
-        batch.publish()
-
-        #expect(ring.load(fromByteOffset: 0, as: UInt32.self) == 3)
-        #expect(page_table_barrier_count() == 1)
+            #expect(ring.load(fromByteOffset: 0, as: UInt32.self) == 3)
+            #expect(page_table_barrier_count() == 1)
+        }
     }
 
     @Test("full batch uses one barrier")
     func full() {
-        let ring = UnsafeMutableRawPointer.allocate(byteCount: 272, alignment: 16)
-        defer { ring.deallocate() }
+        withRing { ring, region in
+            reset_page_table_barrier_count()
 
-        ring.initializeMemory(as: UInt8.self, repeating: 0, count: 272)
-        reset_page_table_barrier_count()
+            var batch = TraceExportBatch(ring: ring, region: region, linearOffset: 0, producer: 0, mask: 7)
+            for value in UInt64(1)...8 {
+                batch.append(TraceEvent(timestamp: value))
+            }
+            batch.publish()
 
-        var batch = TraceExportBatch(ring: ring, producer: 0, mask: 7)
-        for value in UInt64(1)...8 {
-            batch.append(TraceEvent(timestamp: value))
+            #expect(ring.load(fromByteOffset: 0, as: UInt32.self) == 8)
+            #expect(page_table_barrier_count() == 1)
         }
-        batch.publish()
-
-        #expect(ring.load(fromByteOffset: 0, as: UInt32.self) == 8)
-        #expect(page_table_barrier_count() == 1)
     }
 
     @Test("batch wraps slots and producer without early publication")
     func wrap() {
-        let ring = UnsafeMutableRawPointer.allocate(byteCount: 144, alignment: 16)
-        defer { ring.deallocate() }
+        withRing { ring, region in
+            ring.storeBytes(of: UInt32.max - 1, toByteOffset: 0, as: UInt32.self)
+            reset_page_table_barrier_count()
 
-        ring.initializeMemory(as: UInt8.self, repeating: 0, count: 144)
-        ring.storeBytes(of: UInt32.max - 1, toByteOffset: 0, as: UInt32.self)
-        reset_page_table_barrier_count()
+            var batch = TraceExportBatch(
+                ring: ring, region: region, linearOffset: 0, producer: UInt32.max - 1, mask: 3
+            )
+            batch.append(TraceEvent(timestamp: 41))
+            batch.append(TraceEvent(timestamp: 42))
+            batch.append(TraceEvent(timestamp: 43))
 
-        var batch = TraceExportBatch(ring: ring, producer: UInt32.max - 1, mask: 3)
-        batch.append(TraceEvent(timestamp: 41))
-        batch.append(TraceEvent(timestamp: 42))
-        batch.append(TraceEvent(timestamp: 43))
+            #expect(ring.load(fromByteOffset: 0, as: UInt32.self) == UInt32.max - 1)
+            #expect(ring.load(fromByteOffset: 80, as: UInt64.self) == 41)
+            #expect(ring.load(fromByteOffset: 112, as: UInt64.self) == 42)
+            #expect(ring.load(fromByteOffset: 16, as: UInt64.self) == 43)
 
-        #expect(ring.load(fromByteOffset: 0, as: UInt32.self) == UInt32.max - 1)
-        #expect(ring.load(fromByteOffset: 80, as: UInt64.self) == 41)
-        #expect(ring.load(fromByteOffset: 112, as: UInt64.self) == 42)
-        #expect(ring.load(fromByteOffset: 16, as: UInt64.self) == 43)
+            batch.publish()
 
-        batch.publish()
-
-        #expect(ring.load(fromByteOffset: 0, as: UInt32.self) == 1)
-        #expect(page_table_barrier_count() == 1)
+            #expect(ring.load(fromByteOffset: 0, as: UInt32.self) == 1)
+            #expect(page_table_barrier_count() == 1)
+        }
     }
 
     @Test("full export ring reports TraceRing eviction with zero copy budget")
@@ -127,6 +121,27 @@ struct TraceExportBatchTests {
             #expect(page_table_barrier_count() == 0)
         }
     }
+
+    /// A two-page region over host memory, one block, with the ring on page 1.
+    private func withRing(
+        _ body: (UnsafeMutableRawPointer, UnsafeMutablePointer<SharedRegion>) -> Void
+    ) {
+        let base = UnsafeMutableRawPointer.allocate(byteCount: 8192, alignment: 4096)
+        defer { base.deallocate() }
+
+        base.initializeMemory(as: UInt8.self, repeating: 0, count: 8192)
+
+        let region = UnsafeMutablePointer<SharedRegion>.allocate(capacity: 1)
+        region.initialize(to: SharedRegion(
+            physicalPage: PhysicalPage(address: PhysicalAddress(UInt(bitPattern: base)), order: 1),
+            references: 1,
+            pageCount: 2
+        ))
+        defer { region.deinitialize(count: 1); region.deallocate() }
+
+        body(base + 4096, region)
+    }
+
 
     private func withAttachedExport(_ body: (UnsafeMutableRawPointer) -> Void) {
         TraceRing.reset()
@@ -159,16 +174,16 @@ struct TraceExportBatchTests {
         let heap = heapStorage.bindMemory(to: KernelHeap.self, capacity: 1)
         let manager = managerStorage.bindMemory(to: ProcessManager.self, capacity: 1)
 
+        // The host has no linear map: an arena address is its own pointer.
         backing.initialize(to: SharedRegion(
-            physicalPage: PhysicalPage(),
+            physicalPage: PhysicalPage(address: PhysicalAddress(UInt(bitPattern: base)), order: 1),
             references: 1,
             pageCount: 2
         ))
 
         #expect(TraceExport.attach(
-            base: base,
             backing: backing,
-            pageCount: 2,
+            linearOffset: 0,
             ppm: ppm,
             heap: heap,
             processManager: manager

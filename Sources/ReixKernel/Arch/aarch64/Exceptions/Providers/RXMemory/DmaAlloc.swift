@@ -46,9 +46,11 @@ import ReixABI
 /// of processes holding `.dma` is a list worth being able to read off the boot,
 /// and today it has one name on it.
 ///
-/// The frames come from one buddy block, which is what makes them contiguous.
-/// That is not new: `shmCreate` has always allocated the same way. What is new
-/// is that the address may be asked for.
+/// The frames come from one buddy block, which is what makes them contiguous,
+/// rounded up to a power of two as a single block has to be. `shmCreate` no
+/// longer allocates this way: its regions are exact and may be scattered, and
+/// only a buffer made here is a region of one extent, whose address may be
+/// asked for.
 public struct DmaAlloc: SyscallProvider {
 
     public static let number: SyscallNumber = .dmaAlloc
@@ -137,11 +139,9 @@ public struct DmaAlloc: SyscallProvider {
 
         do {
             let regionAddress = try vmaManager.pointee.mapRegion(
-                physicalBase: region.pointee.physicalPage.address,
-                pageCount   : Int(pageCount),
-                kind        : .dma,
-                permissions : [.read, .write, .user],
-                sharedRegion: region
+                region,
+                kind       : .dma,
+                permissions: [.read, .write, .user]
             )
 
             frame.pointee.x0 = UInt64(handle)

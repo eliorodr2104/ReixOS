@@ -124,17 +124,54 @@ extension VMAManager {
 
 
     /// Place `pageCount` pages of `physicalBase` in the mmap area with exactly
-    /// `permissions`.
+    /// `permissions`: a device window, which is contiguous because the device
+    /// is.
     ///
-    /// `permissions` is the caller's to choose because the two syscalls that reach
-    /// here derive it from the capability being mapped, and a region capability
-    /// that carries no `.write` has to produce a read-only window.
+    /// `permissions` is the caller's to choose because every syscall that
+    /// reaches here derives it from the capability being mapped, and a
+    /// capability that carries no `.write` has to produce a read-only window.
     public mutating func mapRegion(
         physicalBase: PhysicalAddress,
         pageCount   : Int,
         kind        : RegionKind,
+        permissions : VMAPermissions
+    ) throws(VMAError) -> VirtualAddress {
+
+        try mapPages(
+            pageCount   : pageCount,
+            kind        : kind,
+            permissions : permissions,
+            sharedRegion: nil
+        ) { page in physicalBase + UInt64(page) * UserSpaceLayout.pageSize }
+    }
+
+
+    /// Place every page of `sharedRegion` in the mmap area with exactly
+    /// `permissions`, page by page through its extents, so a region scattered
+    /// across physical memory is still one contiguous window here.
+    public mutating func mapRegion(
+        _ sharedRegion: UnsafeMutablePointer<SharedRegion>,
+        kind          : RegionKind,
+        permissions   : VMAPermissions
+    ) throws(VMAError) -> VirtualAddress {
+
+        try mapPages(
+            pageCount   : Int(sharedRegion.pointee.pageCount),
+            kind        : kind,
+            permissions : permissions,
+            sharedRegion: sharedRegion
+        ) { page in sharedRegion.pointee.physicalAddress(ofPage: UInt32(page)) }
+    }
+
+
+    /// Register a window of `pageCount` pages and install each one at the frame
+    /// `physical` names for it, or leave the address space as it was.
+    private mutating func mapPages(
+        pageCount   : Int,
+        kind        : RegionKind,
         permissions : VMAPermissions,
-        sharedRegion: UnsafeMutablePointer<SharedRegion>? = nil
+        sharedRegion: UnsafeMutablePointer<SharedRegion>?,
+        physical    : (Int) -> PhysicalAddress
     ) throws(VMAError) -> VirtualAddress {
 
         guard pageCount > 0 else { throw .invalidLayout }
@@ -170,8 +207,8 @@ extension VMAManager {
             do {
                 try context.vmm.pointee.installUserPage(
                     rootTable: context.rootTablePhysical,
-                    virtual  : start        + currentVirtualPage,
-                    physical : physicalBase + currentVirtualPage,
+                    virtual  : start + currentVirtualPage,
+                    physical : physical(i),
                     flags    : permissions.toPageFlags(),
                     type     : kind.memoryType,
                     budget   : context.budget

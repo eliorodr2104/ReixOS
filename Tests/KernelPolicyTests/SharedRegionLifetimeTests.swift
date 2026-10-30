@@ -250,11 +250,9 @@ struct SharedRegionLifetimeTests {
             // And a window of its own, which is what `shmMap` opens.
             guard let receiverVMA = receiver.pointee.addressSpace.vmaManager,
                   let receiverWindow = try? receiverVMA.pointee.mapRegion(
-                    physicalBase: region.pointee.physicalPage.address,
-                    pageCount   : 2,
-                    kind        : .shared,
-                    permissions : [.read, .write, .user],
-                    sharedRegion: region
+                    region,
+                    kind       : .shared,
+                    permissions: [.read, .write, .user]
                   )
             else {
                 Issue.record("the receiver could not map the region")
@@ -282,7 +280,7 @@ struct SharedRegionLifetimeTests {
 
             #expect(region.pointee.references == 2)
             #expect(holders(of: region, across: world) == 2)
-            #expect(ram.ppm.pointee.refCount(of: region.pointee.physicalPage.address) > 0)
+            #expect(ram.ppm.pointee.refCount(of: region.pointee.physicalAddress(ofPage: 0)) > 0)
 
             // The charge follows the frames, once: the creator no longer holds
             // any of them.
@@ -334,7 +332,7 @@ struct SharedRegionLifetimeTests {
             manager.pointee.releaseProcess(parent)
 
             #expect(region.pointee.references == 1)
-            #expect(ram.ppm.pointee.refCount(of: region.pointee.physicalPage.address) > 0)
+            #expect(ram.ppm.pointee.refCount(of: region.pointee.physicalAddress(ofPage: 0)) > 0)
             #expect(childVMA.pointee.isPageMapped(at: created.address))
         }
     }
@@ -492,7 +490,7 @@ struct SharedRegionLifetimeTests {
             #expect(park(ipc, sender, sending, granting: created.handle))
             #expect(region.pointee.references == 4)
 
-            let physical = region.pointee.physicalPage.address
+            let physical = region.pointee.physicalAddress(ofPage: 0)
 
             withCurrentProcess(sender) {
                 _ = manager.pointee.killProcess(
@@ -547,7 +545,7 @@ struct SharedRegionLifetimeTests {
             // And the sender still has both of its own holds.
             #expect(capabilities(naming: region, in: sender) == 1)
             #expect(windows(naming: region, in: sender) == 1)
-            #expect(ram.ppm.pointee.refCount(of: region.pointee.physicalPage.address) > 0)
+            #expect(ram.ppm.pointee.refCount(of: region.pointee.physicalAddress(ofPage: 0)) > 0)
         }
     }
 
@@ -581,7 +579,7 @@ struct SharedRegionLifetimeTests {
             // holds are all that is left.
             #expect(region.pointee.references == 2)
             #expect(sender.pointee.context?.pointee.x0 == IPCStatus.grantRejected.rawValue)
-            #expect(ram.ppm.pointee.refCount(of: region.pointee.physicalPage.address) > 0)
+            #expect(ram.ppm.pointee.refCount(of: region.pointee.physicalAddress(ofPage: 0)) > 0)
         }
     }
 
