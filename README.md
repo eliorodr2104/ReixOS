@@ -151,11 +151,15 @@ Details and limits for each block are available in the [technical documentation]
 
 ## Getting started
 
-ReixOS requires a recent Swift toolchain with Embedded Swift support, LLVM/LLD and QEMU for AArch64. The `reix` command plugin builds the kernel and userland, generates assembly handlers, prepares the initrd and starts the virtual machine. The `Makefile` collects the common entry points.
+ReixOS requires a Swift 6.3 or later toolchain that ships the Embedded stdlib, LLVM/LLD and QEMU for AArch64. Xcode's `swift` lacks the Embedded stdlib for `aarch64-none-none-elf`, so the build prefers a [swiftly](https://www.swift.org/install/) toolchain in `~/.swiftly/bin` when one is installed.
+
+The `reix` CLI in `Tools/reix` builds the kernel and userland, generates the assembly handlers, packs the initrd, provisions the disk and starts the virtual machine. `./reix` at the root builds the CLI and runs it, and the `Makefile` names the common profiles on top of it.
 
 ```bash
-make clean && make run
+make run
 ```
+
+The disk lives in `.reix/disk.img` and survives between runs. `make clean` deletes it together with the build trees, so the next boot starts from an empty RxFS volume.
 
 To run the host suite and QEMU matrix:
 
@@ -163,7 +167,21 @@ To run the host suite and QEMU matrix:
 make test
 ```
 
-Other useful targets include `make host-test`, `make vm-test`, `make smoke`, `make release` and trace export through `reix trace --export`.
+`BOOT_MODE` decides how much of the bring-up the image prints: `standard` shows the banner and then the shell, `verbose` the boot phases, `diagnostic` one line per subsystem, which is what the smoke tests and the QEMU matrix read.
+
+```bash
+make run BOOT_MODE=verbose
+```
+
+Other useful entry points:
+
+- `make host-test`, `make vm-test`, `make smoke` and `make boot-modes` run parts of the test suite on their own.
+- `make run-4m` and `make smoke-4m` boot in 4 MiB of RAM, the floor the project targets.
+- `make app APP=Shell` rebuilds and installs one userland program on the disk without relinking the kernel, and `make boot` starts what is already built.
+- `make release` builds the optimized image.
+- `./reix trace <logfile> --export <out.json>` turns a serial trace dump into a file for [Perfetto](https://ui.perfetto.dev), and `./reix symbolize` resolves a panic report.
+
+On Swift 6.4 the bare-metal builds pass `--build-system native`, because the new default engine treats the bare-metal triple as Darwin and links it with Apple's tools. The CLI and the `Makefile` already pass it.
 
 ## Roadmap
 
