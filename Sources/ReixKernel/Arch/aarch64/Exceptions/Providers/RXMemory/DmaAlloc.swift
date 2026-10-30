@@ -9,12 +9,13 @@ import ReixABI
 
 /// `dmaAlloc(pageCount, deviceHandle)` syscall provider.
 ///
-/// Charged to the creator like an SHM region, with one difference: a buffer
-/// `dmaPhysical` has published outlives its last holder on `DmaQuarantine`
-/// until `dmaReclaim` declares its device reset, so its charge is never
-/// refunded either. A driver that restarts in a loop pays for every buffer it
-/// leaves behind, and the frames return to the machine only when a successor
-/// resets the device and says so.
+/// Charged to the creator like an SHM region, for as long as the frames are out
+/// of the PPM. A buffer `dmaPhysical` has published outlives its last holder on
+/// `DmaQuarantine` until `dmaReclaim` declares its device reset, and its
+/// creator keeps paying for it there: a driver that drops its buffer and lives
+/// on is refunded only by the reclaim. A creator that dies first stops paying
+/// with its budget, which dies with it, and the frames return to the machine
+/// only when a successor resets the device and says so.
 ///
 /// Hands back a physically contiguous, non-cacheable buffer mapped into the
 /// caller, and a capability that names it. Two registers on the way out, like

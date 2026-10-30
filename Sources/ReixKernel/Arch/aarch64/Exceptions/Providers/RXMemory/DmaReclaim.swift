@@ -10,7 +10,8 @@ import ReixABI
 /// The caller declares that the device behind `deviceHandle` has been reset and
 /// no longer holds any address it was given. The kernel then gives back to the
 /// PPM every buffer on `DmaQuarantine` bound to that device, which is every
-/// published buffer minted through that window that nothing holds any more.
+/// published buffer minted through that window that nothing holds any more,
+/// and refunds each one's creator if it is still paying.
 ///
 /// **The kernel cannot verify the reset, and does not try.** It trusts the
 /// caller, for the reason `DmaAlloc` gives: a process holding a device window

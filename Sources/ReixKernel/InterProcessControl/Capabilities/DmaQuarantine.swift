@@ -13,6 +13,13 @@
 /// Here they are counted, and `dmaReclaim` gives back the ones bound to a
 /// device whose holder says it has been reset.
 ///
+/// An entry keeps its creator's charge and the hold on its budget, because
+/// the charge lasts as long as the frames are out of the PPM. A creator that
+/// dropped its buffer and lives on keeps paying until the reclaim. One that
+/// died still holding it ended the charge at teardown, and the entry names no
+/// budget. One that dropped it and died afterwards leaves its budget held by
+/// the entry alone, and the reclaim's refund is the last thing that cell sees.
+///
 /// The region cell itself is the entry, linked through `nextQuarantined`, and
 /// not a smaller record of its one extent and its device. A record would be a
 /// heap allocation on the death path, which has nobody to report a refusal to,
@@ -46,7 +53,7 @@ enum DmaQuarantine: Loggable {
 
 
     /// Takes a published region whose last reference has just gone, frames,
-    /// cell and all.
+    /// cell and charge and all.
     static func admit(_ region: UnsafeMutablePointer<SharedRegion>) {
         region.pointee.nextQuarantined = head
         head = region
@@ -93,8 +100,10 @@ enum DmaQuarantine: Loggable {
             pages   -= frames
             regions -= 1
 
-            // The declared reset is what makes the region no longer visible.
+            // The declared reset is what makes the region no longer visible, and
+            // with the frames about to go back, what ends its creator's charge.
             region.pointee.deviceVisible = false
+            disownSharedRegion(region, heap: heap)
 
             if let failure = region.move().releaseFrames(ppm: ppm, heap: heap) {
                 Self.error("quarantined DMA region released after a reset but one of its frames was refused, \(failure.description)")

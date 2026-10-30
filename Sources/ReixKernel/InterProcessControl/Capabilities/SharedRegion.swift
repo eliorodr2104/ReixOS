@@ -94,8 +94,10 @@ public struct SharedRegion: RXObject, ~Copyable {
     /// region is not charged for it, and the owner stays charged for the whole
     /// life of the region: dropping one of its own references while it still
     /// holds another would let a process hold frames it is not paying for. The
-    /// charge ends at the earlier of the region's death and the owner's
-    /// teardown, and `disownSharedRegion` is the only thing that ends it.
+    /// charge ends at the earlier of the frames going back to the PPM and the
+    /// owner's teardown, and `disownSharedRegion` is the only thing that ends
+    /// it. For most regions the first is their death; for a published buffer
+    /// that dies onto `DmaQuarantine` it is the `dmaReclaim` that frees it.
     ///
     /// The hold is what makes the pointer safe: the cell outlives the process
     /// whenever a region it created does.
@@ -356,15 +358,18 @@ func retainSharedRegion(_ region: UnsafeMutablePointer<SharedRegion>) {
 
 /// End the creator's charge for `region` and let go of its budget.
 ///
-/// The two moments that call it are the region's own death and the creator's
-/// teardown, whichever comes first. Nothing a live process does to one of its
-/// references may reach here: a process that drops a capability and keeps a
-/// window still holds every frame, and refunding it there is how a loop of
-/// create, map and drop would hold memory it never paid for.
+/// The two moments that call it are the frames going back to the PPM, which is
+/// the region's death or, for a quarantined buffer, its reclaim, and the
+/// creator's teardown, whichever comes first. Nothing a live process does to
+/// one of its references may reach here: a process that drops a capability and
+/// keeps a window still holds every frame, and refunding it there is how a loop
+/// of create, map and drop would hold memory it never paid for.
 ///
-/// Quarantined DMA frames do not go back to the allocator with the region, so
-/// their charge is not given back either. `DmaQuarantine` is the kernel's own
-/// account of them and answers to no budget.
+/// Called on a published buffer, which a device may still be writing, it ends
+/// the charge without a refund. Only the creator's teardown does that, and the
+/// budget dies with the process anyway. A published buffer's own death never
+/// reaches here: it goes onto `DmaQuarantine` still charged, and the reclaim
+/// that clears `deviceVisible` and gives its frames back refunds it here.
 @inline(__always)
 func disownSharedRegion(
     _ region: UnsafeMutablePointer<SharedRegion>,
@@ -402,14 +407,15 @@ func releaseSharedRegion(
 ) -> PPMError? {
     guard rxRelease(region) else { return nil }
 
-    // The region is dying, so the charge ends here whoever holds the budget.
-    disownSharedRegion(region, heap: heap)
-
-    // A device may still write there: the cell is kept, frames and all.
+    // A device may still write there: the cell is kept, frames and charge and
+    // all, until `dmaReclaim` gives the frames back and ends the charge.
     guard !region.pointee.deviceVisible else {
         DmaQuarantine.admit(region)
         return nil
     }
+
+    // The frames go back now, so the charge ends here whoever holds the budget.
+    disownSharedRegion(region, heap: heap)
 
     let failure = region.move().releaseFrames(ppm: ppm, heap: heap)
     heap.pointee.kfree(UnsafeMutableRawPointer(region))

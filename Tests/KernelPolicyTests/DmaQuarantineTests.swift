@@ -402,6 +402,88 @@ struct DmaQuarantineTests {
     }
 
 
+    // MARK: - The creator's charge
+
+    /// The charge lasts as long as the frames are out of the PPM: a buffer that
+    /// died onto the ledger is still its creator's, until the reclaim.
+    @Test("a creator that lives on pays for its quarantined buffer until the reclaim")
+    func livingCreatorPaysUntilTheReclaim() {
+        withWorld { _, _, manager, ipc, context in
+            // The keeper stays alive, so the tables under the windows below
+            // already exist and every charge measured here is a block's alone.
+            guard let driver = try? manager.pointee.spawnProcess(),
+                  let device = window(Self.disk, in: driver),
+                  buffer(pages: 1, through: device, as: driver, publish: false, context) != nil
+            else { return }
+
+            let budget: UnsafeMutablePointer<FrameBudget> = driver.pointee.metadata.pointee.budget
+            let before = budget.pointee.charged
+            let holds  = budget.pointee.references
+
+            // Never published: its death refunds at once, as it always did.
+            guard let quiet = buffer(pages: 7, through: device, as: driver, publish: false, context)
+            else { return }
+
+            #expect(budget.pointee.charged == before + 8)
+            drop(quiet, pages: 7, of: driver, ipc)
+            #expect(budget.pointee.charged == before)
+            #expect(budget.pointee.references == holds)
+
+            // Published: its death takes it to the ledger, charge and hold with it.
+            guard let dead = buffer(pages: 7, through: device, as: driver, context) else { return }
+
+            drop(dead, pages: 7, of: driver, ipc)
+            #expect(DmaQuarantine.pages == 8)
+            #expect(budget.pointee.charged == before + 8)
+            #expect(budget.pointee.references == holds + 1)
+
+            #expect(reclaim(UInt64(device), as: driver, context) == 8)
+            #expect(budget.pointee.charged == before)
+            #expect(budget.pointee.references == holds)
+        }
+    }
+
+
+    /// The quarantined buffer is the last thing holding a dead creator's budget,
+    /// so the reclaim that refunds it is also what frees it.
+    @Test("a creator that dies before the reclaim leaves nothing behind once it comes")
+    func deadCreatorLeavesNothing() {
+        withWorld(pages: 256) { ram, heap, manager, ipc, context in
+            guard let bus      = try? manager.pointee.spawnProcess(),
+                  let resetter = window(Self.disk, in: bus)
+            else { return }
+
+            // Twice: the first round pulls in the slabs, the second is measured.
+            for round in 0..<2 {
+                let pages = ram.ppm.pointee.allocatedPages
+                let live  = heap.pointee.metricsLiveBytes
+
+                guard let driver = try? manager.pointee.spawnProcess(),
+                      let device = window(Self.disk, in: driver),
+                      let dead   = buffer(pages: 4, through: device, as: driver, context)
+                else { return }
+
+                let budget: UnsafeMutablePointer<FrameBudget> = driver.pointee.metadata.pointee.budget
+
+                drop(dead, pages: 4, of: driver, ipc)
+                tearDown(driver, manager, ipc)
+
+                // The process is gone and its budget is not: the ledger holds it.
+                #expect(budget.pointee.references == 1)
+                #expect(budget.pointee.charged >= 4)
+
+                #expect(reclaim(UInt64(resetter), as: bus, context) == 4)
+                #expect(DmaQuarantine.regions == 0)
+
+                if round == 1 {
+                    #expect(ram.ppm.pointee.allocatedPages == pages)
+                    #expect(heap.pointee.metricsLiveBytes == live)
+                }
+            }
+        }
+    }
+
+
     // MARK: - The leak this closes
 
     /// Every restart used to leave its buffer behind for good. Now each new
