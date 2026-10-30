@@ -120,4 +120,9 @@ public enum SyscallNumber: UInt64 {
     case taskAbort
     case taskTerminate
     case taskStatus
+
+
+    /// A device has been reset: the DMA buffers it was given and nobody holds
+    /// any more may go back. Appended, like the task calls, to keep every number.
+    case dmaReclaim
 }

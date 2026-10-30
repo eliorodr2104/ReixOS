@@ -132,7 +132,7 @@ struct SyscallHandleWidthTests {
 
     // MARK: - RXMemory
 
-    @Test("shmMap, shmPages and dmaPhysical refuse a handle that does not fit")
+    @Test("shmMap, shmPages, dmaPhysical and dmaReclaim refuse a handle that does not fit")
     func memoryProviders() {
         withCaller { _, _, _, _, caller, context in
             guard let shared = region(pages: 2, context) else {
@@ -168,6 +168,9 @@ struct SyscallHandleWidthTests {
 
             #expect(answer(DmaPhysical.self, x0: UInt64(dma), context) != UInt64.max)
             #expect(answer(DmaPhysical.self, x0: Self.widened(dma), context) == UInt64.max)
+
+            #expect(answer(DmaReclaim.self, x0: UInt64(device), context) == 0)
+            #expect(answer(DmaReclaim.self, x0: Self.widened(device), context) == UInt64.max)
         }
     }
 

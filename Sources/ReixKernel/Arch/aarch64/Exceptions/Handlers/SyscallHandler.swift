@@ -127,6 +127,7 @@ public struct SyscallHandler: RXAllocatable {
             // DMA
             case .dmaAlloc      : DmaAlloc             .handle(frame: frame, context: context)
             case .dmaPhysical   : DmaPhysical          .handle(frame: frame, context: context)
+            case .dmaReclaim    : DmaReclaim           .handle(frame: frame, context: context)
 
 
             // Device registers

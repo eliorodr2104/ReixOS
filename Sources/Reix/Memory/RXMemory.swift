@@ -153,3 +153,16 @@ public func dmaAlloc(
 public func dmaPhysical(handle: UInt32) -> UInt64 {
     _syscall(.dmaPhysical, UInt64(handle))
 }
+
+
+/// Tell the kernel the device behind `device` has been reset, so the published
+/// buffers it was given and nobody holds any more can be freed. Call it only
+/// once the reset has taken: the kernel cannot check, and believes you.
+///
+/// A buffer this process still holds is never freed, so a driver calls it after
+/// its own reset with its own buffer already in place. The frames given back,
+/// zero included, or `UInt64.max` when `device` is not a window carrying `.dma`.
+@inline(__always)
+public func dmaReclaim(device: UInt32) -> UInt64 {
+    _syscall(.dmaReclaim, UInt64(device))
+}
