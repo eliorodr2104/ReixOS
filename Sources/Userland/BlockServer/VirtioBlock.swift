@@ -228,8 +228,9 @@ public struct VirtioBlock {
 
     // MARK: - Bring-up
 
-    /// Resets the device, takes ownership of it, hands it one queue and tells
-    /// it the driver is ready.
+    /// Resets the device, gives back the DMA buffers an earlier driver left
+    /// with it, takes ownership of it, hands it one queue and tells it the
+    /// driver is ready.
     ///
     /// `nil` when the transport is not a legacy one, when the buffer cannot be
     /// allocated, or when the device offers a queue too short to hold a request.
@@ -271,6 +272,16 @@ public struct VirtioBlock {
         _ = deviceWrite(handle: window, offset: Register.status, value: 0)
 
         guard Self.acceptedReset(window, frequency: self.frequency) else { return nil }
+
+        // The reset is what lets go of every address a dead predecessor gave the
+        // device. This driver's own buffer is still held, so it is not among them.
+        let reclaimed = dmaReclaim(device: window)
+
+        if UserBootPresentation.showsServices {
+            print("[ DISK  ] reclaimed ", terminator: "")
+            printDec(reclaimed, terminator: "")
+            print(" DMA pages left by an earlier driver")
+        }
 
         var status = Status.acknowledge
         _ = deviceWrite(handle: window, offset: Register.status, value: status)
