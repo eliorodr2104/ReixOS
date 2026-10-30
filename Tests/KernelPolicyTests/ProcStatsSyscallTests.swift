@@ -80,7 +80,7 @@ struct ProcStatsSyscallTests {
                 withBuffer(fill: 0xC7) { buffer in
                     UserMemory.validationOverride = { address, size, permissions in
                         address == UInt64(UInt(bitPattern: buffer))
-                            && size == 96 && permissions == [.write, .user]
+                            && size == 104 && permissions == [.write, .user]
                     }
                     var frame = processFrame(
                         buffer: buffer,
@@ -103,7 +103,7 @@ struct ProcStatsSyscallTests {
                     #expect(stats.kernelHeapReservedBytes == 4096)
                     #expect(stats.physicalAllocatedPages + stats.physicalFreePages == stats.physicalTotalPages)
                     #expect(stats.pmuEventAvailability == 0 && stats.pmuEventCounters == 0)
-                    #expect(bytes(buffer, from: 96, count: 16) == Array(repeating: 0xC7, count: 16))
+                    #expect(bytes(buffer, from: 104, count: 16) == Array(repeating: 0xC7, count: 16))
                 }
             }
           }

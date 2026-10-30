@@ -104,12 +104,14 @@ public func main() {
             print("===========================  PAGES   ========================")
             print("")
             
-            print("[ TOP   ] FREE PAGES      EVENTS   DROPPED   MEM FREE")
+            print("[ TOP   ] FREE PAGES   QUARANTINED   EVENTS   DROPPED   MEM FREE")
             print("[ TOP   ]", terminator: " ")
             printDec(sys.physicalFreePages, terminator: "")
             print("/", terminator: "")
             printDec(sys.physicalTotalPages, terminator: "")
-            
+
+            // Published DMA frames nobody holds, out of the free count until a reset.
+            printDecPadded(UInt64(sys.physicalQuarantinedPages), width: 14)
             printDecPadded(UInt64(drained), width: 11)
             printDecPadded(ring.dropped, width: 10)
             

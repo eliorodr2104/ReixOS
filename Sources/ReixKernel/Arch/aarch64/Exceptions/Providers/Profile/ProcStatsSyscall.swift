@@ -130,6 +130,9 @@ public struct ProcStatsSyscall: SyscallProvider {
             stats.physicalTotalPages     = total
             stats.physicalAllocatedPages = allocated
             stats.physicalFreePages      = total - allocated
+
+            stats.physicalQuarantinedPages   = DmaQuarantine.pages
+            stats.physicalQuarantinedRegions = DmaQuarantine.regions
         }
 
         let live              = heap.pointee.metricsLiveBytes
