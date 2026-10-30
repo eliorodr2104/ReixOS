@@ -648,10 +648,6 @@ public struct RendezvousIPC: IPCInterface, Loggable {
                 owner       : process.pointee.metadata?.pointee.budget
             )
         )
-        
-        // One hold per region, so the budget outlives the process whenever a
-        // region it created does.
-        if let owner = sharedRegion.pointee.owner { rxRetain(owner) }
 
         let capability = Capability(
             target: forDevice ? .dma(sharedRegion) : .shared(sharedRegion),
@@ -668,7 +664,11 @@ public struct RendezvousIPC: IPCInterface, Loggable {
 
             return .failure(.outOfEndpoints)
         }
-        
+
+        // One hold per region, so the budget outlives the process whenever a
+        // region it created does. Taken here, so the unwind above has none.
+        if let owner = sharedRegion.pointee.owner { rxRetain(owner) }
+
         retain(capability)
 
         return .success((handle, sharedRegion))
