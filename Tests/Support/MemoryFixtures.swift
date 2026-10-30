@@ -220,6 +220,34 @@ public final class HostRAM {
     }
 
 
+    /// Leaves the live manager with free frames and no free block of two:
+    /// takes every frame it will hand out, then gives back each one whose
+    /// index in the arena is even, so no two free frames are buddies.
+    ///
+    /// Turns the progress reserve off to drain the arena; a caller that needs it
+    /// back sets it again. Answers the frames still held.
+    @discardableResult
+    public func checkerboard() -> [PhysicalAddress] {
+        ppm.pointee.setReservePages(0)
+
+        var taken: [PhysicalAddress] = []
+        while let page = try? ppm.pointee.alloc(Int(Self.pageSize)) {
+            taken.append(page.address)
+        }
+
+        var held: [PhysicalAddress] = []
+        for address in taken {
+            if frameIndex(of: address) % 2 == 0 {
+                try? ppm.pointee.free(PhysicalPage(address: address, order: 0))
+            } else {
+                held.append(address)
+            }
+        }
+
+        return held
+    }
+
+
     /// Marks `from ..< to` as frames a boot block withheld, the shape the sweep
     /// leaves behind: one reference each and the `reserved` flag.
     public func markReserved(
