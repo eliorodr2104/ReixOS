@@ -997,19 +997,23 @@ extension FileSystem {
         var findings = first.findings
         guard let census = first.census else { return findings }
 
-        // Mended only on a dirty mount: on a clean one a wrong room is damage or
-        // a bug, and recomputing it would tidy the evidence away.
-        guard roomWalk(&findings, census: census, mending: wasDirty) else { return findings }
-
         // Before the repair, and whether or not the map can also be rebuilt: it
         // used to be inside the branch below.
         if findings.unfixable { quarantine() }
 
+        // The map before the room, from the map the scan just built. The other
+        // way round, the room's commit spent the ticket and the disk was refused.
         if findings.changed {
             guard findings.repairable else { return findings }
-            findings.mapMended = repair(findings) == .ok
+            findings.mapMended = rewriteMap() == .ok
             guard findings.mapMended else { return findings }
         }
+
+        // Mended only on a dirty mount: on a clean one a wrong room is damage or
+        // a bug, and recomputing it would tidy the evidence away.
+        guard roomWalk(&findings, census: census, mending: wasDirty) else { return findings }
+
+        if findings.unfixable { quarantine() }
 
         // Nothing written, so what was read is still the disk and only the names
         // are left; scanning it all again would read the table twice for nothing.

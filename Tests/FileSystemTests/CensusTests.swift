@@ -139,6 +139,42 @@ struct CensusTests {
     }
 
 
+    @Test("a dirty mount puts right a map and a room in one go")
+    func dirtyMountMendsMapAndRoom() {
+        // The map before the room. The other way round, the room's commit spent
+        // the ticket the map repair needed and a disk with both was refused.
+        withDisk(Self.small) { fs, disk in
+            let made = fs.createContainer(
+                UnsafeRawPointer(("box" as StaticString).utf8Start), length: 3,
+                quota: 16, in: FSLayout.rootObject
+            )
+            guard made.status == .ok else { Issue.record("container"); return }
+
+            leak(&fs, at: fs.plan.dataStart + 40, 2)
+
+            // A room behind what is charged to it, left by the machine that went
+            // away: `used` one short.
+            let at = Int(fs.plan.tableStart) * Int(FSLayout.blockSize)
+                + Int(made.object) * Int(FSLayout.objectSize) + 36
+            disk.poke(UInt32(disk.byte(at: at)) + 1, at: at)
+
+            let space = UnsafeMutableRawPointer.allocate(byteCount: FileSystem<MemoryDisk>.scratchBytes, alignment: 8)
+            defer { space.deallocate() }
+
+            let opened = FileSystem.mount(disk, scratch: space)
+            guard var again = opened.disk else {
+                Issue.record("a disk with both a leak and a room behind was refused: \(opened.found)")
+                return
+            }
+
+            let findings = again.scan(.everything)
+            #expect(findings.safeToServe)
+            #expect(findings.wrongQuota == 0)
+            #expect(!findings.changed)
+        }
+    }
+
+
     @Test("a dirty mount with nothing to mend still reads every name")
     func dirtyMountReadsNames() {
         withDisk(Self.small) { fs, disk in
@@ -203,6 +239,31 @@ struct CensusTests {
     }
 
 
+    // MARK: - Interrupted recovery
+
+    /// A 2 MiB disk left dirty with a leak and a room behind, so that a mount
+    /// repairs the map, mends the room and scans it all again.
+    private func dirtyFixture(_ body: (MemoryDisk, [UInt32]) -> Void) {
+        withDisk(Self.small) { fs, disk in
+            let made = fs.createContainer(
+                UnsafeRawPointer(("box" as StaticString).utf8Start), length: 3,
+                quota: 16, in: FSLayout.rootObject
+            )
+            guard made.status == .ok,
+                  let a = file(&fs, "a.bin", blocks: 2),
+                  let b = file(&fs, "b.bin", in: made.object)
+            else { Issue.record("fixture"); return }
+
+            leak(&fs, at: fs.plan.dataStart + 40, 2)
+
+            let at = Int(fs.plan.tableStart) * Int(FSLayout.blockSize)
+                + Int(made.object) * Int(FSLayout.objectSize) + 36
+            disk.poke(UInt32(disk.byte(at: at)) + 1, at: at)
+
+            body(disk, [a, b])
+        }
+    }
+
     private func mount(_ disk: MemoryDisk, _ body: (inout FileSystem<MemoryDisk>?, FSMount) -> Void) {
         let space = UnsafeMutableRawPointer.allocate(byteCount: FileSystem<MemoryDisk>.scratchBytes, alignment: 8)
         defer { space.deallocate() }
@@ -210,5 +271,159 @@ struct CensusTests {
         let opened = FileSystem.mount(disk, scratch: space)
         var fs = opened.disk
         body(&fs, opened.found)
+    }
+
+
+    @Test("a recovery interrupted at any request is finished by the next mount")
+    func interruptedRecoveryIsFinished() {
+        var requests = 0
+        dirtyFixture { disk, _ in
+            let before = disk.reads + disk.writes + disk.flushes
+            mount(disk) { fs, found in #expect(fs != nil, "\(found)") }
+            requests = disk.reads + disk.writes + disk.flushes - before
+        }
+        #expect(requests > 20)
+
+        for stop in 1...(requests + 1) {
+            dirtyFixture { disk, files in
+                disk.failAfter(stop)
+                mount(disk) { _, _ in }
+                disk.recover()
+
+                mount(disk) { fs, found in
+                    guard var fs else {
+                        Issue.record("stop \(stop): not finished, \(found)")
+                        return
+                    }
+
+                    let findings = fs.scan(.everything)
+                    #expect(findings.safeToServe, "stop \(stop)")
+                    #expect(findings.wrongQuota == 0 && !findings.changed, "stop \(stop)")
+
+                    for object in files {
+                        let bytes = UnsafeMutableRawPointer.allocate(byteCount: Int(FSLayout.blockSize), alignment: 8)
+                        defer { bytes.deallocate() }
+                        #expect(fs.read(object, at: 0, into: bytes, count: FSLayout.blockSize).bytes == FSLayout.blockSize)
+                        #expect(bytes.load(fromByteOffset: 9, as: UInt8.self) == 0x61, "stop \(stop)")
+                    }
+                }
+            }
+        }
+    }
+
+
+    @Test("a power cut anywhere in a recovery is finished by the next mount")
+    func powerCutDuringRecovery() {
+        let sectors = Self.small
+
+        // Left dirty with a leak and a room behind, on a disk that loses what it
+        // had not flushed.
+        func fixture(_ body: (CrashDisk, [UInt32]) -> Void) {
+            let disk  = CrashDisk(sectors: sectors)
+            let space = UnsafeMutableRawPointer.allocate(byteCount: FileSystem<CrashDisk>.scratchBytes, alignment: 8)
+            defer { space.deallocate() }
+
+            guard var fs = FileSystem.format(disk, scratch: space).disk else { Issue.record("format"); return }
+
+            let box = fs.createContainer(
+                UnsafeRawPointer(("box" as StaticString).utf8Start), length: 3, quota: 16, in: FSLayout.rootObject
+            )
+            let name = "a.bin" as StaticString
+            let made = fs.create(UnsafeRawPointer(name.utf8Start), length: name.utf8CodeUnitCount, kind: .file, in: FSLayout.rootObject)
+            guard box.status == .ok, made.status == .ok else { Issue.record("fixture"); return }
+
+            let bytes = UnsafeMutableRawPointer.allocate(byteCount: Int(FSLayout.blockSize), alignment: 8)
+            defer { bytes.deallocate() }
+            bytes.initializeMemory(as: UInt8.self, repeating: 0x61, count: Int(FSLayout.blockSize))
+            #expect(fs.write(made.object, at: 0, from: bytes, count: FSLayout.blockSize).status == .ok)
+
+            #expect(fs.begin() == .ok)
+            #expect(fs.allocateAt(fs.plan.dataStart + 40, count: 2) == .ok)
+            #expect(fs.commit() == .ok)
+            #expect(fs.barrier() == .ok)
+
+            let at = Int(fs.plan.tableStart) * Int(FSLayout.blockSize)
+                + Int(box.object) * Int(FSLayout.objectSize) + 36
+            disk.poke(UInt32(disk.byte(at: at)) + 1, at: at)
+
+            body(disk, [made.object])
+        }
+
+        var requests = 0
+        fixture { disk, _ in
+            let space = UnsafeMutableRawPointer.allocate(byteCount: FileSystem<CrashDisk>.scratchBytes, alignment: 8)
+            defer { space.deallocate() }
+            let before = disk.reads + disk.writes + disk.flushes
+            #expect(FileSystem.mount(disk, scratch: space).disk != nil)
+            requests = disk.reads + disk.writes + disk.flushes - before
+        }
+        #expect(requests > 20)
+
+        for stop in 1...(requests + 1) {
+            for policy in [CrashDisk.Survivors.nothing, .everything, .permuted(3)] {
+                fixture { disk, files in
+                    let space = UnsafeMutableRawPointer.allocate(byteCount: FileSystem<CrashDisk>.scratchBytes, alignment: 8)
+                    defer { space.deallocate() }
+
+                    disk.failAfter(stop)
+                    _ = FileSystem.mount(disk, scratch: space)
+                    disk.powerCut(keeping: policy)
+
+                    let restarted = CrashDisk(restarting: disk)
+                    guard var again = FileSystem.mount(restarted, scratch: space).disk else {
+                        Issue.record("stop \(stop), \(policy): not finished")
+                        return
+                    }
+
+                    let findings = again.scan(.everything)
+                    #expect(findings.safeToServe && findings.wrongQuota == 0, "stop \(stop), \(policy)")
+
+                    let bytes = UnsafeMutableRawPointer.allocate(byteCount: Int(FSLayout.blockSize), alignment: 8)
+                    defer { bytes.deallocate() }
+                    #expect(again.read(files[0], at: 0, into: bytes, count: FSLayout.blockSize).bytes == FSLayout.blockSize)
+                    #expect(bytes.load(fromByteOffset: 9, as: UInt8.self) == 0x61, "stop \(stop), \(policy)")
+                }
+            }
+        }
+    }
+
+
+    @Test("a repair cut between two bitmap blocks is finished by the next mount")
+    func repairCutBetweenGroups() {
+        // A leak in each of two bitmap blocks, one transaction each, so a cut
+        // can land with the first rewritten and the second not.
+        func fixture(_ body: (MemoryDisk) -> Void) {
+            withDisk(Self.wide) { fs, disk in
+                let edge = UInt32(FileSystem<MemoryDisk>.blocksPerBitmapBlock)
+                #expect(file(&fs, "a.bin") != nil)
+                leak(&fs, at: fs.plan.dataStart + 50, 3)
+                leak(&fs, at: edge + 50, 5)
+                body(disk)
+            }
+        }
+
+        guard let plan = FSLayout.Plan(sectorCount: Self.wide, sectorSize: 512) else { return }
+
+        // Two superblocks and the journal header, then the census: the repair's
+        // first request comes straight after.
+        let first = 3 + Int(plan.tableBlocks) + Int(plan.bitmapBlocks) + 1
+
+        var cut = 0
+        for stop in first...(first + 24) {
+            fixture { disk in
+                let before = disk.writes
+                disk.failAfter(stop)
+                mount(disk) { _, _ in }
+                disk.recover()
+                if disk.writes > before { cut += 1 }
+
+                mount(disk) { fs, found in
+                    guard var fs else { Issue.record("stop \(stop): \(found)"); return }
+                    let findings = fs.scan(.blocks)
+                    #expect(findings.complete && !findings.changed, "stop \(stop)")
+                }
+            }
+        }
+        #expect(cut > 0)
     }
 }
