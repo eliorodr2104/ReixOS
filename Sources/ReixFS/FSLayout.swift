@@ -18,39 +18,23 @@ public enum FSLayout {
     /// Bytes in a block. Everything below is a whole number of these.
     public static let blockSize: UInt64 = 4096
 
-    /// `REIXFS` and a format version, as the first eight bytes of a superblock.
+    /// `REIXFS` and two zero bytes, as the first eight bytes of a superblock.
     /// A byte, not a number, so a hex dump of the disk says what it is.
-    public static let magic: UInt64 = 0x3230_5346_5849_4552   // "REIXFS02"
-
-    /// The first six of those bytes on their own: which format this is, without
-    /// which version of it.
     ///
-    /// Read apart from the version so that meeting a disk this build cannot
-    /// read is not the same event as meeting a disk that holds something else.
-    /// One of those is refused by name; the other is none of this system's
-    /// business. Before they were split, both were "not formatted".
+    /// No version in it. The two bytes after the name used to carry one, and a
+    /// disk that still says `REIXFS01` or `REIXFS02` was laid down by an earlier
+    /// build with its regions somewhere else: it is refused as unrecognised,
+    /// untouched, rather than read, called corrupt, or formatted over.
+    public static let magic: UInt64 = 0x0000_5346_5849_4552   // "REIXFS\0\0"
+
+    /// The first six of those bytes on their own: whether a superblock is this
+    /// system's at all.
+    ///
+    /// Read apart from the rest so that meeting a disk this build cannot read
+    /// is not the same event as meeting a disk that holds something else. One of
+    /// those is refused by name; the other is none of this system's business.
     public static let magicFamily: UInt64 = 0x5346_5849_4552  // "REIXFS"
 
-    /// The two bytes after the family: the version of the format this build
-    /// writes, and the only one it will mount.
-    ///
-    /// `02` is the layout with two superblocks and a journal in front of the
-    /// bitmap. A `01` disk is refused by name rather than mounted or erased:
-    /// the regions moved, so every offset in it means something else.
-    ///
-    /// The seal region and the entry checksums went in under the same number,
-    /// on purpose: nothing outside this tree has a disk worth migrating yet. A
-    /// disk laid down before them is refused as corrupt, untouched, because its
-    /// superblock describes a table where this build puts the seal.
-    public static let formatVersion: UInt16 = 0x3230          // "02"
-
-    /// The family and the version of whatever is in a superblock's magic.
-    public static func magicParts(_ magic: UInt64) -> (family: UInt64, version: UInt16) {
-        (
-            magic & 0x0000_FFFF_FFFF_FFFF,
-            UInt16(truncatingIfNeeded: magic >> 48)
-        )
-    }
 
     /// Bytes in one object record, and one directory entry.
     ///

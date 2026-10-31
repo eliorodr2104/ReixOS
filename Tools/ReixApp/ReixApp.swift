@@ -94,8 +94,10 @@ enum ReixApp {
                     "disk is blank; repeat with --format-if-blank to authorize formatting"
                 )
 
-            case .unsupportedVersion(let version):
-                throw ReixAppError.refused("unsupported RxFS version \(version)")
+            case .unrecognised:
+                throw ReixAppError.refused(
+                    "disk holds an RxFS layout this build does not read; run `make clean-image` to start over"
+                )
             case .tooLarge(let blocks):
                 throw ReixAppError.refused("RxFS image is too large (\(blocks) blocks)")
             case .corrupt:

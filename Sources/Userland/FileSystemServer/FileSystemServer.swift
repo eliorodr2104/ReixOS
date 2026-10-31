@@ -304,15 +304,9 @@ public struct FileSystemServer: Service {
                 print("[ FS    ] there is something on this disk and it is not a file system this build can mount, so nothing was written")
                 return nil
 
-            case .unsupportedVersion(let version):
-                // Printed as the two letters it is, not as the number those
-                // letters happen to make: the disk says `REIXFS` and then this,
-                // so this is what somebody reading a hex dump will be looking
-                // for.
-                print("[ FS    ] this disk says it is format version ", terminator: "")
-                putchar(ch: readable(UInt8(truncatingIfNeeded: version)))
-                putchar(ch: readable(UInt8(truncatingIfNeeded: version >> 8)))
-                print(", which this build cannot read, so nothing was written")
+            case .unrecognised:
+                // A disk an earlier build laid down: ours by name, not by layout.
+                print("[ FS    ] this disk was laid down by a build with another layout, so nothing was written")
                 return nil
 
             case .blank:
@@ -1458,10 +1452,4 @@ public struct FileSystemServer: Service {
         _ = munmap(addr: attachment.address, size: attachment.extent)
         _ = capDrop(attachment.grant)
     }
-}
-
-
-/// A byte as itself when it can be read, and a dot when it cannot.
-private func readable(_ byte: UInt8) -> UInt8 {
-    (byte >= 0x20 && byte < 0x7F) ? byte : UInt8(ascii: ".")
 }

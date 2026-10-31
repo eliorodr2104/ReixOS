@@ -21,10 +21,7 @@ func isDurabilityUnknown(_ found: FSMount) -> Bool {
     if case .durabilityUnknown = found { return true }; return false
 }
 
-func unsupportedVersion(_ found: FSMount) -> UInt16? {
-    if case .unsupportedVersion(let version) = found { return version }
-    return nil
-}
+func isUnrecognised(_ found: FSMount) -> Bool { if case .unrecognised = found { return true }; return false }
 
 
 /// What mounting does to a disk it does not recognise, which used to be:
@@ -219,21 +216,21 @@ struct MountRefusalTests {
     }
 
 
-    // MARK: - Ours, from the future
+    // MARK: - Ours, in another layout
 
-    @Test("a newer version of this format is named, not overwritten")
-    func newerVersionIsNamed() {
+    @Test("a disk of ours in another layout is named, not overwritten")
+    func otherLayoutIsNamed() {
         withFormatted { disk, scratch in
-            // The version lives in the top two bytes of the magic, so bumping
-            // it is what a disk written by a later build looks like.
-            let newer = FSLayout.magicFamily | (UInt64(0x3239) << 48)   // "REIXFS92"
-            pokeBoth(disk, newer, at: FSSuperblockField.magic)
+            // `REIXFS` and anything but the two zero bytes after it: what a disk
+            // laid down by another build of this system says.
+            let other = FSLayout.magicFamily | (UInt64(0x3239) << 48)   // "REIXFS92"
+            pokeBoth(disk, other, at: FSSuperblockField.magic)
 
             let before  = disk.writes
             let attempt = FileSystem.mount(disk, scratch: scratch)
 
             #expect(attempt.disk == nil)
-            #expect(unsupportedVersion(attempt.found) == 0x3239)
+            #expect(isUnrecognised(attempt.found), "\(attempt.found)")
             #expect(disk.writes == before)
         }
     }
@@ -268,21 +265,19 @@ struct MountRefusalTests {
     }
 
 
-    @Test("the version this build writes is the one it reads")
-    func versionRoundTrips() {
-        // A guard on the two constants drifting apart: the magic is the family
-        // and the version concatenated, and nothing else checks that.
-        let parts = FSLayout.magicParts(FSLayout.magic)
-
-        #expect(parts.family  == FSLayout.magicFamily)
-        #expect(parts.version == FSLayout.formatVersion)
+    @Test("the magic this build writes is its name and nothing after it")
+    func magicIsTheNameAlone() {
+        // A guard on the two constants drifting apart, and on a version
+        // creeping back into the two bytes after the name.
+        #expect(FSLayout.magic & 0x0000_FFFF_FFFF_FFFF == FSLayout.magicFamily)
+        #expect(FSLayout.magic >> 48 == 0)
     }
 
 
-    @Test("a disk laid down before the seal region is refused as corrupt, untouched")
+    @Test("a disk laid down before the seal region is refused as unrecognised, untouched")
     func diskBeforeTheSealIsRefused() {
-        // The same magic, with the table where this build keeps the seal: what
-        // an image made by an earlier build holds, byte for byte.
+        // `REIXFS02`, with the table where this build keeps the seal: what an
+        // image made by an earlier build holds, byte for byte.
         let disk = MemoryDisk(sectors: Self.sectors)
         guard let plan = FSLayout.Plan(sectorCount: Self.sectors, sectorSize: 512) else { return }
 
@@ -291,7 +286,7 @@ struct MountRefusalTests {
             let base = raw.baseAddress!
             let table = plan.bitmapStart + plan.bitmapBlocks
 
-            base.storeBytes(of: FSLayout.magic, toByteOffset: 0, as: UInt64.self)
+            base.storeBytes(of: UInt64(0x3230_5346_5849_4552), toByteOffset: 0, as: UInt64.self)
             for (at, value) in [
                 (8, UInt32(FSLayout.blockSize)), (12, plan.totalBlocks),
                 (16, plan.bitmapStart), (20, plan.bitmapBlocks),
@@ -314,7 +309,7 @@ struct MountRefusalTests {
             let attempt = FileSystem.mount(disk, scratch: scratch)
 
             #expect(attempt.disk == nil)
-            #expect(isCorrupt(attempt.found), "\(attempt.found)")
+            #expect(isUnrecognised(attempt.found), "\(attempt.found)")
         }
 
         #expect(disk.writes == 0)

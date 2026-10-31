@@ -188,8 +188,8 @@ struct FSSuperblock {
         /// Every byte of the block is zero.
         case blank
 
-        /// This format, in a version this build does not know how to read.
-        case unsupported(UInt16)
+        /// This system's name, in a layout this build does not read.
+        case unrecognised
 
         /// Anything else: not this format, torn, or describing another disk.
         case corrupt
@@ -207,21 +207,15 @@ struct FSSuperblock {
         // that an empty disk is how a torn write became an erase.
         if FSChecksum.isZero(base, count: Int(FSLayout.blockSize)) { return .blank }
 
-        let parts = FSLayout.magicParts(
-            base.loadUnaligned(fromByteOffset: FSSuperblockField.magic, as: UInt64.self)
-        )
+        let magic = base.loadUnaligned(fromByteOffset: FSSuperblockField.magic, as: UInt64.self)
 
         // Not our format at all: somebody else's disk, or one damaged past
         // recognising. Either way not ours to write.
-        guard parts.family == FSLayout.magicFamily else { return .corrupt }
+        guard magic & 0x0000_FFFF_FFFF_FFFF == FSLayout.magicFamily else { return .corrupt }
 
-        // Ours, in a version this build does not know. Named, so that an older
-        // machine meeting a newer disk says so instead of treating an unfamiliar
-        // number as an empty disk. Said before the checksum, because a version
-        // this build cannot read may not compute its checksum the same way.
-        guard parts.version == FSLayout.formatVersion else {
-            return .unsupported(parts.version)
-        }
+        // Ours, laid down by a build with another layout. Said before the
+        // checksum, which that layout may not compute the same way.
+        guard magic == FSLayout.magic else { return .unrecognised }
 
         guard base.loadUnaligned(fromByteOffset: FSSuperblockField.commit, as: UInt32.self)
                 == Self.completeMarker
@@ -288,14 +282,10 @@ struct FSSuperblock {
             case (.blank, .blank):
                 return .refuse(.blank)
 
-            // A version this build cannot read, said by name, and said before
-            // corruption: an older machine meeting a newer disk should be told
-            // what it met.
-            case (.unsupported(let version), _):
-                return .refuse(.unsupportedVersion(version))
-
-            case (_, .unsupported(let version)):
-                return .refuse(.unsupportedVersion(version))
+            // A layout this build does not read, said by name and before
+            // corruption: a machine meeting such a disk should be told what it met.
+            case (.unrecognised, _), (_, .unrecognised):
+                return .refuse(.unrecognised)
 
             default:
                 return .refuse(.corrupt)

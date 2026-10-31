@@ -17,7 +17,7 @@
 /// them - `blank` - is a disk anybody should be willing to write over.
 public enum FSMount {
 
-    /// The disk holds this format, at this version, describing this disk.
+    /// The disk holds this format, in this layout, describing this disk.
     case ok
 
     /// Every byte of block zero is zero.
@@ -27,12 +27,12 @@ public enum FSMount {
     /// that as an empty disk is exactly how a torn write turned into an erase.
     case blank
 
-    /// This format, in a version this build does not know how to read.
+    /// This system's disk, laid down in a layout this build does not read.
     ///
-    /// The version travels in the last two bytes of the magic, so an older
-    /// build meeting a newer disk recognises it as one of ours and refuses it,
-    /// rather than seeing an unfamiliar number and calling the disk empty.
-    case unsupportedVersion(UInt16)
+    /// The superblock says `REIXFS` and then something other than what this
+    /// build writes - an earlier build's version bytes, above all. Refused by
+    /// name and untouched: not mounted, not called corrupt, never formatted.
+    case unrecognised
 
     /// This format, on a disk larger than this build is declared to work on.
     ///
