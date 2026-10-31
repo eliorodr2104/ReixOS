@@ -5,12 +5,33 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 21/04/2026.
 //
 
+/// Binary buddy allocator over one contiguous span of RAM.
+///
+/// State is kept per free block and not per page, so alloc, free, split and
+/// coalesce cost a bounded number of steps per order instead of one per page:
+///
+/// - `freeHeads` has one bit per frame, set exactly when that frame is the
+///   head of a free block;
+/// - that block's order is in the `FreeBlock` node overlaid on its first bytes,
+///   which is read only after the bit says the block is free, so it is always
+///   memory this allocator owns and never bytes an owner wrote;
+/// - the block is linked on `freeLists[order]`.
+///
+/// The three agree at every return: a bit is set if and only if its frame heads
+/// a block on the list its node names, free blocks never overlap, and no two
+/// free blocks of the same order are buddies (they would have merged). "Is my
+/// buddy a free block of exactly this order?" is one bit and one byte.
 public struct BuddyAllocator: Allocator {
 
     private let startRam       : PhysicalAddress
     private let sizeRam        : UInt64
 
-    private let bitmap         : UnsafeMutablePointer<UInt8>
+    /// One bit per frame, set on the head of every free block and nowhere else.
+    ///
+    /// Same size as the per-page allocation bitmap it replaces, so the boot
+    /// arena in `PhysicalPageManager.init` did not move. Zero is "no free block
+    /// starts here", which is also what a frame never donated reads as.
+    private let freeHeads      : UnsafeMutablePointer<UInt8>
 
     /// One free list per order (0...maxOrder), kept in the boot bookkeeping arena.
     /// The list nodes live inside the free blocks (`FreeBlock`), so this only
@@ -50,309 +71,301 @@ public struct BuddyAllocator: Allocator {
         self.sizeRam    = size
         let totalPages  = size / UInt64(Self.pageSize)
         let bitmapBytes = Int((totalPages + 7) / 8)
-                
-        self.bitmap    = UnsafeMutablePointer<UInt8>(bitPattern: UInt(bitmapAddress))!
+
+        self.freeHeads = UnsafeMutablePointer<UInt8>(bitPattern: UInt(bitmapAddress))!
         self.freeLists = UnsafeMutablePointer<LinkedList<FreeBlock>>(bitPattern: UInt(freeListsAddress))!
 
         UnsafeMutableRawPointer(freeLists).initializeMemory(as: UInt8.self, repeating: 0, count: Self.freeListsBytes)
 
-        bitmap.initialize(repeating: 0xFF, count: bitmapBytes)
+        freeHeads.initialize(repeating: 0, count: bitmapBytes)
     }
-    
-    
+
+
+    /// Takes the smallest non-empty order that fits and splits it down, pushing
+    /// each upper half on its own list: at most `maxOrder` steps either way.
     public func alloc(_ bytes: Int) throws(AllocatorError) -> PhysicalPage {
-        let bSize = try blockSize(Self.maxOrder)
-        guard bytes >= 0, bytes <= bSize else { throw(.bytesNotValid(bytes)) }
-        
-        let pageSize    = Int(Self.pageSize)
-        let maxPage     = (bytes + pageSize - 1) / pageSize
-        var targetOrder: UInt8 = 0
-        
-        while(UInt64(1) << targetOrder) < maxPage {
-            targetOrder += 1
+        guard bytes >= 0, bytes <= Int(Self.pageSize << UInt64(Self.maxOrder)) else {
+            throw .bytesNotValid(bytes)
         }
-        
-        for currentOrder in targetOrder...Self.maxOrder {
-            let page = try getFreeListHead(order: currentOrder)
-            
-            if page != 0 {
-                let _ = try popFreeBlock(order: currentOrder)
-                
-                if currentOrder > targetOrder {
-                    var iterator = currentOrder
-                    
-                    while iterator > targetOrder {
-                        iterator -= 1
-                        
-                        let dimSplitBuddy = try blockSize(iterator)
-                        let buddyAddress  = page + dimSplitBuddy
-                        
-                        try pushFreeBlock(address: buddyAddress, order: iterator)
-                        try clearBitmapRange(address: buddyAddress, order: iterator)
-                    }
-                                        
-                }
-                
-                try setBitmapRange(address: page, order: targetOrder)
-                return PhysicalPage(address: page, order: targetOrder)
-            }
+
+        let pages       = (bytes + Int(Self.pageSize) - 1) / Int(Self.pageSize)
+        let targetOrder = pages <= 1 ? 0 : UInt8(Int.bitWidth - (pages - 1).leadingZeroBitCount)
+
+        var order = targetOrder
+        while (freeLists + Int(order)).pointee.head == nil {
+            guard order < Self.maxOrder else { throw .fullMemory }
+            order += 1
         }
-        
-        throw(.fullMemory)
+
+        let offset = popFreeBlock(order: order)
+
+        while order > targetOrder {
+            order -= 1
+            pushFreeBlock(offset: offset + (Self.pageSize << UInt64(order)), order: order)
+        }
+
+        return PhysicalPage(address: startRam + offset, order: targetOrder)
     }
-    
+
+
+    /// Refuses a block that is not one, or that is already free in whole or in
+    /// part, before anything is written; then merges upward while the buddy is
+    /// a free block of exactly the current order.
+    ///
+    /// "In part" means its first frame lies in a free block. A free block nested
+    /// further inside is reachable only by naming the wrong order, which
+    /// `PhysicalPageManager` refuses first against the order it recorded.
     public func free(_ page: consuming PhysicalPage) throws(AllocatorError) {
         guard try isValidBlock(address: page.address, order: page.order) else {
             throw .addressInvalid(page.address)
         }
-        guard try !isBlockFree(page.address, order: page.order) else { throw(.doubleFreeInvalid) }
 
+        let offset = page.address - startRam
+        guard !liesInFreeBlock(offset: offset) else { throw .doubleFreeInvalid }
 
-        try mergeAndInsert(address: page.address, order: page.order)
+        mergeAndInsert(offset: offset, order: page.order)
     }
-    
-    
+
+
+    /// Donates `rawStart ..< rawEnd`, page-aligned inward, as the largest aligned
+    /// blocks that fit. A donation overlapping memory that is already free is
+    /// refused whole before the first block goes in: a free block either covers
+    /// the first frame or starts inside the range, and has a head bit there.
     public func addFreeRange(
         from rawStart: PhysicalAddress,
         to   rawEnd  : PhysicalAddress
     ) throws(AllocatorError) {
-        
+
         let ramEnd = try getRamEnd(address: rawStart)
-        
+
         guard rawStart >= startRam &&
               rawStart < ramEnd    &&
               rawEnd   <= ramEnd else { throw .addressInvalid(rawStart) }
-        
+
         guard rawStart < rawEnd else {
             throw .addressRangeInvalid(
                 from: rawStart,
                 to  : rawEnd
             )
         }
-        
-        let start = try alignUp(max(rawStart, startRam), Self.pageSize)
-        let end   = alignDown(min(rawEnd, ramEnd), Self.pageSize)
-        
-        var current = start
-        
-        while current < end {
-            let remaining = end - current
-            
-            let order = try findMaxOrder(
-                address      : current,
-                remainingSize: remaining
-            )
-            
-            try mergeAndInsert(address: current, order: order)
 
-            current += try blockSize(order)
+        let start = try alignUp(max(rawStart, startRam), Self.pageSize) - startRam
+        let end   = alignDown(min(rawEnd, ramEnd), Self.pageSize) - startRam
+
+        guard start < end else { return }
+
+        guard !liesInFreeBlock(offset: start),
+              !anyFreeHead(from: start, to: end)
+        else { throw .doubleFreeInvalid }
+
+        var current = start
+        while current < end {
+            let order = largestOrder(at: current, before: end)
+
+            mergeAndInsert(offset: current, order: order)
+            current += Self.pageSize << UInt64(order)
         }
     }
-    
-    
+
+
     // MARK: - Helpers
-    
+
+    /// Inserts a block already validated by the caller, merging it with its
+    /// buddy at each order for as long as the buddy is free at exactly that
+    /// order. A free head of order k always fits in RAM, so a buddy that would
+    /// run past the end can never pass that test.
     private func mergeAndInsert(
-        address: PhysicalAddress,
-        order  : UInt8
-    ) throws(AllocatorError) {
-        
-        guard try isValidBlock(
-            address: address,
-            order  : order
-        ) else { throw .addressInvalid(address) }
-        
-        var currentAddress = address
-        var currentOrder   = order
+        offset: UInt64,
+        order : UInt8
+    ) {
+        var currentOffset = offset
+        var currentOrder  = order
 
         while currentOrder < Self.maxOrder {
-            
-            guard let buddyAddress = try buddyOf(
-                address: currentAddress,
-                order  : currentOrder
-            ) else { break }
-            
-            guard try isValidBlock(
-                address: buddyAddress,
-                order  : currentOrder
-            ) else { break }
+            let blockBytes  = Self.pageSize << UInt64(currentOrder)
+            let buddyOffset = currentOffset ^ blockBytes
 
-            if try isBlockFree(buddyAddress, order: currentOrder) {
-                
-                if !(try removeFreeBlock(
-                    address: buddyAddress,
-                    order  : currentOrder)) {
-                    fatalError("PPM: Buddy block in list not found. Corrupted structures")
-                }
-                
-                currentAddress = min(currentAddress, buddyAddress)
-                
-            } else { break }
-            
+            guard buddyOffset < sizeRam,
+                  isFreeBlock(offset: buddyOffset, order: currentOrder)
+            else { break }
+
+            unlinkFreeBlock(offset: buddyOffset, order: currentOrder)
+
+            currentOffset = min(currentOffset, buddyOffset)
             currentOrder += 1
         }
-        
-        try pushFreeBlock(address: currentAddress, order: currentOrder)
-        try clearBitmapRange(address: currentAddress, order: currentOrder)
-    }
- 
-    private func blockSize(_ order: UInt8) throws(AllocatorError) -> UInt64 {
-        guard order <= Self.maxOrder else { throw .pageOrderInvalid(order)  }
-        return UInt64(Self.pageSize << order)
-    }
-    
-    private func findMaxOrder(
-        address      : UInt64,
-        remainingSize: UInt64
-    ) throws(AllocatorError) -> UInt8 {
-        let ramEnd = try getRamEnd(address: address)
-        
-        guard address >= startRam &&
-              address < ramEnd else { throw .addressInvalid(address) }
-        
-        var order = Self.maxOrder
-        while order > 0 {
-            let blockBytes = try blockSize(order)
-            
-            if remainingSize >= blockBytes &&
-                (address - startRam) % blockBytes == 0 &&
-                blockBytes <= ramEnd - address {
-                return order
-            }
-            
-            order -= 1
-        }
-        
-        return 0 // 4KB
-    }
-    
-    private func buddyOf(
-        address: UInt64,
-        order  : UInt8
-    ) throws(AllocatorError) -> UInt64? {
-        guard try isValidBlock(
-            address: address,
-            order  : order
-        ) else { throw .addressInvalid(address) }
-        
-        let rel         = address - startRam
-        let blockBytes  = try blockSize(order)
-        let buddyOffset = rel ^ blockBytes
 
-        guard buddyOffset < sizeRam &&
-              blockBytes <= sizeRam - buddyOffset else { return nil }
-        
-        return startRam + buddyOffset
+        pushFreeBlock(offset: currentOffset, order: currentOrder)
     }
-    
-    
+
+
+    /// Largest order whose block starts aligned at `offset` and ends by `end`.
+    @inline(__always)
+    private func largestOrder(
+        at offset : UInt64,
+        before end: UInt64
+    ) -> UInt8 {
+        let page      = offset / Self.pageSize
+        let aligned   = page == 0 ? Self.maxOrder : UInt8(min(page.trailingZeroBitCount, Int(Self.maxOrder)))
+        let remaining = (end - offset) / Self.pageSize
+        let fits      = UInt8(UInt64.bitWidth - 1 - remaining.leadingZeroBitCount)
+
+        return min(aligned, fits)
+    }
+
+
+    /// Whether the frame at `offset` belongs to any free block. A covering block
+    /// of order k starts at `offset` rounded down to k, so one probe per order
+    /// finds it.
+    private func liesInFreeBlock(offset: UInt64) -> Bool {
+        for order in 0...Self.maxOrder {
+            let head = offset & ~((Self.pageSize << UInt64(order)) - 1)
+
+            if isFreeBlock(offset: head, order: order) { return true }
+        }
+
+        return false
+    }
+
+
+    /// One byte per eight frames where the range allows it. Linear in the range,
+    /// which only donation pays: boot and the device tree reclaim, once each.
+    private func anyFreeHead(
+        from start: UInt64,
+        to   end  : UInt64
+    ) -> Bool {
+        var page = Int(start / Self.pageSize)
+        let last = Int(end / Self.pageSize)
+
+        while page < last {
+            if page & 7 == 0, last - page >= 8 {
+                if freeHeads[page >> 3] != 0 { return true }
+                page += 8
+            } else {
+                if freeHeads[page >> 3] & (1 << UInt8(page & 7)) != 0 { return true }
+                page += 1
+            }
+        }
+
+        return false
+    }
+
+
+    @inline(__always)
+    private func isFreeBlock(
+        offset: UInt64,
+        order : UInt8
+    ) -> Bool {
+        isFreeHead(offset: offset) && node(at: offset).pointee.order == order
+    }
+
+
+    @inline(__always)
+    private func isFreeHead(offset: UInt64) -> Bool {
+        let page = Int(offset / Self.pageSize)
+        return freeHeads[page >> 3] & (1 << UInt8(page & 7)) != 0
+    }
+
+
+    @inline(__always)
+    private func setFreeHead(
+        offset: UInt64,
+        _ free: Bool
+    ) {
+        let page = Int(offset / Self.pageSize)
+        let bit  = UInt8(1) << UInt8(page & 7)
+
+        if free {
+            freeHeads[page >> 3] |= bit
+        } else {
+            freeHeads[page >> 3] &= ~bit
+        }
+    }
+
+
+    @inline(__always)
+    private func node(at offset: UInt64) -> UnsafeMutablePointer<FreeBlock> {
+        UnsafeMutablePointer<FreeBlock>(bitPattern: UInt(startRam + offset))!
+    }
+
+
+    // `.pointee`, never the `freeLists[order]` subscript, in every free-list access:
+    // the subscript copies the list in and out, an unaligned ldp with the MMU off.
+    private func pushFreeBlock(
+        offset: UInt64,
+        order : UInt8
+    ) {
+        let block = node(at: offset)
+
+        block.pointee.next  = nil
+        block.pointee.prev  = nil
+        block.pointee.order = order
+
+        (freeLists + Int(order)).pointee.pushBack(block)
+        setFreeHead(offset: offset, true)
+    }
+
+
+    /// Callers check the list is not empty first. The order is zeroed with the
+    /// links, so a node leaves the lists as the all-zero bytes it had before.
+    private func popFreeBlock(order: UInt8) -> UInt64 {
+        let block  = (freeLists + Int(order)).pointee.popFront()!
+        let offset = UInt64(UInt(bitPattern: block)) - startRam
+
+        block.pointee.order = 0
+        setFreeHead(offset: offset, false)
+        return offset
+    }
+
+
+    /// Unlinks a block `isFreeBlock` just confirmed, so it is on exactly this
+    /// list and the doubly linked `remove(element:)` splices it in O(1).
+    private func unlinkFreeBlock(
+        offset: UInt64,
+        order : UInt8
+    ) {
+        let block = node(at: offset)
+
+        (freeLists + Int(order)).pointee.remove(element: block)
+        block.pointee.order = 0
+        setFreeHead(offset: offset, false)
+    }
+
+
     private func alignUp(
         _ x: UInt64,
         _ a: UInt64
     ) throws(AllocatorError) -> UInt64 {
-        
+
         let remainder = x % a
         guard remainder != 0 else { return x }
-        
+
         let increment = a - remainder
         let (result, overflow) = x.addingReportingOverflow(increment)
         guard !overflow else { throw .addressInvalid(x) }
         return result
     }
-    
+
     private func alignDown(
         _ x: UInt64,
         _ a: UInt64
     ) -> UInt64 { x & ~(a - 1) }
-    
-    private func getPageIndex(address: UInt64) throws(AllocatorError) -> Int {
-        let ramEnd = try getRamEnd(address: address)
-        
-        guard address >= startRam &&
-              address < ramEnd else { throw .addressInvalid(address) }
-        
-        let index = (address - startRam) / Self.pageSize
-        guard index < sizeRam / Self.pageSize else {
-            throw .addressInvalid(address)
-        }
-        
-        return Int(index)
-    }
-    
-    private func setBit(_ index: Int) {
-        bitmap[index / 8] |= (1 << UInt8(index % 8))
-    }
-    
-    private func clearBit(_ index: Int) {
-        bitmap[index / 8] &= ~(1 << UInt8(index % 8))
-    }
-    
-    
-    private func setBitmapRange(
-        address: UInt64,
-        order  : UInt8
-    ) throws(AllocatorError) {
-        guard try isValidBlock(
-            address: address,
-            order  : order
-        ) else { throw .addressInvalid(address) }
-        
-        let startPage = try getPageIndex(address: address)
-        let pageCount = 1 << order
-        
-        for i in 0..<pageCount {
-            setBit(startPage + i)
-        }
-    }
-    
-    private func clearBitmapRange(
-        address: UInt64,
-        order  : UInt8
-    ) throws(AllocatorError) {
-        guard try isValidBlock(
-            address: address,
-            order  : order
-        ) else { throw .addressInvalid(address) }
-        
-        let startPage = try getPageIndex(address: address)
-        let pageCount = 1 << order
-        for i in 0..<pageCount { clearBit(startPage + i) }
-    }
-    
-    
-    private func isBlockFree(
-        _ address: UInt64,
-        order    : UInt8
-    ) throws(AllocatorError) -> Bool {
-        guard try isValidBlock(
-            address: address,
-            order  : order
-        ) else { throw .addressInvalid(address) }
-        
-        let startPage = try getPageIndex(address: address)
-        let pageCount = 1 << order
-        for i in 0..<pageCount {
-            if testBit(startPage + i) { return false }
-        }
-        
-        return true
-    }
-    
-    
+
+
     private func isValidBlock(
         address: UInt64,
         order  : UInt8
     ) throws(AllocatorError) -> Bool {
         let ramEnd = try getRamEnd(address: address)
-        
+
         guard address >= startRam &&
               address < ramEnd else { return false }
-        
+
         guard order <= Self.maxOrder else {
             throw .pageOrderInvalid(order)
         }
-        
-        let blockBytes = try blockSize(order)
+
+        let blockBytes = Self.pageSize << UInt64(order)
         return (address - startRam) % blockBytes == 0 &&
                 blockBytes <= ramEnd - address
     }
@@ -360,73 +373,73 @@ public struct BuddyAllocator: Allocator {
     private func getRamEnd(address: UInt64) throws(AllocatorError) -> UInt64 {
         let (ramEnd, overflow) = startRam.addingReportingOverflow(sizeRam)
         guard !overflow else { throw .addressInvalid(address) }
-        
+
         return ramEnd
     }
-    
-    
-    /// Physical address of the order's free-list head, or 0 if the list is
-    /// empty (kept returning a raw address so `alloc` is unchanged).
-    private func getFreeListHead(order: UInt8) throws(AllocatorError) -> UInt64 {
-        guard order <= Self.maxOrder else { throw .pageOrderInvalid(order) }
-
-        // `.pointee`, never the `freeLists[order]` subscript, here and in every
-        // free-list access below: see the note on `freeLists`.
-        if let head = (freeLists + Int(order)).pointee.head {
-            return UInt64(UInt(bitPattern: head))
-        }
-        return 0
-    }
-
-
-    private func pushFreeBlock(
-        address: UInt64,
-        order  : UInt8
-    ) throws(AllocatorError) {
-        guard try isValidBlock(
-            address: address,
-            order  : order
-        ) else { throw .addressInvalid(address) }
-
-        let block = UnsafeMutablePointer<FreeBlock>(bitPattern: UInt(address))!
-
-        block.pointee.next = nil
-        block.pointee.prev = nil
-
-        (freeLists + Int(order)).pointee.pushBack(block)
-    }
-
-    private func popFreeBlock(order: UInt8) throws(AllocatorError) -> UInt64? {
-        guard order <= Self.maxOrder else { throw .pageOrderInvalid(order) }
-
-        guard let block = (freeLists + Int(order)).pointee.popFront() else { return nil }
-        return UInt64(UInt(bitPattern: block))
-    }
-
-    /// Unlink a known-free block from its order list in O(1).
-    ///
-    /// The buddy invariant guarantees the block is actually in `freeLists[order]`
-    /// when this is called (it is reached only after `isBlockFree` confirms a
-    /// maximally-merged free buddy at exactly this order), so the doubly-linked
-    /// `remove(element:)` can splice it directly instead of scanning the list.
-    private func removeFreeBlock(
-        address: UInt64,
-        order  : UInt8
-    ) throws(AllocatorError) -> Bool {
-        guard try isValidBlock(
-            address: address,
-            order  : order
-        ) else { throw .addressInvalid(address) }
-
-        let block = UnsafeMutablePointer<FreeBlock>(bitPattern: UInt(address))!
-        (freeLists + Int(order)).pointee.remove(element: block)
-        return true
-    }
-    
-    // MARK: - Testing
-    
-    private func testBit(_ index: Int) -> Bool {
-        (bitmap[index / 8] & (1 << UInt8(index % 8))) != 0
-    }
-    
 }
+
+
+// MARK: - Host test seam
+
+#if !hasFeature(Embedded)
+/// The allocator's private state, copied out for the host invariant checker.
+/// Gated like the seam at the foot of `PhysicalPageManager.swift`, so the
+/// machine is compiled without it.
+struct BuddyFreeState {
+    let start   : PhysicalAddress
+    let size    : UInt64
+    let maxOrder: UInt8
+
+    /// Per list, each node walked from `head` along `next`, with the order its
+    /// node records.
+    let lists: [[(address: PhysicalAddress, order: UInt8)]]
+
+    /// A `prev` that does not point back, a `tail` that is not the last node,
+    /// or a walk longer than RAM has frames (a cycle). Zero when sound.
+    let brokenLinks: Int
+
+    /// Every frame whose head bit is set, ascending.
+    let heads: [PhysicalAddress]
+}
+
+
+extension BuddyAllocator {
+
+    var freeState: BuddyFreeState {
+        let frames = Int(sizeRam / Self.pageSize)
+        var lists : [[(address: PhysicalAddress, order: UInt8)]] = []
+        var broken = 0
+
+        for order in 0...Self.maxOrder {
+            let list     = (freeLists + Int(order)).pointee
+            var walked   : [(address: PhysicalAddress, order: UInt8)] = []
+            var previous : UnsafeMutablePointer<FreeBlock>? = nil
+            var current  = list.head
+
+            while let block = current, walked.count <= frames {
+                if block.pointee.prev != previous { broken += 1 }
+                walked.append((UInt64(UInt(bitPattern: block)), block.pointee.order))
+                previous = block
+                current  = block.pointee.next
+            }
+
+            if current != nil || list.tail != previous { broken += 1 }
+            lists.append(walked)
+        }
+
+        var heads: [PhysicalAddress] = []
+        for page in 0..<frames where isFreeHead(offset: UInt64(page) * Self.pageSize) {
+            heads.append(startRam + UInt64(page) * Self.pageSize)
+        }
+
+        return BuddyFreeState(
+            start      : startRam,
+            size       : sizeRam,
+            maxOrder   : Self.maxOrder,
+            lists      : lists,
+            brokenLinks: broken,
+            heads      : heads
+        )
+    }
+}
+#endif

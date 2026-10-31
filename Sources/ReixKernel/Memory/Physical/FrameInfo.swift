@@ -34,9 +34,9 @@ public struct FrameInfo {
     /// 12, a third of the array wasted on padding. Both values are bounded well
     /// inside 4 bits, so the nibbles cannot truncate anything real:
     ///
-    /// - `order` is a buddy order. `BuddyAllocator.maxOrder` is 11 and its
-    ///   `blockSize` throws `pageOrderInvalid` above it, so no block can carry
-    ///   more. The one larger value stored is
+    /// - `order` is a buddy order. `BuddyAllocator.maxOrder` is 11: its `alloc`
+    ///   refuses a larger size and its `free` a larger order, so no block can
+    ///   carry more. The one larger value stored is
     ///   `PhysicalPageManager.blockInteriorOrder`, the block-interior sentinel,
     ///   which is 15 for exactly this reason and still above every real order.
     ///
