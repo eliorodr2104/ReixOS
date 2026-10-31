@@ -34,9 +34,9 @@ IRQ delivery wakes the driver through the kernel's interrupt mechanism. Device c
 
 ## Filesystem engine
 
-`FileSystem<Device: BlockDevice>` takes a block backend and scratch memory. It handles object records, directory names, extents, bitmap allocation, container quotas, transactions and recovery. `mount` returns `(disk: FileSystem?, found: FSMount)`; `format` returns `(disk: FileSystem?, made: FSStatus)`.
+`FileSystem<Device: BlockDevice>` takes a block backend and scratch memory sized for that device by `scratchBytes(sectorCount:sectorSize:)`; FileSystemServer asks for 108 KiB on the 16 MiB disk. It handles object records, directory names, extents, bitmap allocation, container quotas, transactions and recovery. `mount` returns `(disk: FileSystem?, found: FSMount)`: `ok`, `blank`, `unrecognised`, `tooLarge`, `corrupt`, `deviceFailed`, `unusable` or `durabilityUnknown`. `format` returns `(disk: FileSystem?, made: FSStatus)`.
 
-Structural updates use a journal with room for 16 block images. File data and structural metadata follow different write paths. Checksums and recovery validate journal records before replay; malformed persistent state can quarantine the volume.
+Structural updates use a journal with room for 16 block images. File data and structural metadata follow different write paths. Checksums and recovery validate journal records before replay; every bitmap and table block read is checked against its last written checksum; malformed persistent state can quarantine the volume. A clean shutdown checks the whole volume and seals it, so the next clean mount reads a few blocks instead of the whole table.
 
 The [disk format page](../Architecture/Storage.md) explains the byte/block layout and commit ordering. It describes the implementation, not a new durability test result.
 

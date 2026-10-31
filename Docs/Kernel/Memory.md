@@ -44,11 +44,11 @@ See [RAM layout](../Architecture/Memory.md) for where these allocations fit.
 
 | Function | Parameters | Returns | Meaning |
 | --- | --- | --- | --- |
-| [<code>PhysicalPageManager.alloc(_:flag:heapShift:)</code>](../../Sources/ReixKernel/Memory/Physical/PhysicalPageManager.swift#L70) | <code>_ bytes : Int, flag : PhysicalPageFlags = .none, heapShift: UInt8 = 0</code> | <code>PhysicalPage; throws(PPMError)</code> | Allocates a physical block large enough for the byte request; throws on allocation or validation failure. |
-| [<code>PhysicalPageManager.free(_:)</code>](../../Sources/ReixKernel/Memory/Physical/PhysicalPageManager.swift#L163) | <code>_ page: consuming PhysicalPage</code> | <code>Void; throws(PPMError)</code> | Returns a consumed allocation to the allocator after ownership checks. |
-| [<code>PhysicalPageManager.retain(_:)</code>](../../Sources/ReixKernel/Memory/Physical/PhysicalPageManager.swift#L204) | <code>_ address: PhysicalAddress</code> | <code>Void; throws(PPMError)</code> | Adds a frame reference; throws if the address or reference state is invalid. |
-| [<code>PhysicalPageManager.release(_:)</code>](../../Sources/ReixKernel/Memory/Physical/PhysicalPageManager.swift#L233) | <code>_ address: PhysicalAddress</code> | <code>Void; throws(PPMError)</code> | Drops a frame reference and handles the last reference. |
-| [<code>PhysicalPageManager.reclaimDeviceTree()</code>](../../Sources/ReixKernel/Memory/Physical/PhysicalPageManager.swift#L300) | <code>—</code> | <code>UInt64; throws(PPMError)</code> | Returns the number of reclaimed bytes; called after boot no longer needs DTB storage. |
+| [<code>PhysicalPageManager.alloc(_:flag:heapShift:)</code>](../../Sources/ReixKernel/Memory/Physical/PhysicalPageManager.swift#L109) | <code>_ bytes : Int, flag : PhysicalPageFlags = .none, heapShift: UInt8 = 0</code> | <code>PhysicalPage; throws(PPMError)</code> | Allocates a physical block large enough for the byte request; throws on allocation or validation failure. |
+| [<code>PhysicalPageManager.free(_:)</code>](../../Sources/ReixKernel/Memory/Physical/PhysicalPageManager.swift#L223) | <code>_ page: consuming PhysicalPage</code> | <code>Void; throws(PPMError)</code> | Returns a consumed allocation to the allocator after ownership checks. |
+| [<code>PhysicalPageManager.retain(_:)</code>](../../Sources/ReixKernel/Memory/Physical/PhysicalPageManager.swift#L264) | <code>_ address: PhysicalAddress</code> | <code>Void; throws(PPMError)</code> | Adds a frame reference; throws if the address or reference state is invalid. |
+| [<code>PhysicalPageManager.release(_:)</code>](../../Sources/ReixKernel/Memory/Physical/PhysicalPageManager.swift#L293) | <code>_ address: PhysicalAddress</code> | <code>Void; throws(PPMError)</code> | Drops a frame reference and handles the last reference. |
+| [<code>PhysicalPageManager.reclaimDeviceTree()</code>](../../Sources/ReixKernel/Memory/Physical/PhysicalPageManager.swift#L360) | <code>—</code> | <code>UInt64; throws(PPMError)</code> | Returns the number of reclaimed bytes; called after boot no longer needs DTB storage. |
 
 ## Address spaces and regions
 
@@ -89,11 +89,11 @@ Addresses and limits are listed in [Memory layout](../Architecture/Memory.md). R
 
 | Function | Parameters | Returns | Meaning |
 | --- | --- | --- | --- |
-| [<code>VirtualMemoryManager.createAddressSpace()</code>](../../Sources/ReixKernel/Memory/Virtual/VirtualMemoryManager.swift#L307) | <code>—</code> | <code>AddressSpace; throws(PPMError)</code> | Creates a user address space with a new translation root and ASID. |
-| [<code>VirtualMemoryManager.destroyAddressSpace(addressSpace:)</code>](../../Sources/ReixKernel/Memory/Virtual/VirtualMemoryManager.swift#L339) | <code>addressSpace: consuming AddressSpace</code> | <code>Void; throws(PPMError)</code> | Destroys a consumed address space and releases its translation resources. |
-| [<code>VirtualMemoryManager.physicalAddressOf(rootTable:virtual:)</code>](../../Sources/ReixKernel/Memory/Virtual/VirtualMemoryManager.swift#L747) | <code>rootTable: PhysicalAddress, virtual : VirtualAddress</code> | <code>PhysicalAddress?</code> | Returns the mapped physical address, or `nil` if no translation exists. |
-| [<code>VirtualMemoryManager.removeUserPage(rootTable:virtual:)</code>](../../Sources/ReixKernel/Memory/Virtual/VirtualMemoryManager.swift#L663) | <code>rootTable: PhysicalAddress, virtual : VirtualAddress</code> | <code>Bool</code> | Clears a present leaf descriptor and reports whether it changed. The caller must finish TLB invalidation before reusing its address or frame. |
-| [<code>AddressSpace.handlePageFault(at:cause:)</code>](../../Sources/ReixKernel/Process/AddressSpace.swift#L48) | <code>at address: VirtualAddress, cause : FaultCause</code> | <code>Bool</code> | Returns whether the fault was resolved and execution may retry. |
+| [<code>VirtualMemoryManager.createAddressSpace()</code>](../../Sources/ReixKernel/Memory/Virtual/VirtualMemoryManager.swift#L312) | <code>—</code> | <code>AddressSpace; throws(PPMError)</code> | Creates a user address space with a new translation root and ASID. |
+| [<code>VirtualMemoryManager.destroyAddressSpace(addressSpace:)</code>](../../Sources/ReixKernel/Memory/Virtual/VirtualMemoryManager.swift#L352) | <code>addressSpace: consuming AddressSpace</code> | <code>Void; throws(PPMError)</code> | Destroys a consumed address space and releases its translation resources. |
+| [<code>VirtualMemoryManager.physicalAddressOf(rootTable:virtual:)</code>](../../Sources/ReixKernel/Memory/Virtual/VirtualMemoryManager.swift#L931) | <code>rootTable: PhysicalAddress, virtual : VirtualAddress</code> | <code>PhysicalAddress?</code> | Returns the mapped physical address, or `nil` if no translation exists. |
+| [<code>VirtualMemoryManager.removeUserPage(rootTable:virtual:)</code>](../../Sources/ReixKernel/Memory/Virtual/VirtualMemoryManager.swift#L847) | <code>rootTable: PhysicalAddress, virtual : VirtualAddress</code> | <code>Bool</code> | Clears a present leaf descriptor and reports whether it changed. The caller must finish TLB invalidation before reusing its address or frame. |
+| [<code>AddressSpace.handlePageFault(at:cause:)</code>](../../Sources/ReixKernel/Process/AddressSpace.swift#L50) | <code>at address: VirtualAddress, cause : FaultCause</code> | <code>Bool</code> | Returns whether the fault was resolved and execution may retry. |
 
 ## Kernel allocations
 
@@ -120,6 +120,6 @@ Live bytes and reserved bytes answer different questions: a slab page can retain
 
 | Function | Parameters | Returns | Meaning |
 | --- | --- | --- | --- |
-| [<code>BucketsHeap.kmalloc(_:errorMessage:)</code>](../../Sources/ReixKernel/Memory/Heap/BucketsHeap.swift#L49) | <code>_ size : UInt, errorMessage: StaticString = "Kmalloc Failed"</code> | <code>UnsafeMutableRawPointer</code> | Returns raw storage; panics when allocation fails. |
-| [<code>BucketsHeap.kmallocOrNil(_:)</code>](../../Sources/ReixKernel/Memory/Heap/BucketsHeap.swift#L71) | <code>_ size: UInt</code> | <code>UnsafeMutableRawPointer?</code> | Returns raw storage, or `nil` on failure. |
-| [<code>BucketsHeap.kfree(_:)</code>](../../Sources/ReixKernel/Memory/Heap/BucketsHeap.swift#L118) | <code>_ ptr: UnsafeMutableRawPointer</code> | <code>Void</code> | Releases the raw allocation. |
+| [<code>BucketsHeap.kmalloc(_:errorMessage:)</code>](../../Sources/ReixKernel/Memory/Heap/BucketsHeap.swift#L50) | <code>_ size : UInt, errorMessage: StaticString = "Kmalloc Failed"</code> | <code>UnsafeMutableRawPointer</code> | Returns raw storage; panics when allocation fails. |
+| [<code>BucketsHeap.kmallocOrNil(_:)</code>](../../Sources/ReixKernel/Memory/Heap/BucketsHeap.swift#L72) | <code>_ size: UInt</code> | <code>UnsafeMutableRawPointer?</code> | Returns raw storage, or `nil` on failure. |
+| [<code>BucketsHeap.kfree(_:)</code>](../../Sources/ReixKernel/Memory/Heap/BucketsHeap.swift#L119) | <code>_ ptr: UnsafeMutableRawPointer</code> | <code>Void</code> | Releases the raw allocation. |

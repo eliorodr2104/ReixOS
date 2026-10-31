@@ -44,7 +44,7 @@ The source remains definitive. These documents describe this checkout and do not
 
 ### Protocol-oriented architecture
 
-The kernel is composed of blocks that depend on Swift protocols rather than concrete implementations. `Allocator`, `SchedulerInterface`, `IPCInterface`, `FileSystemInterface`, `SerialDriver`, `InterruptController` and `KernelArchitecture` make the dependencies between subsystems explicit.
+The kernel is composed of blocks that depend on Swift protocols rather than concrete implementations. `Allocator`, `SchedulerInterface`, `IPCInterface`, `SerialDriver`, `InterruptController` and `KernelArchitecture` make the dependencies between subsystems explicit.
 
 The point is not to use protocols everywhere. The point is to place a boundary where it lets ReixOS replace a policy, test an algorithm on the host or prevent one layer from knowing details that do not belong to it.
 

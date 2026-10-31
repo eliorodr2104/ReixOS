@@ -56,7 +56,7 @@ A timer IRQ may request a switch while the kernel is executing. The handler chan
 | Exception vectors and register preservation | [ContextSaving.S](../../Sources/ReixKernel/Arch/aarch64/Exceptions/Handlers/ContextSaving.S) |
 | Initial/context transition | [ContextSwitch.S](../../Sources/ReixKernel/Arch/aarch64/ContextSwitch/ContextSwitch.S) |
 | Swift exception dispatch and switching | [ExceptionHandler.swift](../../Sources/ReixKernel/Arch/aarch64/Exceptions/Handlers/ExceptionHandler.swift) |
-| Generated assembly and user syscall shims | [AsmRoutines.swift](../../Plugins/reix/AsmRoutines.swift) |
+| Generated assembly and user syscall shims | [AsmRoutines.swift](../../Tools/reix/Sources/ReixBuild/AsmRoutines.swift) |
 
 The present boot path reserves one 24 KiB kernel stack and one 16 KiB emergency exception stack. The global scheduler/managers do not establish an implemented SMP design; see the [memory map](../Architecture/Memory.md).
 
