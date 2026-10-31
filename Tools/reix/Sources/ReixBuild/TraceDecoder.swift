@@ -147,20 +147,37 @@ public enum TraceDecoder {
             let firstTimestamp: UInt64
             var points: [UInt16: TraceEvent] = [:]
             var duplicates: Set<UInt16> = []
+
+            /// The serial delivery of the chunk this record was decoded from, when
+            /// that chunk was read by another record's pull.
+            var chunkDelivery: TraceEvent? = nil
         }
         var groups: [Group] = []
         var invalid = 0
+        var lastDelivery: TraceEvent? = nil
         for event in block.events where event.code == 0x0900 {
             guard (1...10).contains(event.info), event.a <= UInt64(UInt32.max), event.b <= 0x00FF_FFFF else {
                 invalid += 1
                 continue
             }
             let correlation = UInt32(event.a)
-            let index       = groups.firstIndex { $0.correlation == correlation }
-            if let index {
+            let index: Int
+            if let found = groups.firstIndex(where: { $0.correlation == correlation }) {
+                index = found
                 if groups[index].points[event.info] != nil { groups[index].duplicates.insert(event.info) }
                 else { groups[index].points[event.info] = event }
-            } else { groups.append(Group(correlation: correlation, firstTimestamp: event.ts, points: [event.info: event])) }
+            } else {
+                index = groups.count
+                groups.append(Group(correlation: correlation, firstTimestamp: event.ts, points: [event.info: event]))
+            }
+
+            // VTAdapter marks a chunk delivered once, under the pull that read it, and
+            // marks in order: a record decoded before the next delivery came in it.
+            if event.info == 1 { lastDelivery = event }
+            if event.info == 2, groups[index].points[1] == nil, groups[index].chunkDelivery == nil,
+               let lastDelivery, lastDelivery.pid == event.pid {
+                groups[index].chunkDelivery = lastDelivery
+            }
         }
         print("interaction groups=\(groups.count) invalid=\(invalid)")
         func duration(
@@ -168,7 +185,8 @@ public enum TraceDecoder {
             _ start: UInt16,
             _ end  : UInt16
         ) -> String {
-            guard !group.duplicates.contains(start), !group.duplicates.contains(end), let a = group.points[start], let b = group.points[end], b.ts >= a.ts else { return "unavailable" }
+            let first = start == 1 ? group.points[1] ?? group.chunkDelivery : group.points[start]
+            guard !group.duplicates.contains(start), !group.duplicates.contains(end), let a = first, let b = group.points[end], b.ts >= a.ts else { return "unavailable" }
             return "\(fmt(micros(b.ts - a.ts, freq: block.freq)))us"
         }
         for group in groups {

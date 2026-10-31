@@ -26,6 +26,17 @@ grep -Fx "$expected_interaction" "$interaction"
 grep -F 'interaction correlation=2 serial_delivery_to_decoded=10.00us decoded_to_shell=unavailable' "$interaction"
 grep -F 'interaction correlation=3 serial_delivery_to_decoded=unavailable' "$interaction"
 grep -F 'interaction correlation=4 serial_delivery_to_decoded=unavailable' "$interaction" | grep -F 'duplicate=1'
+# One chunk, several records: later records inherit the chunk's delivery mark,
+# a record before any delivery or from another process does not.
+chunked="$work/interaction-chunked.txt"
+"$root/reix" trace "$root/Tests/Fixtures/trace/interaction-chunked.log" --interaction > "$chunked"
+grep -Fx 'interaction groups=6 invalid=0' "$chunked"
+grep -F 'interaction correlation=9 serial_delivery_to_decoded=unavailable' "$chunked"
+grep -F 'interaction correlation=1 serial_delivery_to_decoded=10.00us' "$chunked" | grep -F 'total=20.00us'
+grep -F 'interaction correlation=2 serial_delivery_to_decoded=100.00us' "$chunked" | grep -F 'total=150.00us'
+grep -F 'interaction correlation=3 serial_delivery_to_decoded=10.00us' "$chunked" | grep -F 'total=unavailable'
+grep -F 'interaction correlation=4 serial_delivery_to_decoded=40.00us' "$chunked" | grep -F 'total=60.00us'
+grep -F 'interaction correlation=5 serial_delivery_to_decoded=unavailable' "$chunked"
 "$root/reix" trace "$fixture" --export "$exported"
 python3 - "$exported" <<'PY'
 import json, sys

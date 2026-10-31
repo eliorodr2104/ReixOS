@@ -1,0 +1,13 @@
+[TRACE] begin v=2 freq=1000000 lost=0 stack=0 exstack=0
+[TRACE] t=50 ev=interactionMark pid=1 info=2 a=9 b=0
+[TRACE] t=100 ev=interactionMark pid=1 info=1 a=1 b=3
+[TRACE] t=110 ev=interactionMark pid=1 info=2 a=1 b=0
+[TRACE] t=120 ev=interactionMark pid=1 info=7 a=1 b=4
+[TRACE] t=200 ev=interactionMark pid=1 info=2 a=2 b=0
+[TRACE] t=250 ev=interactionMark pid=1 info=7 a=2 b=4
+[TRACE] t=300 ev=interactionMark pid=1 info=1 a=3 b=2
+[TRACE] t=310 ev=interactionMark pid=1 info=2 a=3 b=0
+[TRACE] t=340 ev=interactionMark pid=1 info=2 a=4 b=0
+[TRACE] t=360 ev=interactionMark pid=1 info=7 a=4 b=4
+[TRACE] t=400 ev=interactionMark pid=2 info=2 a=5 b=0
+[TRACE] end count=11
