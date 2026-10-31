@@ -202,6 +202,11 @@ public struct VMAList: VMAStructure {
     }
 
 
+    /// The first aligned `size`-byte hole inside `[min, max)`, lowest first for
+    /// `.upward` and highest first for `.downward`.
+    ///
+    /// `alignment` must be a power of two; any other value has no mask to align
+    /// with and is refused, as is every request whose arithmetic would wrap.
     @inline(__always)
     public func findFreeGAPInRange(
         min      : VirtualAddress,
@@ -213,7 +218,9 @@ public struct VMAList: VMAStructure {
 
         guard size > 0,
               max > min,
-              max - min >= size
+              max - min >= size,
+              alignment > 0,
+              alignment & (alignment &- 1) == 0
         else { return nil }
 
         return switch direction {
@@ -352,9 +359,12 @@ public struct VMAList: VMAStructure {
 
             if nodeStart >= max { break }
 
-            let alignedStart = align(currentMinAddress, to: alignment)
+            // Past the top of the address space: no hole above can hold it.
+            guard let alignedStart = align(currentMinAddress, to: alignment) else {
+                return nil
+            }
 
-            if alignedStart + size <= nodeStart && alignedStart + size <= max {
+            if fits(alignedStart, size, below: Swift.min(nodeStart, max)) {
                 return alignedStart
             }
 
@@ -362,11 +372,11 @@ public struct VMAList: VMAStructure {
             currentMinAddress = nodeEnd > currentMinAddress ? nodeEnd : currentMinAddress
         }
 
-        let lastAlignedStart = align(currentMinAddress, to: alignment)
+        guard let lastAlignedStart = align(currentMinAddress, to: alignment) else {
+            return nil
+        }
 
-        if lastAlignedStart + size <= max { return lastAlignedStart }
-
-        return nil
+        return fits(lastAlignedStart, size, below: max) ? lastAlignedStart : nil
     }
 
 
@@ -413,16 +423,31 @@ public struct VMAList: VMAStructure {
     }
 
 
+    /// `nil` when rounding up would wrap past the top of the address space.
     @inline(__always)
     private func align(
         _  address  : VirtualAddress,
         to alignment: UInt64
-    ) -> VirtualAddress { (address + (alignment - 1)) & ~(alignment - 1) }
+    ) -> VirtualAddress? {
+        let (bumped, wrapped) = address.addingReportingOverflow(alignment &- 1)
+
+        return wrapped ? nil : bumped & ~(alignment &- 1)
+    }
+
+
+    /// Whether `size` bytes from `start` end at or below `limit`, without
+    /// computing an end that could wrap.
+    @inline(__always)
+    private func fits(
+        _     start: VirtualAddress,
+        _     size : UInt64,
+        below limit: VirtualAddress
+    ) -> Bool { start <= limit && limit - start >= size }
 
 
     @inline(__always)
     private func alignDown(
         _  address  : VirtualAddress,
         to alignment: UInt64
-    ) -> VirtualAddress { address & ~(alignment - 1) }
+    ) -> VirtualAddress { address & ~(alignment &- 1) }
 }
