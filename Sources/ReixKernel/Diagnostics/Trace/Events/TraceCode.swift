@@ -43,6 +43,12 @@ enum TraceCode {
     /// checkpoints it opened.
     static let preemptSpan: UInt16 = 0x0400
 
+    /// A path's longest stretch with IRQs masked grew. `info` = the path, see
+    /// `IrqOffPath`, `a` = the new longest stretch in counter units. `pid` is
+    /// whoever is on the CPU when the stretch closed, which after a switch is
+    /// the incoming process.
+    static let irqOff: UInt16 = 0x0401
+
     /// One PC sample from the timer tick. `a` = ELR, `b` = x30 at the trap,
     /// `info` bit 0 set when the sample interrupted EL1.
     static let sample: UInt16 = 0x0500

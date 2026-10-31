@@ -216,7 +216,7 @@ public enum Preemption {
 
             if stretch > longestStretch { longestStretch = stretch }
 
-            openedAt = openWindow()
+            openedAt = openWindow(closing: now)
 
             let serviced = openedAt &- now
 
@@ -271,14 +271,23 @@ public enum Preemption {
     /// The reading taken *after* the remask is the one returned, so the time
     /// spent servicing an interrupt is charged to the window and not to the
     /// operation's next stretch.
+    ///
+    /// The exception-wide `IrqOffStretch` is split at the same two readings,
+    /// `now` closing it and the returned one reopening it on its own path.
     @inline(__always)
-    private static func openWindow() -> UInt64 {
+    private static func openWindow(closing now: UInt64) -> UInt64 {
+        let path = IrqOffStretch.close(at: now)
+
         Arch.CPU.enableInterrupts()
 
         Arch.CPU.instructionBarrier()
 
         Arch.CPU.disableInterrupts()
 
-        return Arch.Timer.counter()
+        let reopened = Arch.Timer.counter()
+
+        if let path { IrqOffStretch.open(path: path, at: reopened) }
+
+        return reopened
     }
 }

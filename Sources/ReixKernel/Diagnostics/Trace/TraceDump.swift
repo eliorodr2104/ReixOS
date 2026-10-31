@@ -223,6 +223,7 @@ enum TraceDump {
             case TraceCode.ipcWake    : "ipcWake"
             case TraceCode.ipcTransfer: "ipcTransfer"
             case TraceCode.preemptSpan: "preemptSpan"
+            case TraceCode.irqOff     : "irqOff"
             case TraceCode.sample     : "sample"
             case TraceCode.sampleFrame: "sampleFrame"
             case TraceCode.pmuSection : "pmuSection"

@@ -44,6 +44,14 @@ public func exceptionVirtualTableHandler(
 
     KernelStack.noteEntry(at: frameAddress, frame: framePointer)
 
+    IrqOffStretch.open(
+        path: IrqOffStretch.path(of: exceptionType, frame: framePointer),
+        at  : Arch.Timer.counterUnordered()
+    )
+
+    // Both exits, so the switch below is charged to the stretch it lengthens.
+    defer { IrqOffStretch.close(at: Arch.Timer.counterUnordered()) }
+
     handleExceptionType(exceptionType, framePointer: framePointer)
 
     guard Kernel.scheduler.pointee.needsResched else { return }

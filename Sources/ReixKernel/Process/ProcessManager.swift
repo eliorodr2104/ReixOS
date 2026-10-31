@@ -508,6 +508,9 @@ public struct ProcessManager: RXAllocatable, Loggable {
             
         } else {
             Arch.CPU.setCurrentProcess(0)
+
+            // The idle loop never returns to the exception's exit.
+            IrqOffStretch.close(at: Arch.Timer.counterUnordered())
             Arch.CPU.idleLoop()
         }
     }

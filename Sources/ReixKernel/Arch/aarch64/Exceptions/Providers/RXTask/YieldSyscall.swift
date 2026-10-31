@@ -55,6 +55,9 @@ public struct YieldSyscall: SyscallProvider {
                 Arch.TrapFrame.copy(from: frame, to: savedContext)
             }
             Arch.CPU.setCurrentProcess(0)
+
+            // The idle loop never returns to the exception's exit.
+            IrqOffStretch.close(at: Arch.Timer.counterUnordered())
             Arch.CPU.idleLoop()
         }
     }

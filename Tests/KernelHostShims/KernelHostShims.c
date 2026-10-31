@@ -158,9 +158,20 @@ uint64_t psci_hvc(uint64_t function, uint64_t a, uint64_t b, uint64_t c) {
     return (uint64_t)-1;
 }
 
-uint64_t read_counter_frequency(void) { return 0; }
-uint64_t read_virtual_counter(void) { return 0; }
-uint64_t read_virtual_counter_unordered(void) { return 0; }
+// Stateful, like `current_process`, so a suite can stage the clock a latency is
+// measured against. Zero until set, which is what every other suite reads.
+static uint64_t virtual_counter;
+static uint64_t timer_deadline;
+static uint64_t counter_frequency;
+
+void host_set_virtual_counter(uint64_t value) { virtual_counter = value; }
+void host_set_timer_deadline(uint64_t value) { timer_deadline = value; }
+void host_set_counter_frequency(uint64_t value) { counter_frequency = value; }
+
+uint64_t read_counter_frequency(void) { return counter_frequency; }
+uint64_t read_timer_deadline(void) { return timer_deadline; }
+uint64_t read_virtual_counter(void) { return virtual_counter; }
+uint64_t read_virtual_counter_unordered(void) { return virtual_counter; }
 void set_current_process(uint64_t process) { current_process = process; }
 void switch_user_address_space(uint64_t rootTable, uint16_t asid) { (void)rootTable; (void)asid; }
 uint64_t asid_bits(void) { return 16; }

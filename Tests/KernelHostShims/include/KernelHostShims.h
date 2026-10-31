@@ -23,4 +23,10 @@ uint32_t mmu_trace_op(uint64_t index);
 uint64_t mmu_trace_arg(uint64_t index);
 uint64_t mmu_trace_descriptor(uint64_t index);
 
+// The generic timer as a suite stages it: counter, tick compare value and
+// frequency. All three read zero until set, as they always have.
+void host_set_virtual_counter(uint64_t value);
+void host_set_timer_deadline(uint64_t value);
+void host_set_counter_frequency(uint64_t value);
+
 void kernel_host_shims_link_anchor(void);

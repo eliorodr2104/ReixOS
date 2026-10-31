@@ -70,6 +70,21 @@ public enum SystemMetricAvailability {
     public static let pmuCycleCounter: UInt32 = 1 << 4
 }
 
+/// What `SystemStats.irqOffLongestPath` and the kernel's `irqOff` trace record
+/// name: the kind of exception that held interrupts masked.
+///
+/// A syscall is its `SyscallNumber` raw value, so every value below
+/// `syscallLimit` is one. A syscall numbered at or above it would be filed as
+/// `otherException`, which is the cue to raise the limit.
+public enum IrqOffPath {
+    public static let syscallLimit  : UInt32 = 64
+    public static let interrupt     : UInt32 = 64
+    public static let otherException: UInt32 = 65
+
+    /// Distinct paths, the size of any table indexed by one.
+    public static let count = 66
+}
+
 /// Bit assignments for `SystemStats.pmuEventAvailability`.
 public enum PMUEventAvailability {
     /// Architectural event 0x08, INST_RETIRED, is advertised by PMCEID0_EL0.
