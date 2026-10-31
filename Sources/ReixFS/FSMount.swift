@@ -37,9 +37,9 @@ public enum FSMount {
     /// This format, on a disk larger than this build is declared to work on.
     ///
     /// Refused rather than served slowly, and refused *unread*: a dirty mount runs
-    /// a recovery whose cost grows with the square of the disk, and a geometry
-    /// nobody has measured is one nobody can say the boot will come back from.
-    /// See `FSLayout.maxSupportedBlocksV02`.
+    /// a recovery whose cost grows with the disk, and a geometry nobody has
+    /// measured is one nobody can say the boot will come back from.
+    /// See `FSLayout.maxSupportedBlocks`.
     case tooLarge(UInt32)
 
     /// There is something on this disk, and it is not a file system this build

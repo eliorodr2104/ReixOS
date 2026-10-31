@@ -74,7 +74,7 @@ public struct FileSystem<Device: BlockDevice> {
     /// want `scratchBytes(sectorCount:sectorSize:)` instead.
     public static var scratchBytes: Int {
         scratchBytes(
-            sectorCount: UInt64(FSLayout.maxSupportedBlocksV02) * (FSLayout.blockSize / 512),
+            sectorCount: UInt64(FSLayout.maxSupportedBlocks) * (FSLayout.blockSize / 512),
             sectorSize : 512
         )
     }
@@ -370,8 +370,8 @@ public struct FileSystem<Device: BlockDevice> {
         }
 
         // Before a byte is read, and refused rather than served. See
-        // `FSLayout.maxSupportedBlocksV02`.
-        if limited, disk.plan.totalBlocks > FSLayout.maxSupportedBlocksV02 {
+        // `FSLayout.maxSupportedBlocks`.
+        if limited, disk.plan.totalBlocks > FSLayout.maxSupportedBlocks {
             return (nil, .tooLarge(disk.plan.totalBlocks))
         }
 
@@ -425,7 +425,7 @@ public struct FileSystem<Device: BlockDevice> {
         // down is a promise about a boot nobody has timed.
         if let plan = FSLayout.Plan(
             sectorCount: device.sectorCount, sectorSize: device.sectorSize
-        ), plan.totalBlocks > FSLayout.maxSupportedBlocksV02 {
+        ), plan.totalBlocks > FSLayout.maxSupportedBlocks {
             return (nil, .tooManyBlocks)
         }
 

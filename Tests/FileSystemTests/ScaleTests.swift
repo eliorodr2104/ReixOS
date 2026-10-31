@@ -12,27 +12,28 @@ import ReixABI
 /// How this format behaves as the disk gets bigger, measured before anything is
 /// declared about it.
 ///
-/// The two walks that grow are a scan and the recovery a dirty mount runs, and
-/// they grow differently. A block-map scan reads the whole object table once
-/// per bitmap block. `putRight` deliberately verifies the repaired medium with
-/// a deep scan, so a dirty recovery has two such scans, plus the two room passes
-/// while mending and the two room passes while verifying. The resulting measured
-/// bound is `(2 * bitmapBlocks + 5) * tableBlocks`, plus bounded metadata I/O.
-/// The old room walk was worse - it read the whole table once per window of a
-/// thousand containers - which is the step a disk with more than one window's
-/// worth used to fall off.
+/// The walks that grow are a scan, the recovery a dirty mount runs, and the
+/// unmount that seals a volume, and every one of them is now a few passes over
+/// the object table rather than one pass per bitmap block. A block-map scan is
+/// one pass and one read per bitmap block. A recovery with nothing to put right
+/// is that, one room pass and one names pass: `3 * tableBlocks + bitmapBlocks`
+/// plus the folders. One that mends scans the whole disk again afterwards. A
+/// clean mount reads the seal and the bitmap, and nothing that grows with the
+/// table.
 ///
 /// Nothing here is a guess. The geometries are measured, the numbers are printed,
-/// and `FSLayout.maxSupportedBlocksV02` is set from them.
+/// and `FSLayout.maxSupportedBlocks` is set from them.
 @Suite("How far this format goes", .serialized)
 struct ScaleTests {
 
-    /// Three geometries, and the third is the one that matters: it is past the
-    /// limit this format declares, so it is refused rather than measured.
+    /// Four geometries, and the last is the one that matters: it is past the
+    /// limit this format declares, so its recovery is refused rather than
+    /// measured here. `mountMatrix` measures what it would cost.
     private static let geometries: [(name: String, sectors: UInt64)] = [
         ("16 MiB", 32768),
         ("256 MiB", 524288),
         ("1 GiB", 2097152),
+        ("2 GiB", 4194304),
     ]
 
     /// Few samples on purpose. A scan of a gibibyte is not something to do thirty
@@ -154,7 +155,7 @@ struct ScaleTests {
             var recoverReads = 0
 
             let recover = spread {
-                guard plan.totalBlocks <= FSLayout.maxSupportedBlocksV02 else { return }
+                guard plan.totalBlocks <= FSLayout.maxSupportedBlocks else { return }
                 let other = scratch(sectors)
                 defer { other.deallocate() }
 
@@ -190,21 +191,18 @@ struct ScaleTests {
             // The scan and scrub timings beside it are printed and not asserted
             // at all, for the same reason: there is nothing to compare them to
             // that a loaded machine does not move.
-            if plan.totalBlocks <= FSLayout.maxSupportedBlocksV02 {
+            if plan.totalBlocks <= FSLayout.maxSupportedBlocks {
                 #expect(
                     recover.worst < 5_000_000,     // microseconds, so five seconds
                     "\(name): recovery took \(recover.worst)us"
                 )
             }
 
-            // And the shape, which no machine's speed changes. `putRight` first
-            // scans the map, mends room in two table passes, then verifies with a
-            // deep scan: a second map scan, one name pass, and two room passes.
-            // That is `(2 * bitmapBlocks + 5) * tableBlocks`; the 64 leaves room
-            // for bitmap and directory metadata I/O, not an unmeasured full pass.
-            if plan.totalBlocks <= FSLayout.maxSupportedBlocksV02 {
+            // The shape, which no machine's speed changes: three table passes,
+            // the 64 for bitmap and folder reads, never a fourth pass.
+            if plan.totalBlocks <= FSLayout.maxSupportedBlocks {
                 #expect(
-                    recoverReads <= (2 * Int(plan.bitmapBlocks) + 5) * Int(plan.tableBlocks) + 64,
+                    recoverReads <= 3 * Int(plan.tableBlocks) + Int(plan.bitmapBlocks) + 64,
                     "\(name): recovery read \(recoverReads) blocks"
                 )
             } else {
@@ -222,6 +220,190 @@ struct ScaleTests {
                   + pad("\(recover.mid)us", 13)
                   + pad("\(recover.worst)us", 15)
                   + "\(scrub.mid)us")
+        }
+    }
+
+
+    /// What a whole mount costs, clean and dirty, and what the unmount before a
+    /// clean one costs. The service level is about these and not about a scan.
+    ///
+    /// `model` is the host time plus fifty microseconds per device read, which
+    /// is the latency the service level is stated against.
+    @Test("what a clean and a dirty mount cost as the disk grows")
+    func mountMatrix() {
+
+        print("geometry  scratch  clean reads  clean mid  unmount reads  unmount mid"
+              + "  dirty reads  dirty mid  dirty model  mend reads  mend mid  mend model")
+        print(String(repeating: "-", count: 141))
+
+        for (name, sectors) in Self.mountGeometries {
+            guard let plan = FSLayout.Plan(sectorCount: sectors, sectorSize: 512) else {
+                Issue.record("\(name): no plan")
+                continue
+            }
+
+            let disk  = MemoryDisk(sectors: sectors)
+            let bytes = FileSystem<MemoryDisk>.scratchBytes(sectorCount: sectors, sectorSize: 512)
+            let space = UnsafeMutableRawPointer.allocate(byteCount: bytes, alignment: 8)
+            defer { space.deallocate() }
+
+            guard var fs = FileSystem.formatUnchecked(disk, scratch: space).disk else {
+                Issue.record("\(name): would not format")
+                continue
+            }
+            let box = populate(&fs)
+
+            var unmountReads = 0
+            var cleanReads   = 0
+            var dirtyReads   = 0
+
+            // Clean: unmounted, then mounted, `samples` times over.
+            var unmounts = [Int]()
+            var cleans   = [Int]()
+
+            for _ in 0..<Self.samples {
+                var before = disk.reads
+                var opened = ContinuousClock.now
+                #expect(fs.unmount() == .ok, "\(name): unmount refused")
+                unmounts.append(microseconds(opened.duration(to: ContinuousClock.now)))
+                unmountReads = disk.reads - before
+
+                before = disk.reads
+                opened = ContinuousClock.now
+                guard let again = FileSystem.mountUnchecked(disk, scratch: space).disk else {
+                    Issue.record("\(name): clean mount refused")
+                    return
+                }
+                cleans.append(microseconds(opened.duration(to: ContinuousClock.now)))
+                cleanReads = disk.reads - before
+                #expect(!again.wasDirty)
+                fs = again
+            }
+
+            // Dirty: never unmounted, so every mount after this runs recovery.
+            var dirties = [Int]()
+
+            for _ in 0..<Self.samples {
+                let before = disk.reads
+                let opened = ContinuousClock.now
+                guard let again = FileSystem.mountUnchecked(disk, scratch: space).disk else {
+                    Issue.record("\(name): dirty mount refused")
+                    return
+                }
+                dirties.append(microseconds(opened.duration(to: ContinuousClock.now)))
+                dirtyReads = disk.reads - before
+                #expect(again.wasDirty)
+            }
+
+            // Dirty with something to put right: blocks nobody owns and a room
+            // that is behind, both mended, then the whole disk scanned again.
+            var mends     = [Int]()
+            var mendReads = 0
+
+            for _ in 0..<Self.samples {
+                #expect(fs.begin() == .ok)
+                _ = fs.allocateRun(8)
+                #expect(fs.commit() == .ok)
+
+                let at = Int(plan.tableStart) * Self.block + Int(box) * Int(FSLayout.objectSize)
+                disk.poke(UInt32(disk.byte(at: at + 36)) + 1, at: at + 36)
+
+                let before = disk.reads
+                let opened = ContinuousClock.now
+                guard let again = FileSystem.mountUnchecked(disk, scratch: space).disk else {
+                    Issue.record("\(name): a mending mount refused")
+                    return
+                }
+                mends.append(microseconds(opened.duration(to: ContinuousClock.now)))
+                mendReads = disk.reads - before
+                fs = again
+            }
+
+            let dirtyMid = middle(dirties)
+            let model    = dirtyMid + dirtyReads * 50
+            let mendMid  = middle(mends)
+            let mended   = mendMid + mendReads * 50
+
+            print(pad(name, 10)
+                  + pad("\(bytes / 1024)K", 9)
+                  + pad("\(cleanReads)", 13)
+                  + pad("\(middle(cleans))us", 11)
+                  + pad("\(unmountReads)", 15)
+                  + pad("\(middle(unmounts))us", 13)
+                  + pad("\(dirtyReads)", 13)
+                  + pad("\(dirtyMid)us", 11)
+                  + pad("\(model)us", 13)
+                  + pad("\(mendReads)", 12)
+                  + pad("\(mendMid)us", 10)
+                  + "\(mended)us")
+
+            if plan.totalBlocks <= FSLayout.maxSupportedBlocks {
+                #expect(model  < 1_000_000, "\(name): a dirty mount models at \(model)us")
+                #expect(mended < 1_000_000, "\(name): a mending mount models at \(mended)us")
+            }
+        }
+    }
+
+    /// The geometries the mount matrix walks. The largest is past the declared
+    /// limit, and is there to show the limit is where the model says it is.
+    private static let mountGeometries: [(name: String, sectors: UInt64)] = [
+        ("16 MiB", 32768),
+        ("256 MiB", 524288),
+        ("1 GiB", 2097152),
+        ("2 GiB", 4194304),
+    ]
+
+    private func middle(_ values: [Int]) -> Int {
+        let sorted = values.sorted()
+        return sorted[sorted.count / 2]
+    }
+
+    /// Files, folders and containers, so every walk a mount makes has something
+    /// to find: names in more than one folder, and room in more than one place.
+    @discardableResult
+    private func populate(_ fs: inout FileSystem<MemoryDisk>) -> UInt32 {
+        let bytes = UnsafeMutableRawPointer.allocate(byteCount: Self.block * 4, alignment: 8)
+        defer { bytes.deallocate() }
+        bytes.initializeMemory(as: UInt8.self, repeating: 0x5A, count: Self.block * 4)
+
+        var places = [FSLayout.rootObject]
+
+        for which in 0..<4 {
+            withName("box", which) { pointer, length in
+                let result = fs.createContainer(
+                    pointer, length: length, quota: 256, in: FSLayout.rootObject
+                )
+                if result.status == .ok { places.append(result.object) }
+            }
+
+            withName("dir", which) { pointer, length in
+                let result = fs.create(pointer, length: length, kind: .folder, in: FSLayout.rootObject)
+                if result.status == .ok { places.append(result.object) }
+            }
+        }
+        #expect(places.count == 9)
+
+        for (at, place) in places.enumerated() {
+            for which in 0..<6 {
+                withName("f\(at)-", which) { pointer, length in
+                    let result = fs.create(pointer, length: length, kind: .file, in: place)
+                    guard result.status == .ok else {
+                        Issue.record("a fixture file was refused: \(result.status)")
+                        return
+                    }
+                    let wrote = fs.write(result.object, at: 0, from: bytes, count: UInt64(Self.block * 4))
+                    #expect(wrote.status == .ok)
+                }
+            }
+        }
+
+        return places[1]
+    }
+
+    private func withName(_ stem: String, _ which: Int, _ body: (UnsafeRawPointer, Int) -> Void) {
+        let text = Array("\(stem)\(which)".utf8)
+        text.withUnsafeBufferPointer { buffer in
+            body(UnsafeRawPointer(buffer.baseAddress!), buffer.count)
         }
     }
 
@@ -367,7 +549,7 @@ struct ScaleTests {
 
         // One block past, so it is the limit being enforced and not the size of
         // the machine.
-        let over = (UInt64(FSLayout.maxSupportedBlocksV02) + 1)
+        let over = (UInt64(FSLayout.maxSupportedBlocks) + 1)
             * (FSLayout.blockSize / 512)
 
         let disk = MemoryDisk(sectors: over)
@@ -401,7 +583,7 @@ struct ScaleTests {
     @Test("the largest geometry the format declares is accepted")
     func theLimitItselfIsAccepted() {
 
-        let sectors = UInt64(FSLayout.maxSupportedBlocksV02) * (FSLayout.blockSize / 512)
+        let sectors = UInt64(FSLayout.maxSupportedBlocks) * (FSLayout.blockSize / 512)
 
         let disk  = MemoryDisk(sectors: sectors)
         let space = scratch()
@@ -412,7 +594,7 @@ struct ScaleTests {
             return
         }
 
-        #expect(fs.plan.totalBlocks == FSLayout.maxSupportedBlocksV02)
+        #expect(fs.plan.totalBlocks == FSLayout.maxSupportedBlocks)
 
         var made: UInt32? = nil
         named("edge.bin") { pointer, length in

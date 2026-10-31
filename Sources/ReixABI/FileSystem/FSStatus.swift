@@ -141,12 +141,12 @@ public enum FSStatus: UInt32 {
     /// make room. What this asks for is a write at the end instead.
     case pastTheEnd
 
-    /// The disk is larger than this version of the format is declared to work on.
+    /// The disk is larger than this format is declared to work on.
     ///
     /// Not a disk that is broken and not one that is full: it is a geometry whose
     /// recovery has not been measured, and this build will not format one rather
     /// than lay a file system down whose dirty mount takes an unknown amount of
-    /// time. See `FSLayout.maxSupportedBlocksV02`.
+    /// time. See `FSLayout.maxSupportedBlocks`.
     case tooManyBlocks
 
     /// The disk contains more containers than this format can index safely.

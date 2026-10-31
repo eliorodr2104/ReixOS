@@ -226,6 +226,40 @@ struct CensusTests {
     }
 
 
+    @Test("names past one page of objects are scrubbed whole")
+    func namesPastOnePage() {
+        // 1 GiB: sixty-five thousand object slots, two pages of target bits.
+        let sectors: UInt64 = 2097152
+
+        withDisk(sectors) { fs, disk in
+            #expect(fs.plan.objectCount > UInt32(FSLayout.blockSize * 8))
+
+            fs.objectHint = UInt32(FSLayout.blockSize * 8) + 100
+
+            guard let first = file(&fs, "x.bin"),
+                  file(&fs, "y.bin") != nil,
+                  let root = fs.object(FSLayout.rootObject)
+            else { Issue.record("files"); return }
+
+            #expect(first > UInt32(FSLayout.blockSize * 8))
+
+            // The second name pointed at the first one's object.
+            let base = Int(root.runs[0].start) * Int(FSLayout.blockSize)
+            for slot in 0..<Int(FSLayout.blockSize / FSLayout.entrySize) {
+                let at = base + slot * Int(FSLayout.entrySize)
+                guard disk.byte(at: at + 4) == 5, disk.byte(at: at + 8) == UInt8(ascii: "y") else { continue }
+                disk.poke(first, at: at)
+                disk.stampEntry(at: at)
+            }
+
+            let findings = fs.scan(.everything)
+            #expect(findings.complete)
+            #expect(findings.nameScrubState == .complete)
+            #expect(findings.duplicateTargets == 1)
+        }
+    }
+
+
     // MARK: - Scratch
 
     @Test("a geometry's scratch is what it asks for, and all it touches")
@@ -258,7 +292,7 @@ struct CensusTests {
         }
 
         // The fixed size is the largest declared geometry's, and covers it.
-        let ceiling = UInt64(FSLayout.maxSupportedBlocksV02) * (FSLayout.blockSize / 512)
+        let ceiling = UInt64(FSLayout.maxSupportedBlocks) * (FSLayout.blockSize / 512)
         #expect(FileSystem<MemoryDisk>.scratchBytes
                 == FileSystem<MemoryDisk>.scratchBytes(sectorCount: ceiling, sectorSize: 512))
         #expect(FileSystem<MemoryDisk>.scratchBytes(sectorCount: 32768, sectorSize: 512) == 108 * 1024)

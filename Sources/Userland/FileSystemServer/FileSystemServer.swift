@@ -281,9 +281,9 @@ public struct FileSystemServer: Service {
 
             case .tooLarge(let blocks):
                 // Not read, and not formatted. A dirty mount runs a recovery
-                // whose cost grows with the square of the disk, so a geometry
-                // this build has not measured is one it cannot promise a boot
-                // comes back from. See `FSLayout.maxSupportedBlocksV02`.
+                // whose cost grows with the disk, so a geometry this build has
+                // not measured is one it cannot promise a boot comes back from.
+                // See `FSLayout.maxSupportedBlocks`.
                 print("[ FS    ] this disk is ", terminator: "")
                 printDec(UInt64(blocks), terminator: "")
                 print(" blocks, more than this build is declared to serve, so nothing was read")

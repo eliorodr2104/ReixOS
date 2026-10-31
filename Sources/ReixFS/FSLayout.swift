@@ -70,39 +70,38 @@ public enum FSLayout {
     /// whole table for 16 MiB is sixteen blocks.
     public static let bytesPerObject: UInt64 = 16384
 
-    /// The largest disk this version of the format is declared to work on.
+    /// The largest disk this format is declared to work on.
     ///
-    /// **Measured, not chosen.** A scan of the block map reads the whole object
-    /// table once per bitmap block, so it costs bitmap blocks times table blocks,
-    /// and both grow with the disk: the walk is quadratic. `ScaleTests` measures
-    /// three geometries and this is the largest whose recovery stays inside the
-    /// service level below.
+    /// **Measured, not chosen.** Every walk a mount makes is now one pass over
+    /// the object table at a time, so a recovery costs a few table lengths and a
+    /// clean mount costs none: the seal and the bitmap. `ScaleTests` measures
+    /// four geometries and this is the largest whose worst recovery stays inside
+    /// the service level below.
     ///
     /// ```
-    /// geometry  blocks   bmap  table   recover reads  recover p50
-    /// 16 MiB    4096     1     32      227            21ms
-    /// 256 MiB   65536    2     512     4613           412ms
-    /// 1 GiB     262144   8     2048    not served     not measured
+    /// geometry  blocks  bmap  table  clean reads  dirty reads  dirty model  mend reads  mend model
+    /// 16 MiB    4096    1     32     8            397          31ms         462         35ms
+    /// 256 MiB   65536   2     512    9            1838         127ms        2864        193ms
+    /// 1 GiB     262144  8     2048   17           6452         430ms        10556       702ms
+    /// 2 GiB     524288  16    4096   27           12604        843ms        20812       1395ms
     /// ```
     ///
     /// **The service level.** A dirty mount runs `putRight` before it serves
     /// anything, so its cost is time a machine spends with no file system. One
-    /// second is the line: long enough that the walk is allowed to be a walk,
-    /// short enough that a boot is not visibly waiting for the disk.
+    /// second is the line, against host time plus fifty microseconds per device
+    /// read. `dirty` is a disk that went away with nothing to put right, which is
+    /// what the journal leaves; `mend` is one with blocks nobody owns and a room
+    /// behind, so the map and the room are rewritten and the whole disk is
+    /// scanned again. The limit is set by the second. A clean shutdown runs the
+    /// same full check before it seals, so it costs about the `dirty` column,
+    /// at shutdown instead of at boot.
     ///
-    /// A gibibyte fails it by the measured model before it is served: the dirty
-    /// path would make at least `(2 * 8 + 5) * 2048 = 43,008` table reads before
-    /// its bounded metadata overhead. At fifty microseconds per device read that
-    /// alone is more than two seconds. Two hundred and fifty-six mebibytes made
-    /// 4,613 reads and a 412ms host median in `ScaleTests`; its device latency
-    /// remains inside the one-second target with the tested 50us model.
-    ///
-    /// Past this the answer is not a slower mount, it is a different format:
-    /// block-group summaries so the map can be checked a group at a time instead
-    /// of against the whole table, and a persistent quota index so the room walk
-    /// needs no pass at all. Both are v03, and both are refusals here rather than
-    /// promises: a geometry nobody has measured is not one this build accepts.
-    public static let maxSupportedBlocksV02: UInt32 = 65536
+    /// Two gibibytes fails it: the mending recovery reads every table block five
+    /// times, twenty thousand reads before the host has done anything. Past here
+    /// the next cost is the name scrub, which reads each folder once per
+    /// partition and so grows with how many folders a disk has, not how big it
+    /// is.
+    public static let maxSupportedBlocks: UInt32 = 262144
 
     /// How many containers a disk may hold.
     ///
