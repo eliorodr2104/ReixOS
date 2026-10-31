@@ -688,12 +688,14 @@ private func confined(_ files: FileSystemClient) -> Bool {
     // exist. That is the guess with a chance, and every one of them has to come
     // back "no such name" rather than "not yours" - telling a caller that
     // something exists but is not theirs is telling them something.
+    //
+    // Except a file this container names under that very handle. See `holds`.
     for twist in UInt32(1)..<UInt32(64) {
         let forged = files.root ^ twist
 
         let read = files.read(forged, at: 0, into: scratch, count: 16)
 
-        guard read.status == .notFound else {
+        guard read.status == .notFound || holds(files, forged) else {
             print("[ CHECK ] a forged handle answered from outside this container")
             return false
         }
@@ -710,6 +712,52 @@ private func confined(_ files: FileSystemClient) -> Bool {
 
     print("[ CHECK ] nothing outside this container can be reached")
     return true
+}
+
+
+/// Whether this container names something under exactly `handle`.
+///
+/// A boot stopped in the middle of this check leaves its files behind, and one
+/// that took a fresh slot shares this container's generation, so its handle is
+/// one of the forged neighbours and reading it is allowed: it is this process's
+/// own file. Anything that answers without being named here is somewhere this
+/// process cannot see, and still fails the check.
+///
+/// The listing mints each entry's handle from the object and its generation, the
+/// same two facts a forged handle carries, so equal means the same incarnation
+/// of a file this process can already reach by name. Only the container's own
+/// folder is walked: the check keeps no folders, so a nested answer still fails.
+private func holds(_ files: FileSystemClient, _ handle: UInt32) -> Bool {
+
+    var found = false
+
+    withUnsafeTemporaryAllocation(of: UInt8.self, capacity: 16 * FSListEntry.width) { room in
+        let base   = UnsafeMutableRawPointer(room.baseAddress!)
+        var cursor = UInt32(0)
+
+        func look(_ count: Int) {
+            for index in 0..<count
+            where FSListEntry(reading: base.advanced(by: index * FSListEntry.width)).reference == handle {
+                found = true
+            }
+        }
+
+        walk: while !found {
+            let batch = files.listBatch(from: cursor, into: base, capacity: 16)
+
+            switch batch.step {
+                case .more(let count):
+                    look(count)
+                    cursor = batch.next
+
+                case .end(let count), .stopped(let count, _):
+                    look(count)
+                    break walk
+            }
+        }
+    }
+
+    return found
 }
 
 
