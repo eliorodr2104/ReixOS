@@ -25,4 +25,11 @@ public protocol HardwareTimerInterface {
 
     /// Frequency of `counter()`, in Hz.
     static func frequency() -> UInt64
+
+    /// The `counter()` reading this core's tick is armed to fire at.
+    ///
+    /// Read in the tick handler before `rearm`, it is the instant the tick
+    /// being handled was due, which is how lateness is measured against the
+    /// timer rather than against the handler.
+    static func deadline() -> UInt64
 }

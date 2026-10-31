@@ -15,7 +15,7 @@ struct KernelDeadlineQueueTests {
     @Test("empty and future polls inspect only the heap root")
     func noGlobalScan() {
         var empty = KernelDeadlineQueue()
-        #expect(empty.poll(now: 1, budget: 8) { _, _ in } == 0)
+        #expect(empty.poll(now: 1, budget: 8) { _, _, _ in } == 0)
         #expect(empty.inspectionCount == 0)
 
         withProcesses(128) { processes in
@@ -26,7 +26,7 @@ struct KernelDeadlineQueueTests {
             }
 
             queue.resetInspectionCount()
-            #expect(queue.poll(now: 9_999, budget: 8) { _, _ in } == 0)
+            #expect(queue.poll(now: 9_999, budget: 8) { _, _, _ in } == 0)
             #expect(queue.inspectionCount == 1)
         }
     }
@@ -43,14 +43,35 @@ struct KernelDeadlineQueueTests {
             #expect(firstArm && cancelled && secondArm)
 
             var kinds: [KernelDeadlineKind] = []
-            #expect(queue.poll(now: 10, budget: 8) { _, kind in kinds.append(kind) } == 0)
-            #expect(queue.poll(now: 20, budget: 8) { _, kind in kinds.append(kind) } == 1)
+            #expect(queue.poll(now: 10, budget: 8) { _, kind, _ in kinds.append(kind) } == 0)
+            #expect(queue.poll(now: 20, budget: 8) { _, kind, _ in kinds.append(kind) } == 1)
             #expect(kinds == [.sleep])
 
             // #expect's autoclosure captures `queue` as immutable, so the
             // mutating call must happen in a plain statement first.
             let cancelledAgain = queue.cancel(process)
             #expect(!cancelledAgain)
+        }
+    }
+
+    @Test("the expiry is told the deadline it is expiring, which the process no longer holds")
+    func pollReportsTheDeadline() {
+        withProcesses(2) { processes in
+            var queue = KernelDeadlineQueue()
+            let armedEarly = queue.arm(processes[0], kind: .sleep, deadline: 3)
+            let armedLate  = queue.arm(processes[1], kind: .irq,   deadline: 5)
+            #expect(armedEarly && armedLate)
+
+            var seen: [(PID, KernelDeadlineKind, UInt64, UInt64)] = []
+            let expired = queue.poll(now: 9, budget: 8) { process, kind, deadline in
+                seen.append((process.pointee.pid, kind, deadline, process.pointee.kernelDeadline))
+            }
+
+            #expect(expired == 2)
+            #expect(seen.map(\.0) == [1, 2])
+            #expect(seen.map(\.1) == [.sleep, .irq])
+            #expect(seen.map(\.2) == [3, 5])
+            #expect(seen.map(\.3) == [0, 0])
         }
     }
 
@@ -64,7 +85,7 @@ struct KernelDeadlineQueueTests {
             }
 
             var expired: [PID] = []
-            #expect(queue.poll(now: 50, budget: 8) { process, _ in
+            #expect(queue.poll(now: 50, budget: 8) { process, _, _ in
                 expired.append(process.pointee.pid)
             } == 4)
             #expect(expired == [1, 2, 3, 4])
@@ -81,13 +102,13 @@ struct KernelDeadlineQueueTests {
             #expect(first && second && third)
 
             var expired: [PID] = []
-            #expect(queue.poll(now: UInt64.max - 1, budget: 8) { process, _ in
+            #expect(queue.poll(now: UInt64.max - 1, budget: 8) { process, _, _ in
                 expired.append(process.pointee.pid)
             } == 1)
-            #expect(queue.poll(now: 1, budget: 8) { process, _ in
+            #expect(queue.poll(now: 1, budget: 8) { process, _, _ in
                 expired.append(process.pointee.pid)
             } == 1)
-            #expect(queue.poll(now: 3, budget: 8) { process, _ in
+            #expect(queue.poll(now: 3, budget: 8) { process, _, _ in
                 expired.append(process.pointee.pid)
             } == 1)
             #expect(expired == [1, 2, 3])
@@ -111,7 +132,7 @@ struct KernelDeadlineQueueTests {
             #expect(!cancelledTwice)
 
             var expired: [PID] = []
-            #expect(queue.poll(now: 20, budget: 8) { process, _ in
+            #expect(queue.poll(now: 20, budget: 8) { process, _, _ in
                 expired.append(process.pointee.pid)
             } == 3)
             #expect(expired == [2, 3, 5])
@@ -128,14 +149,14 @@ struct KernelDeadlineQueueTests {
             }
 
             var expired: [PID] = []
-            #expect(queue.poll(now: 7, budget: 8) { process, _ in
+            #expect(queue.poll(now: 7, budget: 8) { process, _, _ in
                 expired.append(process.pointee.pid)
             } == 8)
             #expect(queue.hasDue(at: 7))
-            #expect(queue.poll(now: 7, budget: 8) { process, _ in
+            #expect(queue.poll(now: 7, budget: 8) { process, _, _ in
                 expired.append(process.pointee.pid)
             } == 8)
-            #expect(queue.poll(now: 7, budget: 8) { process, _ in
+            #expect(queue.poll(now: 7, budget: 8) { process, _, _ in
                 expired.append(process.pointee.pid)
             } == 4)
             #expect(expired == Array(1...20).map(PID.init))
@@ -174,7 +195,7 @@ struct KernelDeadlineQueueTests {
 
         destroyProcess(process)
 
-        #expect(queue.poll(now: 1, budget: 8) { _, _ in
+        #expect(queue.poll(now: 1, budget: 8) { _, _, _ in
             Issue.record("cancelled process expired")
         } == 0)
     }

@@ -28,6 +28,14 @@ enum TraceCode {
     /// The first task picked after an idle stretch.
     static let idleExit: UInt16 = 0x0202
 
+    /// A process woken by an event got the CPU. `a` = counter units from the
+    /// wake to this rotation, `pid` = the woken process.
+    static let wakeRun: UInt16 = 0x0203
+
+    /// A process woken by a kernel deadline got the CPU. `a` = counter units
+    /// from the instant the deadline was due, `pid` = the woken process.
+    static let deadlineLag: UInt16 = 0x0204
+
     /// A process parked on an endpoint. `info` = `TraceBlockReason`,
     /// `a` = endpoint id.
     static let ipcBlock: UInt16 = 0x0300

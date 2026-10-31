@@ -280,6 +280,13 @@ private func virtualTimer() -> [AsmRoutine] {
             mrs("x0", "cntfrq_el0")
             ret()
         },
+
+        // The compare value the pending tick fires at. Read before the rearm,
+        // it is when the tick being handled was due.
+        fn("read_timer_deadline") {
+            mrs("x0", "cntv_cval_el0")
+            ret()
+        },
     ]
 }
 

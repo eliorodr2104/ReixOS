@@ -27,6 +27,9 @@ public struct VirtualTimerInterruptHandler: InterruptHandler {
     public static func handle(frame: UnsafeMutablePointer<Arch.TrapFrame>) {        
         snapshotCurrentContext(frame: frame)
 
+        // Before the rearm moves it on: the instant this tick was due.
+        let tickDue = Arch.Timer.deadline()
+
         AArch64VirtualTimer.rearm()
 
         TraceSampler.onTick(frame: frame)
@@ -36,7 +39,7 @@ public struct VirtualTimerInterruptHandler: InterruptHandler {
         let systemTicks = Kernel.scheduler.pointee.systemTicks
 
         if Kernel.ipc.pointee.hasDeadlineDue(at: systemTicks) {
-            Kernel.ipc.pointee.checkTimeouts(now: systemTicks)
+            Kernel.ipc.pointee.checkTimeouts(now: systemTicks, tickDue: tickDue)
         }
 
         // A fixed number of non-blocking TX probes; queued bytes resume next tick.

@@ -177,6 +177,8 @@ public struct RoundRobin: SchedulerInterface, Loggable {
             next.pointee.status      = .running
             next.pointee.scheduledAt = now
 
+            WakeLatency.settle(next, at: now)
+
             if idleSince != 0 {
                 idleTime &+= now &- idleSince
                 idleSince = 0
@@ -272,6 +274,7 @@ public struct RoundRobin: SchedulerInterface, Loggable {
     /// `lastWoken`.
     private mutating func makeReady(_ process: UnsafeMutablePointer<Process>) {
         process.pointee.status = .ready
+        WakeLatency.stampWake(process)
 
         guard process.pointee.quantumLeft > 0 else {
             process.pointee.quantumLeft = Self.quantum

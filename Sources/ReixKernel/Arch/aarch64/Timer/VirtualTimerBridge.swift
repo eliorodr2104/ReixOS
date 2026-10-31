@@ -19,3 +19,6 @@ public func read_virtual_counter_unordered() -> UInt64
 
 @_silgen_name("read_counter_frequency")
 public func read_counter_frequency() -> UInt64
+
+@_silgen_name("read_timer_deadline")
+public func read_timer_deadline() -> UInt64

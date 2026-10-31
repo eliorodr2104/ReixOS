@@ -219,6 +219,8 @@ enum TraceDump {
             case TraceCode.ctxSwitch  : "ctxSwitch"
             case TraceCode.idleEnter  : "idleEnter"
             case TraceCode.idleExit   : "idleExit"
+            case TraceCode.wakeRun    : "wakeRun"
+            case TraceCode.deadlineLag: "deadlineLag"
             case TraceCode.ipcBlock   : "ipcBlock"
             case TraceCode.ipcWake    : "ipcWake"
             case TraceCode.ipcTransfer: "ipcTransfer"

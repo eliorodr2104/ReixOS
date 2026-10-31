@@ -883,13 +883,20 @@ public struct RendezvousIPC: IPCInterface, Loggable {
         KernelDeadlineQueue.shared.hasDue(at: now)
     }
 
-    public mutating func checkTimeouts(now: UInt64) {
+    /// Expires every deadline due at tick `now`, up to the per-tick budget.
+    ///
+    /// `tickDue` is the counter reading tick `now` was due at, so a deadline
+    /// can be dated to the instant it was really due: that tick, less a whole
+    /// tick for each one a full budget left it behind.
+    public mutating func checkTimeouts(now: UInt64, tickDue: UInt64) {
         guard hasDeadlineDue(at: now) else { return }
+
+        let tickUnits = Arch.Timer.frequency() / 1000 &* SchedulerABI.millisecondsPerTick
 
         KernelDeadlineQueue.shared.poll(
             now   : now,
             budget: KernelDeadlineQueue.tickBudget
-        ) { process, kind in
+        ) { process, kind, deadline in
             
             switch kind {
                 case .ipc  : expireIPCWait(process)
@@ -897,6 +904,10 @@ public struct RendezvousIPC: IPCInterface, Loggable {
                 case .irq  : IrqWaitSyscall.expire(process)
                 case .none : break
             }
+
+            let behind = (now &- deadline) &* tickUnits
+
+            WakeLatency.backdate(process, to: tickDue > behind ? tickDue - behind : 0)
         }
     }
 

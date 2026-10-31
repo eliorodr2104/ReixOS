@@ -73,7 +73,7 @@ struct KernelDeadlineQueue {
     mutating func poll(
           now   : UInt64,
           budget: Int,
-        _ body  : (UnsafeMutablePointer<Process>, KernelDeadlineKind) -> Void
+        _ body  : (UnsafeMutablePointer<Process>, KernelDeadlineKind, UInt64) -> Void
     ) -> Int {
         guard budget > 0 else { return 0 }
 
@@ -85,9 +85,12 @@ struct KernelDeadlineQueue {
             
             guard Self.isDue(first.pointee.kernelDeadline, at: now) else { break }
 
-            let kind = first.pointee.kernelDeadlineKind
+            // Read before `remove` clears them: the body is told what was due
+            // and when, since the process no longer says.
+            let kind     = first.pointee.kernelDeadlineKind
+            let deadline = first.pointee.kernelDeadline
             remove(at: 0)
-            body(first, kind)
+            body(first, kind, deadline)
             expired += 1
         }
 

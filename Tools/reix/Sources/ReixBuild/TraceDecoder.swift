@@ -25,10 +25,14 @@ import Foundation
 /// Event classes (`code >> 8`):
 ///   0x01 syscallExit  info=raw syscall number, a=duration, b=return x0
 ///   0x02 ctxSwitch (0x0200), idleEnter (0x0201), idleExit (0x0202);
-///        ctxSwitch: a=prev pid, b=next pid
+///        ctxSwitch: a=prev pid, b=next pid; wakeRun (0x0203, pid=woken,
+///        a=wake-to-run counter units), deadlineLag (0x0204, pid=woken,
+///        a=counter units since the deadline was due)
 ///   0x03 ipcBlock (0x0300, info: 0 sendQueue/1 recvWait/2 call, a=endpoint),
 ///        ipcWake (0x0301, a=woken pid), ipcTransfer (0x0302, a=sender, b=receiver)
-///   0x04 preemptSpan (0x0400): info=region slot, a=longest stretch, b=checkpoints
+///   0x04 preemptSpan (0x0400): info=region slot, a=longest stretch, b=checkpoints;
+///        irqOff (0x0401): info=IrqOffPath (a syscall number below 64,
+///        64 interrupt, 65 other exception), a=that path's new longest stretch
 ///   0x05 sample (0x0500, info bit0=1 for an EL1 hit, a=ELR, b=x30),
 ///        sampleFrame (0x0501, info=depth 1-4, a=return address; frames
 ///        belong to the immediately preceding EL1 sample)
@@ -414,7 +418,9 @@ extension TraceDecoder {
     /// instead of being rejected, keeping the unknown-code reporting alive.
     private static let eventNameToCode: [String: UInt16] = [
         "syscallExit": 0x0100, "ctxSwitch": 0x0200, "idleEnter": 0x0201, "idleExit": 0x0202,
+        "wakeRun": 0x0203, "deadlineLag": 0x0204,
         "ipcBlock": 0x0300, "ipcWake": 0x0301, "ipcTransfer": 0x0302, "preemptSpan": 0x0400,
+        "irqOff": 0x0401,
         "sample": 0x0500, "sampleFrame": 0x0501, "pmuSection": 0x0600, "pmuEvents": 0x0601,
         "bootPhase": 0x0700, "procSpawn": 0x0800, "procName": 0x0801, "procExit": 0x0802, "interactionMark": 0x0900,
     ]
@@ -508,10 +514,13 @@ extension TraceDecoder {
             case 0x0200: return "ctxSwitch"
             case 0x0201: return "idleEnter"
             case 0x0202: return "idleExit"
+            case 0x0203: return "wakeRun"
+            case 0x0204: return "deadlineLag"
             case 0x0300: return "ipcBlock"
             case 0x0301: return "ipcWake"
             case 0x0302: return "ipcTransfer"
             case 0x0400: return "preemptSpan"
+            case 0x0401: return "irqOff"
             case 0x0500: return "sample"
             case 0x0501: return "sampleFrame"
             case 0x0600: return "pmuSection"
@@ -526,8 +535,9 @@ extension TraceDecoder {
     }
 
     private static let knownCodes: Set<UInt16> = [
-        0x0100, 0x0200, 0x0201, 0x0202, 0x0300, 0x0301, 0x0302, 0x0400,
-        0x0500, 0x0501, 0x0600, 0x0601, 0x0700, 0x0800, 0x0801, 0x0802, 0x0900,
+        0x0100, 0x0200, 0x0201, 0x0202, 0x0203, 0x0204, 0x0300, 0x0301, 0x0302,
+        0x0400, 0x0401, 0x0500, 0x0501, 0x0600, 0x0601, 0x0700, 0x0800, 0x0801,
+        0x0802, 0x0900,
     ]
 
     /// `1 = ipcTransfer`, the only section id in use today. Others print as
@@ -617,6 +627,8 @@ extension TraceDecoder {
         printPreemptionSpans(block)
         print("")
         printContextSwitches(block)
+        print("")
+        printLatency(block)
         printUnknownCodes(block)
     }
 
@@ -748,6 +760,42 @@ extension TraceDecoder {
         }
     }
 
+    /// `IrqOffPath` as a name: a syscall below 64, then the two fixed paths.
+    static func irqOffPathName(_ path: UInt16) -> String {
+        switch path {
+            case 0..<64: return syscallName(path)
+            case 64    : return "interrupt"
+            case 65    : return "otherException"
+            default    : return "path#\(path)"
+        }
+    }
+
+    /// Wake-to-run and deadline lag per run, and each path's longest masked
+    /// stretch, which is the last `irqOff` record the ring kept for it.
+    private static func printLatency(_ block: TraceBlock) {
+        var wakes: [Double] = []
+        var lags : [Double] = []
+        var irqOff: [UInt16: Double] = [:]
+
+        for event in block.events {
+            switch event.code {
+                case 0x0203: wakes.append(micros(event.a, freq: block.freq))
+                case 0x0204: lags.append(micros(event.a, freq: block.freq))
+                case 0x0401: irqOff[event.info] = micros(event.a, freq: block.freq)
+                default: break
+            }
+        }
+
+        print("Latency:")
+        print("  wake to run  : \(wakes.count) runs, max \(fmt(wakes.max() ?? 0))us")
+        print("  deadline lag : \(lags.count) runs, max \(fmt(lags.max() ?? 0))us")
+        guard !irqOff.isEmpty else { print("  irq off      : (none in ring)"); return }
+        print("  irq off      :")
+        for path in irqOff.keys.sorted() {
+            print("    " + pad(irqOffPathName(path), 20) + "  " + fmt(irqOff[path]!) + "us")
+        }
+    }
+
     /// Codes this decoder does not understand yet, tallied so a newer kernel
     /// build does not silently disappear from the report.
     private static func printUnknownCodes(_ block: TraceBlock) {
@@ -850,6 +898,8 @@ extension TraceDecoder {
                 return "prev=\(event.a) next=\(event.b)"
             case 0x0201, 0x0202:
                 return "pid=\(event.pid)"
+            case 0x0203, 0x0204:
+                return "pid=\(event.pid) latency=\(fmt(micros(event.a, freq: freq)))us"
             case 0x0300:
                 let reason: String
                 switch event.info {
@@ -866,6 +916,8 @@ extension TraceDecoder {
             case 0x0400:
                 let stretch = fmt(micros(event.a, freq: freq))
                 return "region=\(regionName(event.info)) maxStretch=\(stretch)us checkpoints=\(event.b)"
+            case 0x0401:
+                return "path=\(irqOffPathName(event.info)) longest=\(fmt(micros(event.a, freq: freq)))us"
             case 0x0500:
                 let el = event.info & 1 != 0 ? "EL1" : "EL0"
                 return "elr=0x\(String(event.a, radix: 16)) x30=0x\(String(event.b, radix: 16)) mode=\(el) pid=\(event.pid)"

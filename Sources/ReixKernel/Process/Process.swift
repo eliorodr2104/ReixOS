@@ -82,6 +82,15 @@ public struct Process: RXEntry {
     var kernelDeadlineIndex: UInt16 = .max
     var kernelDeadlineKind : KernelDeadlineKind = .none
 
+    /// What `readySince` is measuring, `.none` when nothing is. In the byte of
+    /// padding after `kernelDeadlineKind`, so it costs no space.
+    var readyCause: ReadyCause = .none
+
+    /// The counter reading a wake-to-run measurement starts from, meaningful
+    /// only while `readyCause` is not `.none`. Settled, and the cause cleared,
+    /// by the rotation that puts the process back on the CPU.
+    var readySince: UInt64 = 0
+
     // --- Cold from here down: family links, pending IPC state, address
     // space, cold metadata, IPC rendezvous partners, procStats bookkeeping.
     public var family: ProcessRelations // 32 Byte -> (8 + 8 + 8 + 8)

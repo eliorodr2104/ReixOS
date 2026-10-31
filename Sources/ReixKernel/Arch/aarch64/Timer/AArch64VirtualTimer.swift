@@ -56,4 +56,12 @@ public struct AArch64VirtualTimer: HardwareTimerInterface, Loggable {
     public static func frequency() -> UInt64 {
         read_counter_frequency()
     }
+
+
+    /// `CNTV_CVAL_EL0`, the compare value this core's tick fires at. Banked
+    /// per core like the rest of the timer.
+    @_transparent
+    public static func deadline() -> UInt64 {
+        read_timer_deadline()
+    }
 }
