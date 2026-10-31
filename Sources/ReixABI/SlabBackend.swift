@@ -21,13 +21,16 @@ public protocol SlabBackend {
     mutating func bind(page: UnsafeMutableRawPointer, shift: UInt8)
     /// Returns nil before indexing metadata when the page is foreign, released,
     /// or not currently a slab page.
-    func shiftIfOwned(ofPage page: UnsafeMutableRawPointer) -> UInt8?
+    ///
+    /// This and `largeLiveBits` only read, but are `mutating` so the core passes
+    /// the backend by address: a non-mutating call copied all of `SbrkBackend`'s
+    /// inline arrays onto the stack at every call site.
+    mutating func shiftIfOwned(ofPage page: UnsafeMutableRawPointer) -> UInt8?
 
-    func isAllocatedBlock(
-        page      : UnsafeMutableRawPointer,
-        blockIndex: Int,
-        shift     : UInt8
-    ) -> Bool
+    /// Liveness of a page of a class from `SlabCore.largeShift` up, one bit per
+    /// block. At most sixteen blocks, so this one word is the page's whole free
+    /// set and the core needs no free list for these classes.
+    mutating func largeLiveBits(ofPage page: UnsafeMutableRawPointer) -> UInt16
 
     /// Validate and perform one liveness / count transition. The heap remains
     /// single-writer; this combines metadata work rather than adding synchronization.
@@ -71,8 +74,16 @@ public func slabTransitionPageBit(
     guard live == expectedLive else { return false }
 
     word = expectedLive ? word & ~mask : word | mask
-    page.storeBytes(of: word, toByteOffset: offset, as: UInt64.self)
+    slabStore(word, at: page + offset)
     return true
+}
+
+/// Stores `value` at an address already aligned for `T`. `storeBytes` assumes
+/// nothing about alignment, so under the image's `-mstrict-align` it wrote every
+/// slab link and bitmap word a byte at a time.
+@inline(__always)
+public func slabStore<T>(_ value: T, at address: UnsafeMutableRawPointer) {
+    address.bindMemory(to: T.self, capacity: 1).pointee = value
 }
 
 /// The next representable power of two, or zero when rounding would overflow.

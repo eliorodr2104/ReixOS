@@ -141,21 +141,15 @@ struct SbrkBackend<let arenaPages: Int>: SlabBackend {
     }
     
     @inline(__always)
-    func shiftIfOwned(ofPage page: UnsafeMutableRawPointer) -> UInt8? {
+    mutating func shiftIfOwned(ofPage page: UnsafeMutableRawPointer) -> UInt8? {
         guard owns(page: page) else { return nil }
         let shift = shifts[pageIndex(page)]
         return shift == 0 ? nil : shift
     }
 
     @inline(__always)
-    func isAllocatedBlock(
-        page      : UnsafeMutableRawPointer,
-        blockIndex: Int,
-        shift     : UInt8
-    ) -> Bool {
-        if shift < 8 { return slabPageBitIsSet(page: page, blockIndex: blockIndex) }
-
-        return (liveBits[pageIndex(page)] & (UInt16(1) << UInt16(blockIndex))) != 0
+    mutating func largeLiveBits(ofPage page: UnsafeMutableRawPointer) -> UInt16 {
+        liveBits[pageIndex(page)]
     }
 
     @inline(__always)

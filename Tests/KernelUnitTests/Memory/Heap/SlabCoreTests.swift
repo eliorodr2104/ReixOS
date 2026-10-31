@@ -28,11 +28,11 @@ struct SlabCoreTests {
     private static let pageSize = 4096
 
     @Test("reserved backing follows acquisition, rollback, and final release")
-    func reservedBackingAccounting() {
-        withSlabCore(pages: 3) { core in
+    func reservedBackingAccounting() throws {
+        try withSlabCore(pages: 3) { core in
             #expect(core.reservedPages == 0)
 
-            let first = core.alloc(size: 64)!
+            let first = try allocate(&core, 64)
             #expect(core.reservedPages == 1)
             let released = core.free(first)
             #expect(released)
@@ -84,15 +84,15 @@ struct SlabCoreTests {
 
 
     @Test("a freed block is handed back out before a new page is taken")
-    func allocFreeRoundTrip() {
-        withSlabCore(pages: 8) { core in
+    func allocFreeRoundTrip() throws {
+        try withSlabCore(pages: 8) { core in
             let first  = core.alloc(size: 32)
-            let second = core.alloc(size: 32)
+            let second = try allocate(&core, 32)
             #expect(core.backend.acquiredPages == 1)
 
             // #expect's autoclosure captures `core` as immutable, so every
             // mutating call happens in a plain statement first.
-            let returned = core.free(second!)
+            let returned = core.free(second)
             #expect(returned)
 
             // The free list is LIFO, so the block just returned is the next one out
@@ -106,16 +106,16 @@ struct SlabCoreTests {
 
 
     @Test("a page comes back to the source once its last block is freed")
-    func freeCountAccounting() {
+    func freeCountAccounting() throws {
         // 2048-byte blocks: two per page, so the accounting is short enough to
         // follow block by block. This is `FrameInfo.heapFreeCount` on the machine.
-        withSlabCore(pages: 8) { core in
-            let first = core.alloc(size: 2048)!
+        try withSlabCore(pages: 8) { core in
+            let first = try allocate(&core, 2048)
 
             // One of the two blocks is out, so one is still free.
             #expect(core.backend.freeBlocks(onPageOf: first) == 1)
 
-            let second = core.alloc(size: 2048)!
+            let second = try allocate(&core, 2048)
             #expect(pageBase(first) == pageBase(second))
             #expect(core.backend.freeBlocks(onPageOf: first) == 0)
             #expect(core.backend.acquiredPages == 1)
@@ -125,8 +125,8 @@ struct SlabCoreTests {
             #expect(firstFreed)
             #expect(core.backend.releasedPages == 0)
 
-            // Both blocks free: the page is empty and goes back, and the block list
-            // must be purged of it or the next allocation hands out a released page.
+            // Both blocks free: the page is empty and goes back, and it must leave its
+            // class's partial list or the next allocation hands out a released page.
             let secondFreed = core.free(second)
             #expect(secondFreed)
             #expect(core.backend.releasedPages == 1)
@@ -134,7 +134,7 @@ struct SlabCoreTests {
 
             // The recycled page is bound again from scratch, so its free count is a
             // full page of blocks minus the one just handed out.
-            let reused = core.alloc(size: 2048)!
+            let reused = try allocate(&core, 2048)
             #expect(core.backend.acquiredPages == 2)
             #expect(core.backend.freeBlocks(onPageOf: reused) == 1)
         }
@@ -142,9 +142,9 @@ struct SlabCoreTests {
 
 
     @Test("a page-sized request takes a whole page and leaves no free list")
-    func wholePageBucket() {
-        withSlabCore(pages: 8) { core in
-            let page = core.alloc(size: UInt(Self.pageSize))!
+    func wholePageBucket() throws {
+        try withSlabCore(pages: 8) { core in
+            let page = try allocate(&core, UInt(Self.pageSize))
             #expect(UInt(bitPattern: page) % UInt(Self.pageSize) == 0)
             #expect(core.backend.freeBlocks(onPageOf: page) == 0)
 
@@ -164,9 +164,9 @@ struct SlabCoreTests {
 
 
     @Test("a pointer that is not on a bound page is not freed")
-    func rejectsUnboundPointer() {
-        withSlabCore(pages: 8) { core in
-            let live = core.alloc(size: 64)!
+    func rejectsUnboundPointer() throws {
+        try withSlabCore(pages: 8) { core in
+            let live = try allocate(&core, 64)
 
             // A page the core never carved reports shift 0, which is what tells an
             // invalid free from a live block. `BucketsHeap` panics on the `false`.
@@ -189,10 +189,10 @@ struct SlabCoreTests {
 
 
     @Test("duplicate and interior frees leave the live allocation and free list intact")
-    func rejectsDuplicateAndInteriorPointers() {
-        withSlabCore(pages: 8) { core in
-            let first  = core.alloc(size: 64)!
-            let second = core.alloc(size: 64)!
+    func rejectsDuplicateAndInteriorPointers() throws {
+        try withSlabCore(pages: 8) { core in
+            let first  = try allocate(&core, 64)
+            let second = try allocate(&core, 64)
 
             first.storeBytes(of: UInt64(0x1122_3344_5566_7788), as: UInt64.self)
 
@@ -215,9 +215,9 @@ struct SlabCoreTests {
 
 
     @Test("an aligned address for a free block is not accepted as a live allocation")
-    func rejectsNeverAllocatedBlock() {
-        withSlabCore(pages: 8) { core in
-            let live = core.alloc(size: 128)!
+    func rejectsNeverAllocatedBlock() throws {
+        try withSlabCore(pages: 8) { core in
+            let live = try allocate(&core, 128)
             let neverAllocated = live + 128
 
             let freed = core.free(neverAllocated)
@@ -231,16 +231,16 @@ struct SlabCoreTests {
 
 
     @Test("a stale address that is not a block head in the rebound class is rejected")
-    func rejectsPointerFromPreviousClass() {
-        withSlabCore(pages: 1) { core in
-            let oldHead = core.alloc(size: 2048)!
-            let oldTail = core.alloc(size: 2048)!
+    func rejectsPointerFromPreviousClass() throws {
+        try withSlabCore(pages: 1) { core in
+            let oldHead = try allocate(&core, 2048)
+            let oldTail = try allocate(&core, 2048)
             let freedHead = core.free(oldHead)
             let freedTail = core.free(oldTail)
             #expect(freedHead)
             #expect(freedTail)
 
-            let rebound = core.alloc(size: 4096)!
+            let rebound = try allocate(&core, 4096)
             #expect(rebound == oldHead)
 
             // The tail used to be a block head, but is interior to the rebound
@@ -254,15 +254,16 @@ struct SlabCoreTests {
     }
 
 
-    @Test("small bucket bitmap reservation is bounded and never handed out")
+    @Test("small bucket bitmap and page header reservation is bounded and never handed out")
     func smallBucketMetadataCapacity() {
         withSlabCore(pages: 1) { core in
             var blocks: [UnsafeMutableRawPointer] = []
             while let block = core.alloc(size: 8) { blocks.append(block) }
 
-            #expect(SlabCore<HostSlabBackend>.reservedBlockCount(forShift: 3) == 8)
-            #expect(blocks.count == 504)
-            #expect(blocks.allSatisfy { UInt(bitPattern: $0) & UInt(0xFFF) >= 64 })
+            // 64 bytes of bitmap plus the 20-byte page header, in 8-byte blocks.
+            #expect(SlabCore<HostSlabBackend>.reservedBlockCount(forShift: 3) == 11)
+            #expect(blocks.count == 501)
+            #expect(blocks.allSatisfy { UInt(bitPattern: $0) & UInt(0xFFF) >= 88 })
 
             for block in blocks {
                 let freed = core.free(block)
@@ -351,6 +352,18 @@ struct SlabCoreTests {
             let exhausted = core.alloc(size: 1024)
             #expect(exhausted == nil)
         }
+    }
+
+
+    /// `alloc` through `#require`, so a refusal fails the test by name instead
+    /// of trapping the whole run.
+    private func allocate(
+        _ core        : inout SlabCore<HostSlabBackend>,
+        _ size        : UInt,
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) throws -> UnsafeMutableRawPointer {
+        let pointer = core.alloc(size: size)
+        return try #require(pointer, sourceLocation: sourceLocation)
     }
 
 

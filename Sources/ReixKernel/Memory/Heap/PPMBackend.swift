@@ -76,15 +76,9 @@ struct PPMBackend: SlabBackend {
         return shift == 0 ? nil : shift
     }
 
-    func isAllocatedBlock(
-        page      : UnsafeMutableRawPointer,
-        blockIndex: Int,
-        shift     : UInt8
-    ) -> Bool {
-        if shift < 8 { return slabPageBitIsSet(page: page, blockIndex: blockIndex) }
-
-        let bits = ppmPtr.pointee.framesMetadata![frameIndex(page)].heapAllocationBits
-        return (bits & (UInt16(1) << UInt16(blockIndex))) != 0
+    @inline(__always)
+    func largeLiveBits(ofPage page: UnsafeMutableRawPointer) -> UInt16 {
+        ppmPtr.pointee.framesMetadata![frameIndex(page)].heapAllocationBits
     }
     
     func onAllocBlock(

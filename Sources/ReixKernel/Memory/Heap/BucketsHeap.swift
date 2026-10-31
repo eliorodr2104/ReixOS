@@ -9,9 +9,10 @@ import ReixABI
 /// Bucket-based slab allocator backed by the Physical Page Manager.
 ///
 /// Allocates 4 KiB pages from the PPM and slices them into power-of-two
-/// blocks, served through per-size free lists kept inside `KernelBuckets`.
-/// Built as an instance struct so its mutable state (free lists, PPM
-/// pointer) is explicit and the manager is reachable from every consumer
+/// blocks through `SlabCore`, which keeps per-class lists of partial pages and
+/// gives a page back to the PPM the moment its last block is freed.
+/// Built as an instance struct so its mutable state (the core, the metrics, the
+/// PPM pointer) is explicit and the manager is reachable from every consumer
 /// through a stable pointer composed by `Kernel`.
 ///
 public struct BucketsHeap: KernelHeapInterface, Loggable {
@@ -311,3 +312,15 @@ public struct BucketsHeap: KernelHeapInterface, Loggable {
         return core.backend.ppmPtr.pointee.framesMetadata!.advanced(by: idx)
     }
 }
+
+
+// MARK: - Host test seam
+
+#if !hasFeature(Embedded)
+extension BucketsHeap {
+
+    /// The slab core, read by the host invariant checker. Gated like
+    /// `failAllocationsAfter`, so the machine is compiled without it.
+    var slab: SlabCore<PPMBackend> { core }
+}
+#endif

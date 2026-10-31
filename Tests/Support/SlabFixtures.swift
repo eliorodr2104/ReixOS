@@ -37,6 +37,16 @@ public struct HostSlabBackend: SlabBackend {
         states[key(SlabCore<Self>.pageBase(pointer))]?.freeCount ?? 0
     }
 
+    /// Every page bound to a class and not yet released, with its shift.
+    public var boundPages: [(page: UnsafeMutableRawPointer, shift: UInt8)] {
+        states.sorted { $0.key < $1.key }.map {
+            (UnsafeMutableRawPointer(bitPattern: $0.key)!, $0.value.shift)
+        }
+    }
+
+    /// The pool's first page, for tests that write into it on purpose.
+    public var poolBase: UnsafeMutableRawPointer { arena }
+
     private let arena   : UnsafeMutableRawPointer
     private let capacity: Int
 
@@ -117,15 +127,8 @@ public struct HostSlabBackend: SlabBackend {
     }
 
 
-    public func isAllocatedBlock(
-        page      : UnsafeMutableRawPointer,
-        blockIndex: Int,
-        shift     : UInt8
-    ) -> Bool {
-        if shift < 8 { return slabPageBitIsSet(page: page, blockIndex: blockIndex) }
-
-        return (states[key(page)]!.allocationBits
-            & (UInt16(1) << UInt16(blockIndex))) != 0
+    public func largeLiveBits(ofPage page: UnsafeMutableRawPointer) -> UInt16 {
+        states[key(page)]?.allocationBits ?? UInt16.max
     }
 
 
@@ -198,9 +201,112 @@ public struct HostSlabBackend: SlabBackend {
 /// Runs `body` over a `SlabCore` on a pool of `pages` pages, then frees the pool.
 public func withSlabCore(
     pages : Int,
-    _ body: (inout SlabCore<HostSlabBackend>) -> Void
-) {
+    _ body: (inout SlabCore<HostSlabBackend>) throws -> Void
+) rethrows {
     var core = SlabCore(backend: HostSlabBackend(pages: pages))
-    body(&core)
-    core.backend.release()
+    defer { core.backend.release() }
+    try body(&core)
+}
+
+
+/// Every way `core`'s lists and the backend's liveness can disagree, as one
+/// line each; empty when they agree. Run after every step of a stress.
+///
+/// `boundPages` are the pages the backend holds for the core, `freeCount` the
+/// backend's own free count for one of them, and `live` the address of every
+/// block the caller believes is live. Pages listed in `retainedEmpty` are empty
+/// pages the backend refused to take back, which stay bound off every list.
+public func slabInvariantViolations<Backend: SlabBackend>(
+    _ core       : SlabCore<Backend>,
+    boundPages   : [(page: UnsafeMutableRawPointer, shift: UInt8)],
+    freeCount    : (UnsafeMutableRawPointer) -> Int,
+    live         : Set<UInt>,
+    retainedEmpty: Set<UInt> = []
+) -> [String] {
+    typealias Core = SlabCore<Backend>
+    var backend  = core.backend
+    var problems: [String] = []
+    var listable: [UInt8: Set<UInt>] = [:]
+    var liveSeen = 0
+
+    if core.reservedPages != UInt(boundPages.count) {
+        problems.append("reservedPages \(core.reservedPages) but \(boundPages.count) pages bound")
+    }
+
+    for (page, shift) in boundPages {
+        let name     = "page 0x\(String(UInt(bitPattern: page), radix: 16)) shift \(shift)"
+        let blocks   = Core.pageSize >> Int(shift)
+        let reserved = Core.reservedBlockCount(forShift: shift)
+        let state    = core.pageState(page, shift: shift)
+
+        var liveBlocks: [Int] = []
+        for block in reserved..<blocks {
+            let isLive = shift < Core.largeShift
+                ? slabPageBitIsSet(page: page, blockIndex: block)
+                : backend.largeLiveBits(ofPage: page) & (UInt16(1) << UInt16(block)) != 0
+            if isLive { liveBlocks.append(block) }
+
+            let address = UInt(bitPattern: page) + UInt(block << Int(shift))
+            if isLive != live.contains(address) {
+                problems.append("\(name) block \(block) live=\(isLive), caller disagrees")
+            }
+        }
+        liveSeen += liveBlocks.count
+
+        let free = blocks - reserved - liveBlocks.count
+        if freeCount(page) != free {
+            problems.append("\(name) backend free count \(freeCount(page)), bitmap says \(free)")
+        }
+        if liveBlocks.isEmpty && !retainedEmpty.contains(UInt(bitPattern: page)) {
+            problems.append("\(name) is empty and still bound")
+        }
+
+        if shift < Core.largeShift {
+            let nodes = state.freeBlocks
+            if Set(nodes).count != nodes.count { problems.append("\(name) free list repeats a block") }
+            if state.bump <= reserved || state.bump > blocks {
+                problems.append("\(name) bump \(state.bump) outside \(reserved + 1)...\(blocks)")
+            }
+            for node in nodes where node < reserved || node >= state.bump || liveBlocks.contains(node) {
+                problems.append("\(name) free list holds block \(node)")
+            }
+            for block in liveBlocks where block >= state.bump {
+                problems.append("\(name) live block \(block) at or past bump \(state.bump)")
+            }
+            if nodes.count + blocks - state.bump != free
+                && !retainedEmpty.contains(UInt(bitPattern: page)) {
+                problems.append("\(name) reaches \(nodes.count + blocks - state.bump) free blocks of \(free)")
+            }
+            if !nodes.isEmpty || state.bump < blocks {
+                listable[shift, default: []].insert(UInt(bitPattern: page))
+            }
+        } else if free > 0 {
+            listable[shift, default: []].insert(UInt(bitPattern: page))
+        }
+    }
+
+    if liveSeen != live.count {
+        problems.append("caller holds \(live.count) live blocks, pages hold \(liveSeen)")
+    }
+
+    for shift in Core.minShift...12 {
+        let list = core.partialPages(shift: shift)
+        let addresses = list.map { UInt(bitPattern: $0) }
+        let expected = (listable[shift] ?? []).subtracting(retainedEmpty)
+
+        if Set(addresses).count != addresses.count { problems.append("shift \(shift) list repeats a page") }
+        if Set(addresses) != expected {
+            problems.append("shift \(shift) list \(addresses.count) pages, \(expected.count) have free blocks")
+        }
+        for (index, page) in list.enumerated() {
+            let state = core.pageState(page, shift: shift)
+            let prev  = index == 0 ? nil : list[index - 1]
+            let next  = index + 1 == list.count ? nil : list[index + 1]
+            if state.prev != prev || state.next != next {
+                problems.append("shift \(shift) list position \(index) has broken links")
+            }
+        }
+    }
+
+    return problems
 }
