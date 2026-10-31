@@ -117,4 +117,12 @@ public enum PreemptionSpans {
 
         table[index].checkpoints &+= checkpoints
     }
+
+
+    #if !hasFeature(Embedded)
+    /// Host suites share the table; each starts from empty slots.
+    static func reset() {
+        table = InlineArray<5, PreemptionSpan>(repeating: PreemptionSpan())
+    }
+    #endif
 }

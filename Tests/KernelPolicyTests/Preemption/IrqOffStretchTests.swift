@@ -192,6 +192,51 @@ struct IrqOffStretchTests {
     }
 
 
+    /// 1 MHz makes the 200 µs budget 200 units. The exception has been masked
+    /// for 1 000 when the run starts, so its first probe owes a window although
+    /// the run itself has spent only 10.
+    @Test("a run behind a long prologue opens its window at the first probe")
+    func budgetCountsTheWholeException() {
+        withStretchState {
+            host_set_counter_frequency(1_000_000)
+            defer { host_set_counter_frequency(0) }
+            PreemptionSpans.reset()
+            defer { PreemptionSpans.reset() }
+
+            IrqOffStretch.open(path: 0, at: 1_000)
+            host_set_virtual_counter(2_000)
+
+            _ = Preemption.run(
+                AddressSpaceTeardown.self,
+                ClockedSteps(remaining: 2, cost: 10)
+            )
+
+            #expect(PreemptionSpans.span(of: AddressSpaceTeardown.self).checkpoints == 1)
+            #expect(IrqOffStretch.longest(onPath: 0) == 1_010)
+        }
+    }
+
+
+    @Test("outside an exception the budget is the run's own, and a short run opens nothing")
+    func budgetOutsideException() {
+        withStretchState {
+            host_set_counter_frequency(1_000_000)
+            defer { host_set_counter_frequency(0) }
+            PreemptionSpans.reset()
+            defer { PreemptionSpans.reset() }
+
+            host_set_virtual_counter(2_000)
+
+            _ = Preemption.run(
+                AddressSpaceTeardown.self,
+                ClockedSteps(remaining: 2, cost: 10)
+            )
+
+            #expect(PreemptionSpans.span(of: AddressSpaceTeardown.self).checkpoints == 0)
+        }
+    }
+
+
     // MARK: - Fixtures
 
     private func withStretchState(_ body: () -> Void) {

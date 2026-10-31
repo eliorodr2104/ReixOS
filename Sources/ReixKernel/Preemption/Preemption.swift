@@ -208,7 +208,9 @@ public enum Preemption {
             let now     = Arch.Timer.counter()
             let stretch = now &- openedAt
 
-            guard stretch >= budget else { continue }
+            // Measured against the whole exception, not this run: a run behind
+            // a long prologue owes its first window at its first probe.
+            guard IrqOffStretch.elapsed(at: now, orElse: stretch) >= budget else { continue }
 
             // The tick handler drains the log ring, and a record left half
             // written would be spliced into by that drain.

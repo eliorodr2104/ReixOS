@@ -122,12 +122,13 @@ public protocol PreemptionRegion {
 /// `VMAManager.cloneRegions`, one batch of up to 32 pages per step, and the
 /// whole clone in one run.
 ///
-/// One run and not one per region, for the reason `teardown` takes one: the
-/// budget restarts at every `Preemption.run` and `longestStretch` is per run, so
-/// a run per region would report the longest region and hide the sum of them.
-/// Measured on the retirement side, 256 one-batch runs reported 72 µs while the
-/// door had really been shut for 18 to 21 ms. `RegionClone` therefore walks the
-/// parent's whole VMA list itself.
+/// One run and not one per region, for the reason `teardown` takes one:
+/// `longestStretch` is per run, so a run per region would report the longest
+/// region and hide the sum of them. Measured on the retirement side, 256
+/// one-batch runs reported 72 µs while the door had really been shut for 18 to
+/// 21 ms. `RegionClone` therefore walks the parent's whole VMA list itself.
+/// The budget no longer restarts per run, see `IrqOffStretch.elapsed`, so the
+/// door itself would now open on time either way; the report would not.
 ///
 /// ## Why the step is a batch of pages and not a region
 ///

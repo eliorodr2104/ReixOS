@@ -70,6 +70,17 @@ enum IrqOffStretch {
     }
 
 
+    /// How long the open stretch has run at `now`, or `fallback` when none is
+    /// open. `Preemption.run` decides its windows on this, so a budget counts
+    /// every masked microsecond and not only the ones its own run spent.
+    @inline(__always)
+    static func elapsed(at now: UInt64, orElse fallback: UInt64) -> UInt64 {
+        guard since != 0, now > since else { return fallback }
+
+        return now - since
+    }
+
+
     /// Ends the open stretch and returns its path so a window can reopen it,
     /// or returns `nil` when no stretch was open: a driver run outside any
     /// exception, at boot, has nothing to split.
