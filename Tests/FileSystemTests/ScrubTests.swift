@@ -265,6 +265,7 @@ struct ScrubTests {
                 return
             }
             disk.poke(hidden, at: slot)
+            disk.stampEntry(at: slot)
 
             // The shallow scan cannot see it: it never looks at a name.
             #expect(fs.scan(.blocks).strayNames == 0)
@@ -296,6 +297,7 @@ struct ScrubTests {
 
                 if disk.byte(at: at + 8) == UInt8(ascii: "b") {
                     disk.poke(UInt8(ascii: "a"), at: at + 8)
+                    disk.stampEntry(at: at)
                 }
             }
 
@@ -332,6 +334,7 @@ struct ScrubTests {
                       disk.byte(at: at + 8) == UInt8(ascii: "b")
                 else { continue }
                 disk.poke(first, at: at)
+                disk.stampEntry(at: at)
             }
 
             let deep = fs.scan(.everything)

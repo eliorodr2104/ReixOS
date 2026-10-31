@@ -6,6 +6,7 @@
 
 
 import ReixABI
+@testable import ReixFS
 
 /// A block device made of host memory.
 ///
@@ -312,5 +313,17 @@ final class MemoryDisk: BlockDevice {
 
     func poke(_ value: UInt32, at offset: Int) {
         bytes.storeBytes(of: value, toByteOffset: offset, as: UInt32.self)
+    }
+
+
+    /// Rewrites the check of the directory entry at `offset`, so a poked entry
+    /// reads as one a careful writer made: damage only a scrub can see.
+    func stampEntry(at offset: Int) {
+        let check = FSEntry.check(of: UnsafeRawPointer(bytes.advanced(by: offset)))
+
+        for index in 0..<FSEntry.checkWidth {
+            poke(UInt8(truncatingIfNeeded: check >> UInt32(8 * index)),
+                 at: offset + FSEntry.checkOffset + index)
+        }
     }
 }

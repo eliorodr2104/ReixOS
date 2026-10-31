@@ -13,23 +13,52 @@
 /// and thirty-two bits of avalanche over a hundred bytes catches all three.
 enum FSChecksum {
 
-    private static let offsetBasis: UInt32 = 0x811C_9DC5
+    static let offsetBasis: UInt32 = 0x811C_9DC5
     private static let prime      : UInt32 = 0x0100_0193
 
-    /// Over `count` bytes of `base`, reading the four bytes at `zeroing` as zero.
+    /// Over `count` bytes of `base`, reading the `width` bytes at `zeroing` as
+    /// zero.
     ///
-    /// `zeroing` is negative to checksum the whole range.
+    /// `zeroing` is negative to checksum the whole range. `continuing` is the
+    /// checksum of whatever came before, so a structure that spans several
+    /// blocks is one checksum and not one per block.
     static func over(
-        _ base : UnsafeRawPointer,
-        count  : Int,
-        zeroing: Int = -1
+        _ base    : UnsafeRawPointer,
+        count     : Int,
+        zeroing   : Int = -1,
+        width     : Int = 4,
+        continuing: UInt32 = offsetBasis
     ) -> UInt32 {
 
         let bytes = base.assumingMemoryBound(to: UInt8.self)
-        var hash  = offsetBasis
+        var hash  = continuing
+
+        // The common case, without the per-byte question and eight bytes to a
+        // load: every metadata block a mount reads goes through here.
+        guard zeroing >= 0 else {
+            let words = count / 8
+
+            for index in 0..<words {
+                let word = UInt64(littleEndian: base.loadUnaligned(
+                    fromByteOffset: index * 8, as: UInt64.self
+                ))
+
+                hash = (hash ^ UInt32(truncatingIfNeeded: word        & 0xFF)) &* prime
+                hash = (hash ^ UInt32(truncatingIfNeeded: word >>  8 & 0xFF)) &* prime
+                hash = (hash ^ UInt32(truncatingIfNeeded: word >> 16 & 0xFF)) &* prime
+                hash = (hash ^ UInt32(truncatingIfNeeded: word >> 24 & 0xFF)) &* prime
+                hash = (hash ^ UInt32(truncatingIfNeeded: word >> 32 & 0xFF)) &* prime
+                hash = (hash ^ UInt32(truncatingIfNeeded: word >> 40 & 0xFF)) &* prime
+                hash = (hash ^ UInt32(truncatingIfNeeded: word >> 48 & 0xFF)) &* prime
+                hash = (hash ^ UInt32(truncatingIfNeeded: word >> 56)) &* prime
+            }
+
+            for index in (words * 8)..<count { hash = (hash ^ UInt32(bytes[index])) &* prime }
+            return hash
+        }
 
         for index in 0..<count {
-            let byte = (zeroing >= 0 && index >= zeroing && index < zeroing + 4)
+            let byte = (index >= zeroing && index < zeroing + width)
                 ? UInt8(0)
                 : bytes[index]
 

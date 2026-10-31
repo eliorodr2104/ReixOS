@@ -70,6 +70,30 @@ public struct FSEntry {
     }
 
 
+    /// Where an entry's own check lives: the three bytes after the length,
+    /// which were padding.
+    static let checkOffset = 5
+    static let checkWidth  = 3
+
+    /// The check a named entry at `base` should carry.
+    ///
+    /// Twenty-four bits of the format's one checksum, over the whole entry with
+    /// the check itself read as zero. What it is for is a directory block that
+    /// rotted while nobody was looking: a mount that trusts its seal never walks
+    /// the folders, so the first lookup has to be able to tell.
+    static func check(of base: UnsafeRawPointer) -> UInt32 {
+        let hash = FSChecksum.over(
+            base, count: Int(FSLayout.entrySize), zeroing: checkOffset, width: checkWidth
+        )
+        return (hash ^ (hash >> 24)) & 0xFF_FFFF
+    }
+
+    private static func storedCheck(at base: UnsafeRawPointer) -> UInt32 {
+        UInt32(base.loadUnaligned(fromByteOffset: checkOffset,     as: UInt8.self))
+            | UInt32(base.loadUnaligned(fromByteOffset: checkOffset + 1, as: UInt8.self)) << 8
+            | UInt32(base.loadUnaligned(fromByteOffset: checkOffset + 2, as: UInt8.self)) << 16
+    }
+
     public init(reading base: UnsafeRawPointer) {
         self.object = base.loadUnaligned(fromByteOffset: 0, as: UInt32.self)
 
@@ -92,11 +116,25 @@ public struct FSEntry {
             whole = false
         }
 
+        // Free is every byte zero, as `unlink` writes it; a name is one whose
+        // check adds up. Anything between is a slot something has damaged.
+        if raw == 0 {
+            whole = whole && FSChecksum.isZero(base, count: Int(FSLayout.entrySize))
+        } else {
+            whole = whole && Self.storedCheck(at: base) == Self.check(of: base)
+        }
+
         self.encodingValid = whole
     }
 
 
+    /// Lays the entry over its 64 bytes, check last. A free entry is all zero.
     public func write(to base: UnsafeMutableRawPointer) {
+        guard length > 0 else {
+            base.initializeMemory(as: UInt8.self, repeating: 0, count: Int(FSLayout.entrySize))
+            return
+        }
+
         base.storeBytes(of: object, toByteOffset: 0, as: UInt32.self)
         base.storeBytes(of: length, toByteOffset: 4, as: UInt8.self)
         base.storeBytes(of: UInt8(0), toByteOffset: 5, as: UInt8.self)
@@ -104,6 +142,14 @@ public struct FSEntry {
 
         let bytes = base.advanced(by: 8).assumingMemoryBound(to: UInt8.self)
         for index in 0..<FSLayout.nameLimit { bytes[index] = name[index] }
+
+        let check = Self.check(of: base)
+        for index in 0..<Self.checkWidth {
+            base.storeBytes(
+                of: UInt8(truncatingIfNeeded: check >> UInt32(8 * index)),
+                toByteOffset: Self.checkOffset + index, as: UInt8.self
+            )
+        }
     }
 
 
