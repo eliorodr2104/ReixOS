@@ -74,12 +74,14 @@ struct FrameBudgetSiteTests {
     ]
 
 
-    /// The package root, from this file's own path.
+    /// The package root: the nearest ancestor of this file holding `Package.swift`.
     private static var packageRoot: URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()   // Tests/KernelUnitTests
-            .deletingLastPathComponent()   // Tests
-            .deletingLastPathComponent()   // package root
+        var directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        while !FileManager.default.fileExists(atPath: directory.appendingPathComponent("Package.swift").path),
+              directory.path != "/" {
+            directory.deleteLastPathComponent()
+        }
+        return directory
     }
 
 
