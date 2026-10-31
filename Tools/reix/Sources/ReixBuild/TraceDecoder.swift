@@ -470,12 +470,17 @@ extension TraceDecoder {
         "brk", "mmap", "munmap", "decommit",
         "send", "receive", "spawnEndpoint", "call", "reply", "replyRecv",
         "trySend", "tryReceive", "receiveTimeout", "spawnService", "derive",
-        "shmCreate", "shmMap",
+        "shmCreate", "shmMap", "shmPages",
         "deviceCap", "mapDevice",
         "capExists", "capDrop",
         "profileControl", "procStats",
         "irqWait", "irqAck",
         "dmaAlloc", "dmaPhysical",
+        "deviceRead", "deviceWrite", "busDeriveDevice", "busDeriveInterrupt",
+        "clockNow", "clockSet", "irqBind", "powerOff", "identityAlive",
+        "taskCreate", "taskMapAnonymous", "taskWrite", "taskSealAndProtect",
+        "taskSetContext", "taskStart", "taskAbort", "taskTerminate", "taskStatus",
+        "dmaReclaim",
     ]
 
     static func syscallName(_ raw: UInt16) -> String {
