@@ -66,9 +66,16 @@ extension VMAManager {
             )
         )
 
-        if let sharedRegion { retainSharedRegion(sharedRegion) }
+        // A refused node is still ours to free, and the shared region is retained
+        // only once the node is linked, so a refusal has nothing to give back.
+        do {
+            try vmaList.insert(nodePtr)
+        } catch {
+            heap.pointee.kfree(nodePtr)
+            throw error
+        }
 
-        vmaList.insert(nodePtr)
+        if let sharedRegion { retainSharedRegion(sharedRegion) }
 
         var survivor = nodePtr
         if let prev = survivor.pointee.prev,

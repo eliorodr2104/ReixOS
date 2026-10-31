@@ -89,13 +89,13 @@ struct VMAMetricsBenchmark {
                 let start = UserSpaceLayout.elfBaseTypical
                     + UInt64(index * 2) * Self.pageSize
                 let node = makeVMA(start: start, pages: 1, flags: .none)
-                manager.pointee.vmaList.insert(node)
+                try! manager.pointee.vmaList.insert(node)
                 nodes.append(node)
             }
 
             let stackStart = UserSpaceLayout.stackTop - UInt64(stackPages) * Self.pageSize
             let stack = makeVMA(start: stackStart, pages: stackPages, flags: .growDown)
-            manager.pointee.vmaList.insert(stack)
+            try! manager.pointee.vmaList.insert(stack)
             nodes.append(stack)
             for index in 0..<stackPages {
                 ram.mapPage(

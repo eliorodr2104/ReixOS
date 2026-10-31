@@ -124,7 +124,19 @@ public struct VMAList: VMAStructure {
     }
 
 
-    public mutating func insert(_ region: UnsafeMutablePointer<VirtualMemoryArea>) {
+    /// Link `region` in address order, or refuse and leave both the chain and
+    /// the node untouched.
+    ///
+    /// The refusal is thrown rather than swallowed: a node that was never linked
+    /// is still the caller's to free, and only the caller can tell.
+    public mutating func insert(
+        _ region: UnsafeMutablePointer<VirtualMemoryArea>
+    ) throws(VMAError) {
+
+        guard region.pointee.startAddress < region.pointee.endAddress else {
+            throw .invalidLayout
+        }
+
         var current = head
 
         while let elementPtr = current {
@@ -133,12 +145,12 @@ public struct VMAList: VMAStructure {
             if element.startAddress > region.pointee.startAddress {
 
                 guard region.pointee.endAddress <= element.startAddress else {
-                    return
+                    throw .regionOverlap
                 }
 
                 if let prevPtr = element.prev {
                     guard prevPtr.pointee.endAddress <= region.pointee.startAddress else {
-                        return
+                        throw .regionOverlap
                     }
                 }
 
@@ -152,7 +164,7 @@ public struct VMAList: VMAStructure {
 
         if let lastPtr = tail {
             guard lastPtr.pointee.endAddress <= region.pointee.startAddress else {
-                return
+                throw .regionOverlap
             }
         }
 
@@ -168,8 +180,6 @@ public struct VMAList: VMAStructure {
 
         nodes.remove(element: currentNode)
         noteUnlinked()
-
-        _ = currentNode
     }
 
 

@@ -254,7 +254,7 @@ struct VMADecommitTests {
             memoryType  : backing == .device ? .device : .normal
         ))
 
-        manager.pointee.vmaList.insert(node)
+        #expect(refusal { try manager.pointee.vmaList.insert(node) } == "none")
     }
 
 

@@ -148,12 +148,111 @@ struct VMAListTests {
             )
             defer { destroyRegion(overlapping) }
 
-            // A region straddling an existing one is dropped rather than linked,
+            // A region straddling an existing one is refused rather than linked,
             // which is the invariant every walker here depends on.
-            list.insert(overlapping)
+            #expect(refusal { try list.insert(overlapping) } == "regionOverlap")
             #expect(starts(of: list) == [0, 2, 4].map { Self.base + $0 * Self.pageSize })
+            #expect(list.nodeCount == 3)
             #expect(list.search(at: Self.base + 3 * Self.pageSize) == nil)
             #expect(list.search(at: Self.base + 4 * Self.pageSize) == nodes[0])
+        }
+    }
+
+
+    @Test("insert reports every overlap it refuses and leaves the node unlinked")
+    func insertRefusesEveryOverlap() {
+        // Pages 2 and 5..<7 are taken. Each case collides through a different
+        // check: the next node, the previous node, the tail, and an exact copy.
+        let collisions: [(first: UInt64, pages: UInt64)] = [
+            (1, 2), (6, 1), (4, 2), (6, 4), (2, 1), (5, 2), (0, 9),
+        ]
+
+        for collision in collisions {
+            withRegions([
+                region(from: 2, pages: 1, backing: .anonymous),
+                region(from: 5, pages: 2, backing: .anonymous),
+            ]) { list, _ in
+                var list    = list
+                let refused = makeRegion(
+                    start: Self.base + collision.first * Self.pageSize,
+                    end  : Self.base + (collision.first + collision.pages) * Self.pageSize
+                )
+                defer { destroyRegion(refused) }
+
+                #expect(
+                    refusal { try list.insert(refused) } == "regionOverlap",
+                    "pages \(collision.first)..<\(collision.first + collision.pages)"
+                )
+                #expect(starts(of: list) == [2, 5].map { Self.base + $0 * Self.pageSize })
+                #expect(list.nodeCount == 2)
+                #expect(refused.pointee.prev == nil && refused.pointee.next == nil)
+            }
+        }
+    }
+
+
+    @Test("insert refuses an empty or inverted region")
+    func insertRefusesEmptyRegion() {
+        withRegions([region(from: 2, pages: 1, backing: .anonymous)]) { list, _ in
+            var list = list
+
+            for (start, end) in [(UInt64(4), UInt64(4)), (6, 5)] {
+                let refused = makeRegion(
+                    start: Self.base + start * Self.pageSize,
+                    end  : Self.base + end * Self.pageSize
+                )
+                defer { destroyRegion(refused) }
+
+                #expect(refusal { try list.insert(refused) } == "invalidLayout")
+                #expect(list.nodeCount == 1)
+                #expect(list.tail?.pointee.startAddress == Self.base + 2 * Self.pageSize)
+            }
+        }
+    }
+
+
+    @Test("a region touching both neighbours is linked between them")
+    func insertAcceptsTouchingNeighbours() {
+        withRegions([
+            region(from: 0, pages: 1, backing: .anonymous),
+            region(from: 2, pages: 1, backing: .anonymous),
+        ]) { list, nodes in
+            var list   = list
+            let middle = makeRegion(
+                start: Self.base + Self.pageSize,
+                end  : Self.base + 2 * Self.pageSize
+            )
+            defer {
+                list.remove(element: middle)
+                destroyRegion(middle)
+            }
+
+            #expect(refusal { try list.insert(middle) } == "none")
+            #expect(nodes[0].pointee.next == middle && middle.pointee.next == nodes[1])
+            #expect(list.nodeCount == 3)
+        }
+    }
+
+
+    @Test("unlinking keeps the node count in step with the chain")
+    func nodeCountFollowsUnlinks() {
+        withRegions([
+            region(from: 0, pages: 1, backing: .anonymous),
+            region(from: 1, pages: 1, backing: .anonymous),
+            region(from: 3, pages: 1, backing: .anonymous),
+        ]) { list, nodes in
+            var list = list
+
+            #expect(list.mergeAdjacent(nodes[0], nodes[1]) == nodes[1])
+            #expect(list.nodeCount == 2)
+
+            list.delete(at: Self.base + 3 * Self.pageSize)
+            #expect(list.nodeCount == 1)
+            #expect(list.tail == nodes[0])
+
+            // An address nothing covers deletes nothing.
+            list.delete(at: Self.base + 3 * Self.pageSize)
+            #expect(list.nodeCount == 1)
         }
     }
 
@@ -170,6 +269,8 @@ struct VMAListTests {
             ],
             window: (windowStart, windowEnd)
         ) { list, _ in
+            var list = list
+
             // The first two pages are taken, so the gap starts where they end and
             // stays below the window's own ceiling.
             let gap = list.findFreeGAP(size: 2 * Self.pageSize, alignment: Self.pageSize)
@@ -240,7 +341,7 @@ struct VMAListTests {
                 memoryType  : spec.backing == .device ? .device : .normal
             ))
 
-            list.insert(node)
+            #expect(refusal { try list.insert(node) } == "none")
             nodes.append(node)
         }
 

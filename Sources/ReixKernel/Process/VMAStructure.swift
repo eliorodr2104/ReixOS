@@ -24,7 +24,7 @@ public protocol VMAStructure {
         end  : VirtualAddress
     ) -> UnsafeMutablePointer<VirtualMemoryArea>?
 
-    mutating func insert(_ region: UnsafeMutablePointer<VirtualMemoryArea>)
+    mutating func insert(_ region: UnsafeMutablePointer<VirtualMemoryArea>) throws(VMAError)
     mutating func delete(at address: VirtualAddress)
 
     /// Find a free aligned gap large enough for `size` bytes between
