@@ -75,6 +75,11 @@ assert system['pmu']['status'] == 'available'
 assert system['pmu']['instructions_retired']['status'] == 'unavailable'
 assert system['pmu']['instructions_retired']['reason'] == 'inst-retired-not-advertised'
 assert system['trace_lost_final_snapshot']['scope'] == 'bounded-ring-cumulative-at-final-dump'
+assert system['latency']['status'] == 'measured'
+assert system['latency']['wake_to_run_longest_counter'] == 120
+assert system['latency']['deadline_lag_longest_counter'] == 340
+assert system['latency']['irq_off_longest_path'] == 17
+assert system['latency']['irq_off_task_map_longest_counter'] == 250
 assert document['editor_workloads']['paste-8192']['cycles']['value'] == 500
 assert document['editor_workloads']['paste-8192']['instructions']['status'] == 'unavailable'
 assert document['editor_workloads']['paste-8192']['duration_ticks']['value'] == 200
@@ -102,6 +107,9 @@ def emit(name, text): (out / name).write_text(text)
 emit('missing-process.log', '\n'.join(x for x in serial.splitlines() if 'name=VTAdapter.elf' not in x) + '\n')
 emit('missing-field.log', serial.replace(' kernel_heap_live_capacity_bytes=10000', '', 1))
 emit('malformed-field.log', serial.replace('physical_total_pages=1024', 'physical_total_pages=NaN', 1))
+emit('missing-latency-field.log', serial.replace(' irq_off_longest_path=17', '', 1))
+emit('missing-latency-status.log', serial.replace(' latency_status=measured', '', 1))
+emit('unavailable-latency-with-values.log', serial.replace('latency_status=measured', 'latency_status=unavailable', 1))
 system = next(x for x in serial.splitlines() if x.startswith('[ TERMINAL BASELINE ] system '))
 emit('duplicate-system.log', serial + system + '\n')
 emit('contradictory-system.log', serial + '[ TERMINAL BASELINE ] system status=unavailable reason=late-failure\n')
@@ -190,6 +198,7 @@ reject() {
 }
 
 for bad in missing-process missing-field malformed-field duplicate-system \
+           missing-latency-field missing-latency-status unavailable-latency-with-values \
            contradictory-system stale-schema-token lost-trace dump-lost trace-drop trace-count-mismatch \
            truncated-trace nested-trace \
            editor-event-mismatch system-event-mismatch missing-instruction-reason

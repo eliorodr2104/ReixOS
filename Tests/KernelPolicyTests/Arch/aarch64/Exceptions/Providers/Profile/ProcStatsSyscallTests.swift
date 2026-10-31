@@ -80,7 +80,7 @@ struct ProcStatsSyscallTests {
                 withBuffer(fill: 0xC7) { buffer in
                     UserMemory.validationOverride = { address, size, permissions in
                         address == UInt64(UInt(bitPattern: buffer))
-                            && size == 112 && permissions == [.write, .user]
+                            && size == 152 && permissions == [.write, .user]
                     }
                     var frame = processFrame(
                         buffer: buffer,
@@ -103,10 +103,54 @@ struct ProcStatsSyscallTests {
                     #expect(stats.kernelHeapReservedBytes == 4096)
                     #expect(stats.physicalAllocatedPages + stats.physicalFreePages == stats.physicalTotalPages)
                     #expect(stats.pmuEventAvailability == 0 && stats.pmuEventCounters == 0)
-                    #expect(bytes(buffer, from: 112, count: 16) == Array(repeating: 0xC7, count: 16))
+                    #expect(bytes(buffer, from: 152, count: 16) == Array(repeating: 0xC7, count: 16))
                 }
             }
           }
+        }
+    }
+
+    @Test("the system record carries the latency worst cases, saturated, with their path")
+    func latencyMaxima() {
+        withProcessManager(pages: 64) { ram, heap, _ in
+            IrqOffStretch.reset()
+            WakeLatency.reset()
+            PreemptionSpans.reset()
+            defer { IrqOffStretch.reset(); WakeLatency.reset(); PreemptionSpans.reset() }
+
+            var stats = ProcStatsSyscall.systemSnapshot(ppm: ram.ppm, heap: heap)
+            #expect((stats.availability & SystemMetricAvailability.latency) != 0)
+            #expect(stats.wakeToRunLongest == 0 && stats.irqOffLongest == 0)
+
+            IrqOffStretch.fold(UInt64(UInt32.max) + 5, path: 49)
+            IrqOffStretch.fold(10, path: 64)
+            PreemptionSpans.merge(TaskMapAnonymous.self, stretch: 1_234, longestWindow: 0, cheapestWindow: 0, checkpoints: 3)
+            PreemptionSpans.merge(AddressSpaceTeardown.self, stretch: 777, longestWindow: 0, cheapestWindow: 0, checkpoints: 1)
+
+            withProcesses(1) { processes in
+                let process = processes[0]
+                process.pointee.status     = .ready
+                process.pointee.readySince = 100
+                process.pointee.readyCause = .wake
+                WakeLatency.settle(process, at: 400)
+
+                process.pointee.readySince = 100
+                process.pointee.readyCause = .deadline
+                WakeLatency.settle(process, at: 1_100)
+            }
+
+            stats = ProcStatsSyscall.systemSnapshot(ppm: ram.ppm, heap: heap)
+
+            #expect(stats.wakeToRunLongest      == 300)
+            #expect(stats.deadlineLagLongest    == 1_000)
+            #expect(stats.irqOffLongest         == UInt32.max)
+            #expect(stats.irqOffLongestPath     == 49)
+            #expect(stats.irqOffTaskMapLongest  == 1_234)
+            #expect(stats.irqOffTeardownLongest == 777)
+            #expect(stats.irqOffCloneLongest    == 0)
+            #expect(stats.irqOffUnmapLongest    == 0)
+            #expect(stats.irqOffDecommitLongest == 0)
+            #expect(stats.irqOffRollbackLongest == 0)
         }
     }
 
@@ -263,8 +307,8 @@ struct ProcStatsSyscallTests {
         fill: UInt8,
         _ body: (UnsafeMutableRawPointer) -> Void
     ) {
-        let buffer = UnsafeMutableRawPointer.allocate(byteCount: 128, alignment: 8)
-        buffer.initializeMemory(as: UInt8.self, repeating: fill, count: 128)
+        let buffer = UnsafeMutableRawPointer.allocate(byteCount: 176, alignment: 8)
+        buffer.initializeMemory(as: UInt8.self, repeating: fill, count: 176)
         body(buffer)
         UserMemory.validationOverride = nil
         buffer.deallocate()

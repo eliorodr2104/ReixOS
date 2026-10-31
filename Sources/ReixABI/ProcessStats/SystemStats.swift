@@ -9,7 +9,7 @@
 /// Machine-wide metrics the kernel fills in for `procStats` sub-operation 0,
 /// and the record the profiler's export page republishes.
 ///
-/// 112 bytes, aligned members in declaration order, so a syscall or the SHM
+/// 152 bytes, aligned members in declaration order, so a syscall or the SHM
 /// exporter writes it with one struct store and a userland reader loads it back
 /// the same way. `availability` says which groups below were measured at all;
 /// a group whose bit is clear reads zero and means "not measured", never zero.
@@ -30,6 +30,14 @@
 ///     the linker reserved.
 ///   * PMU: counts of implemented counters and of advertised events. Cycles
 ///     themselves are raw and are never converted with the timer frequency.
+///   * latency: worst cases over the uptime, in raw counter units of
+///     `timerFrequency`, saturated at `UInt32.max` rather than wrapped. Wake
+///     to run is a process made ready by an event until it is on the CPU;
+///     deadline lag is a process made ready by a kernel deadline until it is
+///     on the CPU, measured from the instant the deadline was due. The IRQ-off
+///     group is the longest the kernel ran with interrupts masked: overall,
+///     with the path that did it (see `IrqOffPath`), then inside each
+///     preemption region, where a checkpoint window ends a stretch.
 @frozen
 public struct SystemStats {
 
@@ -57,6 +65,17 @@ public struct SystemStats {
     public var pmuEventAvailability   : UInt16 = 0 // 108
     public var pmuEventCounters       : UInt16 = 0 // 110
 
+    public var wakeToRunLongest     : UInt32 = 0 // 112 counter units
+    public var deadlineLagLongest   : UInt32 = 0 // 116
+    public var irqOffLongest        : UInt32 = 0 // 120
+    public var irqOffLongestPath    : UInt32 = 0 // 124 IrqOffPath
+    public var irqOffCloneLongest   : UInt32 = 0 // 128
+    public var irqOffUnmapLongest   : UInt32 = 0 // 132
+    public var irqOffDecommitLongest: UInt32 = 0 // 136
+    public var irqOffTeardownLongest: UInt32 = 0 // 140
+    public var irqOffRollbackLongest: UInt32 = 0 // 144
+    public var irqOffTaskMapLongest : UInt32 = 0 // 148
+
     public init() {}
 }
 
@@ -68,7 +87,9 @@ public enum SystemMetricAvailability {
     public static let stacks         : UInt32 = 1 << 2
     public static let timer          : UInt32 = 1 << 3
     public static let pmuCycleCounter: UInt32 = 1 << 4
+    public static let latency        : UInt32 = 1 << 5
 }
+
 
 /// What `SystemStats.irqOffLongestPath` and the kernel's `irqOff` trace record
 /// name: the kind of exception that held interrupts masked.

@@ -221,14 +221,14 @@ struct ABILayoutTests {
     }
 
 
-    @Test("the stats wire records stay byte exact at one hundred and twelve and sixty-two")
+    @Test("the stats wire records stay byte exact at one hundred and fifty-two and sixty-two")
     func statsLayout() {
         // Userland reads both straight out of an SHM window or a syscall buffer
         // with one struct load, so a drift here is a misread field and not an error.
         // The process record closes two bytes before its stride, which is the
         // export page's slot step; nothing is allowed to sit in the middle.
-        #expect(MemoryLayout<SystemStats>.size      == 112)
-        #expect(MemoryLayout<SystemStats>.stride    == 112)
+        #expect(MemoryLayout<SystemStats>.size      == 152)
+        #expect(MemoryLayout<SystemStats>.stride    == 152)
         #expect(MemoryLayout<SystemStats>.alignment == 8)
         #expect(MemoryLayout<ProcessStats>.size      == 62)
         #expect(MemoryLayout<ProcessStats>.stride    == 64)
@@ -256,6 +256,16 @@ struct ABILayoutTests {
             (\SystemStats.exceptionStackCapacity, 104),
             (\SystemStats.pmuEventAvailability, 108),
             (\SystemStats.pmuEventCounters, 110),
+            (\SystemStats.wakeToRunLongest, 112),
+            (\SystemStats.deadlineLagLongest, 116),
+            (\SystemStats.irqOffLongest, 120),
+            (\SystemStats.irqOffLongestPath, 124),
+            (\SystemStats.irqOffCloneLongest, 128),
+            (\SystemStats.irqOffUnmapLongest, 132),
+            (\SystemStats.irqOffDecommitLongest, 136),
+            (\SystemStats.irqOffTeardownLongest, 140),
+            (\SystemStats.irqOffRollbackLongest, 144),
+            (\SystemStats.irqOffTaskMapLongest, 148),
         ]
         for (keyPath, offset) in systemOffsets {
             #expect(MemoryLayout<SystemStats>.offset(of: keyPath) == offset)
@@ -287,8 +297,8 @@ struct ABILayoutTests {
         // The export page derives its offsets from those sizes, and sixteen
         // slots plus the header have to fit in page 0.
         #expect(StatsExportPage.systemOffset == 8)
-        #expect(StatsExportPage.processCountOffset == 120)
-        #expect(StatsExportPage.processSlotsOffset == 128)
+        #expect(StatsExportPage.processCountOffset == 160)
+        #expect(StatsExportPage.processSlotsOffset == 168)
         #expect(StatsExportPage.processSlotStride == 64)
         let pageUsed = StatsExportPage.processSlotsOffset
             + StatsExportPage.processSlotLimit * StatsExportPage.processSlotStride

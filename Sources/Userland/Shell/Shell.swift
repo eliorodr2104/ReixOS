@@ -458,6 +458,33 @@ fileprivate func writeTerminalBaselineSystem(
         print(" exception_stack_capacity_bytes=", terminator: "")
         printDec(UInt64(metrics.exceptionStackCapacity), terminator: "")
 
+        // Raw counter units of `timer_frequency_hz`, worst cases since boot.
+        let latencyMeasured = (metrics.availability & SystemMetricAvailability.latency) != 0
+        print(" latency_status=", terminator: "")
+        print(latencyMeasured ? "measured" : "unavailable", terminator: "")
+        if latencyMeasured {
+            print(" wake_to_run_longest_counter=", terminator: "")
+            printDec(UInt64(metrics.wakeToRunLongest), terminator: "")
+            print(" deadline_lag_longest_counter=", terminator: "")
+            printDec(UInt64(metrics.deadlineLagLongest), terminator: "")
+            print(" irq_off_longest_counter=", terminator: "")
+            printDec(UInt64(metrics.irqOffLongest), terminator: "")
+            print(" irq_off_longest_path=", terminator: "")
+            printDec(UInt64(metrics.irqOffLongestPath), terminator: "")
+            print(" irq_off_clone_longest_counter=", terminator: "")
+            printDec(UInt64(metrics.irqOffCloneLongest), terminator: "")
+            print(" irq_off_unmap_longest_counter=", terminator: "")
+            printDec(UInt64(metrics.irqOffUnmapLongest), terminator: "")
+            print(" irq_off_decommit_longest_counter=", terminator: "")
+            printDec(UInt64(metrics.irqOffDecommitLongest), terminator: "")
+            print(" irq_off_teardown_longest_counter=", terminator: "")
+            printDec(UInt64(metrics.irqOffTeardownLongest), terminator: "")
+            print(" irq_off_rollback_longest_counter=", terminator: "")
+            printDec(UInt64(metrics.irqOffRollbackLongest), terminator: "")
+            print(" irq_off_task_map_longest_counter=", terminator: "")
+            printDec(UInt64(metrics.irqOffTaskMapLongest), terminator: "")
+        }
+
         let pmuAvailable = (metrics.availability & SystemMetricAvailability.pmuCycleCounter) != 0
         print(" pmu_status=", terminator: "")
         print(pmuAvailable ? "available" : "unavailable", terminator: "")

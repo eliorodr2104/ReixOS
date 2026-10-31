@@ -126,6 +126,17 @@ def last_trace_header(lines):
     return frequency, lost
 
 
+# Worst cases since boot, raw counter units of `timer_frequency_hz` except the
+# path, which is an `IrqOffPath` value. See `SystemStats` in ReixABI.
+LATENCY_FIELDS = (
+    "wake_to_run_longest_counter", "deadline_lag_longest_counter",
+    "irq_off_longest_counter", "irq_off_longest_path",
+    "irq_off_clone_longest_counter", "irq_off_unmap_longest_counter",
+    "irq_off_decommit_longest_counter", "irq_off_teardown_longest_counter",
+    "irq_off_rollback_longest_counter", "irq_off_task_map_longest_counter",
+)
+
+
 def parse_system(lines):
     prefix = "[ TERMINAL BASELINE ] system "
     records = []
@@ -190,6 +201,17 @@ def parse_system(lines):
     else:
         fail("missing or unsupported PMU status")
     values["pmu_status"] = pmu_status
+
+    latency_status = fields.get("latency_status")
+    if latency_status == "measured":
+        for name in LATENCY_FIELDS:
+            values[name] = parse_uint(fields.get(name, ""), f"system {name}")
+    elif latency_status == "unavailable":
+        if any(name in fields for name in LATENCY_FIELDS):
+            fail("unavailable latency must not carry latency values")
+    else:
+        fail("missing or unsupported latency status")
+    values["latency_status"] = latency_status
     return values
 
 
@@ -695,6 +717,12 @@ def main(arguments):
                          "provenance": "kernel-pmu-probe"}
                         if system["pmu_status"] == "available" else
                         {"status": "unavailable", "reason": system["pmu_reason"], "provenance": "kernel-pmu-probe"}),
+                "latency": ({"status": "measured",
+                             **{name: system[name] for name in LATENCY_FIELDS},
+                             "unit": "counter-units-of-timer-frequency",
+                             "provenance": "kernel-latency-maxima"}
+                            if system["latency_status"] == "measured" else
+                            {"status": "unavailable", "provenance": "kernel-latency-maxima"}),
                 "trace_lost": {"status": "measured", "value": system["trace_lost"], "provenance": "serial"},
                 "trace_lost_final_snapshot": {
                     "status": "measured",

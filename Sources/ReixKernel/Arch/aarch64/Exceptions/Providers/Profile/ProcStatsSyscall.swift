@@ -186,7 +186,35 @@ public struct ProcStatsSyscall: SyscallProvider {
             }
         }
 
+        // Always measured: every one of these is folded on the path it times.
+        stats.availability |= SystemMetricAvailability.latency
+
+        stats.wakeToRunLongest      = saturated(WakeLatency.longestWake)
+        stats.deadlineLagLongest    = saturated(WakeLatency.longestDeadlineLag)
+        stats.irqOffLongest         = saturated(IrqOffStretch.longest)
+        stats.irqOffLongestPath     = UInt32(IrqOffStretch.longestPath)
+        stats.irqOffCloneLongest    = longestStretch(of: AddressSpaceClone.self)
+        stats.irqOffUnmapLongest    = longestStretch(of: RegionUnmap.self)
+        stats.irqOffDecommitLongest = longestStretch(of: RegionDecommit.self)
+        stats.irqOffTeardownLongest = longestStretch(of: AddressSpaceTeardown.self)
+        stats.irqOffRollbackLongest = longestStretch(of: RegionUnmapRollback.self)
+        stats.irqOffTaskMapLongest  = longestStretch(of: TaskMapAnonymous.self)
+
         return stats
+    }
+
+
+    @inline(__always)
+    private static func saturated(_ value: UInt64) -> UInt32 {
+        UInt32(min(value, UInt64(UInt32.max)))
+    }
+
+
+    @inline(__always)
+    private static func longestStretch<Region: PreemptionRegion>(
+        of region: Region.Type
+    ) -> UInt32 {
+        saturated(PreemptionSpans.span(of: region).longestStretch)
     }
 
 
