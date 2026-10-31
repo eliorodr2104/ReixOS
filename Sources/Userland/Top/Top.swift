@@ -120,7 +120,15 @@ public func main() {
             printDecPadded(normalizedRam.value, width: 9)
             print(" ", terminator: "")
             print(normalizedRam.unit)
-            
+
+            // Only on a machine where the PPM has refused a DMA block or found one freed early.
+            if sys.physicalRefusedPages > 0 || sys.physicalDoubleFrees > 0 {
+                print("[ TOP   ] REFUSED DMA PAGES ", terminator: "")
+                printDec(UInt64(sys.physicalRefusedPages), terminator: "")
+                print("   DOUBLE FREES ", terminator: "")
+                printDec(UInt64(sys.physicalDoubleFrees))
+            }
+
             isNewScan = true
         }
     }

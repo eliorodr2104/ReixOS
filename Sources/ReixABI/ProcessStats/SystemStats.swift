@@ -9,7 +9,7 @@
 /// Machine-wide metrics the kernel fills in for `procStats` sub-operation 0,
 /// and the record the profiler's export page republishes.
 ///
-/// 104 bytes, aligned members in declaration order, so a syscall or the SHM
+/// 112 bytes, aligned members in declaration order, so a syscall or the SHM
 /// exporter writes it with one struct store and a userland reader loads it back
 /// the same way. `availability` says which groups below were measured at all;
 /// a group whose bit is clear reads zero and means "not measured", never zero.
@@ -17,8 +17,12 @@
 /// Units and accounting domains, per group:
 ///   * physical pages: PPM frames of `TaskABI.pageSize`, machine-wide. The
 ///     quarantined ones are published DMA buffers nobody holds, kept out of
-///     the PPM until their device is declared reset; they are part of the
-///     allocated count, never of the free one.
+///     the PPM until their device is declared reset; the refused ones had
+///     their reset declared and their block refused by the PPM, and are kept
+///     until its books make sense again. Both are part of the allocated count,
+///     never of the free one. Double frees count buffers whose block was found
+///     already free at reclaim, each a frame that went back while a device
+///     could still write it.
 ///   * kernel heap bytes: `live` is rounded allocation capacity and not bytes
 ///     asked for, `reserved` is the physical backing behind the allocator.
 ///   * timer frequency: Hz of the generic timer.
@@ -34,22 +38,24 @@ public struct SystemStats {
     public var physicalFreePages         : UInt64 = 0 // 16
     public var physicalQuarantinedPages  : UInt32 = 0 // 24
     public var physicalQuarantinedRegions: UInt32 = 0 // 28
+    public var physicalRefusedPages      : UInt32 = 0 // 32
+    public var physicalDoubleFrees       : UInt32 = 0 // 36
 
-    public var kernelHeapLiveBytes             : UInt64 = 0 // 32
-    public var kernelHeapLiveHighWaterBytes    : UInt64 = 0 // 40
-    public var kernelHeapReservedBytes         : UInt64 = 0 // 48
-    public var kernelHeapReservedHighWaterBytes: UInt64 = 0 // 56
+    public var kernelHeapLiveBytes             : UInt64 = 0 // 40
+    public var kernelHeapLiveHighWaterBytes    : UInt64 = 0 // 48
+    public var kernelHeapReservedBytes         : UInt64 = 0 // 56
+    public var kernelHeapReservedHighWaterBytes: UInt64 = 0 // 64
 
-    public var timerFrequency: UInt64 = 0 // 64 Hz
-    public var traceLost     : UInt64 = 0 // 72 events
+    public var timerFrequency: UInt64 = 0 // 72 Hz
+    public var traceLost     : UInt64 = 0 // 80 events
 
-    public var availability           : UInt32 = 0 // 80
-    public var kernelStackUsedBytes   : UInt32 = 0 // 84
-    public var kernelStackCapacity    : UInt32 = 0 // 88
-    public var exceptionStackUsedBytes: UInt32 = 0 // 92
-    public var exceptionStackCapacity : UInt32 = 0 // 96
-    public var pmuEventAvailability   : UInt16 = 0 // 100
-    public var pmuEventCounters       : UInt16 = 0 // 102
+    public var availability           : UInt32 = 0 // 88
+    public var kernelStackUsedBytes   : UInt32 = 0 // 92
+    public var kernelStackCapacity    : UInt32 = 0 // 96
+    public var exceptionStackUsedBytes: UInt32 = 0 // 100
+    public var exceptionStackCapacity : UInt32 = 0 // 104
+    public var pmuEventAvailability   : UInt16 = 0 // 108
+    public var pmuEventCounters       : UInt16 = 0 // 110
 
     public init() {}
 }

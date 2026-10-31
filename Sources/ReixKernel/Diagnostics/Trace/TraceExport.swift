@@ -122,10 +122,10 @@ struct TraceExportBatch {
 ///
 ///     @0   seq          UInt32   odd while being written
 ///     @4   reserved     UInt32
-///     @8   SystemStats  104 B
-///     @112 processCount UInt32
-///     @116 reserved     UInt32
-///     @120 ProcessStats 64 B each, up to 16
+///     @8   SystemStats  112 B
+///     @120 processCount UInt32
+///     @124 reserved     UInt32
+///     @128 ProcessStats 64 B each, up to 16
 ///
 /// Pages 1 and up are an event ring:
 ///

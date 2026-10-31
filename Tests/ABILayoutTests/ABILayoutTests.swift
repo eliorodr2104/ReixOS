@@ -221,14 +221,14 @@ struct ABILayoutTests {
     }
 
 
-    @Test("the stats wire records stay byte exact at one hundred and four and sixty-two")
+    @Test("the stats wire records stay byte exact at one hundred and twelve and sixty-two")
     func statsLayout() {
         // Userland reads both straight out of an SHM window or a syscall buffer
         // with one struct load, so a drift here is a misread field and not an error.
         // The process record closes two bytes before its stride, which is the
         // export page's slot step; nothing is allowed to sit in the middle.
-        #expect(MemoryLayout<SystemStats>.size      == 104)
-        #expect(MemoryLayout<SystemStats>.stride    == 104)
+        #expect(MemoryLayout<SystemStats>.size      == 112)
+        #expect(MemoryLayout<SystemStats>.stride    == 112)
         #expect(MemoryLayout<SystemStats>.alignment == 8)
         #expect(MemoryLayout<ProcessStats>.size      == 62)
         #expect(MemoryLayout<ProcessStats>.stride    == 64)
@@ -241,19 +241,21 @@ struct ABILayoutTests {
             (\SystemStats.physicalFreePages, 16),
             (\SystemStats.physicalQuarantinedPages, 24),
             (\SystemStats.physicalQuarantinedRegions, 28),
-            (\SystemStats.kernelHeapLiveBytes, 32),
-            (\SystemStats.kernelHeapLiveHighWaterBytes, 40),
-            (\SystemStats.kernelHeapReservedBytes, 48),
-            (\SystemStats.kernelHeapReservedHighWaterBytes, 56),
-            (\SystemStats.timerFrequency, 64),
-            (\SystemStats.traceLost, 72),
-            (\SystemStats.availability, 80),
-            (\SystemStats.kernelStackUsedBytes, 84),
-            (\SystemStats.kernelStackCapacity, 88),
-            (\SystemStats.exceptionStackUsedBytes, 92),
-            (\SystemStats.exceptionStackCapacity, 96),
-            (\SystemStats.pmuEventAvailability, 100),
-            (\SystemStats.pmuEventCounters, 102),
+            (\SystemStats.physicalRefusedPages, 32),
+            (\SystemStats.physicalDoubleFrees, 36),
+            (\SystemStats.kernelHeapLiveBytes, 40),
+            (\SystemStats.kernelHeapLiveHighWaterBytes, 48),
+            (\SystemStats.kernelHeapReservedBytes, 56),
+            (\SystemStats.kernelHeapReservedHighWaterBytes, 64),
+            (\SystemStats.timerFrequency, 72),
+            (\SystemStats.traceLost, 80),
+            (\SystemStats.availability, 88),
+            (\SystemStats.kernelStackUsedBytes, 92),
+            (\SystemStats.kernelStackCapacity, 96),
+            (\SystemStats.exceptionStackUsedBytes, 100),
+            (\SystemStats.exceptionStackCapacity, 104),
+            (\SystemStats.pmuEventAvailability, 108),
+            (\SystemStats.pmuEventCounters, 110),
         ]
         for (keyPath, offset) in systemOffsets {
             #expect(MemoryLayout<SystemStats>.offset(of: keyPath) == offset)
@@ -285,8 +287,8 @@ struct ABILayoutTests {
         // The export page derives its offsets from those sizes, and sixteen
         // slots plus the header have to fit in page 0.
         #expect(StatsExportPage.systemOffset == 8)
-        #expect(StatsExportPage.processCountOffset == 112)
-        #expect(StatsExportPage.processSlotsOffset == 120)
+        #expect(StatsExportPage.processCountOffset == 120)
+        #expect(StatsExportPage.processSlotsOffset == 128)
         #expect(StatsExportPage.processSlotStride == 64)
         let pageUsed = StatsExportPage.processSlotsOffset
             + StatsExportPage.processSlotLimit * StatsExportPage.processSlotStride

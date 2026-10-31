@@ -133,6 +133,8 @@ public struct ProcStatsSyscall: SyscallProvider {
 
             stats.physicalQuarantinedPages   = DmaQuarantine.pages
             stats.physicalQuarantinedRegions = DmaQuarantine.regions
+            stats.physicalRefusedPages       = DmaQuarantine.refusedPages
+            stats.physicalDoubleFrees        = DmaQuarantine.doubleFrees
         }
 
         let live              = heap.pointee.metricsLiveBytes
