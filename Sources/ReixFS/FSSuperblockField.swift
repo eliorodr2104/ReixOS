@@ -34,14 +34,20 @@ enum FSSuperblockField {
 
     static let journalStart  = 80
     static let journalBlocks = 84
+    static let sealStart     = 88
+    static let sealBlocks    = 92
+
+    /// The checksum of the whole seal region, on a superblock that says the
+    /// volume was shut down cleanly; zero on every other. See `FSSeal`.
+    static let sealChecksum  = 96
 
     /// Written last of the fields, and the cheap half of "this block is a whole
     /// superblock". The checksum is the half that actually detects a torn write.
-    static let commit        = 88
+    static let commit        = 100
 
     /// Over every byte above, with these four read as zero.
-    static let checksum      = 92
+    static let checksum      = 104
 
     /// How much of the block a superblock uses. Everything after is zero.
-    static let width         = 96
+    static let width         = 108
 }

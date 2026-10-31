@@ -316,6 +316,19 @@ final class MemoryDisk: BlockDevice {
     }
 
 
+    /// One whole block as it stands, without counting as traffic.
+    func block(_ index: UInt32) -> [UInt8] {
+        let start = Int(index) * Int(FSLayout.blockSize)
+        return (0..<Int(FSLayout.blockSize)).map { byte(at: start + $0) }
+    }
+
+    /// Lays `content` over one whole block, behind everybody's back.
+    func put(_ content: [UInt8], block index: UInt32) {
+        let start = Int(index) * Int(FSLayout.blockSize)
+        for (at, value) in content.enumerated() { poke(value, at: start + at) }
+    }
+
+
     /// Rewrites the check of the directory entry at `offset`, so a poked entry
     /// reads as one a careful writer made: damage only a scrub can see.
     func stampEntry(at offset: Int) {
@@ -325,6 +338,15 @@ final class MemoryDisk: BlockDevice {
             poke(UInt8(truncatingIfNeeded: check >> UInt32(8 * index)),
                  at: offset + FSEntry.checkOffset + index)
         }
+    }
+
+
+    /// Zeroes the seal region, which is how a disk shut down without a seal
+    /// looks to the next mount: checked in full.
+    func unseal(_ plan: FSLayout.Plan) {
+        let start = Int(plan.sealStart) * Int(FSLayout.blockSize)
+        let count = Int(plan.sealBlocks) * Int(FSLayout.blockSize)
+        bytes.advanced(by: start).initializeMemory(as: UInt8.self, repeating: 0, count: count)
     }
 }
 

@@ -37,6 +37,11 @@ public enum FSLayout {
     /// `02` is the layout with two superblocks and a journal in front of the
     /// bitmap. A `01` disk is refused by name rather than mounted or erased:
     /// the regions moved, so every offset in it means something else.
+    ///
+    /// The seal region and the entry checksums went in under the same number,
+    /// on purpose: nothing outside this tree has a disk worth migrating yet. A
+    /// disk laid down before them is refused as corrupt, untouched, because its
+    /// superblock describes a table where this build puts the seal.
     public static let formatVersion: UInt16 = 0x3230          // "02"
 
     /// The family and the version of whatever is in a superblock's magic.
@@ -118,7 +123,7 @@ public enum FSLayout {
     /// How many containers a disk may hold.
     ///
     /// One page of indices, because that is what the room walk sorts them into
-    /// and the size every container walk is bounded by. A create past it is refused
+    /// and what the seal's quota index is sized for. A create past it is refused
     /// before it writes rather than leaving a disk no walk can check.
     public static let maxContainers: Int = Int(blockSize) / 4
 
@@ -153,6 +158,9 @@ public enum FSLayout {
     /// The first block that is not the front of the disk.
     public static let reservedBlocks: UInt32 = journalStart + journalBlocks
 
+    /// Bytes at the front of the seal before its group summaries. See `FSSeal`.
+    public static let sealHeader: UInt64 = 32
+
 
     /// Where each region starts, worked out from the size of the disk alone.
     ///
@@ -164,6 +172,8 @@ public enum FSLayout {
         public let totalBlocks : UInt32
         public let bitmapStart : UInt32
         public let bitmapBlocks: UInt32
+        public let sealStart   : UInt32
+        public let sealBlocks  : UInt32
         public let tableStart  : UInt32
         public let tableBlocks : UInt32
         public let dataStart   : UInt32
@@ -210,18 +220,30 @@ public enum FSLayout {
                 FSLayout.blockSize / FSLayout.objectSize
             )
             let tableBlocks = divideUp(objects * FSLayout.objectSize, FSLayout.blockSize)
+            let objectCount = tableBlocks * FSLayout.blockSize / FSLayout.objectSize
+
+            // A summary per bitmap block, a checksum per table block, and a quota
+            // index entry per container this disk could ever hold.
+            let indexed    = objectCount < UInt64(FSLayout.maxContainers)
+                ? objectCount : UInt64(FSLayout.maxContainers)
+            let sealBlocks = divideUp(
+                FSLayout.sealHeader + 8 * bitmapBlocks + 4 * tableBlocks + 8 * indexed,
+                FSLayout.blockSize
+            )
 
             let front     = UInt64(FSLayout.reservedBlocks)
-            let dataStart = front + bitmapBlocks + tableBlocks
+            let dataStart = front + bitmapBlocks + sealBlocks + tableBlocks
             guard dataStart < blocks else { return nil }
 
             self.totalBlocks  = UInt32(blocks)
             self.bitmapStart  = FSLayout.reservedBlocks
             self.bitmapBlocks = UInt32(bitmapBlocks)
-            self.tableStart   = UInt32(front + bitmapBlocks)
+            self.sealStart    = UInt32(front + bitmapBlocks)
+            self.sealBlocks   = UInt32(sealBlocks)
+            self.tableStart   = UInt32(front + bitmapBlocks + sealBlocks)
             self.tableBlocks  = UInt32(tableBlocks)
             self.dataStart    = UInt32(dataStart)
-            self.objectCount  = UInt32(tableBlocks * FSLayout.blockSize / FSLayout.objectSize)
+            self.objectCount  = UInt32(objectCount)
         }
     }
 

@@ -284,6 +284,12 @@ extension FileSystem {
 
     // MARK: - Scanning
 
+    /// Holds the volume still over a scan's finding, unless the scan is the one
+    /// a shutdown runs to decide on a seal. See `scanHolds`.
+    private mutating func hold() {
+        if scanHolds { quarantine() }
+    }
+
     /// Reads the disk and says what it found. Writes nothing, ever.
     public mutating func scan(_ depth: Scrub = .blocks) -> Findings {
         look(depth).findings
@@ -430,7 +436,7 @@ extension FileSystem {
 
                     guard record.fits(plan) else {
                         found(&findings.impossible)
-                        quarantine()
+                        hold()
                         continue
                     }
 
@@ -440,7 +446,7 @@ extension FileSystem {
                         found(&findings.selfParented)
 
                         // A chain with no end, and nothing derives the way out.
-                        quarantine()
+                        hold()
                     }
 
                     census.owned += UInt64(record.blocks)
@@ -456,7 +462,7 @@ extension FileSystem {
                         let twice = markTruth(from: extent.start, count: extent.count)
                         if twice > 0 {
                             found(&findings.claimedTwice, by: twice)
-                            quarantine()
+                            hold()
                         }
                     }
               }
@@ -650,7 +656,7 @@ extension FileSystem {
 
                     if duplicate {
                         found(&findings.duplicateNames)
-                        quarantine()
+                        hold()
                         continue
                     }
 
@@ -670,7 +676,7 @@ extension FileSystem {
         return true
     }
 
-    private mutating func scanNames(_ findings: inout Findings) -> Bool {
+    mutating func scanNames(_ findings: inout Findings) -> Bool {
         guard UInt64(plan.objectCount) <= nameScrubTargetCapacity else {
             findings.nameScrubState = .budgetExhausted
             return false
@@ -717,7 +723,7 @@ extension FileSystem {
                                     continue
                                 case .impossible:
                                     found(&findings.brokenEntries)
-                                    quarantine()
+                                    hold()
                                 case .named:
                                     guard named < Int.max else {
                                         findings.nameScrubState = .budgetExhausted
@@ -729,16 +735,16 @@ extension FileSystem {
                                         case .live(let target):
                                             guard target.parent == index else {
                                                 found(&findings.strayNames)
-                                                quarantine()
+                                                hold()
                                                 continue
                                             }
                                             if markNameScrubTarget(entry.object) {
                                                 found(&findings.duplicateTargets)
-                                                quarantine()
+                                                hold()
                                             }
                                         case .free, .outside, .corrupt:
                                             found(&findings.strayNames)
-                                            quarantine()
+                                            hold()
                                         case .failed:
                                             return false
                                     }
@@ -788,7 +794,7 @@ extension FileSystem {
     ///
     /// The data page holds the counts, a thousand and twenty-four of them, which
     /// is `FSLayout.maxContainers`.
-    private mutating func roomWalk(
+    mutating func roomWalk(
         _ findings: inout Findings,
         census    : Census,
         mending   : Bool
@@ -832,7 +838,7 @@ extension FileSystem {
                     // No disk this build wrote has one, and there is no third
                     // account to derive the right answer from.
                     found(&findings.strayCharges)
-                    quarantine()
+                    hold()
                     continue
                 }
 
@@ -871,7 +877,7 @@ extension FileSystem {
             // number that does not add up is damage or a bug, and tidying it away
             // would be tidying away the evidence.
             guard mending else {
-                quarantine()
+                hold()
                 continue
             }
 

@@ -233,8 +233,8 @@ struct RecoveryTests {
         for index in 0..<(limit - 1) {
             guard container(&fs, index, room: 0) != nil else { Issue.record("container \(index)"); return }
         }
-        #expect(fs.unmount() == .ok)
-
+        // Not unmounted: the forgery below is met by the recovery scan, which is
+        // the door that reads every record of a disk nobody sealed.
         let target = UInt32(limit)
         let offset = Int(fs.plan.tableStart) * Int(FSLayout.blockSize) + Int(target) * Int(FSLayout.objectSize)
         withUnsafeTemporaryAllocation(of: UInt8.self, capacity: Int(FSLayout.objectSize)) { raw in
@@ -371,33 +371,54 @@ struct RecoveryTests {
 
     @Test("a wrong room on a clean volume is damage, not something to tidy away")
     func cleanMountHoldsWrongRoom() {
-        let disk  = MemoryDisk(sectors: Self.sectors)
-        let space = scratch()
-        defer { space.deallocate() }
 
-        var made: UInt32 = 0
-        var plan: FSLayout.Plan? = nil
+        // Shut down tidily, then spoiled: a number that does not add up was not
+        // left half written, it is damage or a bug.
+        func spoiled(_ body: (MemoryDisk, FSLayout.Plan, UInt32) -> Void) {
+            let disk  = MemoryDisk(sectors: Self.sectors)
+            let space = scratch()
+            defer { space.deallocate() }
 
-        guard var fs = FileSystem.format(disk, scratch: space).disk else {
-            Issue.record("format"); return
+            guard var fs = FileSystem.format(disk, scratch: space).disk else {
+                Issue.record("format"); return
+            }
+
+            guard let made = container(&fs, 1, room: 40) else {
+                Issue.record("container"); return
+            }
+
+            #expect(fs.unmount() == .ok)
+            spoilRoom(disk, fs.plan, made)
+
+            body(disk, fs.plan, made)
         }
-        plan = fs.plan
 
-        guard let object = container(&fs, 1, room: 40) else {
-            Issue.record("container"); return
+        // Sealed: the container shares the root's table block, which the mount
+        // reads against the seal, so the change is refused there, untidied.
+        spoiled { disk, _, made in
+            #expect(made < UInt32(FSLayout.blockSize / FSLayout.objectSize))
+
+            let space = scratch()
+            defer { space.deallocate() }
+
+            let before  = disk.writes
+            let attempt = FileSystem.mount(disk, scratch: space)
+            #expect(attempt.disk == nil)
+            if case .corrupt = attempt.found {} else { Issue.record("sealed damage was published") }
+            #expect(disk.writes == before, "clean damage was written over")
         }
-        made = object
 
-        // Shut down tidily. Nothing was interrupted, so a number that does not
-        // add up afterwards was not left half written: it is damage, or a bug.
-        #expect(fs.unmount() == .ok)
+        // Without its seal the mount checks in full, and refuses at the door.
+        spoiled { disk, plan, _ in
+            disk.unseal(plan)
 
-        guard let plan else { return }
-        spoilRoom(disk, plan, made)
+            let space = scratch()
+            defer { space.deallocate() }
 
-        let attempt = FileSystem.mount(disk, scratch: scratch())
-        #expect(attempt.disk == nil)
-        if case .corrupt = attempt.found {} else { Issue.record("clean damage was published") }
+            let attempt = FileSystem.mount(disk, scratch: space)
+            #expect(attempt.disk == nil)
+            if case .corrupt = attempt.found {} else { Issue.record("clean damage was published") }
+        }
     }
 
 

@@ -148,16 +148,25 @@ public struct FileSystem<Device: BlockDevice> {
     /// Moved by every write of one of those blocks and asked by every read of
     /// one off the medium, so a block that changed behind this process's back -
     /// rot, a write the disk lost, a hand that is not this one - is refused the
-    /// first time it is read instead of being believed.
+    /// first time it is read instead of being believed. It is what lets a clean
+    /// mount skip the table: the seal hands these over and the reads check them.
     private let sums: UnsafeMutableRawPointer
 
     /// Whether `sums` describes the disk yet.
     ///
     /// Not on a dirty mount until its scan has read every one of those blocks:
     /// until then a read records what it found instead of judging it, because
-    /// there is nothing to judge it against. True from a format or a whole
-    /// scan, and from then on every read is checked.
+    /// there is nothing to judge it against. True from a format, a verified
+    /// seal, or a whole scan, and from then on every read is checked.
     var sumsKnown = false
+
+    /// Whether a contradiction a scan finds holds the volume still.
+    ///
+    /// Always, except in the scan `unmount` runs before sealing. There a finding
+    /// means no seal and a clean mark, so the next mount checks in full and
+    /// refuses: holding the volume would leave it marked mounted instead, and a
+    /// recovering mount mends a room a clean one must report.
+    var scanHolds = true
 
     /// Which block sits in each slot, or `noBlock`.
     private var tags = InlineArray<4, UInt32>(repeating: FileSystem.noBlock)
@@ -372,12 +381,25 @@ public struct FileSystem<Device: BlockDevice> {
         // The journal before anything is served. What it holds is metadata the
         // home blocks do not have yet, so a request answered before this would be
         // answered off a disk that is one transaction behind itself.
-        guard disk.recoverJournal() == .ok else {
+        let journal = disk.recoverJournal()
+        guard journal.status == .ok else {
             return (nil, disk.corrupted ? .corrupt : .deviceFailed)
         }
 
-        let findings = disk.wasDirty ? disk.putRight() : disk.scan(.everything)
-        guard findings.safeToServe else { return (nil, .corrupt) }
+        // Dirty is recovered, clean and sealed is believed, and any other clean
+        // disk is checked in full, the way every clean mount used to be.
+        if disk.wasDirty {
+            guard disk.putRight().safeToServe else { return (nil, .corrupt) }
+        } else {
+            switch journal.quiet ? disk.openSeal() : .absent {
+                case .verified    : break
+                case .contradicted: return (nil, .corrupt)
+                case .failed      : return (nil, .deviceFailed)
+
+                case .absent:
+                    guard disk.scan(.everything).safeToServe else { return (nil, .corrupt) }
+            }
+        }
 
         // A fresh generation, marked mounted, onto the copy that is *not* the one
         // just read. The next boot can then tell an orderly shutdown from a power
@@ -443,6 +465,11 @@ public struct FileSystem<Device: BlockDevice> {
     /// Refused while a transaction is open, because a clean mark over an
     /// unfinished one would be a disk that says it was shut down tidily and holds
     /// a journal saying otherwise.
+    ///
+    /// The volume is sealed on the way out when a full check finds it whole:
+    /// the seal written and made durable before the clean mark that names it. A
+    /// volume that does not add up is marked clean without a seal, so the next
+    /// mount checks it in full.
     public mutating func unmount() -> FSStatus {
 
         guard !transaction.active else { return .busy }
@@ -451,7 +478,7 @@ public struct FileSystem<Device: BlockDevice> {
         // it did.
         guard barrier() == .ok else { return .deviceFailed }
 
-        return publishSuperblock(state: 0)
+        return publishSuperblock(state: 0, seal: writeSeal())
     }
 
 
@@ -1145,25 +1172,47 @@ public struct FileSystem<Device: BlockDevice> {
     ///
     /// Called at mount and before anything is served, because what the journal
     /// holds is metadata the home blocks do not have yet.
-    private mutating func recoverJournal() -> FSStatus {
+    ///
+    /// `quiet` when the journal was already empty. Anything else changed or threw
+    /// away metadata after the seal was written, so the seal no longer speaks for
+    /// the disk.
+    private mutating func recoverJournal() -> (status: FSStatus, quiet: Bool) {
+        let header: FSJournal
 
-        guard readRawBlock(plan.journalHeader, into: meta) == .ok else {
-            return .deviceFailed
+        switch readJournalHeader() {
+            case .some(let found): header = found
+            case .none           : return (corrupted ? .quarantined : .deviceFailed, false)
         }
+
+        return (recover(header), header.state == .empty)
+    }
+
+
+    /// The journal header off the medium, or nil when it would not read or is
+    /// not one, the second holding the volume still.
+    private mutating func readJournalHeader() -> FSJournal? {
+
+        guard readRawBlock(plan.journalHeader, into: meta) == .ok else { return nil }
 
         // A header that is not one is the disk contradicting itself about the
         // thing that says what to replay. There is no safe reading of it.
         guard FSJournal.isWhole(meta) else {
             quarantine()
-            return .quarantined
+            return nil
         }
 
         let header = FSJournal(reading: meta)
 
         guard header.targetsFit(plan) else {
             quarantine()
-            return .quarantined
+            return nil
         }
+
+        return header
+    }
+
+
+    private mutating func recover(_ header: FSJournal) -> FSStatus {
 
         // Which mount wrote this, against the one opening the disk. Equal for a
         // journal the crashed mount left behind, which is what a replay is for.
@@ -1280,9 +1329,14 @@ public struct FileSystem<Device: BlockDevice> {
     /// there is no moment at which the disk has no whole superblock. Made durable
     /// before it is believed, because a generation that is only in a cache is a
     /// generation the next boot may not see.
-    private mutating func publishSuperblock(state: UInt32) -> FSStatus {
+    ///
+    /// `seal` is the seal's checksum on a clean mark and zero on every other: a
+    /// mounted volume is about to change, so no seal speaks for it.
+    private mutating func publishSuperblock(state: UInt32, seal: UInt32 = 0) -> FSStatus {
 
-        guard let block = superblock else { return .notFormatted }
+        guard var block = superblock else { return .notFormatted }
+
+        block.sealChecksum = state == 0 ? seal : 0
 
         return publishSuperblock(block, state: state)
     }
@@ -1479,6 +1533,13 @@ public struct FileSystem<Device: BlockDevice> {
 
     /// The superblock's `state` word, for a change that must not disturb it.
     var mountedMark: UInt32 { superblock?.state ?? 0 }
+
+    /// The seal checksum the superblock this volume was read from names: zero
+    /// unless that copy says the volume was shut down cleanly and sealed.
+    var namedSeal: UInt32 {
+        guard let block = superblock, block.state == 0 else { return 0 }
+        return block.sealChecksum
+    }
 
     /// Which write of the superblock this volume is reading. Bumped by every
     /// mount, unmount and rename, so it separates two mounts of one disk.

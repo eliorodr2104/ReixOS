@@ -14,8 +14,8 @@ import ReixABI
 /// A scan builds the whole block map in the journal's arena and compares it with
 /// the disk's afterwards. It used to build one bitmap block at a time, with a
 /// pass of the table for each. The census that pass takes - the containers, and
-/// what every record holds - is what the room walk is built from, so a recovery
-/// is a few table lengths and not a product of two.
+/// what every record holds - is what the room walk and the seal are built from,
+/// so a recovery is a few table lengths and not a product of two.
 @Suite("A scan reads the table once", .serialized)
 struct CensusTests {
 

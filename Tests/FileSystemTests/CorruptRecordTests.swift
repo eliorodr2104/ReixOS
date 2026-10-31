@@ -23,13 +23,15 @@ import ReixABI
 /// has contradicted itself once is a disk whose next write is the one that makes
 /// the damage permanent.
 ///
-/// There are two doors, and which one answers depends on when the damage
-/// arrived. Damage that was already on the medium is met by the scan every mount
-/// runs, so the volume is never served at all: `mount` answers `.corrupt` and
-/// leaves the disk byte for byte as it found it. Damage that arrives under a
-/// live mount is met by the decoder, which hands back nothing for the record and
-/// holds the volume still. The tests below ask the first of a record damaged
-/// while nothing was mounted and the second of one damaged while somebody was.
+/// There are three doors, and which one answers depends on when the damage
+/// arrived and how the disk was shut down. Damage on the medium of a disk that
+/// was not shut down cleanly is met by the recovery scan, so the volume is never
+/// served at all: `mount` answers `.corrupt` and leaves the disk byte for byte as
+/// it found it. Damage on a sealed disk is met by the table checksum the seal
+/// handed over, the first time the block is read: nothing from that block is
+/// served and nothing is written after. Damage that arrives under a live mount
+/// is met the same way, or by the decoder when the hand that made it kept the
+/// checksums right.
 @Suite("A record that could not be true is not believed")
 struct CorruptRecordTests {
 
@@ -86,38 +88,44 @@ struct CorruptRecordTests {
 
 
     /// Damages one field of the victim's record with nothing mounted, and asks
-    /// the door what it made of the disk.
+    /// both doors that can meet it what they made of the disk.
     ///
-    /// The mount is the assertion, which is why it lives in the fixture rather
-    /// than in every test: a table that contradicts itself is found by the scan
-    /// `mount` runs before it serves anything, so there is no file system to
-    /// hand back. Both halves of the old question are still asked, of the volume
-    /// instead of the record: not served, and not written to either.
+    /// Not shut down cleanly, the recovery scan finds the record before anything
+    /// is served. Shut down cleanly and sealed, the mount reads the root's record
+    /// to see the machine is still there, and the victim shares the root's table
+    /// block: that block is no longer the one sealed, so the mount refuses it.
+    /// Either way no file system comes back and nothing is written. A record in
+    /// a table block the mount does not read is met on its first read instead;
+    /// see `SealTests`.
     private func refusedAtTheDoor(
         _ damage: (MemoryDisk, Int, FSLayout.Plan) -> Void
     ) {
-        withVictim { fs, disk, _, at, plan in
-            #expect(fs.unmount() == .ok)
+        for sealed in [false, true] {
+            withVictim { fs, disk, victim, at, plan in
+                #expect(victim < UInt32(FSLayout.blockSize / FSLayout.objectSize))
 
-            damage(disk, at, plan)
+                if sealed { #expect(fs.unmount() == .ok) }
 
-            // A mount of its own, with its own scratch: the one above belongs to
-            // a file system that has been unmounted.
-            let scratch = UnsafeMutableRawPointer.allocate(
-                byteCount: FileSystem<MemoryDisk>.scratchBytes,
-                alignment: 8
-            )
-            defer { scratch.deallocate() }
+                damage(disk, at, plan)
 
-            let before = disk.writes
-            let opened = FileSystem.mount(disk, scratch: scratch)
+                // A mount of its own, with its own scratch: the one above is done
+                // with, cleanly or by going away.
+                let scratch = UnsafeMutableRawPointer.allocate(
+                    byteCount: FileSystem<MemoryDisk>.scratchBytes,
+                    alignment: 8
+                )
+                defer { scratch.deallocate() }
 
-            #expect(opened.disk == nil)
-            #expect(isCorrupt(opened.found))
-            #expect(
-                disk.writes == before,
-                "the disk was written to after being refused"
-            )
+                let before = disk.writes
+                let opened = FileSystem.mount(disk, scratch: scratch)
+
+                #expect(opened.disk == nil, "sealed: \(sealed)")
+                #expect(isCorrupt(opened.found), "sealed: \(sealed)")
+                #expect(
+                    disk.writes == before,
+                    "the disk was written to after being refused, sealed: \(sealed)"
+                )
+            }
         }
     }
 

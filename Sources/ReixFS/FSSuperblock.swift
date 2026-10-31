@@ -52,6 +52,12 @@ struct FSSuperblock {
     var generation  : UInt64
     var journalStart : UInt32
     var journalBlocks: UInt32
+    var sealStart    : UInt32
+    var sealBlocks   : UInt32
+
+    /// What the seal region checksums to, when this copy says the volume was
+    /// shut down cleanly and sealed. Zero means there is no seal to believe.
+    var sealChecksum : UInt32
 
 
     /// A fresh superblock for `plan`, named `machine`.
@@ -70,6 +76,9 @@ struct FSSuperblock {
         self.generation   = generation
         self.journalStart  = plan.journalStart
         self.journalBlocks = plan.journalBlocks
+        self.sealStart     = plan.sealStart
+        self.sealBlocks    = plan.sealBlocks
+        self.sealChecksum  = 0
 
         var letters = InlineArray<24, UInt8>(repeating: 0)
         for index in 0..<min(machine.utf8CodeUnitCount, FSLayout.machineNameLimit) {
@@ -96,6 +105,9 @@ struct FSSuperblock {
         self.generation   = base.loadUnaligned(fromByteOffset: FSSuperblockField.generation,  as: UInt64.self)
         self.journalStart  = base.loadUnaligned(fromByteOffset: FSSuperblockField.journalStart,  as: UInt32.self)
         self.journalBlocks = base.loadUnaligned(fromByteOffset: FSSuperblockField.journalBlocks, as: UInt32.self)
+        self.sealStart     = base.loadUnaligned(fromByteOffset: FSSuperblockField.sealStart,     as: UInt32.self)
+        self.sealBlocks    = base.loadUnaligned(fromByteOffset: FSSuperblockField.sealBlocks,    as: UInt32.self)
+        self.sealChecksum  = base.loadUnaligned(fromByteOffset: FSSuperblockField.sealChecksum,  as: UInt32.self)
 
         var letters = InlineArray<24, UInt8>(repeating: 0)
         let bytes = base.advanced(by: FSSuperblockField.name).assumingMemoryBound(to: UInt8.self)
@@ -126,6 +138,9 @@ struct FSSuperblock {
         base.storeBytes(of: generation,   toByteOffset: FSSuperblockField.generation,  as: UInt64.self)
         base.storeBytes(of: journalStart,  toByteOffset: FSSuperblockField.journalStart,  as: UInt32.self)
         base.storeBytes(of: journalBlocks, toByteOffset: FSSuperblockField.journalBlocks, as: UInt32.self)
+        base.storeBytes(of: sealStart,     toByteOffset: FSSuperblockField.sealStart,     as: UInt32.self)
+        base.storeBytes(of: sealBlocks,    toByteOffset: FSSuperblockField.sealBlocks,    as: UInt32.self)
+        base.storeBytes(of: sealChecksum,  toByteOffset: FSSuperblockField.sealChecksum,  as: UInt32.self)
 
         let letters = base.advanced(by: FSSuperblockField.name).assumingMemoryBound(to: UInt8.self)
         for index in 0..<FSLayout.machineNameLimit { letters[index] = name[index] }
@@ -157,6 +172,8 @@ struct FSSuperblock {
             && rootObject   == FSLayout.rootObject
             && journalStart  == plan.journalStart
             && journalBlocks == plan.journalBlocks
+            && sealStart     == plan.sealStart
+            && sealBlocks    == plan.sealBlocks
     }
 
 

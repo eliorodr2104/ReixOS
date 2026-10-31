@@ -279,6 +279,50 @@ struct MountRefusalTests {
     }
 
 
+    @Test("a disk laid down before the seal region is refused as corrupt, untouched")
+    func diskBeforeTheSealIsRefused() {
+        // The same magic, with the table where this build keeps the seal: what
+        // an image made by an earlier build holds, byte for byte.
+        let disk = MemoryDisk(sectors: Self.sectors)
+        guard let plan = FSLayout.Plan(sectorCount: Self.sectors, sectorSize: 512) else { return }
+
+        var old = [UInt8](repeating: 0, count: Int(FSLayout.blockSize))
+        old.withUnsafeMutableBytes { raw in
+            let base = raw.baseAddress!
+            let table = plan.bitmapStart + plan.bitmapBlocks
+
+            base.storeBytes(of: FSLayout.magic, toByteOffset: 0, as: UInt64.self)
+            for (at, value) in [
+                (8, UInt32(FSLayout.blockSize)), (12, plan.totalBlocks),
+                (16, plan.bitmapStart), (20, plan.bitmapBlocks),
+                (24, table), (28, plan.tableBlocks), (32, table + plan.tableBlocks),
+                (36, plan.objectCount), (40, 0), (44, 0),
+                (80, FSLayout.journalStart), (84, FSLayout.journalBlocks),
+                (88, FSSuperblock.completeMarker),
+            ] {
+                base.storeBytes(of: value, toByteOffset: at, as: UInt32.self)
+            }
+            base.storeBytes(of: UInt64(2), toByteOffset: 72, as: UInt64.self)
+            base.storeBytes(
+                of: FSChecksum.over(base, count: 96, zeroing: 92), toByteOffset: 92, as: UInt32.self
+            )
+        }
+        disk.put(old, block: FSLayout.superblockA)
+        disk.put(old, block: FSLayout.superblockB)
+
+        withScratch { scratch in
+            let attempt = FileSystem.mount(disk, scratch: scratch)
+
+            #expect(attempt.disk == nil)
+            #expect(isCorrupt(attempt.found), "\(attempt.found)")
+        }
+
+        #expect(disk.writes == 0)
+        #expect(disk.block(FSLayout.superblockA) == old)
+        #expect(disk.block(FSLayout.superblockB) == old)
+    }
+
+
     // MARK: - No disk at all
 
     @Test("a disk that will not answer is not mistaken for an empty one")

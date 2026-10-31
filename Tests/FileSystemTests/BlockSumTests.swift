@@ -12,9 +12,10 @@ import ReixABI
 /// Every bitmap and table block is checked against what this process last
 /// knew to be there, on every read off the medium.
 ///
-/// It holds for the whole of a mount: a block that changed behind the file
-/// system's back - rot, a write the disk lost, another hand - is refused the
-/// first time it is read rather than believed. These tests are about where the knowing comes from and that a
+/// It is what lets a clean mount skip the table, and it holds for the whole of a
+/// mount: a block that changed behind the file system's back - rot, a write the
+/// disk lost, another hand - is refused the first time it is read rather than
+/// believed. These tests are about where the knowing comes from and that a
 /// refused write does not make the file system disbelieve its own disk.
 @Suite("A metadata block read is the one last written")
 struct BlockSumTests {

@@ -206,7 +206,25 @@ struct LifecycleTests {
         var refused = 0
         var took    = 0
 
-        for stop in 1...8 {
+        // Every request an unmount makes, sealing included, and one past: the
+        // seal made it longer, so the fault points are counted rather than fixed.
+        var requests = 0
+        do {
+            let disk  = MemoryDisk(sectors: Self.sectors)
+            let space = scratch()
+            defer { space.deallocate() }
+
+            guard var fs = FileSystem.format(disk, scratch: space).disk else {
+                Issue.record("format")
+                return
+            }
+
+            let before = disk.reads + disk.writes + disk.flushes
+            #expect(fs.unmount() == .ok)
+            requests = disk.reads + disk.writes + disk.flushes - before
+        }
+
+        for stop in 1...(requests + 1) {
             let disk  = MemoryDisk(sectors: Self.sectors)
             let space = scratch()
             defer { space.deallocate() }
