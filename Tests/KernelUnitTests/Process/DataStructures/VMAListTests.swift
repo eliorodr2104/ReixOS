@@ -234,6 +234,30 @@ struct VMAListTests {
     }
 
 
+    @Test("search finds the region that holds an address and nothing else")
+    func searchBoundaries() {
+        withRegions([
+            region(from: 2, pages: 2, backing: .anonymous),
+            region(from: 6, pages: 1, backing: .anonymous),
+        ]) { list, nodes in
+            let page = Self.pageSize
+            let base = Self.base
+
+            #expect(list.search(at: base + 2 * page)     == nodes[0])
+            #expect(list.search(at: base + 4 * page - 1) == nodes[0])
+            #expect(list.search(at: base + 6 * page)     == nodes[1])
+            #expect(list.search(at: base + 7 * page - 1) == nodes[1])
+
+            // Below the first region, in the hole between the two, on the
+            // exclusive end of each, and past the last.
+            for miss in [base, base + 2 * page - 1, base + 4 * page, base + 5 * page,
+                         base + 7 * page, UserSpaceLayout.userMax] {
+                #expect(list.search(at: miss) == nil, "\(miss)")
+            }
+        }
+    }
+
+
     @Test("unlinking keeps the node count in step with the chain")
     func nodeCountFollowsUnlinks() {
         withRegions([

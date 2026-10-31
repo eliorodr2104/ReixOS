@@ -83,14 +83,17 @@ public struct VMAList: VMAStructure {
     }
 
 
+    /// The region holding `address`, or `nil`.
+    ///
+    /// Regions are ordered and disjoint, so the first one ending above `address`
+    /// is the only one that can hold it: one comparison per node on the way, and
+    /// a miss stops at the next region instead of walking to the tail.
     public func search(at address: VirtualAddress) -> UnsafeMutablePointer<VirtualMemoryArea>? {
         var current = head
 
         while let elementPtr = current {
-            let element = elementPtr.pointee
-
-            if element.startAddress <= address && address < element.endAddress {
-                return elementPtr
+            if address < elementPtr.pointee.endAddress {
+                return address >= elementPtr.pointee.startAddress ? elementPtr : nil
             }
 
             current = elementPtr.pointee.next
