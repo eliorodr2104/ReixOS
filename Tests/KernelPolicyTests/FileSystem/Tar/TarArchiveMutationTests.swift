@@ -14,10 +14,10 @@ import KernelTestSupport
 /// The same shape as `DeviceTreeMutationTests`: a seed in the test's own name, a
 /// handful of byte edits per case printed in full on failure, and a corpus that
 /// starts from an archive the project's own packer wrote rather than from random
-/// bytes. What is under test is the pair of guards `TarFileSystem` relies on for
-/// its safety rather than for its correctness.
+/// bytes. What is under test is the guards `TarFileSystem` relies on for its
+/// safety rather than for its correctness.
 ///
-/// ## The two guards
+/// ## The guards
 ///
 /// `isResident(base:size:)` is the clamp. A member's length is twelve octal
 /// digits in a header this kernel did not author when the archive arrives by
@@ -30,6 +30,12 @@ import KernelTestSupport
 /// `alpha.txt`: a walk that stopped at a prefix would answer with the wrong
 /// member's bytes, not merely with the wrong name.
 ///
+/// The header checksum and the strict octal size are what stand in front of both:
+/// a header that fails either is refused before its size or name is believed. A
+/// bare byte edit breaks the checksum, so the size-field and name-field families
+/// are re-sealed after the edit, or the clamp and the match rule would never be
+/// reached and the families would be testing nothing but the checksum.
+///
 /// ## The oracle
 ///
 /// For every mutant and every probe path, `open` must **return**, and then
@@ -40,7 +46,9 @@ import KernelTestSupport
 ///    declared member lies inside the archive window: the clamp held;
 /// 2. the header 512 bytes before that base carries a name field that matches
 ///    the probe exactly, judged by `UstarLayout.matches`, which is written
-///    independently of the walk it is checking;
+///    independently of the walk it is checking, and every header the walk
+///    stepped over to reach it has a checksum that holds and a size that parses
+///    as strict octal, judged by `UstarLayout` too;
 /// 3. a `read` asking for more than the member holds returns the member's length
 ///    and no more, leaves a poison margin behind the buffer untouched, and copies
 ///    exactly the bytes the mutant has at that offset;
@@ -129,7 +137,8 @@ struct TarArchiveMutationTests {
 
         let headers = members.map(\.headerOffset)
 
-        for mutant in plan(archive: archive, headers: headers, seed: seed, family: family) {
+        for planned in plan(archive: archive, headers: headers, seed: seed, family: family) {
+            let mutant = family == .header ? planned : sealed(planned, headers: headers)
             tally.edits += mutant.edits.count
 
             let staged: Void? = withStagedTarArchive(mutant.bytes) { start, end in
@@ -146,6 +155,15 @@ struct TarArchiveMutationTests {
         }
 
         return tally
+    }
+
+    /// The mutant with every original header's checksum redone, so the edit is
+    /// the only thing a header is wrong about.
+    private func sealed(_ mutant: Mutant, headers: [Int]) -> Mutant {
+        var bytes = mutant.bytes
+        for header in headers { sealUstarHeader(&bytes, at: header) }
+
+        return Mutant(index: mutant.index, bytes: bytes, edits: mutant.edits)
     }
 
     /// The mutation domain is the header blocks, never the member payloads.
@@ -193,10 +211,10 @@ struct TarArchiveMutationTests {
     /// One byte of a twelve-digit octal size field, set to a digit or to
     /// something that is not a digit at all.
     ///
-    /// The kernel's reader skips every byte outside `0`..`7` rather than stopping
-    /// at it, so a non-digit does not truncate the number, it deletes one digit
-    /// and shifts the rest: `0000010000` with its fourth byte clobbered is a
-    /// different, larger size, and that is the interesting case for the clamp.
+    /// The kernel's reader accepts digits then padding and refuses anything else,
+    /// so a non-digit in the middle refuses the member while a digit written
+    /// over the terminator, or over a digit, can make a larger size: that is the
+    /// case the clamp is for.
     private func octalFieldEdit(at field: Int, planner: inout MutationPlanner) -> ByteMutation {
         let digits: [UInt8] = [
             0x30, 0x31, 0x33, 0x37, 0x00, 0x20, 0x39, 0x41, 0xFF,
@@ -220,7 +238,7 @@ struct TarArchiveMutationTests {
             tally.refused += 1
             return
         }
-        defer { _ = fs.close(handle: handle) }
+        defer { try? fs.close(handle: handle) }
 
         tally.opened += 1
 
@@ -239,11 +257,37 @@ struct TarArchiveMutationTests {
 
         guard let size = UstarLayout.declaredSize(mutant.bytes, headerAt: headerOffset),
               let name = UstarLayout.nameField(mutant.bytes, headerAt: headerOffset) else {
-            Issue.record("\(mutant.label): \(probe) resolved to a header outside the archive")
+            Issue.record("\(mutant.label): \(probe) resolved to a header outside the archive or with a size that is not octal")
             return
         }
 
-        #expect(base + UInt64(size) <= end, Comment(rawValue: "\(mutant.label): \(probe) size \(size)"))
+        #expect(
+            UstarLayout.checksumHolds(mutant.bytes, headerAt: headerOffset),
+            Comment(rawValue: "\(mutant.label): \(probe) opened a header whose checksum fails")
+        )
+
+        // The walk's own steps, redone: nothing it believed on the way was
+        // unvouched for.
+        var cursor = 0
+        while cursor < headerOffset {
+            guard UstarLayout.hasUstarMagic(mutant.bytes, headerAt: cursor),
+                  UstarLayout.checksumHolds(mutant.bytes, headerAt: cursor),
+                  let skipped = UstarLayout.declaredSize(mutant.bytes, headerAt: cursor)
+            else {
+                Issue.record("\(mutant.label): \(probe) was reached over a header at \(cursor) the walk should have refused")
+                return
+            }
+
+            cursor += UstarLayout.blockSize + ((skipped + 511) & ~511)
+        }
+        #expect(cursor == headerOffset, Comment(rawValue: "\(mutant.label): \(probe)"))
+
+        // Returns rather than going on to read: a member that overruns is the
+        // failure, and the read that follows would be the fault.
+        guard base + UInt64(size) <= end else {
+            Issue.record("\(mutant.label): \(probe) size \(size) runs past the archive")
+            return
+        }
 
         // The exact-match rule, judged independently of the walk that applied it.
         #expect(

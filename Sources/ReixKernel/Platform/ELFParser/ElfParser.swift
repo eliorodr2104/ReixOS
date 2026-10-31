@@ -70,7 +70,7 @@ public struct ElfParser {
     /// rather than after it has taken every frame the machine had.
     public static func loadSegments(
         handle      : FileHandle,
-        fileSystem  : UnsafeMutablePointer<KernelInternalFileSystem>,
+        fileSystem  : UnsafeMutablePointer<TarFileSystem>,
         addressSpace: borrowing AddressSpace,
         vmaManager  : UnsafeMutablePointer<VMAManager>,
         vmm         : UnsafeMutablePointer<VirtualMemoryManager>,
@@ -83,16 +83,16 @@ public struct ElfParser {
         try Self.seek(handle: handle, fileSystem: fileSystem, to: 0)
 
         let headerRead = withUnsafeMutablePointer(to: &ehdr) { ptr in
-            fileSystem.pointee.read(
+            try? fileSystem.pointee.read(
                 handle: handle,
                 buffer: UnsafeMutableRawPointer(ptr),
-                count : MemoryLayout<Elf64_Ehdr_t>.size
+                count : UInt64(MemoryLayout<Elf64_Ehdr_t>.size)
             )
         }
 
-        guard case .success(let headerBytes) = headerRead,
-              headerBytes == MemoryLayout<Elf64_Ehdr_t>.size
-        else { throw .invalidMagicNumber }
+        guard headerRead == UInt64(MemoryLayout<Elf64_Ehdr_t>.size) else {
+            throw .invalidMagicNumber
+        }
 
         guard ehdr.e_ident[0] == 0x7F,
               ehdr.e_ident[1] == 0x45, // 'E'
@@ -134,16 +134,16 @@ public struct ElfParser {
             try Self.seek(handle: handle, fileSystem: fileSystem, to: phdrOffset)
 
             let phdrRead = withUnsafeMutablePointer(to: &phdr) { ptr in
-                fileSystem.pointee.read(
+                try? fileSystem.pointee.read(
                     handle: handle,
                     buffer: UnsafeMutableRawPointer(ptr),
-                    count : MemoryLayout<Elf64_Phdr_t>.size
+                    count : UInt64(MemoryLayout<Elf64_Phdr_t>.size)
                 )
             }
 
-            guard case .success(let phdrBytes) = phdrRead,
-                  phdrBytes == MemoryLayout<Elf64_Phdr_t>.size
-            else { throw .malformedLayout }
+            guard phdrRead == UInt64(MemoryLayout<Elf64_Phdr_t>.size) else {
+                throw .malformedLayout
+            }
 
             guard phdr.p_type == Self.PT_LOAD else { continue }
 
@@ -375,15 +375,13 @@ public struct ElfParser {
 
                 let pageDst: UnsafeMutablePointer<UInt8> = vmm.pointee.physToVirt(phys)
 
-                let segmentRead = fileSystem.pointee.read(
+                let segmentRead = try? fileSystem.pointee.read(
                     handle: handle,
                     buffer: UnsafeMutableRawPointer(pageDst.advanced(by: Int(pageOff))),
-                    count : Size(chunk)
+                    count : chunk
                 )
 
-                guard case .success(let copied) = segmentRead,
-                      copied == Size(chunk)
-                else { throw .malformedLayout }
+                guard segmentRead == chunk else { throw .malformedLayout }
 
                 va        += chunk
                 remaining -= chunk
@@ -491,21 +489,18 @@ public struct ElfParser {
 
     // MARK: - Untrusted input helpers
 
-    /// Size of the file behind `handle`, obtained with a seek to `.end`
-    /// because the FS interface exposes no stat on an open handle. Every
-    /// offset the headers claim is bounded against this before use.
+    /// Size of the file behind `handle`. Every offset the headers claim is
+    /// bounded against this before use.
     private static func fileSize(
         handle    : FileHandle,
-        fileSystem: UnsafeMutablePointer<KernelInternalFileSystem>
+        fileSystem: UnsafeMutablePointer<TarFileSystem>
     ) throws(ElfError) -> UInt64 {
 
-        guard case .success(let size) = fileSystem.pointee.seek(
-            handle: handle,
-            to    : 0,
-            method: .end
-        ), size >= 0 else { throw .malformedLayout }
+        guard let size = try? fileSystem.pointee.size(handle: handle) else {
+            throw .malformedLayout
+        }
 
-        return UInt64(size)
+        return size
     }
 
 
@@ -513,21 +508,18 @@ public struct ElfParser {
     /// offset past EOF and leaves `currentOffset` where the previous read
     /// stopped, so a discarded failure turns a bogus header offset into a read
     /// of whatever bytes happen to follow, adjacent file content
-    /// reinterpreted as a header. The narrowing to `Size` is guarded for the
-    /// same reason: it traps above `Size.max`.
+    /// reinterpreted as a header.
     private static func seek(
         handle    : FileHandle,
-        fileSystem: UnsafeMutablePointer<KernelInternalFileSystem>,
+        fileSystem: UnsafeMutablePointer<TarFileSystem>,
         to offset : UInt64
     ) throws(ElfError) {
 
-        guard offset <= UInt64(Size.max) else { throw .malformedLayout }
-
-        guard case .success = fileSystem.pointee.seek(
-            handle: handle,
-            to    : Size(offset),
-            method: .start
-        ) else { throw .malformedLayout }
+        do {
+            try fileSystem.pointee.seek(handle: handle, to: offset)
+        } catch {
+            throw .malformedLayout
+        }
     }
 
 

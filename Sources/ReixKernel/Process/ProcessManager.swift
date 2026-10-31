@@ -79,14 +79,14 @@ public struct ProcessManager: RXAllocatable, Loggable {
     let vmm               : UnsafeMutablePointer<VirtualMemoryManager>
     let ppm               : UnsafeMutablePointer<KernelPPM>
     let heap              : UnsafeMutablePointer<BucketsHeap>
-    private let fileSystem: UnsafeMutablePointer<KernelInternalFileSystem>
+    private let fileSystem: UnsafeMutablePointer<TarFileSystem>
     
     
     public init(
         vmm       : UnsafeMutablePointer<VirtualMemoryManager>,
         ppm       : UnsafeMutablePointer<KernelPPM>,
         heap      : UnsafeMutablePointer<BucketsHeap>,
-        fileSystem: UnsafeMutablePointer<KernelInternalFileSystem>
+        fileSystem: UnsafeMutablePointer<TarFileSystem>
     ) {
         self.vmm        = vmm
         self.ppm        = ppm
@@ -111,176 +111,174 @@ public struct ProcessManager: RXAllocatable, Loggable {
     /// every rung of the ladder.
     public mutating func spawnProcess(path: UnsafePointer<CChar>) throws(ProcessManagerError) -> UnsafeMutablePointer<Process> {
         
-        switch fileSystem.pointee.open(
-            path : path,
-            flags: .read
-        ) {
-                
-            case .success(let handle):
-                defer { _ = fileSystem.pointee.close(handle: handle) }
-
-                // The metadata is built first because it holds the budget, and
-                // everything below this line is charged to it.
-                guard let metadataPtr = makeMetadata(basenameOf: path) else {
-                    throw .heapAllocationFailed
-                }
-
-                metadataPtr.pointee.budget.pointee.limit = childFrameLimit()
-
-                let budget = metadataPtr.pointee.budget
-
-                var addressSpace: AddressSpace
-                do {
-                    addressSpace = try vmm.pointee.createAddressSpace(budget: budget)
-                } catch {
-                    freeMetadata(metadataPtr)
-                    throw .creationProcessFailed(error)
-                }
-
-                guard let vmaManagerPtr = attachVMAManager(
-                    to    : &addressSpace,
-                    budget: budget
-                ) else {
-                    // Only the fresh root table is live and `vmaManager` is still
-                    // `nil`, so teardown is just destroying the address space.
-                    destroyPartialAddressSpace(&addressSpace, budget: budget)
-                    freeMetadata(metadataPtr)
-                    throw .heapAllocationFailed
-                }
-
-                let elf: LoadedELF
-                do {
-                    elf = try ElfParser.loadSegments(
-                        handle: handle, fileSystem: fileSystem,
-                        addressSpace: addressSpace, vmaManager: vmaManagerPtr,
-                        vmm: vmm, ppm: ppm
-                    )
-                } catch {
-                    destroyPartialAddressSpace(&addressSpace, budget: budget)
-                    freeMetadata(metadataPtr)
-                    throw .elfParsingFailed(error)
-                }
-
-                let userStackTop   = UserSpaceLayout.stackTop
-                let firstStackPage = userStackTop - UserSpaceLayout.pageSize
-
-                guard chargeFrames(budget, 1) else {
-                    destroyPartialAddressSpace(&addressSpace, budget: budget)
-                    freeMetadata(metadataPtr)
-                    throw .allocationPageFailed(.budgetExceeded)
-                }
-
-                let stackPage: PhysicalPage
-                do {
-                    stackPage = try ppm.pointee.alloc(4096)
-                } catch {
-                    refundFrames(budget, 1)
-                    destroyPartialAddressSpace(&addressSpace, budget: budget)
-                    freeMetadata(metadataPtr)
-                    throw .allocationPageFailed(error)
-                }
-
-                let stackBytes: UnsafeMutablePointer<UInt8> = vmm.pointee.physToVirt(
-                    stackPage.address
-                )
-                stackBytes.initialize(
-                    repeating: 0,
-                    count    : Int(UserSpaceLayout.pageSize)
-                )
-
-                do {
-                    try vmm.pointee.installUserPage(
-                        addressSpace: addressSpace,
-                        virtual     : firstStackPage,
-                        physical    : stackPage.address,
-                        flags       : [.present, .userAccess, .pxn, .uxn],
-                        type        : .normal,
-                        budget      : budget
-                    )
-                } catch {
-                    try? ppm.pointee.release(stackPage.address)
-                    refundFrames(budget, 1)
-                    destroyPartialAddressSpace(&addressSpace, budget: budget)
-                    freeMetadata(metadataPtr)
-                    throw .mappingFailed(error)
-                }
-
-                do {
-                    try vmaManagerPtr.pointee.registerRegion(
-                        start      : firstStackPage,
-                        size       : UserSpaceLayout.pageSize,
-                        permissions: [.read, .write, .user],
-                        backing    : .anonymous,
-                        flags      : .growDown,
-                        memoryType : .normal
-                    )
-                } catch {
-                    try? ppm.pointee.release(stackPage.address)
-                    refundFrames(budget, 1)
-                    destroyPartialAddressSpace(&addressSpace, budget: budget)
-                    freeMetadata(metadataPtr)
-                    throw .registerRegionError(error)
-                }
-
-                // Nothing below maps a page, which is what keeps the unwinding
-                // rule on `spawnProcess` true for every step from here down.
-                guard let trapFramePtr = makeTrapFrame(
-                    entry: elf.entryPoint, stack: userStackTop
-                
-                ) else {
-                    destroyPartialAddressSpace(&addressSpace, budget: budget)
-                    freeMetadata(metadataPtr)
-                    throw .heapAllocationFailed
-                }
-
-                guard let numbered = self.nextIdentifiers() else {
-                    heap.pointee.kfree(trapFramePtr)
-                    destroyPartialAddressSpace(&addressSpace, budget: budget)
-                    freeMetadata(metadataPtr)
-                    throw .identitiesExhausted
-                }
-
-                let pid      = numbered.pid
-                let identity = numbered.identity
-
-                let initialBreak = (elf.loadEnd + UserSpaceLayout.pageSize - 1) & ~(UserSpaceLayout.pageSize - 1)
-
-                metadataPtr.pointee.elfImage     = elf.image
-                metadataPtr.pointee.elfLoadBase  = elf.loadBase
-                metadataPtr.pointee.elfLoadEnd   = elf.loadEnd
-                metadataPtr.pointee.programBreak = initialBreak
-
-                guard let processPtr = makeProcess(
-                    pid         : pid,
-                    identity    : identity,
-                    addressSpace: addressSpace,
-                    context     : trapFramePtr,
-                    metadata    : metadataPtr
-                
-                ) else {
-                    freeMetadata(metadataPtr)
-                    heap.pointee.kfree(trapFramePtr)
-                    destroyPartialAddressSpace(&addressSpace, budget: budget)
-                    throw .heapAllocationFailed
-                }
-
-                guard Self.registerForProcStats(processPtr) else {
-                    Arch.CPU.panic("duplicate process in ProcStats index")
-                }
-
-                vmaManagerPtr.pointee.setInitialBreak(initialBreak)
-
-                vmaManagerPtr.pointee.recountResidentPages()
-
-                Self.traceSpawn(pid)
-                Self.traceName(metadataPtr, pid: pid)
-
-                return processPtr
-
-
-            case .failure(_):
-                throw .elfParsingFailed(.invalidMagicNumber)
+        // A refused open and a missing member look the same to the caller: no
+        // image to load.
+        let handle: FileHandle
+        do {
+            handle = try fileSystem.pointee.open(path: path, flags: .read)
+        } catch {
+            throw .elfParsingFailed(.invalidMagicNumber)
         }
+
+        defer { try? fileSystem.pointee.close(handle: handle) }
+
+        // The metadata is built first because it holds the budget, and
+        // everything below this line is charged to it.
+        guard let metadataPtr = makeMetadata(basenameOf: path) else {
+            throw .heapAllocationFailed
+        }
+
+        metadataPtr.pointee.budget.pointee.limit = childFrameLimit()
+
+        let budget = metadataPtr.pointee.budget
+
+        var addressSpace: AddressSpace
+        do {
+            addressSpace = try vmm.pointee.createAddressSpace(budget: budget)
+        } catch {
+            freeMetadata(metadataPtr)
+            throw .creationProcessFailed(error)
+        }
+
+        guard let vmaManagerPtr = attachVMAManager(
+            to    : &addressSpace,
+            budget: budget
+        ) else {
+            // Only the fresh root table is live and `vmaManager` is still
+            // `nil`, so teardown is just destroying the address space.
+            destroyPartialAddressSpace(&addressSpace, budget: budget)
+            freeMetadata(metadataPtr)
+            throw .heapAllocationFailed
+        }
+
+        let elf: LoadedELF
+        do {
+            elf = try ElfParser.loadSegments(
+                handle: handle, fileSystem: fileSystem,
+                addressSpace: addressSpace, vmaManager: vmaManagerPtr,
+                vmm: vmm, ppm: ppm
+            )
+        } catch {
+            destroyPartialAddressSpace(&addressSpace, budget: budget)
+            freeMetadata(metadataPtr)
+            throw .elfParsingFailed(error)
+        }
+
+        let userStackTop   = UserSpaceLayout.stackTop
+        let firstStackPage = userStackTop - UserSpaceLayout.pageSize
+
+        guard chargeFrames(budget, 1) else {
+            destroyPartialAddressSpace(&addressSpace, budget: budget)
+            freeMetadata(metadataPtr)
+            throw .allocationPageFailed(.budgetExceeded)
+        }
+
+        let stackPage: PhysicalPage
+        do {
+            stackPage = try ppm.pointee.alloc(4096)
+        } catch {
+            refundFrames(budget, 1)
+            destroyPartialAddressSpace(&addressSpace, budget: budget)
+            freeMetadata(metadataPtr)
+            throw .allocationPageFailed(error)
+        }
+
+        let stackBytes: UnsafeMutablePointer<UInt8> = vmm.pointee.physToVirt(
+            stackPage.address
+        )
+        stackBytes.initialize(
+            repeating: 0,
+            count    : Int(UserSpaceLayout.pageSize)
+        )
+
+        do {
+            try vmm.pointee.installUserPage(
+                addressSpace: addressSpace,
+                virtual     : firstStackPage,
+                physical    : stackPage.address,
+                flags       : [.present, .userAccess, .pxn, .uxn],
+                type        : .normal,
+                budget      : budget
+            )
+        } catch {
+            try? ppm.pointee.release(stackPage.address)
+            refundFrames(budget, 1)
+            destroyPartialAddressSpace(&addressSpace, budget: budget)
+            freeMetadata(metadataPtr)
+            throw .mappingFailed(error)
+        }
+
+        do {
+            try vmaManagerPtr.pointee.registerRegion(
+                start      : firstStackPage,
+                size       : UserSpaceLayout.pageSize,
+                permissions: [.read, .write, .user],
+                backing    : .anonymous,
+                flags      : .growDown,
+                memoryType : .normal
+            )
+        } catch {
+            try? ppm.pointee.release(stackPage.address)
+            refundFrames(budget, 1)
+            destroyPartialAddressSpace(&addressSpace, budget: budget)
+            freeMetadata(metadataPtr)
+            throw .registerRegionError(error)
+        }
+
+        // Nothing below maps a page, which is what keeps the unwinding
+        // rule on `spawnProcess` true for every step from here down.
+        guard let trapFramePtr = makeTrapFrame(
+            entry: elf.entryPoint, stack: userStackTop
+        
+        ) else {
+            destroyPartialAddressSpace(&addressSpace, budget: budget)
+            freeMetadata(metadataPtr)
+            throw .heapAllocationFailed
+        }
+
+        guard let numbered = self.nextIdentifiers() else {
+            heap.pointee.kfree(trapFramePtr)
+            destroyPartialAddressSpace(&addressSpace, budget: budget)
+            freeMetadata(metadataPtr)
+            throw .identitiesExhausted
+        }
+
+        let pid      = numbered.pid
+        let identity = numbered.identity
+
+        let initialBreak = (elf.loadEnd + UserSpaceLayout.pageSize - 1) & ~(UserSpaceLayout.pageSize - 1)
+
+        metadataPtr.pointee.elfImage     = elf.image
+        metadataPtr.pointee.elfLoadBase  = elf.loadBase
+        metadataPtr.pointee.elfLoadEnd   = elf.loadEnd
+        metadataPtr.pointee.programBreak = initialBreak
+
+        guard let processPtr = makeProcess(
+            pid         : pid,
+            identity    : identity,
+            addressSpace: addressSpace,
+            context     : trapFramePtr,
+            metadata    : metadataPtr
+        
+        ) else {
+            freeMetadata(metadataPtr)
+            heap.pointee.kfree(trapFramePtr)
+            destroyPartialAddressSpace(&addressSpace, budget: budget)
+            throw .heapAllocationFailed
+        }
+
+        guard Self.registerForProcStats(processPtr) else {
+            Arch.CPU.panic("duplicate process in ProcStats index")
+        }
+
+        vmaManagerPtr.pointee.setInitialBreak(initialBreak)
+
+        vmaManagerPtr.pointee.recountResidentPages()
+
+        Self.traceSpawn(pid)
+        Self.traceName(metadataPtr, pid: pid)
+
+        return processPtr
     }
     
     

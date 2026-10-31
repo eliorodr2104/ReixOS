@@ -9,7 +9,6 @@ public typealias KernelPPM                = PhysicalPageManager<BuddyAllocator>
 public typealias KernelHeap               = BucketsHeap
 public typealias KernelScheduler          = RoundRobin
 public typealias KernelIPC                = RendezvousIPC
-public typealias KernelInternalFileSystem = TarFileSystem
 public typealias Arch                     = AArch64
 
 public enum ReixVersion {

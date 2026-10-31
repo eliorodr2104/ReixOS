@@ -7,12 +7,12 @@
 
 
 public struct FileInfo {
-    public let size       : Size
+    public let size       : UInt64
     public let isDirectory: Bool
     public let permissions: UInt16
     
     public init(
-        size       : Size,
+        size       : UInt64,
         isDirectory: Bool,
         permissions: UInt16
     ) {

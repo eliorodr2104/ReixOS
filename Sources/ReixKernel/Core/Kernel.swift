@@ -48,7 +48,7 @@ public struct Kernel: Loggable {
     
     public  static var ipc: UnsafeMutablePointer<KernelIPC>!
     
-    public  static var fileSystem: UnsafeMutablePointer<KernelInternalFileSystem>!
+    public  static var fileSystem: UnsafeMutablePointer<TarFileSystem>!
 
     public  static var internalPanicMessage: StaticString?
     public  static var platformInfo = PlatformInfo()
@@ -136,7 +136,7 @@ public struct Kernel: Loggable {
             bootPhase(TraceBootPhase.gicReady)
 
 
-            let tarFileSystemPtr = heap.pointee.kmalloc(KernelInternalFileSystem.self)
+            let tarFileSystemPtr = heap.pointee.kmalloc(TarFileSystem.self)
             tarFileSystemPtr.initialize(
                 to: TarFileSystem()
             )

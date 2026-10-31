@@ -26,23 +26,45 @@ public enum UstarLayout {
         return String(decoding: field.prefix(while: { $0 != 0 }), as: UTF8.self)
     }
 
-    /// Twelve octal digits, read the way the kernel reads them: every byte
-    /// outside `0`..`7` is skipped rather than ending the field.
+    /// The size field as the kernel reads it: octal digits, at least one, then
+    /// only NUL or space padding to the end of the twelve bytes.
     ///
-    /// Deliberately bug-compatible with `TarFileSystem.getFileSize`, because the
-    /// corpus assertions compare against what the kernel will compute, not
-    /// against what POSIX would prefer.
+    /// Returns `nil` for anything else, which is the kernel's refusal of the
+    /// member. Restated here rather than shared, so a corpus assertion is
+    /// checked against a second reading of the rule and not against the code
+    /// under test.
     public static func declaredSize(_ bytes: [UInt8], headerAt offset: Int) -> Int? {
         guard offset >= 0, offset + blockSize <= bytes.count else { return nil }
 
-        var result = 0
-        for i in 0..<sizeWidth {
-            let byte = bytes[offset + sizeOffset + i]
-            guard byte >= 0x30, byte <= 0x37 else { continue }
-            result = (result << 3) + Int(byte - 0x30)
+        let field = Array(bytes[(offset + sizeOffset)..<(offset + sizeOffset + sizeWidth)])
+        let digits = field.prefix(while: { $0 >= 0x30 && $0 <= 0x37 })
+
+        guard !digits.isEmpty,
+              field.dropFirst(digits.count).allSatisfy({ $0 == 0 || $0 == 0x20 })
+        else { return nil }
+
+        return digits.reduce(0) { ($0 << 3) + Int($1 - 0x30) }
+    }
+
+    /// The header checksum rule: the sum of all 512 bytes with the eight
+    /// checksum bytes counted as spaces, against the octal number stored there.
+    public static func checksumHolds(_ bytes: [UInt8], headerAt offset: Int) -> Bool {
+        guard offset >= 0, offset + blockSize <= bytes.count else { return false }
+
+        let field  = Array(bytes[(offset + 148)..<(offset + 156)])
+        let digits = field.prefix(while: { $0 >= 0x30 && $0 <= 0x37 })
+
+        guard !digits.isEmpty,
+              field.dropFirst(digits.count).allSatisfy({ $0 == 0 || $0 == 0x20 })
+        else { return false }
+
+        let stored = digits.reduce(0) { ($0 << 3) + Int($1 - 0x30) }
+        var sum    = 0
+        for i in 0..<blockSize {
+            sum += (148..<156).contains(i) ? 0x20 : Int(bytes[offset + i])
         }
 
-        return result
+        return sum == stored
     }
 
     public static func hasUstarMagic(_ bytes: [UInt8], headerAt offset: Int) -> Bool {
@@ -131,9 +153,8 @@ public enum FullWidthNameArchive {
 
 /// One 512-byte POSIX ustar header, with a real checksum.
 ///
-/// `TarFileSystem` never verifies the checksum, and the field is filled anyway:
-/// a fixture that is only valid because nobody looks is a fixture that stops
-/// being valid the day somebody does.
+/// `TarFileSystem` verifies the checksum, so every fixture built here carries a
+/// real one: a header it would refuse is not a member, whatever else it says.
 public func ustarHeader(name: [UInt8], size: Int, typeflag: UInt8 = UInt8(ascii: "0")) -> [UInt8] {
     var header = [UInt8](repeating: 0, count: UstarLayout.blockSize)
 
@@ -145,18 +166,31 @@ public func ustarHeader(name: [UInt8], size: Int, typeflag: UInt8 = UInt8(ascii:
     putBytes(ustarOctal(size, width: 12),  at: 124, into: &header)
     putBytes(ustarOctal(0, width: 12),     at: 136, into: &header)
 
-    for i in 148..<156 { header[i] = 0x20 } // blanks while the sum is taken
     header[156] = typeflag
     putBytes(Array("ustar".utf8), at: 257, into: &header)
     putBytes(Array("00".utf8),    at: 263, into: &header)
 
-    let sum = header.reduce(0) { $0 + Int($1) }
+    sealUstarHeader(&header, at: 0)
+
+    return header
+}
+
+
+/// Rewrites the checksum of the header block at `offset` so it matches the
+/// block's other bytes: the sum with the eight checksum bytes taken as spaces,
+/// stored as six octal digits, a NUL and a space.
+///
+/// What a test calls after editing a header on purpose, so the edit is the only
+/// thing the kernel can object to. Leaving it out is how a test builds a header
+/// whose checksum is wrong.
+public func sealUstarHeader(_ bytes: inout [UInt8], at offset: Int) {
+    for i in 148..<156 { bytes[offset + i] = 0x20 }
+
+    let sum = bytes[offset..<(offset + UstarLayout.blockSize)].reduce(0) { $0 + Int($1) }
     var checksum = ustarOctalDigits(sum, count: 6)
     checksum.append(0)
     checksum.append(0x20)
-    putBytes(checksum, at: 148, into: &header)
-
-    return header
+    putBytes(checksum, at: offset + 148, into: &bytes)
 }
 
 

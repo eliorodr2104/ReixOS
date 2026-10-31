@@ -104,10 +104,10 @@ struct TarArchiveCorpusTests {
 
                     // Rewound and read again, so the offset the first read left
                     // behind is the one `seek` is being asked to undo.
-                    #expect(seek(&fs, handle, to: 0) == 0)
+                    #expect(isSuccess(seek(&fs, handle, to: 0)))
                     #expect(readAll(&fs, handle, upTo: member.size) == expected)
 
-                    #expect(isSuccess(fs.close(handle: handle)))
+                    #expect(isSuccess(close(&fs, handle)))
                 }
             }
         }
@@ -134,14 +134,14 @@ struct TarArchiveCorpusTests {
                 // prefix match would answer with the wrong member's data.
                 if case .success(let handle) = open(&fs, "al") {
                     #expect(fs.residentBase(handle: handle) == start + UInt64(short ?? 0))
-                    _ = fs.close(handle: handle)
+                    try? fs.close(handle: handle)
                 } else {
                     Issue.record("al did not open")
                 }
 
                 if case .success(let handle) = open(&fs, "alpha.txt") {
                     #expect(fs.residentBase(handle: handle) == start + UInt64(alpha ?? 0))
-                    _ = fs.close(handle: handle)
+                    try? fs.close(handle: handle)
                 } else {
                     Issue.record("alpha.txt did not open")
                 }
@@ -175,7 +175,7 @@ struct TarArchiveCorpusTests {
 
                 #expect(fs.residentBase(handle: handle) == start + 512)
                 #expect(readAll(&fs, handle, upTo: 512) == FullWidthNameArchive.contents)
-                _ = fs.close(handle: handle)
+                try? fs.close(handle: handle)
 
                 // One byte short of filling the field, and one byte longer than
                 // the field can hold: neither can be the member that was found.
@@ -210,7 +210,7 @@ struct TarArchiveCorpusTests {
                 #expect(Set(handles.map(\.id)).count == 32)
                 #expect(isFailure(open(&fs, "alpha.txt")))
 
-                #expect(isSuccess(fs.close(handle: handles[7])))
+                #expect(isSuccess(close(&fs, handles[7])))
                 if case .success(let reused) = open(&fs, "alpha.txt") {
                     #expect(reused.id == handles[7].id)
                 } else {
@@ -233,7 +233,9 @@ struct TarArchiveCorpusTests {
         let staged: Void? = withStagedTarArchive(archive) { _, _ in
             withTarFileSystem { fs in
                 for flags in [FileFlags.write, .append, .create, [.read, .write]] as [FileFlags] {
-                    let outcome = "alpha.txt".withCString { fs.open(path: $0, flags: flags) }
+                    let outcome = "alpha.txt".withCString { path in
+                        Result { () throws(FSError) in try fs.open(path: path, flags: flags) }
+                    }
 
                     guard case .failure(let error) = outcome else {
                         Issue.record("\(flags.rawValue) was accepted")
@@ -245,9 +247,15 @@ struct TarArchiveCorpusTests {
                 // And the write path itself, which exists only to say no.
                 guard case .success(let handle) = open(&fs, "alpha.txt") else { return }
                 var byte: UInt8 = 0x41
-                let written = withUnsafeBytes(of: &byte) { fs.write(handle: handle, buffer: $0.baseAddress!, count: 1) }
-                #expect(isFailure(written))
-                _ = fs.close(handle: handle)
+                let written = withUnsafeBytes(of: &byte) { raw in
+                    Result { () throws(FSError) in try fs.write(handle: handle, buffer: raw.baseAddress!, count: 1) }
+                }
+                guard case .failure(let writeError) = written else {
+                    Issue.record("the write was accepted")
+                    return
+                }
+                #expect(writeError == .readOnlyFileSystem)
+                try? fs.close(handle: handle)
             }
         }
 
@@ -280,13 +288,22 @@ func withTarFileSystem<R>(_ body: (inout TarFileSystem) -> R) -> R {
 
 
 func open(_ fs: inout TarFileSystem, _ path: String) -> Result<FileHandle, FSError> {
-    path.withCString { fs.open(path: $0, flags: [.read]) }
+    path.withCString { path in
+        Result { () throws(FSError) in try fs.open(path: path, flags: [.read]) }
+    }
+}
+
+
+func close(_ fs: inout TarFileSystem, _ handle: FileHandle) -> Result<Void, FSError> {
+    Result { () throws(FSError) in try fs.close(handle: handle) }
 }
 
 
 extension TarFileSystem {
     func getInfo(path: String) -> Result<FileInfo, FSError> {
-        path.withCString { getInfo(path: $0) }
+        path.withCString { path in
+            Result { () throws(FSError) in try getInfo(path: path) }
+        }
     }
 }
 
@@ -301,22 +318,21 @@ func readAll(_ fs: inout TarFileSystem, _ handle: FileHandle, upTo count: Int) -
     let margin = 64
     var buffer = [UInt8](repeating: 0xAA, count: count + margin)
 
-    let outcome: Result<Size, FSError> = buffer.withUnsafeMutableBytes {
-        fs.read(handle: handle, buffer: $0.baseAddress!, count: count)
+    let outcome: Result<UInt64, FSError> = buffer.withUnsafeMutableBytes { raw in
+        Result { () throws(FSError) in
+            try fs.read(handle: handle, buffer: raw.baseAddress!, count: UInt64(count))
+        }
     }
 
-    guard case .success(let read) = outcome, read >= 0, read <= count else { return nil }
+    guard case .success(let read) = outcome, read <= UInt64(count) else { return nil }
     guard buffer[(count)..<(count + margin)].allSatisfy({ $0 == 0xAA }) else { return nil }
 
-    return Array(buffer[0..<read])
+    return Array(buffer[0..<Int(read)])
 }
 
 
-func seek(_ fs: inout TarFileSystem, _ handle: FileHandle, to offset: Int) -> Int? {
-    guard case .success(let landed) = fs.seek(handle: handle, to: offset, method: .start) else {
-        return nil
-    }
-    return landed
+func seek(_ fs: inout TarFileSystem, _ handle: FileHandle, to offset: UInt64) -> Result<Void, FSError> {
+    Result { () throws(FSError) in try fs.seek(handle: handle, to: offset) }
 }
 
 

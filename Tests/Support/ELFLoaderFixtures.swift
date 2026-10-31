@@ -166,14 +166,14 @@ public func loadELFFixture(
         baseShift: layout.baseShift
     ) { _, _ in
 
-        let fileSystem = UnsafeMutablePointer<KernelInternalFileSystem>.allocate(capacity: 1)
+        let fileSystem = UnsafeMutablePointer<TarFileSystem>.allocate(capacity: 1)
         fileSystem.initialize(to: TarFileSystem())
         defer {
             fileSystem.deinitialize(count: 1)
             fileSystem.deallocate()
         }
 
-        guard case .success(let handle) = fileSystem.pointee.open(path: name, flags: [.read]) else {
+        guard let handle = try? fileSystem.pointee.open(path: name, flags: [.read]) else {
             return
         }
 
@@ -245,7 +245,7 @@ public func loadELFFixture(
 /// `catch` no longer infers the typed `ElfError` and lands on `any Error`.
 private func loadResult(
     handle      : FileHandle,
-    fileSystem  : UnsafeMutablePointer<KernelInternalFileSystem>,
+    fileSystem  : UnsafeMutablePointer<TarFileSystem>,
     addressSpace: borrowing AddressSpace,
     vmaManager  : UnsafeMutablePointer<VMAManager>,
     vmm         : UnsafeMutablePointer<VirtualMemoryManager>,
@@ -408,27 +408,23 @@ public func withStagedELFImage(
         baseShift: layout.baseShift
     ) { start, end in
 
-        let fileSystem = UnsafeMutablePointer<KernelInternalFileSystem>.allocate(capacity: 1)
+        let fileSystem = UnsafeMutablePointer<TarFileSystem>.allocate(capacity: 1)
         fileSystem.initialize(to: TarFileSystem())
         defer {
             fileSystem.deinitialize(count: 1)
             fileSystem.deallocate()
         }
 
-        guard case .success(let handle) = fileSystem.pointee.open(path: name, flags: [.read]),
+        guard let handle = try? fileSystem.pointee.open(path: name, flags: [.read]),
               let residentBase = fileSystem.pointee.residentBase(handle: handle),
-              case .success(let size) = fileSystem.pointee.seek(
-                  handle: handle,
-                  to    : 0,
-                  method: .end
-              ), size >= 0
+              let size = try? fileSystem.pointee.size(handle: handle)
         else { return }
 
         opened = true
 
         body(StagedELFImage(
             residentBase: residentBase,
-            fileSize    : UInt64(size),
+            fileSize    : size,
             initrdStart : start,
             initrdEnd   : end,
             segments    : readProgramHeaders(at: residentBase)
@@ -557,20 +553,16 @@ public func withLoadedELFImage(
         baseShift: layout.baseShift
     ) { start, end in
 
-        let fileSystem = UnsafeMutablePointer<KernelInternalFileSystem>.allocate(capacity: 1)
+        let fileSystem = UnsafeMutablePointer<TarFileSystem>.allocate(capacity: 1)
         fileSystem.initialize(to: TarFileSystem())
         defer {
             fileSystem.deinitialize(count: 1)
             fileSystem.deallocate()
         }
 
-        guard case .success(let handle) = fileSystem.pointee.open(path: name, flags: [.read]),
+        guard let handle = try? fileSystem.pointee.open(path: name, flags: [.read]),
               let residentBase = fileSystem.pointee.residentBase(handle: handle),
-              case .success(let size) = fileSystem.pointee.seek(
-                  handle: handle,
-                  to    : 0,
-                  method: .end
-              ), size >= 0
+              let size = try? fileSystem.pointee.size(handle: handle)
         else { return }
 
         opened = true
@@ -625,7 +617,7 @@ public func withLoadedELFImage(
             result      : result,
             regions     : registeredRegions(of: vmaManager),
             residentBase: residentBase,
-            fileSize    : UInt64(size),
+            fileSize    : size,
             initrdStart : start,
             initrdEnd   : end,
             arenaStart  : ram.base,
@@ -770,7 +762,7 @@ public func makeELFImage(
 /// the archive itself is staged 512 bytes below a page boundary, which nothing
 /// does. `makePageAlignedTarArchive` is the layout the real initrd has.
 public func makeTarArchive(name: String, contents: [UInt8]) -> [UInt8] {
-    var archive = tarHeader(name: name, size: contents.count)
+    var archive = ustarHeader(name: Array(name.utf8), size: contents.count)
     archive.append(contentsOf: contents)
     archive.append(contentsOf: [UInt8](
         repeating: 0,
@@ -798,11 +790,11 @@ public func makePageAlignedTarArchive(
         if modulo != 3584 {
             let fillerSize = ((3072 - modulo) % 4096 + 4096) % 4096
 
-            archive.append(contentsOf: tarHeader(name: "@pad", size: fillerSize))
+            archive.append(contentsOf: ustarHeader(name: Array("@pad".utf8), size: fillerSize))
             archive.append(contentsOf: [UInt8](repeating: 0, count: fillerSize))
         }
 
-        archive.append(contentsOf: tarHeader(name: member.name, size: member.contents.count))
+        archive.append(contentsOf: ustarHeader(name: Array(member.name.utf8), size: member.contents.count))
         archive.append(contentsOf: member.contents)
         archive.append(contentsOf: [UInt8](
             repeating: 0,
@@ -901,41 +893,8 @@ private func readProgramHeaders(at base: PhysicalAddress) -> [Elf64_Phdr_t] {
 
 // MARK: - Byte helpers
 
-/// One 512-byte POSIX ustar header. The checksum field is left blank, which
-/// `TarFileSystem` never verifies.
-private func tarHeader(name: String, size: Int) -> [UInt8] {
-    var header = [UInt8](repeating: 0, count: 512)
-
-    put(name,          at: 0,   into: &header) // name
-    put("0000644",     at: 100, into: &header) // mode
-    put("0000000",     at: 108, into: &header) // uid
-    put("0000000",     at: 116, into: &header) // gid
-    put(octal(size),   at: 124, into: &header) // size
-    put("00000000000", at: 136, into: &header) // mtime
-    put("        ",    at: 148, into: &header) // chksum, unverified
-    put("0",           at: 156, into: &header) // typeflag, regular file
-    put("ustar",       at: 257, into: &header) // magic
-    put("00",          at: 263, into: &header) // version
-
-    return header
-}
-
-
-/// 11 octal digits, the width tar keeps a size in.
-private func octal(_ value: Int) -> String {
-    let digits = String(value, radix: 8)
-
-    return String(repeating: "0", count: max(0, 11 - digits.count)) + digits
-}
-
-
 private func roundUp(_ value: Int, to alignment: Int) -> Int {
     (value + alignment - 1) & ~(alignment - 1)
-}
-
-
-private func put(_ text: String, at offset: Int, into bytes: inout [UInt8]) {
-    for (index, byte) in Array(text.utf8).enumerated() { bytes[offset + index] = byte }
 }
 
 

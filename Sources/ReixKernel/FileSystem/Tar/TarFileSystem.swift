@@ -6,7 +6,14 @@
 //
 
 
-public struct TarFileSystem: FileSystemInterface, Loggable {
+/// The initrd as a read-only file system.
+///
+/// Offsets, sizes and counts are `UInt64` and every failure is a typed
+/// `FSError`, so a negative position cannot be expressed and a refusal cannot
+/// be dropped by forgetting to look at a `Result`. A member is only handed out
+/// after its header has passed the checksum, its size field has parsed as
+/// octal and its data has been shown to lie inside the archive window.
+public struct TarFileSystem: RXAllocatable, Loggable {
     
     public static var errorMessageAllocation: StaticString = "Failed to allocate TarFileSystem on the kernel heap"
     
@@ -29,146 +36,104 @@ public struct TarFileSystem: FileSystemInterface, Loggable {
     public mutating func open(
         path : UnsafePointer<CChar>,
         flags: FileFlags
-    ) -> Result<FileHandle, FSError> {
+    ) throws(FSError) -> FileHandle {
         
         guard flags.isDisjoint(with: [.write, .append, .create]) else {
-            return .failure(.readOnlyFileSystem)
-        }
-        
-        let findedResult = findFile(path)
-        switch findedResult {
-            case .success(let entry):
-
-                if let sizeEntry = getFileSize(size: entry.size),
-                   isResident(base: entry.address + 512, size: sizeEntry) {
-
-                    if let id = findBucket(
-                        address: entry.address + 512,
-                        size   : sizeEntry
-
-                    ) { return .success(FileHandle(id: id)) }
-                }
-
-
-            case .failure(let failure):
-                return .failure(failure)
+            throw .readOnlyFileSystem
         }
 
-        return .failure(.fileNotFound)
+        let member = try findFile(path)
+
+        guard let id = findBucket(address: member.data, size: member.size) else {
+            throw .fileNotFound
+        }
+
+        return FileHandle(id: id)
     }
 
 
+    /// Refuses a slot that is not open, so a second `close` is an error rather
+    /// than a silent rewrite of a slot another `open` may already own.
     @inline(never)
     public mutating func close(
         handle: FileHandle
-    ) -> Result<Void, FSError> {
-        guard handle.id >= 0 && handle.id < openedFiles.count else {
-            return .failure(.invalidArgument)
-        }
-        
-        openedFiles[handle.id] = OpenFileDescription()
-        
-        return .success(Void())
+    ) throws(FSError) {
+        let slot = try usedSlot(handle)
+
+        openedFiles[slot] = OpenFileDescription()
     }
 
 
+    /// Copies `min(count, bytes left)` bytes and advances by that many, so a
+    /// read at or past the end returns 0 and no sum of offset and count is
+    /// ever formed.
     public mutating func read(
         handle: FileHandle,
         buffer: UnsafeMutableRawPointer,
-        count : Size
-    ) -> Result<Size, FSError> {
-        
-        guard handle.id >= 0 && handle.id < openedFiles.count else {
-            return .failure(.invalidArgument)
-        }
-        
-        let file = openedFiles[handle.id]
-        guard file.isUsed else {
-            return .failure(.ioError)
-        }
-        
-        guard file.currentOffset <= file.size else {
-            return .success(0)
-        }
-        
-        let remainingBytes = file.size - file.currentOffset
-        var readBytesSize  = count
-        if file.currentOffset + readBytesSize >= file.size {
-            readBytesSize = remainingBytes
-        }
-        
-        let source = file.dataPointer! + file.currentOffset
-        buffer.copyMemory(from: source, byteCount: readBytesSize)
-        
-        openedFiles[handle.id].currentOffset += readBytesSize
-        
-        return .success(readBytesSize)
+        count : UInt64
+    ) throws(FSError) -> UInt64 {
+
+        let slot = try usedSlot(handle)
+        let file = openedFiles[slot]
+
+        // Holds by construction; checked so a broken `seek` is an error here and
+        // not a subtraction that traps.
+        guard file.currentOffset <= file.size else { throw .ioError }
+
+        let readBytesSize = min(count, file.size - file.currentOffset)
+
+        // Both fit an `Int`: `findFile` bounded the member by the archive window.
+        let source = file.dataPointer! + Int(clamping: file.currentOffset)
+        buffer.copyMemory(from: source, byteCount: Int(clamping: readBytesSize))
+
+        openedFiles[slot].currentOffset = file.currentOffset + readBytesSize
+
+        return readBytesSize
     }
     
     
-    // TODO: Not yet implemented because is only read FS
+    /// Exists only to say no: the initrd is read-only, and `open` already
+    /// refuses the flags that would have produced a writable handle.
     public func write(
         handle: FileHandle,
         buffer: UnsafeRawPointer,
-        count : Size
-    ) -> Result<Size, FSError> {
-        .failure(.fileNotFound)
+        count : UInt64
+    ) throws(FSError) -> UInt64 {
+        throw .readOnlyFileSystem
     }
     
     
+    /// Absolute only. A relative or from-the-end seek with an unsigned offset
+    /// can never land inside the member, so those modes would be dead weight,
+    /// and the size is asked for directly with `size(handle:)`.
     public mutating func seek(
            handle: FileHandle,
-        to offset: Size,
-           method: SeekMethod
-    ) -> Result<Size, FSError> {
-        
-        guard handle.id >= 0 && handle.id < openedFiles.count else {
-            return .failure(.invalidArgument)
-        }
-        
-        let file = openedFiles[handle.id]
-        guard file.isUsed else {
-            return .failure(.ioError)
-        }
-    
-        let newOffset = switch method {
-            case .start  :                      offset
-            case .current: file.currentOffset + offset
-            case .end    : file.size          + offset
-        }
-        
-        guard newOffset <= file.size else {
-            return .failure(.invalidArgument)
-        }
-        
-        openedFiles[handle.id].currentOffset = newOffset
-        
-        return .success(newOffset)
+        to offset: UInt64
+    ) throws(FSError) {
+
+        let slot = try usedSlot(handle)
+
+        guard offset <= openedFiles[slot].size else { throw .invalidArgument }
+
+        openedFiles[slot].currentOffset = offset
+    }
+
+
+    /// Size of the member behind `handle`.
+    public mutating func size(handle: FileHandle) throws(FSError) -> UInt64 {
+        openedFiles[try usedSlot(handle)].size
     }
 
 
 
-    public func getInfo(path: UnsafePointer<CChar>) -> Result<FileInfo, FSError> {
-        let findedResult = findFile(path)
-        switch findedResult {
-            case .success(let entry):
-            
-                if let sizeEntry = getFileSize(size: entry.size) {
-                    return .success(
-                        FileInfo(
-                            size       : sizeEntry,
-                            isDirectory: false,
-                            permissions: 0
-                        )
-                    )
-                }
-                
-                
-            case .failure(let failure):
-                return .failure(failure)
-        }
-        
-        return .failure(.fileNotFound)
+    public func getInfo(path: UnsafePointer<CChar>) throws(FSError) -> FileInfo {
+        let member = try findFile(path)
+
+        return FileInfo(
+            size       : member.size,
+            isDirectory: false,
+            permissions: 0
+        )
     }
 
 
@@ -183,39 +148,45 @@ public struct TarFileSystem: FileSystemInterface, Loggable {
     /// path, on a method that returns one word. `borrowing` is rejected outright
     /// here ("self cannot be captured by an escaping closure").
     public mutating func residentBase(handle: FileHandle) -> PhysicalAddress? {
-        guard handle.id >= 0 && handle.id < openedFiles.count else {
-            return nil
-        }
+        guard let slot = try? usedSlot(handle) else { return nil }
 
-        let file = openedFiles[handle.id]
-        guard file.isUsed else {
-            return nil
-        }
-
-        return file.address
+        return openedFiles[slot].address
     }
 
 
     // MARK: - Helpers
 
+    /// Index of `handle`'s slot, refusing one outside the table or not open.
+    private mutating func usedSlot(_ handle: FileHandle) throws(FSError) -> Int {
+        guard handle.id >= 0 && handle.id < openedFiles.count else {
+            throw .invalidArgument
+        }
+
+        guard openedFiles[handle.id].isUsed else { throw .ioError }
+
+        return handle.id
+    }
+
+
     /// True when `size` bytes at `base` lie entirely inside the initrd image.
     ///
-    /// The bound every open handle inherits, and the reason it is taken at `open`
-    /// rather than at each use: the size comes from twelve octal digits in a
-    /// header this kernel does not author when the archive arrives by `-initrd`,
-    /// and one that overruns the archive would hand out a handle whose data
-    /// pointer names RAM the initrd never covered. That RAM is frames the buddy
-    /// allocator still owns and re-issues, which `read` would copy out of and
-    /// `residentBase` would offer up to be mapped into a user address space.
-    private func isResident(base: PhysicalAddress, size: Size) -> Bool {
+    /// The bound every open handle inherits, and the reason it is taken when the
+    /// member is found rather than at each use: the size comes from twelve octal
+    /// digits in a header this kernel does not author when the archive arrives
+    /// by `-initrd`, and one that overruns the archive would hand out a handle
+    /// whose data pointer names RAM the initrd never covered. That RAM is frames
+    /// the buddy allocator still owns and re-issues, which `read` would copy out
+    /// of and `residentBase` would offer up to be mapped into a user address
+    /// space.
+    private func isResident(base: PhysicalAddress, size: UInt64) -> Bool {
         let archiveStart = Kernel.platformInfo.initrdStart
         let archiveEnd   = Kernel.platformInfo.initrdEnd
 
-        guard archiveEnd > archiveStart, base >= archiveStart, size >= 0 else {
+        guard archiveEnd > archiveStart, base >= archiveStart else {
             return false
         }
 
-        let (end, overflow) = base.addingReportingOverflow(UInt64(size))
+        let (end, overflow) = base.addingReportingOverflow(size)
 
         return !overflow && end <= archiveEnd
     }
@@ -223,7 +194,7 @@ public struct TarFileSystem: FileSystemInterface, Loggable {
 
     private mutating func findBucket(
         address: PhysicalAddress,
-        size   : Int
+        size   : UInt64
     ) -> Int? {
         
         var idBucket: Int?
@@ -247,31 +218,50 @@ public struct TarFileSystem: FileSystemInterface, Loggable {
     }
     
     
-    private func findFile(_ path: UnsafePointer<CChar>) -> Result<TarInfo, FSError> {
+    /// The data address and length of the member called `path`, whose data is
+    /// known to lie inside the archive.
+    ///
+    /// Every header on the way is checked before its size is believed, because
+    /// the size is what the walk steps by: one that is not octal, or sits in a
+    /// block whose checksum fails, ends the lookup with `.ioError` instead of
+    /// sending the walk to wherever the damaged digits point. So does a target
+    /// whose data would run past the archive. A header that is not ustar at all
+    /// still ends it as `.fileNotFound`, as trailing bytes do.
+    private func findFile(
+        _ path: UnsafePointer<CChar>
+    ) throws(FSError) -> (data: PhysicalAddress, size: UInt64) {
+
         var entry = TarInfo(address: tarAddress)
 
         // The walk is what produces the address `open` then bounds, and a member
         // size it believed could already have stepped it out of the archive.
-        while isResident(base: entry.address, size: 512), entry.name?.pointee != 0 {
+        while isResident(base: entry.address, size: UInt64(TarInfo.blockSize)),
+              entry.name?.pointee != 0 {
             
             guard isFileSection(filename: "ustar", entryTar: entry.magic, fieldSize: 6) else {
-                return .failure(.fileNotFound)
+                throw .fileNotFound
             }
 
-            if let sizeEntry = getFileSize(size: entry.size) {
-                let currentAddress = entry.address
-                let sizeAligned = (sizeEntry + 511) & ~511;
-
-                guard isFileSection(filename: path, entryTar: entry.name, fieldSize: 100) else {
-                    entry = TarInfo(address: currentAddress + 512 + UInt64(sizeAligned))
-                    continue
-                }
-                
-                return .success(entry)
+            guard entry.hasValidChecksum, let size = entry.contentSize else {
+                throw .ioError
             }
+
+            let data = entry.address + UInt64(TarInfo.blockSize)
+
+            if isFileSection(filename: path, entryTar: entry.name, fieldSize: 100) {
+                guard isResident(base: data, size: size) else { throw .ioError }
+
+                return (data, size)
+            }
+
+            let (padded, sizeOverflow) = size.addingReportingOverflow(511)
+            let (next  , nextOverflow) = data.addingReportingOverflow(padded & ~511)
+            guard !sizeOverflow, !nextOverflow else { throw .ioError }
+
+            entry = TarInfo(address: next)
         }
         
-        return .failure(.fileNotFound)
+        throw .fileNotFound
     }
     
     
@@ -301,19 +291,5 @@ public struct TarFileSystem: FileSystemInterface, Loggable {
         // A prefix is not a match: the member name must end exactly here,
         // either at a NUL or by filling the whole fixed-width field.
         return result && (iteratorName == fieldSize || entryTar[iteratorName] == 0)
-    }
-    
-    
-    private func getFileSize(size: UnsafePointer<CChar>?) -> Int? {
-        guard let size = size else { return nil }
-        
-        var result: Int = 0;
-        for i in 0..<12 {
-            let character = size[i];
-            if character < 48 || character > 55 { continue }
-            result = (result << 3) + Int(character - 48);
-        }
-        
-        return Int(result);
     }
 }

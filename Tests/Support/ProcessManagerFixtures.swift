@@ -40,7 +40,7 @@ public func withProcessManager(
         defer { heap.deinitialize(count: 1); heap.deallocate() }
 
         // Never read on this path: the fork-like spawn loads no image.
-        let fileSystem = UnsafeMutablePointer<KernelInternalFileSystem>.allocate(capacity: 1)
+        let fileSystem = UnsafeMutablePointer<TarFileSystem>.allocate(capacity: 1)
         fileSystem.initialize(to: TarFileSystem())
         defer { fileSystem.deinitialize(count: 1); fileSystem.deallocate() }
 

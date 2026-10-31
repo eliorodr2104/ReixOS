@@ -6,10 +6,13 @@
 //
 
 
+/// One open member. `currentOffset <= size` always holds: `seek` refuses
+/// anything past the end and `read` advances by at most what is left, which is
+/// what lets `read` subtract without a check.
 public struct OpenFileDescription {
     let address      : PhysicalAddress
-    let size         : Size
-    var currentOffset: Size
+    let size         : UInt64
+    var currentOffset: UInt64
     let isUsed       : Bool
 
     // The initrd is identity-mapped, so this physical base doubles as a
@@ -27,8 +30,8 @@ public struct OpenFileDescription {
 
     init(
         address      : PhysicalAddress,
-        size         : Size,
-        currentOffset: Size,
+        size         : UInt64,
+        currentOffset: UInt64,
         isUsed       : Bool
     ) {
         self.address       = address
