@@ -112,16 +112,22 @@ public struct BuddyAllocator: Allocator {
     /// part, before anything is written; then merges upward while the buddy is
     /// a free block of exactly the current order.
     ///
-    /// "In part" means its first frame lies in a free block. A free block nested
-    /// further inside is reachable only by naming the wrong order, which
-    /// `PhysicalPageManager` refuses first against the order it recorded.
+    /// "In part" is either side of the block's first frame: a free block covering
+    /// it, or a free block starting anywhere after it inside the block. The second
+    /// is reachable only by naming a wrong, larger order, which
+    /// `PhysicalPageManager` already refuses against the order it recorded; this
+    /// check is what keeps the allocator sound on its own, and costs one vector
+    /// scan of the block's head bits, 16 bytes for 128 frames.
     public func free(_ page: consuming PhysicalPage) throws(AllocatorError) {
         guard try isValidBlock(address: page.address, order: page.order) else {
             throw .addressInvalid(page.address)
         }
 
         let offset = page.address - startRam
-        guard !liesInFreeBlock(offset: offset) else { throw .doubleFreeInvalid }
+        let end    = offset + (Self.pageSize << UInt64(page.order))
+        guard !liesInFreeBlock(offset: offset),
+              !anyFreeHead(from: offset + Self.pageSize, to: end)
+        else { throw .doubleFreeInvalid }
 
         mergeAndInsert(offset: offset, order: page.order)
     }
@@ -228,26 +234,58 @@ public struct BuddyAllocator: Allocator {
     }
 
 
-    /// One byte per eight frames where the range allows it. Linear in the range,
-    /// which only donation pays: boot and the device tree reclaim, once each.
+    /// Whether any frame in `start ..< end` heads a free block. Linear in the
+    /// range: donation pays it once per range, `free` once per block above order 0.
+    ///
+    /// The body reads 16 bytes, 128 frames, per NEON load and reduces them with
+    /// one `umaxv`. Donation runs before the MMU is on, where RAM is Device memory
+    /// and an unaligned vector access faults, so every load is 16-byte aligned by
+    /// address: the bytes before the first aligned one and after the last, and the
+    /// bits of a byte the range only partly covers, are read one at a time.
+    ///
+    /// `speed` because under the image's `-Osize` the stdlib's generic `.!=` and
+    /// `any` stay lane loops through the stack; here they become `cmtst` plus
+    /// `umaxv`. The kernel saves the whole FP/SIMD state on every exception.
+    @_optimize(speed)
     private func anyFreeHead(
         from start: UInt64,
         to   end  : UInt64
     ) -> Bool {
-        var page = Int(start / Self.pageSize)
-        let last = Int(end / Self.pageSize)
+        let first = Int(start / Self.pageSize)
+        let last  = Int(end / Self.pageSize)
+        guard first < last else { return false }
 
-        while page < last {
-            if page & 7 == 0, last - page >= 8 {
-                if freeHeads[page >> 3] != 0 { return true }
-                page += 8
-            } else {
-                if freeHeads[page >> 3] & (1 << UInt8(page & 7)) != 0 { return true }
-                page += 1
-            }
+        var byte = first >> 3
+        let stop = last >> 3
+
+        // A first byte the range enters part way, which may also be its last.
+        if first & 7 != 0 || byte == stop {
+            let low  = UInt8(truncatingIfNeeded: 0xFF << (first & 7))
+            let high = byte == stop ? UInt8(truncatingIfNeeded: (1 << (last & 7)) - 1) : 0xFF
+            if freeHeads[byte] & low & high != 0 { return true }
+            if byte == stop { return false }
+            byte += 1
         }
 
-        return false
+        while byte < stop, UInt(bitPattern: freeHeads + byte) & 15 != 0 {
+            if freeHeads[byte] != 0 { return true }
+            byte += 1
+        }
+
+        while stop - byte >= 16 {
+            let lanes = freeHeads + byte
+            assert(UInt(bitPattern: lanes) & 15 == 0, "unaligned vector load of the head bitmap")
+            if any(UnsafeRawPointer(lanes).load(as: SIMD16<UInt8>.self) .!= SIMD16<UInt8>()) { return true }
+            byte += 16
+        }
+
+        while byte < stop {
+            if freeHeads[byte] != 0 { return true }
+            byte += 1
+        }
+
+        let tail = last & 7
+        return tail != 0 && freeHeads[stop] & UInt8(truncatingIfNeeded: (1 << tail) - 1) != 0
     }
 
 
@@ -404,6 +442,15 @@ struct BuddyFreeState {
 
 
 extension BuddyAllocator {
+
+    /// `anyFreeHead`, for the host test that holds the vector scan to a bit-by-bit
+    /// one at every alignment of the bitmap.
+    func hasFreeHead(
+        from start: UInt64,
+        to   end  : UInt64
+    ) -> Bool {
+        anyFreeHead(from: start, to: end)
+    }
 
     var freeState: BuddyFreeState {
         let frames = Int(sizeRam / Self.pageSize)
