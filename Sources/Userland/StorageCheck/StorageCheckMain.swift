@@ -111,6 +111,9 @@ private func denseFiles(_ files: FileSystemClient) -> Bool {
     let name  = "dense.bin" as StaticString
     let bytes = UnsafeRawPointer(name.utf8Start)
 
+    // Left over from a boot that was stopped mid-check, since the disk outlives it.
+    _ = files.remove(bytes, length: name.utf8CodeUnitCount)
+
     let made = files.create(bytes, length: name.utf8CodeUnitCount)
     guard made.status == .ok, let file = made.file else {
         print("[ CHECK ] the file for the dense check was not made")
