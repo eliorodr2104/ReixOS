@@ -24,13 +24,13 @@ extension KernelPolicyTestRoot {
 @Suite("DMA quarantine", .serialized)
 struct DmaQuarantineTests {
 
-    private static let page = UserSpaceLayout.pageSize
+    static let page = UserSpaceLayout.pageSize
 
     /// Two transports of one bus, a slot apart, as the virtio bus carves them.
-    private static let disk : PhysicalAddress = 0x0a00_0000
-    private static let other: PhysicalAddress = 0x0a00_0200
+    static let disk : PhysicalAddress = 0x0a00_0000
+    static let other: PhysicalAddress = 0x0a00_0200
 
-    private typealias Buffer = (
+    typealias Buffer = (
         handle  : UInt32,
         address : VirtualAddress,
         region  : UnsafeMutablePointer<SharedRegion>,
@@ -40,7 +40,9 @@ struct DmaQuarantineTests {
 
     // MARK: - Fixture
 
-    private func withWorld(
+    // Not private: `DmaRefusalTests` extends this suite and builds on them.
+
+    func withWorld(
         pages : Int = 192,
         _ body: (
             HostRAM,
@@ -69,7 +71,7 @@ struct DmaQuarantineTests {
 
 
     /// A window over `device` in `process`, carrying `rights`.
-    private func window(
+    func window(
         _ device  : PhysicalAddress,
         rights    : CapRights = [.read, .write, .dma],
         in process: UnsafeMutablePointer<Process>
@@ -86,7 +88,7 @@ struct DmaQuarantineTests {
 
     /// `dmaAlloc(pages, window)` as `process`, then `dmaPhysical` unless told
     /// not to publish.
-    private func buffer(
+    func buffer(
         pages     : UInt64,
         through window: UInt32,
         as process: UnsafeMutablePointer<Process>,
@@ -122,7 +124,7 @@ struct DmaQuarantineTests {
 
 
     /// `dmaReclaim(handle)` as `process`, answering `x0`.
-    private func reclaim(
+    func reclaim(
         _ handle  : UInt64,
         as process: UnsafeMutablePointer<Process>,
         _ context : SyscallContext
@@ -135,7 +137,7 @@ struct DmaQuarantineTests {
 
 
     /// Drops `process`'s capability on `buffer` and its window, in that order.
-    private func drop(
+    func drop(
         _ buffer  : Buffer,
         pages     : UInt64,
         of process: UnsafeMutablePointer<Process>,
@@ -152,7 +154,7 @@ struct DmaQuarantineTests {
 
     /// A buffer published, dropped and reclaimed, so the slabs and tables the
     /// first one pulls in are already there when a test takes its baseline.
-    private func prime(
+    func prime(
         _ process: UnsafeMutablePointer<Process>,
         through window: UInt32,
         _ ipc    : UnsafeMutablePointer<KernelIPC>,
@@ -166,7 +168,7 @@ struct DmaQuarantineTests {
 
 
     /// The whole death of a process: its capabilities, its address space, its cell.
-    private func tearDown(
+    func tearDown(
         _ process: UnsafeMutablePointer<Process>,
         _ manager: UnsafeMutablePointer<ProcessManager>,
         _ ipc    : UnsafeMutablePointer<KernelIPC>
@@ -362,42 +364,6 @@ struct DmaQuarantineTests {
             #expect(ram.ppm.pointee.refCount(of: dead.physical) == 1)
             #expect(DmaQuarantine.pages   == 4)
             #expect(DmaQuarantine.regions == 1)
-        }
-    }
-
-
-    @Test("a block the PPM refuses is left out of the answer, and its region still leaves the list")
-    func refusedBlockIsNotCounted() {
-        withWorld { ram, _, manager, ipc, context in
-            guard let driver = try? manager.pointee.spawnProcess(),
-                  let device = window(Self.disk, in: driver),
-                  let dead   = buffer(pages: 4, through: device, as: driver, context)
-            else { return }
-
-            drop(dead, pages: 4, of: driver, ipc)
-
-            // Freed behind the ledger's back, so the reclaim's own free is refused.
-            #expect((try? ram.ppm.pointee.free(PhysicalPage(address: dead.physical, order: 2))) != nil)
-
-            #expect(reclaim(UInt64(device), as: driver, context) == 0)
-            #expect(DmaQuarantine.pages   == 0)
-            #expect(DmaQuarantine.regions == 0)
-
-            // And said, as the last thing the kernel logged.
-            var last: LogRing.Record? = nil
-            LogRing.forEachRecord { last = $0 }
-
-            guard let record = last else {
-                Issue.record("the refusal was not logged")
-                return
-            }
-
-            let payload = (0..<record.payloadLength).map { LogRing.payloadByte(record, $0) }
-
-            #expect(record.level == LogLevel.error.rawValue)
-            #expect(String(decoding: payload, as: UTF8.self).hasPrefix(
-                "quarantined DMA region released after a reset but one of its frames was refused"
-            ))
         }
     }
 

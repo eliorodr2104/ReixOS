@@ -13,6 +13,14 @@ import ReixABI
 /// published buffer minted through that window that nothing holds any more,
 /// and refunds each one's creator if it is still paying.
 ///
+/// A block the PPM refuses is not freed, not refunded and not forgotten: it
+/// stays on the list as refused, with what the books said about it, and the
+/// next reclaim of the same device looks again, and only looks: a refused block
+/// is never freed by the kernel, since one that reads live may be somebody
+/// else's by then. One the books call free already is closed and counted as a
+/// double free: it went back while the device could still write it. Neither
+/// is in the answer.
+///
 /// **The kernel cannot verify the reset, and does not try.** It trusts the
 /// caller, for the reason `DmaAlloc` gives: a process holding a device window
 /// with `.dma` is already inside the trusted base, and could aim the device at
@@ -26,8 +34,8 @@ import ReixABI
 /// own live buffer survives this call; one bound to another window is not
 /// touched either.
 ///
-/// `x0` the device window's handle in, and out the frames given back, zero
-/// included. `UInt64.max` on refusal, which no count of frames can be.
+/// `x0` the device window's handle in, and out the frames this call gave back,
+/// zero included. `UInt64.max` on refusal, which no count of frames can be.
 public struct DmaReclaim: SyscallProvider {
 
     public static let number: SyscallNumber = .dmaReclaim

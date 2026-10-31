@@ -80,12 +80,22 @@ public struct SharedRegion: RXObject, ~Copyable {
     ///
     /// A property of what has happened to the region, not of what it is: only a
     /// `.dma` region can ever be published, but one that never was stays
-    /// reclaimable. `kind` is the immutable half. The declared reset is the one
-    /// thing that clears it, because it is what makes it false.
+    /// reclaimable. `kind` is the immutable half. A declared reset is the one
+    /// thing that clears it, because it is what makes it false, and the reclaim
+    /// clears it as it closes the region, once the frames are back in the PPM.
     var deviceVisible = false
 
     /// Extents in use, the inline ones first and then the spill's.
     private(set) var extentCount: UInt16 = 0
+
+    /// What the PPM's books said about this region's block when they refused
+    /// it, and at every reclaim since, `nil` while nothing has been refused.
+    ///
+    /// Set only on `DmaQuarantine`, where it is what marks a region refused
+    /// rather than waiting: its device was declared reset, and its frames are
+    /// still out because the PPM would not take them. Two bytes, in the gap
+    /// before `owner` that alignment left empty, so the cell stays at 128.
+    var refusal: PhysicalBlockState? = nil
 
     /// The budget the frames of this region were charged to when it was
     /// created, with one hold taken on it. `nil` once the charge has ended.
@@ -97,7 +107,8 @@ public struct SharedRegion: RXObject, ~Copyable {
     /// charge ends at the earlier of the frames going back to the PPM and the
     /// owner's teardown, and `disownSharedRegion` is the only thing that ends
     /// it. For most regions the first is their death; for a published buffer
-    /// that dies onto `DmaQuarantine` it is the `dmaReclaim` that frees it.
+    /// that dies onto `DmaQuarantine` it is the `dmaReclaim` that frees it, or
+    /// finds it already free. A block the PPM refuses keeps the charge on.
     ///
     /// The hold is what makes the pointer safe: the cell outlives the process
     /// whenever a region it created does.
@@ -337,8 +348,8 @@ public struct SharedRegion: RXObject, ~Copyable {
     /// slab storage.
     ///
     /// A device-visible region is refused and keeps its frames. It never gets
-    /// here: `releaseSharedRegion` puts it on `DmaQuarantine` instead, and that
-    /// clears the flag once the device is declared reset.
+    /// here: `releaseSharedRegion` puts it on `DmaQuarantine` instead, which
+    /// gives its one block back itself, so a refusal can keep the cell.
     public consuming func releaseFrames(
         ppm : UnsafeMutablePointer<KernelPPM>,
         heap: UnsafeMutablePointer<KernelHeap>
@@ -369,7 +380,8 @@ func retainSharedRegion(_ region: UnsafeMutablePointer<SharedRegion>) {
 /// the charge without a refund. Only the creator's teardown does that, and the
 /// budget dies with the process anyway. A published buffer's own death never
 /// reaches here: it goes onto `DmaQuarantine` still charged, and the reclaim
-/// that clears `deviceVisible` and gives its frames back refunds it here.
+/// that clears `deviceVisible` refunds it here once its frames are back in the
+/// PPM, given back or found already free. A refused block is not refunded.
 @inline(__always)
 func disownSharedRegion(
     _ region: UnsafeMutablePointer<SharedRegion>,
