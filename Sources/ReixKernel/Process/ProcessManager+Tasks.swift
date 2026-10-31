@@ -279,7 +279,7 @@ extension ProcessManager {
         else { return .invalidState }
 
         TaskRegistry.markAborted(control)
-        context.ipc.pointee.releaseCapabilities(of: process)
+        releaseCapabilitiesInSteps(of: process, context)
         try? releaseAddressSpace(process)
         releaseProcess(process)
         return .ok

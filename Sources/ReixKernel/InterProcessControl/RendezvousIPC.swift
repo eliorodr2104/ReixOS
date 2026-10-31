@@ -1525,6 +1525,20 @@ public struct RendezvousIPC: IPCInterface, Loggable {
     }
 
     public mutating func releaseCapabilities(of process: UnsafeMutablePointer<Process>) {
+        releaseWaits(of: process)
+
+        guard let metadata = process.pointee.metadata else { return }
+
+        for slot in 0..<metadata.pointee.capsTable.caps.count {
+            releaseSlot(slot, of: metadata)
+        }
+    }
+
+
+    /// What a dying process holds outside its table: its deadlines and a parked
+    /// message. Always before the table, because the message is not in it and
+    /// holds a reference of its own, see `PendingMessage`.
+    mutating func releaseWaits(of process: UnsafeMutablePointer<Process>) {
         disarmDeadline(on: process)
 
         // And an interrupt deadline, which is the other kind this process could
@@ -1532,21 +1546,27 @@ public struct RendezvousIPC: IPCInterface, Loggable {
         // scheduler will follow into freed memory.
         IrqWaitSyscall.cancelDeadline(on: process)
 
-        guard let metadata = process.pointee.metadata else { return }
+        guard process.pointee.metadata != nil else { return }
 
-        // Before the table, because it is not in the table: a parked message
-        // holds a reference of its own. See `PendingMessage`.
         retirePending(of: process)
+    }
 
-        for i in 0..<metadata.pointee.capsTable.caps.count where metadata.pointee.capsTable.caps[i] != nil {
-            let capability = metadata.pointee.capsTable.caps[i]!
 
-            disown(capability, of: metadata)
+    /// Releases slot `slot` of a dying process's table, disowning what it
+    /// created first, and says whether the slot held anything.
+    @discardableResult
+    mutating func releaseSlot(
+        _  slot    : Int,
+        of metadata: UnsafeMutablePointer<ProcessMetadata>
+    ) -> Bool {
+        guard let capability = metadata.pointee.capsTable.caps[slot] else { return false }
 
-            release(capability)
-            metadata.pointee.capsTable.remove(handle: i)
-            
-        }
+        disown(capability, of: metadata)
+
+        release(capability)
+        metadata.pointee.capsTable.remove(handle: slot)
+
+        return true
     }
 
 

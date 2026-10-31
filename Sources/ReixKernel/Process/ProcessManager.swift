@@ -582,7 +582,7 @@ public struct ProcessManager: RXAllocatable, Loggable {
             )
 
             try? context.processManager.pointee.releaseAddressSpace(process)
-            context.ipc.pointee.releaseCapabilities(of: process)
+            releaseCapabilitiesInSteps(of: process, context)
 
             return deliverCorpse(process, context)
         }
@@ -591,6 +591,26 @@ public struct ProcessManager: RXAllocatable, Loggable {
         // on the `terminated` list, so it is still there to be reaped.
         return true
     }
+
+    /// `releaseCapabilities` as steps of the teardown region, for the two paths
+    /// that end a process, `killProcess` and `abortTask`: a window can open
+    /// after any held slot, so a table full of endpoints and regions is not one
+    /// masked stretch added to the death. The region is the teardown's because
+    /// it is the same death and the same constraint: nobody left to resume.
+    func releaseCapabilitiesInSteps(
+        of process: UnsafeMutablePointer<Process>,
+        _  context: SyscallContext
+    ) {
+        context.ipc.pointee.releaseWaits(of: process)
+
+        guard let metadata = process.pointee.metadata else { return }
+
+        _ = Preemption.run(
+            AddressSpaceTeardown.self,
+            CapabilityRelease(ipc: context.ipc, metadata: metadata)
+        )
+    }
+
 
     /// Hands a fresh corpse to whoever is entitled to it.
     ///

@@ -276,11 +276,14 @@ public enum RegionDecommit: PreemptionRegion {
 }
 
 
-/// `VMAManager.teardown`, one batch of up to 32 pages per step.
+/// `VMAManager.teardown`, one batch of up to 32 pages per step, and the
+/// release of a dying process's capabilities, one held slot per step.
 ///
 /// Every region of a dying address space in one run, so the budget spans the
 /// whole teardown rather than restarting at each region. The page cost is the
-/// two regions above, and so is the policy.
+/// two regions above, and so is the policy. `CapabilityRelease` runs under the
+/// same region because it is the same death under the same constraint, and its
+/// steps, an endpoint or a region freed, are no larger than a page batch.
 ///
 /// `.latencyOnly`, and this one is a hard constraint rather than a preference.
 /// `teardown` is reached only from `ProcessManager.releaseAddressSpace` and
