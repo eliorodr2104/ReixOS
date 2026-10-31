@@ -399,7 +399,7 @@ public struct PhysicalPageManager<A: Allocator>: Loggable {
     /// Arithmetic is relative to `ramStart`, so a wrapped RAM end cannot turn an
     /// invalid address into a metadata access.
     @inline(__always)
-    private func frameIndex(for address: PhysicalAddress) -> Int? {
+    func frameIndex(for address: PhysicalAddress) -> Int? {
         guard address >= ramStart else { return nil }
 
         let offset = address - ramStart
@@ -458,7 +458,7 @@ public struct PhysicalPageManager<A: Allocator>: Loggable {
     /// Validates metadata state shared by retain, release and the final free.
     /// Reference count and allocator ownership are separate checks on purpose.
     @inline(__always)
-    private func validatedLiveBlock(
+    func validatedLiveBlock(
         metadata : FrameInfo,
         headIndex: Int
     ) throws(PPMError) -> UInt64 {
