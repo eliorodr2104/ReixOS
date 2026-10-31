@@ -115,6 +115,13 @@ public enum FSLayout {
     /// promises: a geometry nobody has measured is not one this build accepts.
     public static let maxSupportedBlocksV02: UInt32 = 65536
 
+    /// How many containers a disk may hold.
+    ///
+    /// One page of indices, because that is what the room walk sorts them into
+    /// and the size every container walk is bounded by. A create past it is refused
+    /// before it writes rather than leaving a disk no walk can check.
+    public static let maxContainers: Int = Int(blockSize) / 4
+
 
     // MARK: - The front of the disk
 

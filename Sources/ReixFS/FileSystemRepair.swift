@@ -207,7 +207,7 @@ extension FileSystem {
         ///
         /// Separate from `quotasChecked`, which is a device that stopped
         /// answering: this one is a disk this build is not sized for. See
-        /// `maxContainersV02`.
+        /// `FSLayout.maxContainers`.
         public var tooManyContainers = false
 
         /// How many of those were recomputed rather than reported.
@@ -286,31 +286,107 @@ extension FileSystem {
 
     /// Reads the disk and says what it found. Writes nothing, ever.
     public mutating func scan(_ depth: Scrub = .blocks) -> Findings {
+        look(depth).findings
+    }
+
+
+    /// A scan, and the census its pass over the table took, which the room
+    /// walk after it uses instead of a pass of its own.
+    ///
+    /// The room before the names: the names walk borrows the accumulator page
+    /// the census left the quota index in.
+    private mutating func look(_ depth: Scrub) -> (findings: Findings, census: Census?) {
 
         var findings = Findings()
         findings.depth      = depth
         findings.generation = superblockGeneration
         findings.mutations  = mutations
 
-        guard scanBlocks(&findings) else { return findings }
+        guard let census = scanBlocks(&findings) else { return (findings, nil) }
 
         if depth == .everything {
-            guard scanNames(&findings), scanRoom(&findings) else { return findings }
+            guard roomWalk(&findings, census: census, mending: false),
+                  scanNames(&findings)
+            else { return (findings, census) }
         }
 
-        findings.complete = true
-        findings.safeToServe = findings.quotasChecked && !findings.tooManyContainers
-            && !findings.unfixable && !findings.changed
-        return findings
+        settle(&findings)
+        return (findings, census)
     }
 
 
-    /// The block map against the object table.
+    /// Marks findings that saw everything they set out to, and says whether
+    /// they are enough to serve on.
+    private func settle(_ findings: inout Findings) {
+        findings.complete = true
+        findings.safeToServe = findings.quotasChecked && !findings.tooManyContainers
+            && !findings.unfixable && !findings.changed
+    }
+
+
+    /// What one pass over the object table counted besides the block map.
     ///
-    /// One bitmap block at a time, and for each of them a pass over the whole
-    /// object table. That is a table read per bitmap block, which on this disk is
-    /// thirty-two reads, and it needs no memory beyond the two scratch blocks
-    /// this type already has.
+    /// The containers are left in the accumulator page, ascending, with each
+    /// one's `used` at the same position in the data page: that is the quota
+    /// index a seal is written from. `owned` and `charged` are the same fact
+    /// told twice - what every record holds, and what every container says is
+    /// charged to it - and a volume whose two totals disagree is not sealed.
+    struct Census {
+        var containers        = 0
+        var tooManyContainers = false
+        var owned  : UInt64   = 0
+        var charged: UInt64   = 0
+    }
+
+
+    /// The block map against the object table, in one pass over the table.
+    ///
+    /// The whole map is built in the journal's arena first, every bitmap block
+    /// at once, and only then compared with the map on the disk. It used to be
+    /// built a bitmap block at a time, which cost a pass over the whole table per
+    /// bitmap block, and both of those grow with the disk. Now it is one pass and
+    /// one read per bitmap block, for the price of memory the arena already is.
+    ///
+    /// Nil when the device stopped answering part way.
+    @discardableResult
+    mutating func scanBlocks(_ findings: inout Findings) -> Census? {
+
+        var census = Census()
+        guard buildTruth(&findings, &census) else { return nil }
+
+        let words = Int(FSLayout.blockSize) / FSBitmap.bytesPerWord
+
+        for map in 0..<plan.bitmapBlocks {
+            guard readBlock(plan.bitmapStart + map, into: metaBuffer) == .ok else {
+                return nil
+            }
+
+            let truth = truthPage(map)
+
+            for word in 0..<words {
+                let built  = FSBitmap.word(truth, word)
+                let stored = FSBitmap.word(metaBuffer, word)
+
+                guard built != stored else { continue }
+
+                found(&findings.reclaimable,  by: UInt32((stored & ~built).nonzeroBitCount))
+                found(&findings.ownedButFree, by: UInt32((built & ~stored).nonzeroBitCount))
+            }
+        }
+
+        containerCount = census.tooManyContainers ? FSLayout.maxContainers : census.containers
+
+        return census
+    }
+
+
+    /// One bitmap block's worth of the map being built.
+    func truthPage(_ map: UInt32) -> UnsafeMutableRawPointer {
+        arenaBuffer.advanced(by: Int(map) * Int(FSLayout.blockSize))
+    }
+
+
+    /// The block map as the object table says it should be, in the arena.
     ///
     /// `fits` is asked here and not only at `object`, because this loop reads
     /// records straight out of the table: believing one whose runs point at the
@@ -318,40 +394,34 @@ extension FileSystem {
     /// *before* the free-slot skip, because a kind byte this format never writes
     /// arrives clamped to `.free` - so the skip used to discard precisely the
     /// records worth refusing over.
-    private mutating func scanBlocks(_ findings: inout Findings) -> Bool {
+    private mutating func buildTruth(
+        _ findings: inout Findings,
+        _ census  : inout Census
+    ) -> Bool {
 
-        let perBitmapBlock = Self.blocksPerBitmapBlock
-        let perTableBlock  = Int(FSLayout.blockSize / FSLayout.objectSize)
+        let perTableBlock = Int(FSLayout.blockSize / FSLayout.objectSize)
 
-        for map in 0..<plan.bitmapBlocks {
+        arenaBuffer.initializeMemory(
+            as: UInt8.self, repeating: 0,
+            count: Int(plan.bitmapBlocks) * Int(FSLayout.blockSize)
+        )
 
-            let first = UInt64(map) * perBitmapBlock
-            let last  = first + perBitmapBlock
+        // Everything before the data region belongs to the file system itself
+        // and is used by definition.
+        markTruth(from: 0, count: plan.dataStart)
 
-            dataBuffer.initializeMemory(
-                as: UInt8.self, repeating: 0, count: Int(FSLayout.blockSize)
-            )
-
-            // Everything before the data region belongs to the file system
-            // itself and is used by definition.
-            for block in 0..<UInt64(plan.dataStart) where block >= first && block < last {
-                mark(UInt32(block))
+        for table in 0..<plan.tableBlocks {
+            guard readBlock(plan.tableStart + table, into: metaBuffer) == .ok else {
+                return false
             }
 
-            for table in 0..<plan.tableBlocks {
-                guard readBlock(plan.tableStart + table, into: metaBuffer) == .ok else {
-                    return false
-                }
-
-                for slot in 0..<perTableBlock {
+              for slot in 0..<perTableBlock {
                     let record = FSObject(
                         reading: metaBuffer.advanced(by: slot * Int(FSLayout.objectSize))
                     )
 
                     let index = table * UInt32(perTableBlock) + UInt32(slot)
 
-                    // Asked here and not only at `object`, and asked before the
-                    // free-slot skip. See the doc above.
                     guard record.fits(plan) else {
                         found(&findings.impossible)
                         quarantine()
@@ -367,37 +437,74 @@ extension FileSystem {
                         quarantine()
                     }
 
+                    census.owned += UInt64(record.blocks)
+
+                    if record.kind == .container {
+                        count(container: index, using: record.used, into: &census)
+                    }
+
                     for run in 0..<Int(record.extents) {
                         let extent = record.runs[run]
 
-                        for block in UInt64(extent.start)..<UInt64(extent.start + extent.count)
-                        where block >= first && block < last {
-
-                            if mark(UInt32(block)) {
-                                found(&findings.claimedTwice)
-                                quarantine()
-                            }
+                        // Bits already set are blocks something else claimed first.
+                        let twice = markTruth(from: extent.start, count: extent.count)
+                        if twice > 0 {
+                            found(&findings.claimedTwice, by: twice)
+                            quarantine()
                         }
                     }
-                }
-            }
-
-            guard readBlock(plan.bitmapStart + map, into: metaBuffer) == .ok else {
-                return false
-            }
-
-            for byte in 0..<Int(FSLayout.blockSize) {
-                let truth  = dataBuffer.loadUnaligned(fromByteOffset: byte, as: UInt8.self)
-                let stored = metaBuffer.loadUnaligned(fromByteOffset: byte, as: UInt8.self)
-
-                guard truth != stored else { continue }
-
-                found(&findings.reclaimable,  by: UInt32(count(of: stored & ~truth)))
-                found(&findings.ownedButFree, by: UInt32(count(of: truth & ~stored)))
-            }
+              }
         }
 
         return true
+    }
+
+
+    /// Puts a live container into the census, ascending because the table is
+    /// walked in order, and past `FSLayout.maxContainers` only says so.
+    private func count(
+        container index: UInt32,
+        using       used: UInt32,
+        into      census: inout Census
+    ) {
+        census.charged += UInt64(used)
+
+        guard census.containers < FSLayout.maxContainers else {
+            census.tooManyContainers = true
+            return
+        }
+
+        tallyBuffer.storeBytes(of: index, toByteOffset: census.containers * 4, as: UInt32.self)
+        dataBuffer.storeBytes(of: used, toByteOffset: census.containers * 4, as: UInt32.self)
+        census.containers += 1
+    }
+
+
+    /// Sets `count` bits of the map being built from `start`, a word at a time,
+    /// and says how many were set already.
+    ///
+    /// The runs were asked by `fits` to end inside the disk, so every bit lands
+    /// in a bitmap block the arena holds.
+    @discardableResult
+    private func markTruth(from start: UInt32, count: UInt32) -> UInt32 {
+
+        let per   = Self.blocksPerBitmapBlock
+        var done  = UInt64(0)
+        var twice = UInt32(0)
+
+        while done < UInt64(count) {
+            let block  = UInt64(start) + done
+            let inside = Int(block % per)
+            let width  = Int(min(UInt64(count) - done, per - UInt64(inside)))
+            let page   = truthPage(UInt32(block / per))
+
+            twice += UInt32(width - FSBitmap.clearCount(page, from: inside, count: width))
+            FSBitmap.set(page, from: inside, count: width, used: true)
+
+            done += UInt64(width)
+        }
+
+        return twice
     }
 
 
@@ -417,7 +524,9 @@ extension FileSystem {
     /// `object` are borrowed. Three separate buffers, which is why this can walk
     /// a folder and resolve a name inside the walk.
     static var nameScrubDescriptorCapacity: Int { Int(FSLayout.blockSize) / 8 }
-    static var nameScrubTargetCapacity: UInt32 { UInt32(FSLayout.blockSize * 8) }
+    var nameScrubTargetCapacity: UInt64 {
+        UInt64(Self.targetBlocks(plan)) * FSLayout.blockSize * 8
+    }
     static var nameScrubPassBudget: Int { 32 }
 
     static func nameScrubPartitions(named: Int) -> Int? {
@@ -556,93 +665,96 @@ extension FileSystem {
     }
 
     private mutating func scanNames(_ findings: inout Findings) -> Bool {
-        guard plan.objectCount <= Self.nameScrubTargetCapacity else {
+        guard UInt64(plan.objectCount) <= nameScrubTargetCapacity else {
             findings.nameScrubState = .budgetExhausted
             return false
         }
 
-        targetBuffer.initializeMemory(as: UInt8.self, repeating: 0, count: Int(FSLayout.blockSize))
+        targetBuffer.initializeMemory(
+            as: UInt8.self, repeating: 0,
+            count: Self.targetBlocks(plan) * Int(FSLayout.blockSize)
+        )
         let key = superblockGeneration &* 0x9E3779B97F4A7C15
             ^ mutations
 
-        for index in 0..<plan.objectCount {
-            let record: FSObject
-            switch readObject(index) {
-                case .live(let value):
-                    record = value
-                case .free:
+        // A table block held in the arena while its folders are walked: asking
+        // the door per record copied a whole block per object.
+        let perTableBlock = Int(FSLayout.blockSize / FSLayout.objectSize)
+        let held          = truthPage(0)
+
+        for table in 0..<plan.tableBlocks {
+            guard readBlock(plan.tableStart + table, into: held) == .ok else { return false }
+
+            for slot in 0..<perTableBlock {
+                let record = FSObject(reading: held.advanced(by: slot * Int(FSLayout.objectSize)))
+                let index  = table * UInt32(perTableBlock) + UInt32(slot)
+
+                // The census before this counted and held whatever is not a record.
+                guard record.fits(plan), record.standing == .live, record.kind != .file else {
                     continue
-                case .outside:
-                    findings.nameScrubState = .budgetExhausted
-                    return false
-                case .failed:
-                    return false
-                case .corrupt:
-                    continue
-            }
+                }
 
-            guard record.kind != .file else { continue }
+                var named = 0
+                for run in 0..<Int(record.extents) {
+                    let extent = record.runs[run]
 
-            var named = 0
-            for run in 0..<Int(record.extents) {
-                let extent = record.runs[run]
+                    for block in extent.start..<(extent.start + extent.count) {
+                        guard readBlock(block, into: tallyBuffer) == .ok else { return false }
 
-                for block in extent.start..<(extent.start + extent.count) {
-                    guard readBlock(block, into: tallyBuffer) == .ok else { return false }
+                        for slot in 0..<Int(Self.entriesPerBlock) {
+                            let entry = FSEntry(
+                                reading: tallyBuffer.advanced(by: slot * Int(FSLayout.entrySize))
+                            )
 
-                    for slot in 0..<Int(Self.entriesPerBlock) {
-                        let entry = FSEntry(
-                            reading: tallyBuffer.advanced(by: slot * Int(FSLayout.entrySize))
-                        )
+                            switch entry.standing {
+                                case .free:
+                                    continue
+                                case .impossible:
+                                    found(&findings.brokenEntries)
+                                    quarantine()
+                                case .named:
+                                    guard named < Int.max else {
+                                        findings.nameScrubState = .budgetExhausted
+                                        return false
+                                    }
+                                    named += 1
 
-                        switch entry.standing {
-                            case .free:
-                                continue
-                            case .impossible:
-                                found(&findings.brokenEntries)
-                                quarantine()
-                            case .named:
-                                guard named < Int.max else {
-                                    findings.nameScrubState = .budgetExhausted
-                                    return false
-                                }
-                                named += 1
-
-                                switch readObject(entry.object) {
-                                    case .live(let target):
-                                        guard target.parent == index else {
+                                    switch readObject(entry.object) {
+                                        case .live(let target):
+                                            guard target.parent == index else {
+                                                found(&findings.strayNames)
+                                                quarantine()
+                                                continue
+                                            }
+                                            if markNameScrubTarget(entry.object) {
+                                                found(&findings.duplicateTargets)
+                                                quarantine()
+                                            }
+                                        case .free, .outside, .corrupt:
                                             found(&findings.strayNames)
                                             quarantine()
-                                            continue
-                                        }
-                                        if markNameScrubTarget(entry.object) {
-                                            found(&findings.duplicateTargets)
-                                            quarantine()
-                                        }
-                                    case .free, .outside, .corrupt:
-                                        found(&findings.strayNames)
-                                        quarantine()
-                                    case .failed:
-                                        return false
-                                }
+                                        case .failed:
+                                            return false
+                                    }
+                            }
                         }
                     }
                 }
-            }
 
-            guard let partitions = Self.nameScrubPartitions(named: named) else {
-                findings.nameScrubState = .budgetExhausted
-                return false
-            }
+                guard let partitions = Self.nameScrubPartitions(named: named) else {
+                    findings.nameScrubState = .budgetExhausted
+                    return false
+                }
 
-            for partition in 0..<partitions {
-                guard scanNamePartition(
-                    record,
-                    partition: partition,
-                    partitions: partitions,
-                    key: key,
-                    findings: &findings
-                ) else { return false }
+                for partition in 0..<partitions {
+                    guard scanNamePartition(
+                        record,
+                        partition: partition,
+                        partitions: partitions,
+                        key: key,
+                        findings: &findings
+                    ) else { return false }
+                }
             }
         }
 
@@ -650,105 +762,48 @@ extension FileSystem {
     }
 
 
-    /// How many containers this version of the format keeps an index of.
-    ///
-    /// One page of counters, so a thousand and twenty-four. It is a *bound* and
-    /// not a window: the walk below reads the object table twice however many
-    /// containers there are, and a disk with more than this many is reported
-    /// rather than checked in pieces.
-    ///
-    /// It used to be a window, and that was the mistake. A pass over the whole
-    /// object table per window meant the thousand and twenty-fifth container
-    /// bought a second pass, and on a large disk a pass is the whole table: the
-    /// room walk went from one table read per block to as many as there are
-    /// windows. Measured, the step was visible; see `ScaleTests`.
-    ///
-    /// Past this the answer is a persistent quota index, which is v03: a number
-    /// kept up to date as blocks are charged needs no walk at all.
-    static var maxContainersV02: Int { Int(FSLayout.blockSize) / 4 }
 
 
-    /// Every container's room against what is actually charged to it.
+    /// Every container's room against what is actually charged to it: one pass
+    /// over the object table, after a census.
     ///
-    /// Writes nothing, whatever it finds, and holds the volume still when it
-    /// finds a container whose room does not add up. A volume that was not
-    /// interrupted and does not add up is damaged; the one that was interrupted
-    /// is put right instead, by `putRight`, and that is the only place a room is
-    /// ever recomputed.
-    private mutating func scanRoom(_ findings: inout Findings) -> Bool {
-        roomWalk(&findings, mending: false)
-    }
-
-
-    /// Rebuilds every container's room from the records charged to it.
+    /// The census found the containers, ascending because that is the order the
+    /// table is walked in, and left them in the accumulator page. This pass adds
+    /// up what every live record is charged to, by looking its container up in
+    /// that index - a binary search of ten comparisons rather than a pass of the
+    /// table. Then the counts are compared against what each container says
+    /// about itself. It used to find the containers with a pass of its own.
     ///
-    /// Each correction is its own transaction: a container's `used` derived from
-    /// the records is right whatever the other containers say, so correcting one
-    /// is an act that stands alone and does not have to fit in a journal beside
-    /// the rest.
-    private mutating func roomRebuild(_ findings: inout Findings) -> Bool {
-        roomWalk(&findings, mending: true)
-    }
-
-
-    /// Two passes over the object table, and never more.
+    /// Reporting or mending. A scan reports a container whose room does not add
+    /// up and holds the volume still: a volume that was not interrupted and does
+    /// not add up is damaged. A dirty mount mends instead, each correction its
+    /// own transaction, because a container's `used` derived from the records is
+    /// right whatever the other containers say.
     ///
-    /// The first finds the containers, in ascending order because that is the
-    /// order the table is walked in. The second adds up what every live record is
-    /// charged to, by looking its container up in that index - a binary search of
-    /// ten comparisons rather than a pass of the table. Then the counts are
-    /// compared against what each container says about itself.
-    ///
-    /// Two buffers, and both are free here: the accumulator page holds the index
-    /// and the data page holds the counts. A thousand and twenty-four of each,
-    /// which is `maxContainersV02`.
+    /// The data page holds the counts, a thousand and twenty-four of them, which
+    /// is `FSLayout.maxContainers`.
     private mutating func roomWalk(
         _ findings: inout Findings,
+        census    : Census,
         mending   : Bool
     ) -> Bool {
 
         let perTableBlock = Int(FSLayout.blockSize / FSLayout.objectSize)
 
-        tallyBuffer.initializeMemory(
-            as: UInt8.self, repeating: 0, count: Int(FSLayout.blockSize)
-        )
+        // Said out loud rather than checked in pieces. See
+        // `FSLayout.maxContainers`.
+        guard !census.tooManyContainers else {
+            findings.tooManyContainers = true
+            return true
+        }
+
+        let containers = census.containers
+
         dataBuffer.initializeMemory(
             as: UInt8.self, repeating: 0, count: Int(FSLayout.blockSize)
         )
 
-        // Pass one: which containers there are.
-        var containers = 0
-
-        for table in 0..<plan.tableBlocks {
-            guard readBlock(plan.tableStart + table, into: metaBuffer) == .ok else {
-                return false
-            }
-
-            for slot in 0..<perTableBlock {
-                let record = FSObject(
-                    reading: metaBuffer.advanced(by: slot * Int(FSLayout.objectSize))
-                )
-
-                guard record.fits(plan), record.standing == .live,
-                      record.kind == .container else { continue }
-
-                guard containers < Self.maxContainersV02 else {
-                    // Said out loud rather than checked in pieces. See
-                    // `maxContainersV02`.
-                    findings.tooManyContainers = true
-                    return true
-                }
-
-                let index = table * UInt32(perTableBlock) + UInt32(slot)
-                tallyBuffer.storeBytes(
-                    of: index, toByteOffset: containers * 4, as: UInt32.self
-                )
-
-                containers += 1
-            }
-        }
-
-        // Pass two: what is charged to each of them.
+        // What is charged to each of them.
         for table in 0..<plan.tableBlocks {
             guard readBlock(plan.tableStart + table, into: metaBuffer) == .ok else {
                 return false
@@ -871,55 +926,37 @@ extension FileSystem {
 
         guard findings.repairable else { return .notFound }
 
-        let perTableBlock = Int(FSLayout.blockSize / FSLayout.objectSize)
+        // The map rebuilt from the records, whole, before the first transaction:
+        // staging later goes through the arena it is built in. See below.
+        var again  = Findings()
+        var census = Census()
+        guard buildTruth(&again, &census) else { return .deviceFailed }
 
-        // One transaction per bitmap block, and not one for the whole repair.
-        //
-        // Each block is rebuilt from the records alone, so each is independently
-        // true of the disk: stopping between two of them leaves a correct map for
-        // the blocks already done and the old one for the rest, which is a state
-        // the next scan puts right the same way. One transaction for all of them
-        // would be bounded by the journal instead - sixteen images - and a disk
-        // big enough to need seventeen bitmap blocks could then never be
-        // repaired at all.
+        return rewriteMap()
+    }
+
+
+    /// Writes the map built in the arena over the one on the disk.
+    ///
+    /// One transaction per bitmap block, and not one for the whole repair. Each
+    /// block is rebuilt from the records alone, so each is independently true of
+    /// the disk: stopping between two of them leaves a correct map for the blocks
+    /// already done and the old one for the rest, which is a state the next scan
+    /// puts right the same way. One transaction for all of them would be bounded
+    /// by the journal instead - sixteen images - and a disk big enough to need
+    /// seventeen bitmap blocks could then never be repaired at all.
+    ///
+    /// Each transaction stages one image, into the arena's first slot, which is
+    /// the first bitmap block's rebuilt page. So each page is copied out before
+    /// it is staged, and the page it lands on was committed already.
+    private mutating func rewriteMap() -> FSStatus {
+
         for map in 0..<plan.bitmapBlocks {
+
+            dataBuffer.copyMemory(from: truthPage(map), byteCount: Int(FSLayout.blockSize))
 
             let begun = begin()
             guard begun == .ok else { return begun }
-
-            let first = UInt64(map) * Self.blocksPerBitmapBlock
-            let last  = first + Self.blocksPerBitmapBlock
-
-            dataBuffer.initializeMemory(
-                as: UInt8.self, repeating: 0, count: Int(FSLayout.blockSize)
-            )
-
-            for block in 0..<UInt64(plan.dataStart) where block >= first && block < last {
-                mark(UInt32(block))
-            }
-
-            for table in 0..<plan.tableBlocks {
-                guard readBlock(plan.tableStart + table, into: metaBuffer) == .ok else {
-                    abort()
-                    return .deviceFailed
-                }
-
-                for slot in 0..<perTableBlock {
-                    let record = FSObject(
-                        reading: metaBuffer.advanced(by: slot * Int(FSLayout.objectSize))
-                    )
-                    guard record.fits(plan), record.standing == .live else { continue }
-
-                    for run in 0..<Int(record.extents) {
-                        let extent = record.runs[run]
-
-                        for block in UInt64(extent.start)..<UInt64(extent.start + extent.count)
-                        where block >= first && block < last {
-                            mark(UInt32(block))
-                        }
-                    }
-                }
-            }
 
             guard finish(
                 stageStructuralBlock(plan.bitmapStart + map, from: dataBuffer)
@@ -956,15 +993,13 @@ extension FileSystem {
     @discardableResult
     public mutating func putRight() -> Findings {
 
-        var findings = scan(.blocks)
+        let first = look(.blocks)
+        var findings = first.findings
+        guard let census = first.census else { return findings }
 
-        // The room, and only on a dirty mount. A clean volume whose containers do
-        // not add up was not interrupted: something wrote a number that cannot be
-        // true, and recomputing it would be tidying away the evidence of a bug or
-        // of damage. So it is corruption there and a repair here.
-        if wasDirty, findings.complete {
-            guard roomRebuild(&findings) else { return findings }
-        }
+        // Mended only on a dirty mount: on a clean one a wrong room is damage or
+        // a bug, and recomputing it would tidy the evidence away.
+        guard roomWalk(&findings, census: census, mending: wasDirty) else { return findings }
 
         // Before the repair, and whether or not the map can also be rebuilt: it
         // used to be inside the branch below.
@@ -974,6 +1009,16 @@ extension FileSystem {
             guard findings.repairable else { return findings }
             findings.mapMended = repair(findings) == .ok
             guard findings.mapMended else { return findings }
+        }
+
+        // Nothing written, so what was read is still the disk and only the names
+        // are left; scanning it all again would read the table twice for nothing.
+        guard findings.mapMended || findings.roomsMended > 0 else {
+            findings.depth = .everything
+            guard scanNames(&findings) else { return findings }
+
+            settle(&findings)
+            return findings
         }
 
         var verified = scan(.everything)
@@ -987,40 +1032,5 @@ extension FileSystem {
         verified.roomsMended = findings.roomsMended
         verified.mapMended  = findings.mapMended
         return verified
-    }
-
-
-    /// Sets one block's bit in the map being built, and says whether it was
-    /// already set.
-    ///
-    /// The answer is the double-claim detector, free of charge: the walk already
-    /// visits every block every record claims, so a block visited twice is a
-    /// block two records claim.
-    @discardableResult
-    private func mark(_ block: UInt32) -> Bool {
-        let place = Self.bitmapBit(of: block)
-
-        let byte  = dataBuffer.loadUnaligned(fromByteOffset: place.byte, as: UInt8.self)
-        let taken = byte & (1 << place.bit) != 0
-
-        dataBuffer.storeBytes(
-            of: byte | (1 << place.bit), toByteOffset: place.byte, as: UInt8.self
-        )
-
-        return taken
-    }
-
-
-    /// How many bits are set in a byte. Eight comparisons, no table.
-    private func count(of byte: UInt8) -> Int {
-        var value = byte
-        var total = 0
-
-        while value != 0 {
-            total += Int(value & 1)
-            value >>= 1
-        }
-
-        return total
     }
 }

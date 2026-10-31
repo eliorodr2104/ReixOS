@@ -149,7 +149,8 @@ public enum FSStatus: UInt32 {
     /// time. See `FSLayout.maxSupportedBlocksV02`.
     case tooManyBlocks
 
-    /// The disk contains more containers than version 02 can index safely.
+    /// The disk contains more containers than this format can index safely.
+    /// See `FSLayout.maxContainers`.
     case unsupportedCapacity
 
     /// A caller's destination cannot hold the complete typed result.

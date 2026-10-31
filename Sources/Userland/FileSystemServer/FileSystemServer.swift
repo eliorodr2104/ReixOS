@@ -38,14 +38,18 @@ public struct FileSystemServer: Service {
     /// at a page and therefore at two blocks - and two is not a pipeline.
     private static let maximumPages : UInt32 = 4
 
-    /// The file system's scratch blocks: two to work in and four it holds.
+    /// The file system's scratch blocks, as many as this disk's geometry asks
+    /// for and no more: a small disk on a small machine does not pay for the
+    /// largest disk the format accepts.
     ///
     /// Allocated rather than declared as a static array: taking the address of
-    /// a global and keeping it is a thing Swift does not promise, and twenty-four
+    /// a global and keeping it is a thing Swift does not promise, and a hundred
     /// kilobytes is far too much to put on a sixteen-kilobyte stack.
-    private static func scratch() -> UnsafeMutableRawPointer {
+    private static func scratch(for device: BlockClient) -> UnsafeMutableRawPointer {
         UnsafeMutableRawPointer.allocate(
-            byteCount: FileSystem<BlockClient>.scratchBytes,
+            byteCount: FileSystem<BlockClient>.scratchBytes(
+                sectorCount: device.sectorCount, sectorSize: device.sectorSize
+            ),
             alignment: 8
         )
     }
@@ -156,7 +160,7 @@ public struct FileSystemServer: Service {
         UserBootPresentation.ready("[ FS    ] disk found, mounting")
 
         // One scratch allocation, used by whichever of the two doors is taken.
-        let scratch = Self.scratch()
+        let scratch = Self.scratch(for: device)
 
         let attempt = FileSystem.mount(device, scratch: scratch)
 

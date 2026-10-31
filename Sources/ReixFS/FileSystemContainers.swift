@@ -53,7 +53,7 @@ extension FileSystem {
 
     mutating func admitContainer() -> FSStatus {
         if let count = containerCount {
-            return count < Self.maxContainersV02 ? .ok : .unsupportedCapacity
+            return count < FSLayout.maxContainers ? .ok : .unsupportedCapacity
         }
 
         var count = 0
@@ -62,12 +62,12 @@ extension FileSystem {
             switch readObject(index) {
                 case .live(let record):
                     guard record.kind == .container else { continue }
-                    guard count < Self.maxContainersV02 else {
+                    guard count < FSLayout.maxContainers else {
                         containerCount = nil
                         return .unsupportedCapacity
                     }
                     count += 1
-                    guard count < Self.maxContainersV02 else {
+                    guard count < FSLayout.maxContainers else {
                         containerCount = count
                         return .unsupportedCapacity
                     }

@@ -36,26 +36,55 @@ public struct FileSystem<Device: BlockDevice> {
     /// A tag no block can wear, so an empty slot needs no second array.
     static var noBlock: UInt32 { .max }
 
-    /// How much scratch memory to hand `init`. Contiguous, and all of it used.
+    /// How much scratch memory to hand `mount` or `format` for a disk of this
+    /// geometry. Contiguous, and all of it used.
     ///
-    /// Six loose blocks, `heldBlocks` cached ones, and the journal's arena.
+    /// Five loose blocks, `heldBlocks` cached ones, then two regions that grow
+    /// with the disk: the name scrub's target bitset and the journal's arena.
     ///
     /// The third loose one is the journal header's: replay copies an after-image
     /// out of a payload block and into its home block, and doing that through
     /// either of the first two would be doing it through a buffer the operation
     /// around it is holding. The fourth is the scan's accumulator - a thousand and
-    /// twenty-four counters over one page - which is what replaced a fixed table
-    /// of thirty-two containers and the report that said "there were more". The
-    /// fifth and sixth are the deep name scrub's target bitset and descriptor
-    /// workspace; neither is journal state or persistent format state.
+    /// twenty-four counters over one page - and the fifth the name scrub's
+    /// descriptor workspace.
     ///
-    /// The arena is the last sixteen, one per journal record: sixty-four kilobytes
-    /// that used to be sixteen blocks of the disk written over and over. Staging
-    /// overwrites an image in place here and the disk sees each one once, at the
-    /// commit. It is the largest thing this type asks for and it is asked for
-    /// once, at mount.
+    /// The arena is one block per journal record, sixteen, and never fewer than
+    /// one per bitmap block: outside a transaction it is where a scan builds the
+    /// whole block map at once, which is what makes a scan one pass over the
+    /// object table instead of one pass per bitmap block. Up to two gibibytes
+    /// that costs nothing the journal was not already asking for.
+    ///
+    /// A device no file system fits gets the smallest shape; `mount` refuses it.
+    public static func scratchBytes(sectorCount: UInt64, sectorSize: UInt64) -> Int {
+        let fixed = 5 + heldBlocks
+        guard let plan = FSLayout.Plan(sectorCount: sectorCount, sectorSize: sectorSize) else {
+            return Int(FSLayout.blockSize) * (fixed + 1 + FSJournal.capacity)
+        }
+
+        return Int(FSLayout.blockSize)
+            * (fixed + targetBlocks(plan) + arenaBlocks(plan))
+    }
+
+    /// Enough scratch for every geometry `mount` and `format` accept.
+    ///
+    /// The regions only grow with the disk, so the largest declared geometry is
+    /// the most any of them asks for. The unchecked doors take bigger disks and
+    /// want `scratchBytes(sectorCount:sectorSize:)` instead.
     public static var scratchBytes: Int {
-        Int(FSLayout.blockSize) * (6 + heldBlocks + FSJournal.capacity)
+        scratchBytes(
+            sectorCount: UInt64(FSLayout.maxSupportedBlocksV02) * (FSLayout.blockSize / 512),
+            sectorSize : 512
+        )
+    }
+
+    /// One bit per object, for the name scrub's duplicate-target check.
+    static func targetBlocks(_ plan: FSLayout.Plan) -> Int {
+        Int(FSLayout.divideUp(UInt64(plan.objectCount), FSLayout.blockSize * 8))
+    }
+
+    static func arenaBlocks(_ plan: FSLayout.Plan) -> Int {
+        Int(plan.bitmapBlocks) > FSJournal.capacity ? Int(plan.bitmapBlocks) : FSJournal.capacity
     }
 
     public var device: Device
@@ -73,7 +102,8 @@ public struct FileSystem<Device: BlockDevice> {
     /// The scan's accumulator. Only a scan touches it.
     private let tally: UnsafeMutableRawPointer
 
-    /// The deep name scan's target bitset. Only a scan touches it.
+    /// The deep name scan's target bitset, one bit per object. Only a scan
+    /// touches it.
     private let targets: UnsafeMutableRawPointer
 
     /// The deep name scan's descriptor workspace. Only a scan touches it.
@@ -235,18 +265,19 @@ public struct FileSystem<Device: BlockDevice> {
             sectorSize : device.sectorSize
         ) else { return nil }
 
-        self.device = device
-        self.plan   = plan
-        self.meta   = scratch
-        self.data   = scratch.advanced(by: Int(FSLayout.blockSize))
-        self.jrnl   = scratch.advanced(by: Int(FSLayout.blockSize) * 2)
-        self.tally  = scratch.advanced(by: Int(FSLayout.blockSize) * 3)
-        self.targets = scratch.advanced(by: Int(FSLayout.blockSize) * 4)
-        self.scrub  = scratch.advanced(by: Int(FSLayout.blockSize) * 5)
-        self.held   = scratch.advanced(by: Int(FSLayout.blockSize) * 6)
-        self.images = scratch.advanced(
-            by: Int(FSLayout.blockSize) * (6 + Self.heldBlocks)
-        )
+        let block = Int(FSLayout.blockSize)
+        let grown = 5 + Self.heldBlocks
+
+        self.device  = device
+        self.plan    = plan
+        self.meta    = scratch
+        self.data    = scratch.advanced(by: block)
+        self.jrnl    = scratch.advanced(by: block * 2)
+        self.tally   = scratch.advanced(by: block * 3)
+        self.scrub   = scratch.advanced(by: block * 4)
+        self.held    = scratch.advanced(by: block * 5)
+        self.targets = scratch.advanced(by: block * grown)
+        self.images  = scratch.advanced(by: block * (grown + Self.targetBlocks(plan)))
 
         self.sectorsPerBlock = FSLayout.blockSize / device.sectorSize
 
@@ -1361,6 +1392,9 @@ public struct FileSystem<Device: BlockDevice> {
     var tallyBuffer: UnsafeMutableRawPointer { tally }
     var targetBuffer: UnsafeMutableRawPointer { targets }
     var scrubBuffer: UnsafeMutableRawPointer { scrub }
+
+    /// The journal's arena, which a scan borrows outside a transaction.
+    var arenaBuffer: UnsafeMutableRawPointer { images }
 
     /// The superblock's `state` word, for a change that must not disturb it.
     var mountedMark: UInt32 { superblock?.state ?? 0 }

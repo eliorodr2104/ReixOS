@@ -66,7 +66,9 @@ enum ReixApp {
     private static func install(_ options: Options) throws {
         let device  = try FileBlockDevice(path: options.disk)
         let scratch = UnsafeMutableRawPointer.allocate(
-            byteCount: FileSystem<FileBlockDevice>.scratchBytes,
+            byteCount: FileSystem<FileBlockDevice>.scratchBytes(
+                sectorCount: device.sectorCount, sectorSize: device.sectorSize
+            ),
             alignment: 4096
         )
         defer { scratch.deallocate() }

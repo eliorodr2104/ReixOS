@@ -43,9 +43,15 @@ struct ScaleTests {
     private static let block = Int(FSLayout.blockSize)
 
 
-    private func scratch() -> UnsafeMutableRawPointer {
+    /// Enough for `sectors`, which past the declared limit is more than the
+    /// fixed `scratchBytes` covers.
+    private func scratch(_ sectors: UInt64 = 0) -> UnsafeMutableRawPointer {
         UnsafeMutableRawPointer.allocate(
-            byteCount: FileSystem<MemoryDisk>.scratchBytes, alignment: 8
+            byteCount: max(
+                FileSystem<MemoryDisk>.scratchBytes,
+                FileSystem<MemoryDisk>.scratchBytes(sectorCount: sectors, sectorSize: 512)
+            ),
+            alignment: 8
         )
     }
 
@@ -94,7 +100,7 @@ struct ScaleTests {
             }
 
             let disk  = MemoryDisk(sectors: sectors)
-            let space = scratch()
+            let space = scratch(sectors)
             defer { space.deallocate() }
 
             // The private door, so a geometry past the declared limit can still
@@ -149,7 +155,7 @@ struct ScaleTests {
 
             let recover = spread {
                 guard plan.totalBlocks <= FSLayout.maxSupportedBlocksV02 else { return }
-                let other = scratch()
+                let other = scratch(sectors)
                 defer { other.deallocate() }
 
                 guard var again = FileSystem.mountUnchecked(
@@ -231,7 +237,7 @@ struct ScaleTests {
     @Test("the container ceiling refuses one more create without another room walk")
     func containersPastOneWindow() {
 
-        // 64 MiB has enough object slots for the v02 container ceiling while
+        // 64 MiB has enough object slots for the container ceiling while
         // keeping this production gate regression quick.
         let sectors: UInt64 = 131072
 
@@ -284,8 +290,8 @@ struct ScaleTests {
 
         // The root is the first container. Fill the remaining production capacity
         // and prove a following request is refused before it writes.
-        fill(to: FileSystem<MemoryDisk>.maxContainersV02 - 1)
-        guard made == FileSystem<MemoryDisk>.maxContainersV02 - 1 else {
+        fill(to: FSLayout.maxContainers - 1)
+        guard made == FSLayout.maxContainers - 1 else {
             Issue.record("only \(made) containers were made")
             return
         }
@@ -366,7 +372,7 @@ struct ScaleTests {
 
         let disk = MemoryDisk(sectors: over)
 
-        let space = scratch()
+        let space = scratch(over)
         defer { space.deallocate() }
 
         let made = FileSystem.format(disk, scratch: space)

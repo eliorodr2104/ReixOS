@@ -20,7 +20,7 @@ import ReixABI
 /// only with a ticket saying which moment it is a report about.
 ///
 /// The room walk has one bounded page of container indices. It reaches every
-/// representable v02 container and rejects an image with more than that bound;
+/// representable container and rejects an image with more than that bound;
 /// it does not use a moving window that could silently omit part of the disk.
 @Suite("Recovery and scrub")
 struct RecoveryTests {
@@ -157,7 +157,7 @@ struct RecoveryTests {
     @Test("the container ceiling refuses before a transaction writes")
     func containerCeilingStopsBeforeWrites() {
         withFileSystem { fs, disk in
-            fs.containerCount = FileSystem<MemoryDisk>.maxContainersV02
+            fs.containerCount = FSLayout.maxContainers
             let writes = disk.writes
 
             named(1_024) { pointer, length in
@@ -184,7 +184,7 @@ struct RecoveryTests {
             return
         }
 
-        let limit = FileSystem<MemoryDisk>.maxContainersV02
+        let limit = FSLayout.maxContainers
         for index in 0..<(limit - 1) {
             guard container(&fs, index, room: 0) != nil else {
                 Issue.record("container \(index)")
@@ -229,7 +229,7 @@ struct RecoveryTests {
         let space = scratch()
         defer { space.deallocate() }
         guard var fs = FileSystem.format(disk, scratch: space).disk else { Issue.record("format"); return }
-        let limit = FileSystem<MemoryDisk>.maxContainersV02
+        let limit = FSLayout.maxContainers
         for index in 0..<(limit - 1) {
             guard container(&fs, index, room: 0) != nil else { Issue.record("container \(index)"); return }
         }
@@ -264,7 +264,7 @@ struct RecoveryTests {
         // first thousand object slots is nothing special. It used to be a window
         // over slot numbers, and a second window cost a second pass.
         withFileSystem(sectors: Self.wideSectors) { fs, _ in
-            #expect(fs.plan.objectCount > UInt32(FileSystem<MemoryDisk>.maxContainersV02))
+            #expect(fs.plan.objectCount > UInt32(FSLayout.maxContainers))
 
             // Fill the first thousand slots with plain files, so the container
             // below lands past them.
@@ -294,7 +294,7 @@ struct RecoveryTests {
                 return
             }
 
-            #expect(made.object >= UInt32(FileSystem<MemoryDisk>.maxContainersV02),
+            #expect(made.object >= UInt32(FSLayout.maxContainers),
                     "the container landed at \(made.object), inside the first thousand")
 
             let findings = fs.scan(.everything)
