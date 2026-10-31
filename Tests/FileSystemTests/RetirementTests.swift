@@ -111,7 +111,7 @@ struct RetirementTests {
             // limit, and the one after that is the removal that would have
             // wrapped.
             setGeneration(disk, fs.plan, object, last - 1)
-            fs.dropCache()
+            fs.believeMedium()
 
             #expect(remove(&fs, "doomed.bin") == .ok)
 
@@ -152,7 +152,7 @@ struct RetirementTests {
             }
 
             setGeneration(disk, fs.plan, object, limit(fs.plan))
-            fs.dropCache()
+            fs.believeMedium()
 
             #expect(remove(&fs, "doomed.bin") == .ok)
             #expect(fs.object(object)?.retired == true)
@@ -207,7 +207,7 @@ struct RetirementTests {
             let stale = handles.encode(object: object, generation: 0)
 
             setGeneration(disk, fs.plan, object, limit(fs.plan))
-            fs.dropCache()
+            fs.believeMedium()
 
             #expect(remove(&fs, "doomed.bin") == .ok)
 

@@ -834,7 +834,7 @@ struct DecoderFailClosedTests {
 
             // And a self-parented folder, which nothing can derive the answer to.
             disk.poke(folder, at: recordAt(fs, folder) + At.parent)
-            fs.dropCache()
+            fs.believeMedium()
 
             let findings = fs.putRight()
 

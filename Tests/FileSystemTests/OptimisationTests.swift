@@ -297,7 +297,7 @@ struct OptimisationTests {
 
                 let last = plan.totalBlocks
                 fragment(disk, plan) { used($0, plan.dataStart, last) }
-                fs.dropCache()
+                fs.believeMedium()
 
                 var found = FSRun.refused(.noSpace)
                 let scan = spread { found = fs.allocateRun(wanted) }
@@ -540,7 +540,7 @@ struct OptimisationTests {
             // this walk.
             let last = plan.totalBlocks
             fragment(disk, plan) { $0 >= plan.dataStart && $0 < last - 100 }
-            fs.dropCache()
+            fs.believeMedium()
 
             var free = UInt32(0)
             let count = spread { free = fs.freeBlocks() }

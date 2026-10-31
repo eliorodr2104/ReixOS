@@ -114,6 +114,32 @@ struct CensusTests {
     }
 
 
+    @Test("two records claiming a block in the second bitmap block are found")
+    func doubleClaimInTheSecondGroup() {
+        withDisk(Self.wide) { fs, disk in
+            let edge = UInt32(FileSystem<MemoryDisk>.blocksPerBitmapBlock)
+            fs.blockHint = edge + 100
+
+            guard let first  = file(&fs, "one.bin"),
+                  let second = file(&fs, "two.bin"),
+                  let owner  = fs.object(first)
+            else { Issue.record("files"); return }
+
+            #expect(owner.runs[0].start > edge)
+
+            let at = Int(fs.plan.tableStart) * Int(FSLayout.blockSize)
+                + Int(second) * Int(FSLayout.objectSize) + 64
+            disk.poke(owner.runs[0].start, at: at)
+            fs.believeMedium()
+
+            let findings = fs.scan(.blocks)
+            #expect(findings.claimedTwice == 1)
+            #expect(findings.reclaimable == 1)
+            #expect(fs.corrupted)
+        }
+    }
+
+
     @Test("a repair rewrites every bitmap block from one rebuilt map")
     func repairCoversEveryGroup() {
         withDisk(Self.wide) { fs, disk in
@@ -235,7 +261,7 @@ struct CensusTests {
         let ceiling = UInt64(FSLayout.maxSupportedBlocksV02) * (FSLayout.blockSize / 512)
         #expect(FileSystem<MemoryDisk>.scratchBytes
                 == FileSystem<MemoryDisk>.scratchBytes(sectorCount: ceiling, sectorSize: 512))
-        #expect(FileSystem<MemoryDisk>.scratchBytes(sectorCount: 32768, sectorSize: 512) == 104 * 1024)
+        #expect(FileSystem<MemoryDisk>.scratchBytes(sectorCount: 32768, sectorSize: 512) == 108 * 1024)
     }
 
 

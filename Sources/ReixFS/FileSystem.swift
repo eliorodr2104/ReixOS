@@ -39,8 +39,9 @@ public struct FileSystem<Device: BlockDevice> {
     /// How much scratch memory to hand `mount` or `format` for a disk of this
     /// geometry. Contiguous, and all of it used.
     ///
-    /// Five loose blocks, `heldBlocks` cached ones, then two regions that grow
-    /// with the disk: the name scrub's target bitset and the journal's arena.
+    /// Five loose blocks, `heldBlocks` cached ones, then three regions that grow
+    /// with the disk: the name scrub's target bitset, the journal's arena, and
+    /// the checksum of every bitmap and table block.
     ///
     /// The third loose one is the journal header's: replay copies an after-image
     /// out of a payload block and into its home block, and doing that through
@@ -59,11 +60,11 @@ public struct FileSystem<Device: BlockDevice> {
     public static func scratchBytes(sectorCount: UInt64, sectorSize: UInt64) -> Int {
         let fixed = 5 + heldBlocks
         guard let plan = FSLayout.Plan(sectorCount: sectorCount, sectorSize: sectorSize) else {
-            return Int(FSLayout.blockSize) * (fixed + 1 + FSJournal.capacity)
+            return Int(FSLayout.blockSize) * (fixed + 1 + FSJournal.capacity + 1)
         }
 
         return Int(FSLayout.blockSize)
-            * (fixed + targetBlocks(plan) + arenaBlocks(plan))
+            * (fixed + targetBlocks(plan) + arenaBlocks(plan) + sumBlocks(plan))
     }
 
     /// Enough scratch for every geometry `mount` and `format` accept.
@@ -85,6 +86,13 @@ public struct FileSystem<Device: BlockDevice> {
 
     static func arenaBlocks(_ plan: FSLayout.Plan) -> Int {
         Int(plan.bitmapBlocks) > FSJournal.capacity ? Int(plan.bitmapBlocks) : FSJournal.capacity
+    }
+
+    /// Four bytes per bitmap block and per table block. See `sums`.
+    static func sumBlocks(_ plan: FSLayout.Plan) -> Int {
+        Int(FSLayout.divideUp(
+            4 * (UInt64(plan.bitmapBlocks) + UInt64(plan.tableBlocks)), FSLayout.blockSize
+        ))
     }
 
     public var device: Device
@@ -133,6 +141,23 @@ public struct FileSystem<Device: BlockDevice> {
     /// until the commit writes it out, which is also why an abandoned transaction
     /// touches the medium not at all.
     private let images: UnsafeMutableRawPointer
+
+    /// What every bitmap block and every table block should checksum to: the
+    /// bitmap's first, then the table's, four bytes each.
+    ///
+    /// Moved by every write of one of those blocks and asked by every read of
+    /// one off the medium, so a block that changed behind this process's back -
+    /// rot, a write the disk lost, a hand that is not this one - is refused the
+    /// first time it is read instead of being believed.
+    private let sums: UnsafeMutableRawPointer
+
+    /// Whether `sums` describes the disk yet.
+    ///
+    /// Not on a dirty mount until its scan has read every one of those blocks:
+    /// until then a read records what it found instead of judging it, because
+    /// there is nothing to judge it against. True from a format or a whole
+    /// scan, and from then on every read is checked.
+    var sumsKnown = false
 
     /// Which block sits in each slot, or `noBlock`.
     private var tags = InlineArray<4, UInt32>(repeating: FileSystem.noBlock)
@@ -278,6 +303,9 @@ public struct FileSystem<Device: BlockDevice> {
         self.held    = scratch.advanced(by: block * 5)
         self.targets = scratch.advanced(by: block * grown)
         self.images  = scratch.advanced(by: block * (grown + Self.targetBlocks(plan)))
+        self.sums    = scratch.advanced(
+            by: block * (grown + Self.targetBlocks(plan) + Self.arenaBlocks(plan))
+        )
 
         self.sectorsPerBlock = FSLayout.blockSize / device.sectorSize
 
@@ -461,9 +489,54 @@ public struct FileSystem<Device: BlockDevice> {
             
         ) == .ok else { return deviceRefused() }
 
+        // Off the medium, so asked whether it is what was last written there.
+        guard believe(index, read: buffer) else {
+            quarantine()
+            return .quarantined
+        }
+
         keep(index, from: buffer)
 
         return .ok
+    }
+
+
+    /// Where `index`'s checksum sits in `sums`, if it is a bitmap or table block.
+    private func sumSlot(of index: UInt32) -> Int? {
+        if index >= plan.bitmapStart, index - plan.bitmapStart < plan.bitmapBlocks {
+            return Int(index - plan.bitmapStart)
+        }
+        if index >= plan.tableStart, index - plan.tableStart < plan.tableBlocks {
+            return Int(plan.bitmapBlocks) + Int(index - plan.tableStart)
+        }
+        return nil
+    }
+
+    /// What `index` should checksum to, for the seal. Bitmap and table only.
+    func expectedSum(of index: UInt32) -> UInt32? {
+        guard let slot = sumSlot(of: index) else { return nil }
+        return sums.loadUnaligned(fromByteOffset: slot * 4, as: UInt32.self)
+    }
+
+    /// Sets what `index` should checksum to, for a seal being loaded.
+    mutating func expect(_ sum: UInt32, of index: UInt32) {
+        guard let slot = sumSlot(of: index) else { return }
+        sums.storeBytes(of: sum, toByteOffset: slot * 4, as: UInt32.self)
+    }
+
+    /// Whether a block just read off the medium is the one this process last
+    /// knew to be there. Recorded instead of judged while `sumsKnown` is false.
+    private mutating func believe(_ index: UInt32, read buffer: UnsafeRawPointer) -> Bool {
+        guard let slot = sumSlot(of: index) else { return true }
+
+        let sum = FSChecksum.over(buffer, count: Int(FSLayout.blockSize))
+
+        guard sumsKnown else {
+            sums.storeBytes(of: sum, toByteOffset: slot * 4, as: UInt32.self)
+            return true
+        }
+
+        return sums.loadUnaligned(fromByteOffset: slot * 4, as: UInt32.self) == sum
     }
 
 
@@ -614,6 +687,10 @@ public struct FileSystem<Device: BlockDevice> {
             from: buffer
             
         ) == .ok else { return deviceRefused() }
+
+        // Only once the device has taken it. A refused write left the old bytes,
+        // and the old checksum is still the true one.
+        expect(FSChecksum.over(buffer, count: Int(FSLayout.blockSize)), of: index)
 
         keep(index, from: buffer)
 
@@ -1356,6 +1433,10 @@ public struct FileSystem<Device: BlockDevice> {
         liveSuperblock = FSLayout.superblockB
         wasDirty       = false
         containerCount = 1
+
+        // Every bitmap and table block was just written by this process, so its
+        // checksum is known from here on.
+        sumsKnown      = true
 
         return .ok
     }

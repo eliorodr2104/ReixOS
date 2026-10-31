@@ -311,14 +311,10 @@ struct CorruptRecordTests {
             + Int(made[1]) * Int(FSLayout.objectSize)
 
         disk.poke(first.runs[0].start, at: at + 64)
-        fs.dropCache()
+        fs.believeMedium()
 
-        // Planted under the live mount and asked of it, because a pair like this
-        // one on the medium is a disk `mount` refuses outright: that is what the
-        // tests above assert, and it would leave nothing here to scrub.
-        //
-        // Both records pass on their own, so nothing is quarantined until the
-        // scrub puts them side by side.
+        // Planted by a hand that keeps the checksums right, which only a scrub
+        // can see: each record passes alone, and only the pair is wrong.
         #expect(fs.object(made[0]) != nil)
         #expect(fs.object(made[1]) != nil)
         #expect(!fs.corrupted)

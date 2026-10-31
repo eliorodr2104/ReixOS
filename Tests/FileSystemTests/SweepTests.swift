@@ -160,7 +160,7 @@ struct SweepTests {
                 for (name, used, counts) in cases {
                     for count in counts {
                         let taken = paint(disk, plan, used)
-                        fs.dropCache()
+                        fs.believeMedium()
 
                         let want = expected(
                             taken, Int(count),
@@ -189,13 +189,13 @@ struct SweepTests {
             // three, of which one block is not on the disk.
             let last = plan.totalBlocks - 1
             _ = paint(disk, plan, { $0 >= plan.dataStart && $0 < last - 1 })
-            fs.dropCache()
+            fs.believeMedium()
 
             #expect(chosen(&fs, 2) == last - 1)
 
             let taken = paint(disk, plan, { $0 >= plan.dataStart && $0 < last - 1 })
             #expect(taken.count == Int(plan.totalBlocks))
-            fs.dropCache()
+            fs.believeMedium()
 
             #expect(chosen(&fs, 3) == nil, "a run ran off the end of the disk")
         }
@@ -217,7 +217,7 @@ struct SweepTests {
                     ("all but one", { $0 >= data && $0 != data + 7 }),
                 ] {
                     let taken = paint(disk, plan, used)
-                    fs.dropCache()
+                    fs.believeMedium()
 
                     // Only the data region counts: the front of the disk is the
                     // file system's own and is never free.

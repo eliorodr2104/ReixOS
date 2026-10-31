@@ -211,10 +211,9 @@ struct ScrubTests {
                 + Int(object) * Int(FSLayout.objectSize)
             disk.poke(UInt32(1), at: at + 64)
 
-            // A poke is another writer, and a cache cannot see one. Nothing on a
-            // mounted volume writes behind the file system's back; this does,
-            // which is the whole point of it.
-            fs.dropCache()
+            // A poke that keeps every checksum right: the damage only a scrub is
+            // there to find. A careless one is refused on its first read.
+            fs.believeMedium()
 
             let findings = fs.scan()
 
@@ -415,7 +414,7 @@ struct ScrubTests {
             let at = Int(fs.plan.tableStart) * Int(FSLayout.blockSize)
                 + Int(made.object) * Int(FSLayout.objectSize)
             disk.poke(UInt32(29), at: at + 36)      // used
-            fs.dropCache()
+            fs.believeMedium()
 
             let deep = fs.scan(.everything)
 
@@ -434,7 +433,7 @@ struct ScrubTests {
             let at = Int(fs.plan.tableStart) * Int(FSLayout.blockSize)
                 + Int(folder) * Int(FSLayout.objectSize)
             disk.poke(folder, at: at + 44)          // parent
-            fs.dropCache()
+            fs.believeMedium()
 
             let findings = fs.scan()
 

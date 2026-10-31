@@ -245,6 +245,10 @@ struct RecoveryTests {
             for index in 0..<Int(FSLayout.objectSize) { disk.poke(raw[index], at: offset + index) }
         }
 
+        // Written by a hand that keeps the table's checksums right, so the scan
+        // gets as far as counting it.
+        fs.believeMedium()
+
         let findings = fs.scan(.everything)
         #expect(findings.tooManyContainers)
         #expect(!findings.quotasChecked)

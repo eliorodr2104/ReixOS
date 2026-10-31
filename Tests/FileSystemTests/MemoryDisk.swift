@@ -327,3 +327,18 @@ final class MemoryDisk: BlockDevice {
         }
     }
 }
+
+
+extension FileSystem {
+
+    /// Takes the medium as it now stands as this file system's own writing.
+    ///
+    /// For a test whose poke is the fixture rather than the damage: a bitmap
+    /// painted into a pattern, a counter moved to where years would leave it, a
+    /// contradiction only a scrub is meant to find. The next scan learns every
+    /// checksum again from what it reads.
+    mutating func believeMedium() {
+        dropCache()
+        sumsKnown = false
+    }
+}

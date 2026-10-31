@@ -347,6 +347,9 @@ extension FileSystem {
     /// bitmap block, and both of those grow with the disk. Now it is one pass and
     /// one read per bitmap block, for the price of memory the arena already is.
     ///
+    /// A scan reads every table and bitmap block, so a whole one is also what
+    /// tells `sums` what the disk holds.
+    ///
     /// Nil when the device stopped answering part way.
     @discardableResult
     mutating func scanBlocks(_ findings: inout Findings) -> Census? {
@@ -373,6 +376,9 @@ extension FileSystem {
                 found(&findings.ownedButFree, by: UInt32((built & ~stored).nonzeroBitCount))
             }
         }
+
+        // Every bitmap and table block has now been read off the medium.
+        sumsKnown = true
 
         containerCount = census.tooManyContainers ? FSLayout.maxContainers : census.containers
 
