@@ -449,11 +449,11 @@ public final class HostRAM {
 /// Runs `body` over one `HostRAM` of `pages` pages, then releases it.
 public func withHostRAM(
     pages : Int,
-    _ body: (HostRAM) -> Void
-) {
+    _ body: (HostRAM) throws -> Void
+) rethrows {
     let ram = HostRAM(pages: pages)
-    body(ram)
-    ram.release()
+    defer { ram.release() }
+    try body(ram)
 }
 
 

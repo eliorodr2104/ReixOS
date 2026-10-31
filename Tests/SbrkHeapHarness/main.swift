@@ -138,4 +138,85 @@ reixFree(wholePage)
 reixFree(afterGrowth)
 reixFree(afterRecovery)
 
+// Every class through posix_memalign, so 8 bytes is a class of its own: a page
+// holds exactly its usable blocks and is decommitted at its last free, no sooner.
+private func allocClass(_ size: UInt) -> UnsafeMutableRawPointer? {
+    var output: UnsafeMutableRawPointer? = nil
+    return reixPosixMemalign(&output, 8, size) == 0 ? output : nil
+}
+
+let usableBlocks: [(UInt, Int)] = [
+    (8, 501), (16, 252), (32, 126), (64, 63), (128, 31),
+    (256, 16), (512, 8), (1024, 4), (2048, 2), (4096, 1),
+]
+for (size, count) in usableBlocks {
+    let decommits = reix_heap_host_decommit_count()
+    let blocks = (0..<count).map { _ in allocClass(size)! }
+    require(blocks.allSatisfy { samePage($0, blocks[0]) }, "a class page did not hold its usable blocks")
+    require(Set(blocks.map { UInt(bitPattern: $0) }).count == count, "a class page aliased its blocks")
+
+    let spill = allocClass(size)
+    require(spill != nil && !samePage(spill, blocks[0]), "a full page served a block past its usable count")
+    reixFree(spill)
+    require(reix_heap_host_decommit_count() == decommits + 1, "the one-block spill page was not released")
+
+    for (index, block) in blocks.enumerated() {
+        reixFree(block)
+        let expected = decommits + 1 + (index + 1 == count ? 1 : 0)
+        require(reix_heap_host_decommit_count() == expected, "a page was not released exactly at its last free")
+    }
+}
+
+// Three partial pages; emptying the middle one releases it at once, and the two
+// left keep serving the class without growing the arena.
+let breakBeforeLists = reix_heap_host_break_offset()
+var listPages = (0..<3).map { _ in (0..<63).map { _ in allocClass(64)! } }
+for page in listPages { reixFree(page[0]) }
+let decommitsBeforeMiddle = reix_heap_host_decommit_count()
+for block in listPages[1].dropFirst() { reixFree(block) }
+require(reix_heap_host_decommit_count() == decommitsBeforeMiddle + 1, "emptied middle page was not released")
+let refillA = allocClass(64)
+let refillB = allocClass(64)
+require(
+    samePage(refillA, listPages[2][1]) && samePage(refillB, listPages[0][1]),
+    "remaining partial pages were not served head first"
+)
+require(reix_heap_host_break_offset() == breakBeforeLists, "partial pages were bypassed by arena growth")
+listPages[2][0] = refillA!
+listPages[0][0] = refillB!
+for block in listPages[0] + listPages[2] { reixFree(block) }
+
+// A fixed-seed stress over every class: payloads survive, no block is handed out
+// twice, and after the drain every arena page is free again for any class.
+var stressState: UInt64 = 0x5B4C_0001
+var stressLive: [(UnsafeMutableRawPointer, UInt64)] = []
+var stressAddresses: Set<UInt> = []
+for step in 0..<6000 {
+    stressState = stressState &* 6364136223846793005 &+ 1442695040888963407
+    let growing = (step / 750) % 2 == 0
+    if stressLive.isEmpty || (stressState >> 33) % 4 < (growing ? 3 : 1) {
+        let size = max(UInt(1) << UInt((stressState >> 40) % 10 + 3) - UInt((stressState >> 50) & 1), 1)
+        guard let block = allocClass(size) else { continue }
+        require(stressAddresses.insert(UInt(bitPattern: block)).inserted, "stress handed out a live block")
+        let pattern = UInt64(step) | 0xFEED_0000_0000_0000
+        block.storeBytes(of: pattern, as: UInt64.self)
+        stressLive.append((block, pattern))
+    } else {
+        let index = Int((stressState >> 20) % UInt64(stressLive.count))
+        let (block, pattern) = stressLive.remove(at: index)
+        require(block.load(as: UInt64.self) == pattern, "stress payload was overwritten")
+        stressAddresses.remove(UInt(bitPattern: block))
+        reixFree(block)
+    }
+}
+for (block, pattern) in stressLive {
+    require(block.load(as: UInt64.self) == pattern, "stress payload was overwritten")
+    reixFree(block)
+}
+
+var wholePages: [UnsafeMutableRawPointer] = []
+while let page = allocClass(4096) { wholePages.append(page) }
+require(wholePages.count == 64, "drained arena did not return every page")
+for page in wholePages { reixFree(page) }
+
 print("Sbrk heap harness passed")
