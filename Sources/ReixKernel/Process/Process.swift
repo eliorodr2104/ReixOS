@@ -63,6 +63,18 @@ public struct Process: RXEntry {
     public var status: ProcessStatus                                  // 9 Byte -> (8 + 1) Enum with param
     public var priority: UInt8                                        // 1 Byte
 
+    /// Ticks of quantum this process has not consumed yet.
+    ///
+    /// Refilled only when the process joins the tail of the ready queue, and
+    /// spent only by a tick that finds it running. A block, a wake and a
+    /// preemption by somebody else's wake all carry the remainder unchanged, so
+    /// no sequence of wakes can mint CPU time: that is what bounds how long a
+    /// ready process can be passed over. See `RoundRobin.makeReady`.
+    ///
+    /// In the first line's trailing padding, beside `status`, because the tick
+    /// and every rotation touch both.
+    var quantumLeft: UInt8 = 0                                        // 1 Byte
+
     // --- Warm: kernelDeadline is read on every timer tick by
     // KernelDeadlineQueue.hasDue; its siblings travel with it for arm/cancel.
     var kernelDeadline     : UInt64 = 0

@@ -19,8 +19,10 @@ public struct RoundRobin: SchedulerInterface, Loggable {
     private var terminated: LinkedList = LinkedList<Process>(head: nil, tail: nil)
     
     
-    private var currentTicks: UInt = 0 // Tick
-    private let quantum     : UInt = 7 // One tick is SchedulerABI.millisecondsPerTick
+    /// Ticks a process may run before it goes behind everybody else. One tick
+    /// is `SchedulerABI.millisecondsPerTick`. Kept per process, in
+    /// `Process.quantumLeft`, because a wake carries the unspent part along.
+    public static let quantum: UInt8 = 7
 
     /// Whether the last `selectNextTask` found nobody to run.
     ///
@@ -52,6 +54,14 @@ public struct RoundRobin: SchedulerInterface, Loggable {
     /// so whichever site rotates the queue first also cancels the request.
     public private(set) var needsResched: Bool = false
 
+    /// The last process a wake put at the front since the previous rotation.
+    ///
+    /// The next wake queues behind it, so wakes run in the order they came,
+    /// and so does a process those wakes preempt, so the one cut short never
+    /// gets back ahead of the ones that cut it. The group it ends always starts
+    /// at the head, which is what lets `unlink` step it back to `prev`.
+    private var lastWoken: UnsafeMutablePointer<Process>? = nil
+
 
     /// Written out rather than left implicit only so the boot line has
     /// somewhere to live. Every queue and counter above still starts from
@@ -66,7 +76,8 @@ public struct RoundRobin: SchedulerInterface, Loggable {
             throw .notNewerProcess
         }
         
-        process.pointee.status = .ready
+        process.pointee.status      = .ready
+        process.pointee.quantumLeft = Self.quantum
         self.ready.pushBack(process)
     }
     
@@ -77,7 +88,10 @@ public struct RoundRobin: SchedulerInterface, Loggable {
     ) {
         switch status {
                 
-            case .ready  : ready.remove(element: process)
+            case .ready:
+                if process == lastWoken { lastWoken = process.pointee.prev }
+                ready.remove(element: process)
+
             case .waiting: waiting.remove(element: process)
             default      : break
         }
@@ -96,27 +110,36 @@ public struct RoundRobin: SchedulerInterface, Loggable {
     /// site rotates first also cancels any pending request, so a switch cannot
     /// happen twice for one expiry.
     ///
+    /// ## Where the outgoing process goes
+    ///
+    /// A process taken off the CPU with its quantum spent joins the tail with a
+    /// fresh one. One taken off with quantum left was cut short by a wake, since
+    /// a spent quantum and a yield both leave it at zero, so it goes back to
+    /// the front, behind the wakes that preempted it, and keeps what it had
+    /// left. Losing its place to every ready process because somebody else woke
+    /// up would make the CPU-bound pay for the I/O-bound twice.
+    ///
     /// ## The quantum, and why idling looks wasteful but is not
     ///
-    /// `currentTicks` counts ticks since the last rotation, not per process, so
-    /// a task that never yields is preempted after `quantum` of them and a
-    /// workload that yields constantly never reaches it. Measured: this kernel
-    /// serves roughly a thousand voluntary rotations per tick under IPC load
-    /// and the timer never fires, while two spinning tasks alternate at exactly
-    /// 7 ticks with no jitter.
+    /// The quantum is per process and spent only by `onTick`, so a task that
+    /// never yields is preempted after `quantum` ticks of its own and a
+    /// workload that yields constantly spends almost none. Measured on the
+    /// global count this replaced: roughly a thousand voluntary rotations per
+    /// tick under IPC load with the timer never firing, and two spinning tasks
+    /// alternating at exactly 7 ticks with no jitter.
     ///
-    /// With nobody ready the count is left *spent* rather than reset, so the
-    /// timer asks again on every tick. That looks like busy work and is in fact
-    /// the only thing that lifts the CPU out of `wfi`: the ask is what notices
-    /// a sleeper has become ready. Resetting it here would idle the machine for
-    /// a whole quantum between asks and strand every sleeper for up to that
-    /// long.
+    /// With nobody on the CPU `onTick` asks on every tick. That used to be the
+    /// only thing that lifted the CPU out of `wfi` for a sleeper; every wake now
+    /// asks for its own switch, and the per-tick ask stays as the backstop for
+    /// a path that might one day make a process ready without asking.
     public mutating func selectNextTask() -> UnsafeMutablePointer<Process>? {
 
         needsResched = false
 
         let now      = Arch.Timer.counter()
         let previous = Arch.CPU.getCurrentProcess()
+
+        var preempted: UnsafeMutablePointer<Process>? = nil
 
         if let currentPtr = previous {
             if currentPtr.pointee.scheduledAt != 0 {
@@ -126,17 +149,33 @@ public struct RoundRobin: SchedulerInterface, Loggable {
 
             if case .running = currentPtr.pointee.status {
                 currentPtr.pointee.status = .ready
-                ready.pushBack(currentPtr)
+
+                if currentPtr.pointee.quantumLeft == 0 {
+                    currentPtr.pointee.quantumLeft = Self.quantum
+                    ready.pushBack(currentPtr)
+
+                } else { preempted = currentPtr }
             }
         }
 
-        if let next = ready.popFront() {
+        // Popped before the preempted one is queued, or it would pop itself. With
+        // no wake left to make way for, a kill having unlinked it, it carries on.
+        let next = preempted != nil && lastWoken == nil
+            ? preempted
+            : ready.popFront() ?? preempted
+
+        if let preempted, preempted != next {
+            queueAtFront(preempted, popped: next)
+        }
+
+        lastWoken = nil
+
+        if let next {
+
             let nextAddr = VirtualAddress(UInt(bitPattern: next))
             Arch.CPU.setCurrentProcess(nextAddr)
             next.pointee.status      = .running
             next.pointee.scheduledAt = now
-
-            currentTicks = 0
 
             if idleSince != 0 {
                 idleTime &+= now &- idleSince
@@ -161,11 +200,6 @@ public struct RoundRobin: SchedulerInterface, Loggable {
 
             return next
         }
-        
-        // Leave the quantum spent rather than untouched, so the next tick asks
-        // again. Keeping the old count would delay the first ask by up to a
-        // whole quantum, and that ask is what wakes a sleeper.
-        currentTicks = quantum
 
         if previous != nil, idleSince == 0 {
             idleSince = now
@@ -179,8 +213,8 @@ public struct RoundRobin: SchedulerInterface, Loggable {
         Arch.CPU.setCurrentProcess(0)
         return nil
     }
-    
-    
+
+
     /// Puts a parked process back on the ready queue, unlinking it first from
     /// whichever list its status says it is parked on.
     ///
@@ -205,16 +239,83 @@ public struct RoundRobin: SchedulerInterface, Loggable {
                 break
         }
 
+        makeReady(process)
+    }
+
+
+    /// Queues a process that has just stopped waiting, the one place a wake
+    /// decides where it goes.
+    ///
+    /// With quantum left it goes to the front and asks for the switch, so a
+    /// process that blocks before spending its slice, the I/O-bound one, runs
+    /// as soon as whatever woke it gets out of the way. With none left it joins
+    /// the tail with a fresh quantum, exactly as an expiry would, and asks
+    /// nothing.
+    ///
+    /// ## Why this cannot starve anybody
+    ///
+    /// Only the tail refills a quantum, and nothing at the tail gets ahead of a
+    /// process already queued. Ticks spent before a ready process runs again are
+    /// therefore at most the sum of every other process's remainder at the
+    /// moment it became ready, `(n - 1) * quantum` with `n` processes, however
+    /// often the others wake each other. `RoundRobinTests` holds a ping-pong pair
+    /// to two quanta against a process that never blocks.
+    ///
+    /// ## Where lending would go
+    ///
+    /// A caller handing its remainder to the process it wakes is a transfer of
+    /// `quantumLeft` from one to the other, right before the test below, with the
+    /// lender then spent. It moves ticks instead of minting them, so the sum
+    /// above, and the bound with it, survives.
+    ///
+    /// Several wakes before one switch run in the order they came, see
+    /// `lastWoken`.
+    private mutating func makeReady(_ process: UnsafeMutablePointer<Process>) {
         process.pointee.status = .ready
-        ready.pushBack(process)
+
+        guard process.pointee.quantumLeft > 0 else {
+            process.pointee.quantumLeft = Self.quantum
+            ready.pushBack(process)
+            return
+        }
+
+        queueAtFront(process, popped: nil)
+        lastWoken    = process
+        needsResched = true
+    }
+
+
+    /// Puts `process` behind the wakes queued since the last rotation, or at
+    /// the head when there are none still queued. `popped` is the process the
+    /// current rotation took off the head, which is no anchor any more.
+    @inline(__always)
+    private mutating func queueAtFront(
+        _ process: UnsafeMutablePointer<Process>,
+        popped   : UnsafeMutablePointer<Process>?
+    ) {
+        if let anchor = lastWoken, anchor != popped {
+            ready.insertAfter(element: process, to: anchor)
+
+        } else if let head = ready.getIterator() {
+            ready.insertBefore(element: process, to: head)
+
+        } else { ready.pushBack(process) }
     }
     
     
+    /// Spends one tick of the running process's quantum, and asks for a switch
+    /// once it is gone. Saturates rather than wraps: ticks can land between the
+    /// ask and the switch that answers it, on a long syscall.
     public mutating func onTick() -> Bool {
-        currentTicks &+= 1
-        systemTicks  &+= 1
+        systemTicks &+= 1
 
-        return currentTicks >= quantum
+        guard let current = Arch.CPU.getCurrentProcess() else { return true }
+
+        if current.pointee.quantumLeft > 0 {
+            current.pointee.quantumLeft -= 1
+        }
+
+        return current.pointee.quantumLeft == 0
     }
 
 
@@ -223,7 +324,14 @@ public struct RoundRobin: SchedulerInterface, Loggable {
     }
 
     
+    /// Gives up the CPU. A running caller gives up the rest of its quantum
+    /// too, which is what sends it to the tail; one that has just blocked is
+    /// not running and keeps its remainder for the wake.
     public mutating func yield() -> UnsafeMutablePointer<AArch64TrapFrame>? {
+        if let current = Arch.CPU.getCurrentProcess(), case .running = current.pointee.status {
+            current.pointee.quantumLeft = 0
+        }
+
         if let nextProcess = selectNextTask() {
             return nextProcess.pointee.context
         }
@@ -252,8 +360,7 @@ public struct RoundRobin: SchedulerInterface, Loggable {
             throw .processNotExist
         }
         
-        process.pointee.status = .ready
-        ready.pushBack(process)
+        makeReady(process)
     }
     
     

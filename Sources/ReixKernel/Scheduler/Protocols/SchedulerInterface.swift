@@ -9,10 +9,11 @@ public protocol SchedulerInterface: RXAllocatable {
 
     /// True while a switch is owed but has not been performed yet.
     ///
-    /// A tick that finds the quantum spent cannot always switch on the spot:
-    /// the frame it holds may be a nested one taken at EL1, and installing
-    /// another task over it would abandon the kernel call underneath. The
-    /// request is recorded here and honoured on the way back out to EL0.
+    /// A tick that finds the quantum spent, or a wake that puts a process at
+    /// the front, cannot always switch on the spot: the frame it holds may be a
+    /// nested one taken at EL1, and installing another task over it would
+    /// abandon the kernel call underneath. The request is recorded here and
+    /// honoured on the way back out to EL0.
     var needsResched: Bool { get }
 
     /// Records that the running task has outstayed its quantum.
