@@ -77,7 +77,7 @@ public enum PreemptionSpans {
     /// generic value parameter needs a literal, and because nothing enumerates
     /// the conforming types; the accessors bounds-check `slot` rather than
     /// trusting the two to stay in step.
-    private static var table = InlineArray<5, PreemptionSpan>(repeating: PreemptionSpan())
+    private static var table = InlineArray<6, PreemptionSpan>(repeating: PreemptionSpan())
 
 
     public static func span<Region: PreemptionRegion>(of region: Region.Type) -> PreemptionSpan {
@@ -122,7 +122,7 @@ public enum PreemptionSpans {
     #if !hasFeature(Embedded)
     /// Host suites share the table; each starts from empty slots.
     static func reset() {
-        table = InlineArray<5, PreemptionSpan>(repeating: PreemptionSpan())
+        table = InlineArray<6, PreemptionSpan>(repeating: PreemptionSpan())
     }
     #endif
 }

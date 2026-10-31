@@ -61,9 +61,9 @@ struct FrameBudgetSiteTests {
         "Sources/ReixKernel/Process/VMA/VMAManager+Faults.swift": (2, .process),
 
         // The first stack page, the task map, the ELF load frames.
-        "Sources/ReixKernel/Process/ProcessManager.swift"      : (1, .process),
-        "Sources/ReixKernel/Process/ProcessManager+Tasks.swift": (1, .process),
-        "Sources/ReixKernel/Platform/ELFParser/ElfParser.swift": (1, .process),
+        "Sources/ReixKernel/Process/ProcessManager.swift"                 : (1, .process),
+        "Sources/ReixKernel/Process/VMA/Operations/TaskMapFill.swift"     : (1, .process),
+        "Sources/ReixKernel/Platform/ELFParser/ElfParser.swift"           : (1, .process),
 
         // Regions, charged to the process that created them for as long as it
         // holds them: `shmCreate` charges before `allocateFrames` takes the

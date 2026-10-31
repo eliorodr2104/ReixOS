@@ -72,50 +72,21 @@ extension ProcessManager {
             return .invalidRange
         }
 
-        let budget = vma.pointee.budget
+        let fill = TaskMapFill(
+            ppm   : ppm,
+            vmm   : vmm,
+            vma   : vma,
+            root  : process.pointee.addressSpace.rootTablePhysical,
+            budget: vma.pointee.budget,
+            start : range.start,
+            end   : range.end
+        )
 
-        var cursor = range.start
-        while cursor < range.end {
-            // The pages of a task map are the child's, charged to the child and
-            // given back by the rollback below or by its teardown.
-            guard chargeFrames(budget, 1) else {
-                try? vma.pointee.rollbackMapping(addr: range.start, size: byteCount)
-                return .outOfMemory
-            }
-
-            let page: PhysicalPage
-            do {
-                page = try ppm.pointee.alloc(Int(UserSpaceLayout.pageSize))
-            } catch {
-                refundFrames(budget, 1)
-                try? vma.pointee.rollbackMapping(addr: range.start, size: byteCount)
-                return .outOfMemory
-            }
-
-            let zero: UnsafeMutablePointer<UInt8> = vmm.pointee.physToVirt(page.address)
-            zero.initialize(
-                repeating: 0,
-                count    : Int(UserSpaceLayout.pageSize)
-            )
-
-            do {
-                try vmm.pointee.installUserPage(
-                    addressSpace: process.pointee.addressSpace,
-                    virtual     : cursor,
-                    physical    : page.address,
-                    flags       : VMAPermissions([.read, .write, .user]).toPageFlags(),
-                    type        : .normal,
-                    budget      : budget
-                )
-            } catch {
-                try? ppm.pointee.free(page)
-                refundFrames(budget, 1)
-                try? vma.pointee.rollbackMapping(addr: range.start, size: byteCount)
-                return .outOfMemory
-            }
-
-            vma.pointee.noteMapped(1)
-            cursor += UserSpaceLayout.pageSize
+        do {
+            _ = try Preemption.run(TaskMapAnonymous.self, fill)
+        } catch {
+            try? vma.pointee.rollbackMapping(addr: range.start, size: byteCount)
+            return .outOfMemory
         }
 
         guard TaskRegistry.appendRegion(

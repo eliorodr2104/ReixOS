@@ -494,7 +494,7 @@ extension TraceDecoder {
     }
 
     // Indexed by slot id from PreemptionRegion.swift, which is not declaration order.
-    static let regionNames = ["CLON", "UNMP", "DCMT", "TDWN", "RBCK"]
+    static let regionNames = ["CLON", "UNMP", "DCMT", "TDWN", "RBCK", "TMAP"]
 
     static func regionName(_ slot: UInt16) -> String {
         Int(slot) < regionNames.count ? regionNames[Int(slot)] : "slot#\(slot)"

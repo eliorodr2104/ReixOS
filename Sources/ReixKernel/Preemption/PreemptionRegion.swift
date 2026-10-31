@@ -299,6 +299,35 @@ public enum AddressSpaceTeardown: PreemptionRegion {
 }
 
 
+/// `ProcessManager.mapTaskAnonymous`, one page per step.
+///
+/// A task map is up to `TaskABI.maximumPagesPerMapping` pages, each charged,
+/// taken, zeroed and installed, and it used to run with the door shut from the
+/// first page to the last: 4.1 ms for one ELF segment, measured at boot, which
+/// made it the longest syscall left once the trace dump is set aside.
+///
+/// One page per step because the page is the unit whose four effects have to
+/// agree at a boundary, see `TaskMapFill`. A page is a 4 KiB zeroing and an
+/// install, and the zeroing dominates: probing every eighth page measured
+/// stretches of 400 to 445 µs on QEMU virt in the debug image, about 50 µs a
+/// page, so this region probes every step like the others. One page of
+/// overshoot is a quarter of the budget, and the ~70 ns probe a fraction of a
+/// percent of the page it follows.
+///
+/// `.latencyOnly`, because the syscall cannot be re-executed: the region is
+/// registered before the fill, so a second attempt would find its own range
+/// taken and fail. Nothing needs it to be anything else, since the caller is
+/// the task's owner and is back in userland as soon as the fill is done.
+public enum TaskMapAnonymous: PreemptionRegion {
+
+    public static let slot     : Int              = 5
+    public static let name     : StaticString     = "[TMAP]"
+    public static let isEnabled: Bool             = true
+    public static let mode     : PreemptionMode   = .latencyOnly
+    public static let policy   : CheckpointPolicy = CheckpointPolicy(stepsPerProbe: 1, budget: 200)
+}
+
+
 /// When the driver stops to let interrupts in.
 ///
 /// ## The budget, and why it is time and not a step count
