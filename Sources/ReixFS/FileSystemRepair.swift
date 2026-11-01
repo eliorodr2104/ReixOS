@@ -1088,6 +1088,10 @@ extension FileSystem {
             guard findings.mapMended else { return findings }
         }
 
+        // The block scan finished; the room and names have not. A stop in
+        // either walk must not carry that earlier completion into this report.
+        findings.complete = false
+
         // Mended only on a dirty mount: on a clean one a wrong room is damage or
         // a bug, and recomputing it would tidy the evidence away.
         guard roomWalk(&findings, census: census, mending: wasDirty) else { return findings }

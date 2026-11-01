@@ -120,6 +120,7 @@ struct FolderSumTests {
                 let writes  = disk.writes
                 let mending = fs.putRight()
 
+                #expect(!mending.complete, "\(damage)")
                 #expect(!mending.safeToServe, "\(damage)")
                 #expect(!mending.mapMended && mending.roomsMended == 0, "\(damage)")
                 #expect(fs.corrupted, "\(damage)")
