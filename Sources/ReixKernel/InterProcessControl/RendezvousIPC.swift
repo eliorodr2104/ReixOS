@@ -1248,7 +1248,10 @@ public struct RendezvousIPC: IPCInterface, Loggable {
         var at = server.pointee.replyTo
 
         while let candidate = at {
-            if candidate.pointee.identity == identity { return candidate }
+            if candidate.pointee.identity == identity {
+                if case .terminated = candidate.pointee.status { return nil }
+                return candidate
+            }
             at = candidate.pointee.nextWaiter
         }
 
@@ -1266,19 +1269,31 @@ public struct RendezvousIPC: IPCInterface, Loggable {
         _ caller : UnsafeMutablePointer<Process>,
         from server: UnsafeMutablePointer<Process>
     ) {
-        if server.pointee.replyTo == caller {
-            server.pointee.replyTo = caller.pointee.nextWaiter
+        var previous: UnsafeMutablePointer<Process>? = nil
+        var at = server.pointee.replyTo
 
+        while let node = at, node != caller {
+            previous = node
+            at = node.pointee.nextWaiter
+        }
+
+        guard at == caller else { return }
+
+        unlinkWaiter(caller, from: server, after: previous)
+    }
+
+
+    /// The same unlink with a predecessor already found by a stepped walk.
+    /// No window can mutate a reply list: only the outer syscall runs here.
+    static func unlinkWaiter(
+        _ caller: UnsafeMutablePointer<Process>,
+        from server: UnsafeMutablePointer<Process>,
+        after previous: UnsafeMutablePointer<Process>?
+    ) {
+        if let previous {
+            previous.pointee.nextWaiter = caller.pointee.nextWaiter
         } else {
-            var at = server.pointee.replyTo
-
-            while let node = at {
-                if node.pointee.nextWaiter == caller {
-                    node.pointee.nextWaiter = caller.pointee.nextWaiter
-                    break
-                }
-                at = node.pointee.nextWaiter
-            }
+            server.pointee.replyTo = caller.pointee.nextWaiter
         }
 
         if server.pointee.deferredReplies > 0 {

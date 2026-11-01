@@ -318,27 +318,6 @@ extension ProcessManager {
         return TaskStatus(state: status.0, exitCode: status.1)
     }
 
-    /// A process owns the lifetime of every task it created. Losing the
-    /// ProcessServer therefore cannot strand an unscheduled address space or
-    /// leave its running jobs unsupervised.
-    func terminateTasks(
-        ownedBy identity: Identity,
-        context         : SyscallContext
-    ) {
-        for index in 0..<TaskRegistry.capacity {
-            guard let control = TaskRegistry.control(at: index, ownedBy: identity) else {
-                continue
-            }
-
-            if let process = TaskRegistry.runningProcess(control) {
-                _ = killProcess(process, reason: .killed, context: context)
-            } else {
-                _ = abortTask(control, context: context)
-            }
-        }
-    }
-
-
     /// Give back a construction object and its frame. `nil` is a task that
     /// left `configuring` before, so it had nothing left to give.
     func releaseConstruction(_ construction: UnsafeMutablePointer<TaskConstruction>?) {

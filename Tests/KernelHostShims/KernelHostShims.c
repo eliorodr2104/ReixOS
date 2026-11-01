@@ -20,6 +20,7 @@
 //
 
 #include <stdint.h>
+#include <time.h>
 
 #include "include/KernelHostShims.h"
 
@@ -230,6 +231,16 @@ uint64_t psci_hvc(uint64_t function, uint64_t a, uint64_t b, uint64_t c) {
 // Stateful, like `current_process`, so a suite can stage the clock a latency is
 // measured against. Zero until set, which is what every other suite reads.
 static uint64_t virtual_counter;
+static int monotonic_counter;
+
+void host_use_monotonic_counter(int enabled) { monotonic_counter = enabled; }
+
+static uint64_t host_counter(void) {
+    if (!monotonic_counter) return virtual_counter;
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (uint64_t)now.tv_sec * 1000000000ULL + (uint64_t)now.tv_nsec;
+}
 static uint64_t timer_deadline;
 static uint64_t counter_frequency;
 
@@ -239,8 +250,8 @@ void host_set_counter_frequency(uint64_t value) { counter_frequency = value; }
 
 uint64_t read_counter_frequency(void) { return counter_frequency; }
 uint64_t read_timer_deadline(void) { return timer_deadline; }
-uint64_t read_virtual_counter(void) { return virtual_counter; }
-uint64_t read_virtual_counter_unordered(void) { return virtual_counter; }
+uint64_t read_virtual_counter(void) { return host_counter(); }
+uint64_t read_virtual_counter_unordered(void) { return host_counter(); }
 void set_current_process(uint64_t process) { current_process = process; }
 void switch_user_address_space(uint64_t rootTable, uint16_t asid) { (void)rootTable; (void)asid; }
 uint64_t asid_bits(void) { return 16; }

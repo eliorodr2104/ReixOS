@@ -369,7 +369,8 @@ public struct RoundRobin: SchedulerInterface, Loggable {
     
     // Get a process pointer, because the handler delete a child process
     public mutating func reapChild(_ child: UnsafeMutablePointer<Process>) -> Bool {
-        guard case .terminated = child.pointee.status else {
+        guard case .terminated = child.pointee.status,
+              terminated.search(id: child.pointee.pid) == child else {
             return false
         }
         

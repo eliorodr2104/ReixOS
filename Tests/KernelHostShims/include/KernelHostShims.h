@@ -51,3 +51,6 @@ void host_set_interrupt_window_hook(void (*hook)(void));
 void host_set_serial_write_hook(uint8_t (*hook)(uint8_t));
 void host_set_data_barrier_hook(void (*hook)(void));
 void dmb_ish(void);
+
+// Read host nanoseconds for latency measurements, zero disables it.
+void host_use_monotonic_counter(int enabled);

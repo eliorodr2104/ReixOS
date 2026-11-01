@@ -3,60 +3,41 @@
 //  ReixOS
 //
 
-/// Everything `killProcess` does after the process stops being runnable, as one
-/// `ResumableOperation` under `AddressSpaceTeardown`.
+import ReixABI
+
+/// A death, including its owned tasks, under one teardown driver.
 ///
-/// ## Why one operation and not three runs
+/// `beginDeath` removes live queue membership and publishes `terminated` before
+/// the first step. That state refuses wakes and lookups; it does not prove
+/// membership in the zombie queue. Only the last stage publishes a reapable
+/// corpse. A parent parked in `reapChild` stays parked until the hand-off.
 ///
-/// The death used to be two runs, the region walk and the capability table, with
-/// work no run covered between and after them: the trap frame and the tables
-/// freed after the walk, the corpse handed to its parent after the table. A
-/// window opens only between two steps of a run, so each of those pieces held
-/// the door shut on top of whatever the run before it had last left open. Measured
-/// in the diagnostic image on QEMU virt, the exit path's longest stretch was about
-/// 0.8 ms and always one of those seams: the last window of the walk to the first
-/// of the capability release, or the last of the release to the switch away.
+/// The outgoing reply list, task registry, children and incoming reply list are
+/// visited one item per step. Owned tasks descend into this same operation,
+/// never another `killProcess` or `Preemption.run`: a nested driver opens no
+/// windows and would make an entire child death one masked step.
 ///
-/// A run nested in another opens no windows, so the pieces could not simply be
-/// wrapped. They are stages of this operation instead, each a step or a sequence
-/// of them, and every boundary is a checkpoint. Over the same boots the worst
-/// stretch of an `exit` went from a median of 0.65 ms to 0.29 ms, with none of
-/// 36 above 0.5 ms; what is left is the budget plus one step, and the prologue
-/// of `killProcess` ahead of the run.
+/// Pending owners lend their unused scheduler `next` link to the continuation
+/// chain. They are terminated and off every queue, and only interrupt handlers
+/// run in windows, so nobody else can write those links. Popping clears the
+/// link before the owner can become a zombie. Depth costs no kernel stack and
+/// no allocation, even when a task owns tasks itself.
 ///
-/// ## The order, which is the one `killProcess` always had
+/// Children are collected only when the zombie queue really owns them. The
+/// rest go to the old parent, else live init, else nobody, preserving their
+/// sibling order. Reparenting also takes one child per step.
 ///
-/// 1. `AddressSpaceRelease`: regions, then frames, then the tables, the root and
-///    last the ASID, after its tag is invalidated.
-/// 2. `releaseWaits`, before the table, see `RendezvousIPC.releaseWaits`.
-/// 3. `CapabilityRelease`, one held slot per step.
-/// 4. The corpse: to the `terminated` list, or to the parent parked in
-///    `reapChild` on it, in three steps.
-///
-/// Every death route ends in the fourth stage (`exit`, a fault, `terminate`, a
-/// `split` unwinding its half-built child), because the two outcomes are
-/// exclusive and a route that performed neither was doubly broken: the parent
-/// parked in `reapChild` was never woken, and the unrecorded `Process` block was
-/// left unreachable by any later reap.
-///
-/// A table the PPM refuses to take back fails the first stage and nothing else,
-/// as the `try?` it replaces did: the capabilities still go and the parent is
-/// still told.
-///
-/// ## What a window may find
-///
-/// The corpse is `.terminated` and on no queue for the whole run, which is
-/// what a zombie looks like, so the tick's walk of the family tree reads a
-/// zombie until the corpse is unlinked and nothing at all after.
-///
-/// Its deadlines stay armed until the second stage, as they did under the
-/// walk's own windows before this: every expiry leaves a `.terminated` process
-/// where it is, and the `Process` block outlives them all.
+/// The remaining stages keep the address-space, waits, capability and corpse
+/// order. A refused address-space free ends that stage, not the death.
 struct ProcessTeardown: ResumableOperation {
 
     typealias Failure = Never
 
     private enum Stage {
+        case outgoingReply
+        case tasks
+        case children
+        case replies
         case addressSpace
         case waits
         case capabilities
@@ -65,88 +46,211 @@ struct ProcessTeardown: ResumableOperation {
         case release
     }
 
-    private let process: UnsafeMutablePointer<Process>
-    private let parent : UnsafeMutablePointer<Process>?
     private let context: SyscallContext
 
-    private var stage       : Stage = .addressSpace
-    private var addressSpace: AddressSpaceRelease
+    private var process: UnsafeMutablePointer<Process>
+    private var parent : UnsafeMutablePointer<Process>?
+    private var pending: UnsafeMutablePointer<Process>? = nil
+    private var server : UnsafeMutablePointer<Process>?
+    private var waiter : UnsafeMutablePointer<Process>?
+    private var previousWaiter: UnsafeMutablePointer<Process>? = nil
+    private var adoptedTail   : UnsafeMutablePointer<Process>? = nil
+    private var taskSlot      : Int = 0
+    private var aborting      : Bool = false
+
+    private var stage       : Stage = .outgoingReply
+    private var addressSpace: AddressSpaceRelease? = nil
     private var capabilities: CapabilityRelease? = nil
 
 
-    /// - Parameter parent: the process parked in `reapChild` on this one, or
-    ///   `nil` to leave the corpse on the `terminated` list.
+    /// `parent` is the stable reapChild destination captured before the run.
+    /// `server` preserves the outgoing link that the terminated status erased.
     init(
         process: UnsafeMutablePointer<Process>,
         parent : UnsafeMutablePointer<Process>?,
+        server : UnsafeMutablePointer<Process>? = nil,
         context: SyscallContext
     ) {
-        self.process      = process
-        self.parent       = parent
-        self.context      = context
-        self.addressSpace = AddressSpaceRelease(
-            process: process,
-            heap   : context.processManager.pointee.heap,
-            vmm    : context.processManager.pointee.vmm
-        )
+        self.process = process
+        self.parent  = parent
+        self.server  = server
+        self.waiter  = server?.pointee.replyTo
+        self.context = context
     }
 
 
     mutating func step() -> Progress {
         switch stage {
+            case .outgoingReply:
+                if let server, let waiter {
+                    if waiter == process {
+                        RendezvousIPC.unlinkWaiter(process, from: server, after: previousWaiter)
+                        self.waiter = nil
+                        self.server = nil
+                    } else {
+                        previousWaiter = waiter
+                        self.waiter   = waiter.pointee.nextWaiter
+                    }
+                    return .more
+                }
+
+                stage = .tasks
+                return .more
+
+            case .tasks:
+                guard !aborting, taskSlot < TaskRegistry.capacity else {
+                    stage = .children
+                    return .more
+                }
+
+                let slot = taskSlot
+                taskSlot += 1
+
+                guard let control = TaskRegistry.control(at: slot, ownedBy: process.pointee.identity)
+                else { return .more }
+
+                let child: UnsafeMutablePointer<Process>
+                let abort: Bool
+
+                if let running = TaskRegistry.runningProcess(control) {
+                    child = running
+                    abort = false
+                } else if let configuring = TaskRegistry.configuring(control) {
+                    child = configuring.process
+                    abort = true
+                } else { return .more }
+
+                // The owner is no longer on any list. Its queue link is private
+                // until this child finishes and `finish` restores the owner.
+                process.pointee.next = pending
+                pending = process
+                process = child
+                parent  = context.processManager.pointee.waitingParent(of: child)
+                server  = context.processManager.pointee.beginDeath(
+                    child, reason: .killed, aborting: abort, context: context
+                )
+                waiter         = server?.pointee.replyTo
+                previousWaiter = nil
+                taskSlot       = 0
+                aborting       = abort
+                stage          = .outgoingReply
+                return .more
+
+            case .children:
+                guard let child = process.pointee.family.firstChild else {
+                    adoptedTail = nil
+                    stage = .replies
+                    return .more
+                }
+
+                if context.scheduler.pointee.reapChild(child) {
+                    context.processManager.pointee.releaseProcess(child)
+                    return .more
+                }
+
+                let adopter = context.processManager.pointee.initProcess.flatMap { candidate -> UnsafeMutablePointer<Process>? in
+                    if case .terminated = candidate.pointee.status { return nil }
+                    return candidate
+                }
+                let newParent = process.pointee.family.parent ?? adopter
+
+                process.pointee.family.removeChild(child)
+                child.pointee.family.parent = nil
+
+                if let newParent, newParent != process {
+                    if let tail = adoptedTail {
+                        child.pointee.family.prevSibling = tail
+                        child.pointee.family.nextSibling = tail.pointee.family.nextSibling
+                        tail.pointee.family.nextSibling?.pointee.family.prevSibling = child
+                        tail.pointee.family.nextSibling = child
+                    } else {
+                        newParent.pointee.family.pushChild(child)
+                    }
+                    child.pointee.family.parent = newParent
+                    adoptedTail = child
+                }
+                return .more
+
+            case .replies:
+                if let waiter = process.pointee.replyTo {
+                    process.pointee.replyTo = waiter.pointee.nextWaiter
+                    waiter.pointee.nextWaiter = nil
+                    if process.pointee.deferredReplies > 0 { process.pointee.deferredReplies -= 1 }
+                    waiter.pointee.context?.pointee.x0 = IPCStatus.peerDied.rawValue
+                    context.scheduler.pointee.resume(waiter)
+                    return .more
+                }
+
+                process.pointee.deferredReplies = 0
+                addressSpace = AddressSpaceRelease(
+                    process: process,
+                    heap   : context.processManager.pointee.heap,
+                    vmm    : context.processManager.pointee.vmm
+                )
+                stage = .addressSpace
+                return .more
+
             case .addressSpace:
-                // A refused free ends this stage, as the `try?` it replaces did,
-                // and not the death.
-                let progress = (try? addressSpace.step()) ?? .done
-
-                if progress == .done { stage = .waits }
-
+                let progress = (try? addressSpace!.step()) ?? .done
+                if progress == .done {
+                    addressSpace = nil
+                    stage = .waits
+                }
                 return .more
 
             case .waits:
                 context.ipc.pointee.releaseWaits(of: process)
-
                 if let metadata = process.pointee.metadata {
                     capabilities = CapabilityRelease(ipc: context.ipc, metadata: metadata)
-                    stage        = .capabilities
-
+                    stage = .capabilities
                 } else { stage = .unlink }
-
                 return .more
 
             case .capabilities:
-                if capabilities!.step() == .done { stage = .unlink }
-
+                if capabilities!.step() == .done {
+                    capabilities = nil
+                    stage = .unlink
+                }
                 return .more
 
             case .unlink:
-                guard let parent else {
+                guard aborting || parent != nil else {
                     context.scheduler.pointee.addZombie(process)
-                    return .done
+                    return finish()
                 }
 
-                // Read before `releaseMetadata` frees the block it lives in.
-                parent.pointee.context?.pointee.x0 = ProcessManager.exitStatus(of: process)
-
+                if !aborting {
+                    parent?.pointee.context?.pointee.x0 = ProcessManager.exitStatus(of: process)
+                }
                 context.processManager.pointee.unlinkCorpse(process)
                 stage = .metadata
-
                 return .more
 
             case .metadata:
                 context.processManager.pointee.releaseMetadata(of: process)
                 stage = .release
-
                 return .more
 
             case .release:
                 context.processManager.pointee.heap.pointee.kfree(process)
-
-                // Only now: `unlinkCorpse` cleared the parent's `waitingChildPid`,
-                // and a parent resumed still claiming it would walk a freed block.
-                try? context.scheduler.pointee.wakeUp(parent!.pointee.pid)
-
-                return .done
+                if !aborting, let parent { try? context.scheduler.pointee.wakeUp(parent.pointee.pid) }
+                return finish()
         }
+    }
+
+
+    /// Resume the pending owner after the child has stopped using its block.
+    /// Its final registry state makes a fresh slot scan skip completed tasks.
+    private mutating func finish() -> Progress {
+        guard let owner = pending else { return .done }
+
+        pending = owner.pointee.next
+        owner.pointee.next = nil
+        process = owner
+        parent = context.processManager.pointee.waitingParent(of: owner)
+        aborting = false
+        taskSlot = 0
+        stage = .tasks
+        return .more
     }
 }

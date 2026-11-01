@@ -22,5 +22,7 @@ public enum ProcessStatus {
     /// naming a server it was waiting on. Now the two cannot disagree, because
     /// they are the same word.
     case blockedOnReply(UnsafeMutablePointer<Process>?)
+    /// Death is published before teardown starts. Queue membership, rather
+    /// than this tag alone, proves the corpse is ready for `reapChild`.
     case terminated
 }

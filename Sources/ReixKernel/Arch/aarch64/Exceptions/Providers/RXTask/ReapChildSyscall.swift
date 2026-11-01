@@ -36,11 +36,13 @@ public struct ReapChildSyscall: SyscallProvider {
                 
             // Case 1, the child is already a zombie: reap it and return its code.
             case .terminated:
-                frame.pointee.x0 = ProcessManager.exitStatus(of: child)
+                if context.scheduler.pointee.reapChild(child) {
+                    frame.pointee.x0 = ProcessManager.exitStatus(of: child)
+                    context.processManager.pointee.releaseProcess(child)
+                    return
+                }
 
-                _ = context.scheduler.pointee.reapChild(child)
-                context.processManager.pointee.releaseProcess(child)
-                return
+                fallthrough
                 
             default:
                 current.pointee.metadata.pointee.waitingChildPid = childPid

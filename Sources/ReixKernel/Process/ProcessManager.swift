@@ -516,71 +516,73 @@ public struct ProcessManager: RXAllocatable, Loggable {
           context: SyscallContext
     ) -> Bool {
 
-        let status = process.pointee.status
-
-        guard case .terminated = status else {
-
-            terminateTasks(ownedBy: process.pointee.identity, context: context)
-
-            releaseOrphanedZombies(of: process, context)
-
-            let adopter = initProcess.flatMap { candidate -> UnsafeMutablePointer<Process>? in
-                if case .terminated = candidate.pointee.status { return nil }
-                return candidate
-            }
-
-            let newParent = process.pointee.family.parent ?? adopter
-
-            if let newParent, newParent != process {
-                process.pointee.family.reparent(newParent: newParent)
-
-            } else { process.pointee.family.orphanChildren() }
-
-            SleepSyscall.unpark(pid: process.pointee.pid)
-
-            switch status {
-                case .blockedOnSend(let ep?), .blockedOnReceive(let ep?):
-                    ep.pointee.queue.remove(element: process)
-                    if ep.pointee.queue.isEmpty() { ep.pointee.state = .idle }
-                    
-                case .ready, .waiting:
-                    context.scheduler.pointee.unlink(process, in: status)
-                    
-                default: break
-            }
-                        
-            severReplyLinks(of: process, context)
-
-            process.pointee.status                       = .terminated
-            process.pointee.metadata?.pointee.exitReason = reason
-
-            if let control = process.pointee.metadata?.pointee.taskControl {
-                releaseConstruction(TaskRegistry.markExited(
-                    control,
-                    code: Self.exitStatus(of: process)
-                ))
-            }
-
-            Trace.emit(
-                TraceProc.self,
-                code: TraceCode.procExit,
-                info: Self.traceReason(reason),
-                a   : process.pointee.pid
-            )
-
-            let parent = waitingParent(of: process)
-
-            _ = Preemption.run(
-                AddressSpaceTeardown.self,
-                ProcessTeardown(process: process, parent: parent, context: context)
-            )
-
-            return parent == nil
+        if case .terminated = process.pointee.status {
+            return context.scheduler.pointee.search(in: .terminated, to: process.pointee.pid) == process
         }
 
-        // Already a zombie: somebody else ran the teardown and left the corpse
-        // on the `terminated` list, so it is still there to be reaped.
-        return true
+        let parent = waitingParent(of: process)
+        let server = beginDeath(process, reason: reason, context: context)
+
+        _ = Preemption.run(
+            AddressSpaceTeardown.self,
+            ProcessTeardown(process: process, parent: parent, server: server, context: context)
+        )
+
+        return parent == nil
+    }
+
+
+    /// Publishes death before any window, with no walk over another process.
+    ///
+    /// `terminated` means no longer live, not yet on the zombie queue. Resume,
+    /// deadline expiry and identity lookup already refuse that state. Reaping
+    /// additionally proves queue membership, so an unfinished death is not a
+    /// corpse a parent can free. The outgoing reply link is walked in steps;
+    /// its server stays alive until that walk ends, before any owned task dies.
+    func beginDeath(
+        _ process: UnsafeMutablePointer<Process>,
+        reason   : ExitReason,
+        aborting : Bool = false,
+        context  : SyscallContext
+    ) -> UnsafeMutablePointer<Process>? {
+        let status = process.pointee.status
+        let server = process.pointee.replyPartner
+
+        SleepSyscall.unpark(pid: process.pointee.pid)
+        _ = KernelDeadlineQueue.shared.cancel(process)
+
+        if let set = InterruptClaims.set(waitedOnBy: process) {
+            set.pointee.waiter = nil
+        }
+
+        switch status {
+            case .blockedOnSend(let endpoint?), .blockedOnReceive(let endpoint?):
+                endpoint.pointee.queue.remove(element: process)
+                if endpoint.pointee.queue.isEmpty() { endpoint.pointee.state = .idle }
+
+            case .ready, .waiting:
+                context.scheduler.pointee.unlink(process, in: status)
+
+            default: break
+        }
+
+        process.pointee.status                       = .terminated
+        process.pointee.metadata?.pointee.exitReason = reason
+
+        if let control = process.pointee.metadata?.pointee.taskControl {
+            releaseConstruction(aborting
+                ? TaskRegistry.markAborted(control)
+                : TaskRegistry.markExited(control, code: Self.exitStatus(of: process)))
+        }
+
+        Trace.emit(
+            TraceProc.self,
+            code: TraceCode.procExit,
+            info: Self.traceReason(reason),
+            a   : process.pointee.pid
+        )
+
+        return server
     }
 
     /// `releaseCapabilities` as steps of the teardown region, for `abortTask`: a
@@ -611,7 +613,7 @@ public struct ProcessManager: RXAllocatable, Loggable {
     /// answer cannot change in between: a parent blocked in `reapChild` is on
     /// no endpoint and under no deadline, so neither a window's interrupt nor the
     /// release of this process's capabilities can resume it.
-    private func waitingParent(
+    func waitingParent(
         of process: UnsafeMutablePointer<Process>
     ) -> UnsafeMutablePointer<Process>? {
 
@@ -713,87 +715,6 @@ public struct ProcessManager: RXAllocatable, Loggable {
         return nil
     }
 
-
-    /// Wakes everybody a dying process owed an answer to, and unhooks it from
-    /// whoever owes it one.
-    ///
-    /// **Every** caller, not just the one in `replyTo`. A server may now hold
-    /// several requests at once, and the ones it is not currently pointing at
-    /// are reachable only through their own `replyPartner` - so this walks the
-    /// tree, which is the one enumeration that sees a process wherever it is
-    /// parked. Missing them would leave them `.blockedOnReply` on a process that
-    /// no longer exists, which is a hang that outlives the thing that caused it.
-    /// Wakes everybody a dying process owed an answer to, and unhooks it from
-    /// whoever owes it one.
-    ///
-    /// **Every** caller, not just one. A server may now hold several requests at
-    /// once, threaded through its callers' own `nextWaiter` links, and leaving
-    /// any of them behind would leave it `.blockedOnReply` on a process that no
-    /// longer exists - a hang outliving the thing that caused it.
-    ///
-    /// The list is walked and cleared as it goes, because each node's link is
-    /// read before that node is let go of.
-    private func severReplyLinks(
-        of process: UnsafeMutablePointer<Process>,
-        _  context: SyscallContext
-    ) {
-
-        var waiting = process.pointee.replyTo
-
-        while let waiter = waiting {
-            waiting = waiter.pointee.nextWaiter
-
-            waiter.pointee.nextWaiter          = nil
-            waiter.pointee.context?.pointee.x0 = IPCStatus.peerDied.rawValue
-
-            // `resume` leaves `.blockedOnReply`, which is where the link to this
-            // dying process lived, so waking it is what forgets it.
-            context.scheduler.pointee.resume(waiter)
-        }
-
-        process.pointee.replyTo         = nil
-        process.pointee.deferredReplies = 0
-
-        // And the other direction: this process was itself waiting on somebody,
-        // so it has to come out of that server's list rather than be left in it
-        // as a pointer to memory about to be freed.
-        if let server = process.pointee.replyPartner {
-            RendezvousIPC.unlinkWaiter(process, from: server)
-        }
-    }
-
-    /// Frees the children that already died and can no longer be named.
-    ///
-    /// A zombie is only reachable through `family.findChild(id:)`, so once its
-    /// parent is gone nobody knows its pid: reparenting it to the grandparent
-    /// would keep it in the scheduler's `terminated` list and leak its
-    /// `Process` plus `ProcessMetadata` for the rest of the boot. Its address
-    /// space is already down (`killProcess` did that when it became a zombie),
-    /// so all that is left is to unlink it from `terminated` and free it.
-    /// Which must happen in that order, and only for a zombie the list really
-    /// holds, because `LinkedList.remove` on a node it does not own would
-    /// clear the head and drop every other zombie.
-    private func releaseOrphanedZombies(
-        of process: UnsafeMutablePointer<Process>,
-        _  context: SyscallContext
-    ) {
-        var current = process.pointee.family.firstChild
-
-        while let child = current {
-            current = child.pointee.family.nextSibling
-
-            guard case .terminated = child.pointee.status,
-                  context.scheduler.pointee.search(
-                    in: .terminated,
-                    to: child.pointee.pid
-                  ) == child
-            else { continue }
-
-            guard context.scheduler.pointee.reapChild(child) else { continue }
-
-            releaseProcess(child)
-        }
-    }
 
     // MARK: - Trace funnels
 
