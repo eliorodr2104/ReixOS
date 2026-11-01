@@ -142,8 +142,21 @@ static uint64_t cache_type;
 void host_set_cache_type(uint64_t value) { cache_type = value; }
 uint64_t read_cache_type(void) { return cache_type; }
 
+static uint64_t main_id;
+static uint64_t main_id_reads;
+
+void host_set_main_id(uint64_t value) { main_id = value; }
+uint64_t host_main_id_reads(void) { return main_id_reads; }
+uint64_t read_main_id(void) {
+    main_id_reads += 1;
+    return main_id;
+}
+
 void clean_dcache_pou(void *base, uint64_t size, uint64_t line) {
     mmu_trace_record_range(MMU_OP_DCACHE_CLEAN_POU, (uint64_t)base, size, line);
+}
+void clean_dcache_poc(void *base, uint64_t size, uint64_t line) {
+    mmu_trace_record_range(MMU_OP_DCACHE_CLEAN_POC, (uint64_t)base, size, line);
 }
 void invalidate_icache_lines(void *base, uint64_t size, uint64_t line) {
     mmu_trace_record_range(MMU_OP_ICACHE_LINES, (uint64_t)base, size, line);

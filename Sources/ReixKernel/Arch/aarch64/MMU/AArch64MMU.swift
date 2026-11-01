@@ -94,9 +94,23 @@ extension AArch64MMU {
     @_silgen_name("read_cache_type")
     static func readCacheType() -> UInt64
 
-    /// Read CTR_EL0 once, before the first page of user code is published.
+    @_silgen_name("read_main_id")
+    static func readMainID() -> UInt64
+
+    /// Early Cortex-A53 cleans need an invalidation too. Loaded at boot with
+    /// the cache type; no publication reads the CPU's identity again.
+    static var cleanCacheNeedsInvalidate: Bool = false
+
+    /// Read CTR_EL0 and MIDR_EL1 before the first page of code is published.
     public static func loadCacheType() {
         cacheType = readCacheType()
+
+        let midr = readMainID()
+
+        // Errata 819472, 826319, 827319 and 824069: Cortex-A53 r0p0-r0p2.
+        // Match the model without variant/revision, then their combined range.
+        cleanCacheNeedsInvalidate = midr & 0xFF0F_FFF0 == 0x410F_D030
+                                 && midr & 0x00F0_000F <= 2
     }
 
     /// Not IDC: a store reaches the instruction side only through a clean to
@@ -116,6 +130,13 @@ extension AArch64MMU {
 
     @_silgen_name("clean_dcache_pou")
     static func cleanDataCacheToPoU(
+        _ base: UnsafeMutableRawPointer,
+        size  : UInt64,
+        line  : UInt64
+    )
+
+    @_silgen_name("clean_dcache_poc")
+    static func cleanDataCacheToPoC(
         _ base: UnsafeMutableRawPointer,
         size  : UInt64,
         line  : UInt64
@@ -145,7 +166,11 @@ extension AArch64MMU {
     @inline(never)
     public static func stageInstructions(_ base: UnsafeMutableRawPointer, size: UInt64) {
         if cleanNeeded {
-            cleanDataCacheToPoU(base, size: size, line: dataLine)
+            if cleanCacheNeedsInvalidate {
+                cleanDataCacheToPoC(base, size: size, line: dataLine)
+            } else {
+                cleanDataCacheToPoU(base, size: size, line: dataLine)
+            }
         }
 
         guard invalidationNeeded, instructionCacheIsPIPT else { return }

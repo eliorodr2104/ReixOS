@@ -9,7 +9,7 @@ import KernelTestSupport
 import KernelHostShims
 
 /// How a range of freshly written code reaches the instruction side, decided by
-/// CTR_EL0 as boot read it.
+/// CTR_EL0 and MIDR_EL1 as boot read them.
 ///
 /// The decision is the subject because every wrong answer is silent: QEMU keeps
 /// no instruction cache, so a kernel that skipped the clean, skipped the
@@ -160,6 +160,91 @@ struct InstructionPublicationTests {
             #expect(mmuOps() == [.cleanPoU, .icacheAll])
             #expect(mmu_trace_line(0) == 64)
             #expect(Arch.MMU.cacheType == Self.vipt)
+        }
+    }
+
+
+    struct Part: CustomTestStringConvertible, Sendable {
+        let name : String
+        let midr : UInt64
+        let clean: MMUOp
+
+        var testDescription: String { name }
+    }
+
+    static let parts: [Part] = [
+        Part(name: "A53 r0p0", midr: 0x410F_D030, clean: .cleanPoC),
+        Part(name: "A53 r0p1", midr: 0x410F_D031, clean: .cleanPoC),
+        Part(name: "A53 r0p2", midr: 0x410F_D032, clean: .cleanPoC),
+        Part(name: "A53 r0p3", midr: 0x410F_D033, clean: .cleanPoU),
+        Part(name: "A53 r0p15", midr: 0x410F_D03F, clean: .cleanPoU),
+        Part(name: "A53 r1p0", midr: 0x411F_D030, clean: .cleanPoU),
+        Part(name: "A53 r1p2", midr: 0x411F_D032, clean: .cleanPoU),
+        Part(name: "other implementer", midr: 0x420F_D030, clean: .cleanPoU),
+        Part(name: "adjacent part below", midr: 0x410F_D020, clean: .cleanPoU),
+        Part(name: "adjacent part above", midr: 0x410F_D040, clean: .cleanPoU),
+        Part(name: "other architecture", midr: 0x410E_D030, clean: .cleanPoU),
+        Part(name: "no MIDR loaded", midr: 0, clean: .cleanPoU),
+    ]
+
+
+    @Test("only affected A53 revisions clean and invalidate to PoC", arguments: parts)
+    func cleanMatchesThePart(_ part: Part) {
+        withCacheType(Self.vipt, midr: part.midr) {
+            mmu_trace_reset(nil)
+            defer { mmu_trace_reset(nil) }
+
+            let base = Self.page + 100
+            Arch.MMU.stageInstructions(base, size: 300)
+
+            #expect(mmuCalls() == [MMUCall(
+                op: part.clean, arg: UInt64(UInt(bitPattern: base)), size: 300, line: 64
+            )])
+
+            Arch.MMU.completeInstructionPublication()
+            #expect(mmuOps() == [part.clean, .icacheAll])
+        }
+    }
+
+
+    @Test("MIDR_EL1 is read with CTR_EL0 at boot, never per range", arguments: [false, true])
+    func mainIDIsReadOnce(_ affected: Bool) {
+        let reads = host_main_id_reads()
+        withCacheType(Self.vipt, midr: affected ? 0x410F_D032 : 0x410F_D033) {
+            #expect(host_main_id_reads() == reads + 1)
+            host_set_main_id(affected ? 0x410F_D033 : 0x410F_D032)
+
+            mmu_trace_reset(nil)
+            defer { mmu_trace_reset(nil) }
+
+            Arch.MMU.stageInstructions(Self.page, size: 4096)
+            Arch.MMU.stageInstructions(Self.page + 4096, size: 4096)
+            Arch.MMU.completeInstructionPublication()
+
+            let clean: MMUOp = affected ? .cleanPoC : .cleanPoU
+            #expect(mmuOps() == [clean, clean, .icacheAll])
+            #expect(host_main_id_reads() == reads + 1)
+        }
+    }
+
+
+    @Test("the workaround preserves IDC, DIC and PIPT ordering", arguments: shapes)
+    func workaroundPreservesTheCachePolicy(_ shape: Shape) {
+        withCacheType(shape.ctr, midr: 0x410F_D032) {
+            mmu_trace_reset(nil)
+            defer { mmu_trace_reset(nil) }
+
+            Arch.MMU.stageInstructions(Self.page, size: 4096)
+            Arch.MMU.completeInstructionPublication()
+
+            let stage = shape.stage.map { $0 == .cleanPoU ? MMUOp.cleanPoC : $0 }
+            #expect(mmuOps() == stage + shape.complete)
+
+            for call in mmuCalls() where call.op == .cleanPoC || call.op == .icacheLines {
+                #expect(call.arg == 0x4010_2000)
+                #expect(call.size == 4096)
+                #expect(call.line == (call.op == .cleanPoC ? shape.dataLine : shape.codeLine))
+            }
         }
     }
 }

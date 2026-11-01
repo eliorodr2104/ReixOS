@@ -117,6 +117,9 @@ private func mmuHandlers() -> [AsmRoutine] {
         // L1Ip fields decide how every code publication is done.
         fn("read_cache_type") { mrs("x0", "ctr_el0"); ret() },
 
+        // MIDR_EL1 is read alongside CTR_EL0 at boot, to select CPU workarounds.
+        fn("read_main_id") { mrs("x0", "midr_el1"); ret() },
+
         // clean_dcache_pou(base, size, line): `dc cvau` per data line, and no
         // barrier, so a batch waits once for every page it cleaned.
         fn("clean_dcache_pou") {
@@ -130,6 +133,22 @@ private func mmuHandlers() -> [AsmRoutine] {
             raw("    cmp x0, x1")
             raw("    b.lo .L_pou_clean_loop")
             label(".L_pou_clean_done")
+            ret()
+        },
+
+        // clean_dcache_poc(base, size, line): early A53s need `dc civac` in
+        // place of `dc cvau`. The same range and the same deferred wait.
+        fn("clean_dcache_poc") {
+            raw("    cbz x1, .L_poc_clean_done")
+            add("x1", "x0", "x1")
+            raw("    sub x3, x2, #1")
+            raw("    bic x0, x0, x3")
+            label(".L_poc_clean_loop")
+            raw("    dc civac, x0")
+            add("x0", "x0", "x2")
+            raw("    cmp x0, x1")
+            raw("    b.lo .L_poc_clean_loop")
+            label(".L_poc_clean_done")
             ret()
         },
 

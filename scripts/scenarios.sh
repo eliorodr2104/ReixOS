@@ -652,7 +652,7 @@ post_tlb_scope() {
 # linked image. QEMU keeps no instruction cache, so a kernel that skipped this
 # entirely passes every row; what can be checked is that the per-range half
 # never invalidates the whole cache, that only the completion does, and that
-# CTR_EL0 is read once, at boot, and never per publication.
+# CTR_EL0 and MIDR_EL1 are read at boot, and never per publication.
 post_icache_batch() {
     ib_out=$2
 
@@ -684,16 +684,44 @@ post_icache_batch() {
         return 1
     fi
 
-    # The per-range clean waits for nothing; the batch's completion does.
-    if ! pte_body "$ib_out" '<clean_dcache_pou>' | grep -qE 'dc[[:space:]]+cvau'; then
-        printf 'clean_dcache_pou does not clean to the point of unification'
+    # Only the ordinary publication clean uses cvau. Early A53s need civac;
+    # the DMA clean already uses that form, with its own device barrier.
+    ib_where=$(holders_of "$ib_out" 'dc[ \t]+cvau')
+    if [ "$ib_where" != '<clean_dcache_pou>:' ]; then
+        printf 'dc cvau outside clean_dcache_pou: %s' "$ib_where"
         return 1
     fi
 
-    if pte_body "$ib_out" '<clean_dcache_pou>' | grep -qE 'dsb|isb'; then
-        printf 'clean_dcache_pou waits per range'
+    ib_where=$(holders_of "$ib_out" 'dc[ \t]+civac' | tr '\n' ' ')
+    if [ "$ib_where" != '<clean_dcache_poc>: <clean_dcache_range>: ' ]; then
+        printf 'dc civac outside the workaround and DMA cleans: %s' "$ib_where"
         return 1
     fi
+
+    ib_dma=$(pte_body "$ib_out" '<clean_dcache_range>' | awk '
+        /dc[ \t]+civac/ { s = s "C"; next }
+        /dsb[ \t]+sy$/  { s = s "D"; next }
+        /dsb|isb/        { s = s "X"; next }
+        END { print s }
+    ')
+    if [ "$ib_dma" != CD ]; then
+        printf 'the DMA clean is not dc civac then dsb sy: read "%s"' "$ib_dma"
+        return 1
+    fi
+
+    ib_where=$(holders_of "$ib_out" 'dc[ \t]+(cvac|cvap)')
+    if [ -n "$ib_where" ]; then
+        printf 'unreviewed dc cvac or cvap clean: %s' "$ib_where"
+        return 1
+    fi
+
+    # Neither per-range publication clean waits; the completion still does.
+    for ib_routine in clean_dcache_pou clean_dcache_poc; do
+        if pte_body "$ib_out" "<$ib_routine>" | grep -qE 'dsb|isb'; then
+            printf '%s waits per range' "$ib_routine"
+            return 1
+        fi
+    done
 
     ib_lines=$(pte_body "$ib_out" '<invalidate_icache_lines>' | awk '
         /dsb[ \t]+ish$/ { s = s "D"; next }
@@ -706,7 +734,7 @@ post_icache_batch() {
         return 1
     fi
 
-    for ib_routine in clean_dcache_pou invalidate_icache_lines; do
+    for ib_routine in clean_dcache_pou clean_dcache_poc invalidate_icache_lines; do
         ib_callers=$(callers_of "$ib_out" "<$ib_routine>")
         case $ib_callers in
             *stageInstructions*) ;;
@@ -744,22 +772,32 @@ post_icache_batch() {
         return 1
     fi
 
-    ib_callers=$(callers_of "$ib_out" '<read_cache_type>' | grep -v 'loadCacheType' || true)
-    case $ib_callers in
-        *VirtualMemoryManagerV6ppmPtr*) ;;
-        *)
-            printf 'read_cache_type is reached from outside boot: %s' "$ib_callers"
-            return 1
-            ;;
-    esac
-
-    if [ "$(printf '%s\n' "$ib_callers" | wc -l)" -ne 1 ]; then
-        printf 'read_cache_type has callers besides boot: %s' "$ib_callers"
+    ib_midr=$(holders_of "$ib_out" 'midr_el1')
+    if [ "$ib_midr" != '<read_main_id>:' ]; then
+        printf 'MIDR_EL1 is read outside read_main_id: %s' "$ib_midr"
         return 1
     fi
 
-    if [ -n "$(callers_of "$ib_out" 'loadCacheType' | grep -v 'VirtualMemoryManagerV6ppmPtr' || true)" ]; then
+    # The compiler may inline loadCacheType into boot or leave the call in.
+    ib_indirect=no
+    for ib_routine in read_cache_type read_main_id; do
+        ib_callers=$(callers_of "$ib_out" "<$ib_routine>")
+        if [ -z "$ib_callers" ] || [ -n "$(printf '%s\n' "$ib_callers" | grep -vE 'loadCacheType|VirtualMemoryManagerV6ppmPtr' || true)" ]; then
+            printf '%s is reached from outside boot: %s' "$ib_routine" "$ib_callers"
+            return 1
+        fi
+
+        case $ib_callers in *loadCacheType*) ib_indirect=yes ;; esac
+    done
+
+    ib_load=$(callers_of "$ib_out" 'loadCacheType')
+    if [ -n "$(printf '%s\n' "$ib_load" | grep -v 'VirtualMemoryManagerV6ppmPtr' || true)" ]; then
         printf 'loadCacheType is called from outside boot'
+        return 1
+    fi
+
+    if [ "$ib_indirect" = yes ] && [ -z "$ib_load" ]; then
+        printf 'loadCacheType is not reached from boot'
         return 1
     fi
 

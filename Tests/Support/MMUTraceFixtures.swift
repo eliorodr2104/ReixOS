@@ -11,7 +11,7 @@ import KernelHostShims
 /// One list for every suite that reads the recorder, so a new primitive is
 /// classified once and an unknown code reads as `.unknown` instead of as
 /// whatever the nearest suite happened to fall back to.
-public enum MMUOp: UInt32, Equatable {
+public enum MMUOp: UInt32, Equatable, Sendable {
     case barrier     = 1
     case tlbSync     = 4
     case tlbAll      = 5
@@ -23,6 +23,7 @@ public enum MMUOp: UInt32, Equatable {
     case icacheLines = 11
     case icacheAll   = 12
     case stream      = 13
+    case cleanPoC    = 14
     case unknown     = 0
 }
 
@@ -96,20 +97,25 @@ public func tlbiOperand(_ virtual: VirtualAddress, asid: ASID) -> UInt64 {
 public let cortexA53CacheType: UInt64 = 0x8444_8004
 
 
-/// Runs `body` with `cacheType` loaded the way boot loads it, through the shim's
-/// CTR_EL0, and puts both back afterwards.
+/// Runs `body` with the cache policy loaded as at boot, through the register
+/// shims, and puts it back afterwards. A zero MIDR needs no workaround.
 public func withCacheType<Result>(
     _ value: UInt64,
+    midr   : UInt64 = 0,
     _ body : () throws -> Result
 ) rethrows -> Result {
     let saved = Arch.MMU.cacheType
+    let savedClean = Arch.MMU.cleanCacheNeedsInvalidate
 
     host_set_cache_type(value)
+    host_set_main_id(midr)
     Arch.MMU.loadCacheType()
 
     defer {
         Arch.MMU.cacheType = saved
+        Arch.MMU.cleanCacheNeedsInvalidate = savedClean
         host_set_cache_type(0)
+        host_set_main_id(0)
     }
 
     return try body()
