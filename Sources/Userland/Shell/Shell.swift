@@ -483,6 +483,10 @@ fileprivate func writeTerminalBaselineSystem(
             printDec(UInt64(metrics.irqOffRollbackLongest), terminator: "")
             print(" irq_off_task_map_longest_counter=", terminator: "")
             printDec(UInt64(metrics.irqOffTaskMapLongest), terminator: "")
+            print(" irq_off_profile_longest_counter=", terminator: "")
+            printDec(UInt64(metrics.irqOffProfileLongest), terminator: "")
+            print(" irq_off_trace_dump_longest_counter=", terminator: "")
+            printDec(UInt64(metrics.irqOffTraceDumpLongest), terminator: "")
         }
 
         let pmuAvailable = (metrics.availability & SystemMetricAvailability.pmuCycleCounter) != 0

@@ -6,9 +6,12 @@
 
 
 import Testing
+import ReixABI
 @testable import Kernel
 import KernelHostShims
 import KernelTestSupport
+
+private var exportReaderBarrier: (() -> Void)?
 
 /// `TraceRing`, `TraceExport`'s attachment and the shim's barrier counter are
 /// all global, and `.serialized` only orders this suite's own tests.
@@ -120,6 +123,176 @@ struct TraceExportBatchTests {
             #expect(ring.load(fromByteOffset: 0, as: UInt32.self) == 64)
             #expect(ring.load(fromByteOffset: 8, as: UInt64.self) == 1)
             #expect(page_table_barrier_count() == 0)
+        }
+    }
+
+    @Test("tick exports publish distinct even stats generations while a dump keeps its interval")
+    func snapshotDuringPump() {
+        withAttachedExport { base in
+            let sequence = StatsExportPage.sequenceOffset
+            let first = base.load(fromByteOffset: sequence, as: UInt32.self)
+            #expect(first != 0 && first & 1 == 0)
+            TraceRing.append(TraceEvent(timestamp: 101, a: 201, b: 301))
+            var snapshot = TraceRing.snapshot()
+            for tick in 0..<32 {
+                TraceRing.append(TraceEvent(timestamp: UInt64(1000 + tick)))
+                TraceExport.pump()
+            }
+            let second = base.load(fromByteOffset: sequence, as: UInt32.self)
+            #expect(second == first &+ 2)
+            #expect(first != second && second & 1 == 0)
+            let system = base.load(fromByteOffset: StatsExportPage.systemOffset, as: SystemStats.self)
+            #expect((system.availability & SystemMetricAvailability.latency) != 0)
+            #expect(base.load(fromByteOffset: StatsExportPage.processCountOffset, as: UInt32.self) == 0)
+            let event = snapshot.next()
+            #expect(event?.timestamp == 101 && event?.a == 201 && event?.b == 301)
+            #expect(snapshot.next() == nil)
+            #expect(!snapshot.invalidated)
+            let ring = base + Int(UserSpaceLayout.pageSize)
+            #expect(ring.load(fromByteOffset: 0, as: UInt32.self) == 33)
+            #expect(ring.load(fromByteOffset: 16, as: UInt64.self) == 101)
+        }
+    }
+
+    @Test("SHM reports writes rejected by snapshot protection exactly once")
+    func protectedWriteLoss() {
+        withAttachedExport { base in
+            for index in 0..<TraceRing.capacity {
+                TraceRing.append(TraceEvent(timestamp: UInt64(index)))
+            }
+            guard let snapshot = TraceRing.protectSnapshot() else {
+                Issue.record("snapshot protection was already owned")
+                return
+            }
+            defer { snapshot.release() }
+            TraceRing.append(TraceEvent(timestamp: 9999))
+            TraceRing.append(TraceEvent(timestamp: 10000))
+            TraceExport.pump()
+            let ring = base + Int(UserSpaceLayout.pageSize)
+            #expect(ring.load(fromByteOffset: 8, as: UInt64.self) == 2)
+            TraceExport.pump()
+            #expect(ring.load(fromByteOffset: 8, as: UInt64.self) == 2)
+        }
+    }
+
+    @Test("reattaching the same page changes both the sequence and attachment generation")
+    func reattachGeneration() {
+        withScatteredRegion { ram, heap, region in
+            let manager = allocateZeroedStorage(ProcessManager.self)
+            defer { UnsafeMutableRawPointer(manager).deallocate() }
+            let page = TraceExport.linearPage(0, of: region, linearOffset: 0)
+            #expect(TraceExport.attach(backing: region, linearOffset: 0,
+                ppm: ram.ppm, heap: heap, processManager: manager))
+            defer { TraceExport.detach(pid: 0) }
+            let before = page.load(fromByteOffset: StatsExportPage.sequenceOffset, as: UInt32.self)
+            let generation = page.load(fromByteOffset: StatsExportPage.generationOffset, as: UInt32.self)
+            #expect(TraceExport.attach(backing: region, linearOffset: 0,
+                ppm: ram.ppm, heap: heap, processManager: manager))
+            let after = page.load(fromByteOffset: StatsExportPage.sequenceOffset, as: UInt32.self)
+            let newGeneration = page.load(fromByteOffset: StatsExportPage.generationOffset, as: UInt32.self)
+            #expect(before != after && before & 1 == 0 && after & 1 == 0)
+            #expect(generation != newGeneration)
+            for _ in 0..<32 { TraceExport.pump() }
+            #expect(page.load(fromByteOffset: StatsExportPage.generationOffset, as: UInt32.self) == newGeneration)
+        }
+    }
+
+    @Test("the live event consumer publishes a tagged cursor and refuses impossible occupancy")
+    func eventConsumer() {
+        withAttachedExport { base in
+            let ring = base + Int(UserSpaceLayout.pageSize)
+            var reader = ProfileEventRing(base: ring, stats: base, mask: 63, barrier: dmb_ish)
+            for index in 0..<3 { TraceRing.append(TraceEvent(timestamp: UInt64(index))) }
+            TraceExport.pump()
+            let batch = reader.drain(barrier: dmb_ish)
+            #expect(batch?.count == 3 && batch?.dropped == 0)
+            #expect(reader.drain(barrier: dmb_ish)?.count == 0)
+            let generation = ring.load(fromByteOffset: TraceExportRing.generationOffset, as: UInt32.self)
+            let consumer = base.load(fromByteOffset: TraceExportRing.consumerOffset, as: UInt64.self)
+            #expect(TraceExportRing.head(of: consumer, generation: generation) == 3)
+            ring.storeBytes(of: UInt32(1000), as: UInt32.self)
+            #expect(reader.drain(barrier: dmb_ish) == nil)
+        }
+    }
+
+    @Test("reattachment at any consumer barrier discards the old batch", arguments: [1, 2, 3, 4])
+    func eventConsumerReplacement(barrier: Int) {
+        withScatteredRegion { ram, heap, region in
+            let manager = allocateZeroedStorage(ProcessManager.self)
+            defer { UnsafeMutableRawPointer(manager).deallocate() }
+            TraceRing.reset()
+            defer { TraceRing.reset() }
+            let page = TraceExport.linearPage(0, of: region, linearOffset: 0)
+            let ring = TraceExport.linearPage(1, of: region, linearOffset: 0)
+            #expect(TraceExport.attach(backing: region, linearOffset: 0,
+                ppm: ram.ppm, heap: heap, processManager: manager))
+            defer { TraceExport.detach(pid: 0) }
+            for index in 0..<3 { TraceRing.append(TraceEvent(timestamp: UInt64(index))) }
+            TraceExport.pump()
+            var reader = ProfileEventRing(base: ring, stats: page, mask: 127, barrier: dmb_ish)
+            var barriers = 0
+            exportReaderBarrier = {
+                barriers += 1
+                if barriers == barrier {
+                    #expect(TraceExport.attach(backing: region, linearOffset: 0,
+                        ppm: ram.ppm, heap: heap, processManager: manager))
+                }
+            }
+            host_set_data_barrier_hook { exportReaderBarrier?() }
+            #expect(reader.drain(barrier: dmb_ish) == nil)
+            host_set_data_barrier_hook(nil)
+            exportReaderBarrier = nil
+            #expect(reader.drain(barrier: dmb_ish) == nil)
+            TraceRing.append(TraceEvent(timestamp: 999))
+            TraceExport.pump()
+            #expect(ring.load(as: UInt32.self) == 1)
+            #expect(ring.load(fromByteOffset: 16, as: UInt64.self) == 999)
+            var replacement = ProfileEventRing(base: ring, stats: page, mask: 127, barrier: dmb_ish)
+            #expect(replacement.drain(barrier: dmb_ish)?.count == 1)
+        }
+    }
+
+    @Test("a late old cursor cannot undo accepted progress in the new stream")
+    func staleEventCursor() {
+        withAttachedExport { page in
+            let ring = page + Int(UserSpaceLayout.pageSize)
+            var reader = ProfileEventRing(base: ring, stats: page, mask: 63, barrier: dmb_ish)
+            for index in 0..<32 { TraceRing.append(TraceEvent(timestamp: UInt64(index))) }
+            TraceExport.pump()
+            #expect(reader.drain(barrier: dmb_ish)?.count == 32)
+            TraceExport.pump()
+            for index in 0..<64 { TraceRing.append(TraceEvent(timestamp: UInt64(100 + index))) }
+            TraceExport.pump()
+            #expect(reader.drain(barrier: dmb_ish)?.count == 64)
+            TraceExport.pump()
+            for index in 0..<32 { TraceRing.append(TraceEvent(timestamp: UInt64(200 + index))) }
+            TraceExport.pump()
+            let generation = ring.load(fromByteOffset: TraceExportRing.generationOffset, as: UInt32.self)
+            page.storeBytes(of: TraceExportRing.consumer(head: 100, generation: generation &- 1),
+                toByteOffset: TraceExportRing.consumerOffset, as: UInt64.self)
+            for index in 0..<64 { TraceRing.append(TraceEvent(timestamp: UInt64(300 + index))) }
+            TraceExport.pump()
+            #expect(ring.load(as: UInt32.self) == 160)
+            #expect(reader.drain(barrier: dmb_ish)?.count == 64)
+            TraceExport.pump()
+            #expect(ring.load(as: UInt32.self) == 192)
+            #expect(reader.drain(barrier: dmb_ish)?.count == 32)
+        }
+    }
+
+    @Test("a tagged event consumer wraps its cursor without rereading the batch")
+    func eventConsumerWrap() {
+        withAttachedExport { page in
+            let ring = page + Int(UserSpaceLayout.pageSize)
+            let generation = ring.load(fromByteOffset: TraceExportRing.generationOffset, as: UInt32.self)
+            ring.storeBytes(of: UInt32(1), as: UInt32.self)
+            page.storeBytes(of: TraceExportRing.consumer(head: UInt32.max - 1, generation: generation),
+                toByteOffset: TraceExportRing.consumerOffset, as: UInt64.self)
+            var reader = ProfileEventRing(base: ring, stats: page, mask: 7, barrier: dmb_ish)
+            #expect(reader.drain(barrier: dmb_ish)?.count == 3)
+            #expect(reader.drain(barrier: dmb_ish)?.count == 0)
+            let published = page.load(fromByteOffset: TraceExportRing.consumerOffset, as: UInt64.self)
+            #expect(TraceExportRing.head(of: published, generation: generation) == 1)
         }
     }
 

@@ -9,7 +9,7 @@
 /// Machine-wide metrics the kernel fills in for `procStats` sub-operation 0,
 /// and the record the profiler's export page republishes.
 ///
-/// 152 bytes, aligned members in declaration order, so a syscall or the SHM
+/// 160 bytes, aligned members in declaration order, so a syscall or the SHM
 /// exporter writes it with one struct store and a userland reader loads it back
 /// the same way. `availability` says which groups below were measured at all;
 /// a group whose bit is clear reads zero and means "not measured", never zero.
@@ -75,6 +75,8 @@ public struct SystemStats {
     public var irqOffTeardownLongest: UInt32 = 0 // 140
     public var irqOffRollbackLongest: UInt32 = 0 // 144
     public var irqOffTaskMapLongest : UInt32 = 0 // 148
+    public var irqOffProfileLongest : UInt32 = 0 // 152 profileControl path
+    public var irqOffTraceDumpLongest: UInt32 = 0 // 156 preemption region
 
     public init() {}
 }
@@ -117,9 +119,11 @@ public enum PMUEventAvailability {
 ///
 /// The kernel writes the snapshot under a seqlock at `sequenceOffset` and
 /// userland reads it back; the offsets are derived from the records so a field
-/// added to either one moves both readers together.
+/// added to either one moves both readers together. An attachment generation
+/// changes on replacement even when the same physical page is offered again.
 public enum StatsExportPage {
     public static let sequenceOffset     = 0
+    public static let generationOffset   = 4
     public static let systemOffset       = 8
     public static let processCountOffset = systemOffset + MemoryLayout<SystemStats>.stride
     public static let processSlotsOffset = processCountOffset + 8

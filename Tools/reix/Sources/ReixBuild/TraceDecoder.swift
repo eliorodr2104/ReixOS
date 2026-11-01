@@ -263,9 +263,12 @@ extension TraceDecoder {
     enum ExtractionError: Error, CustomStringConvertible {
         case noBlock
         case truncated(startLine: Int)
+        case inconsistent(line: Int)
 
         var description: String {
             switch self {
+                case .inconsistent(let line):
+                    return "Inconsistent trace snapshot at line \(line): nested framing, dropped records or count mismatch."
                 case .noBlock:
                     return "No trace block ([TRACE] begin ... / [TRACE] end ...) found in the log."
                 case .truncated(let line):
@@ -281,9 +284,9 @@ extension TraceDecoder {
     private static let tracePrefix = "[TRACE] "
 
     /// Scans every line once, tracking the currently open begin/end block. A
-    /// fresh begin abandons whatever block was still open (an earlier dump
-    /// that never got its end); only the last completed block is returned.
-    private static func extractLastBlock(from lines: [String]) throws -> Extraction {
+    /// nested begin or an incomplete payload is refused, so two exports
+    /// cannot be combined into a measurement.
+    static func extractLastBlock(from lines: [String]) throws -> Extraction {
         struct OpenBlock {
             var startLine: Int
             var freq: UInt64
@@ -299,6 +302,9 @@ extension TraceDecoder {
 
         for (index, line) in lines.enumerated() {
             let lineNumber = index + 1
+            if open != nil, line.hasPrefix("[TRACE-DROP] ") {
+                throw ExtractionError.inconsistent(line: lineNumber)
+            }
             guard let payload = tracePayload(line) else { continue }
 
             // Splitting without collapsing empty runs makes a double space
@@ -308,7 +314,10 @@ extension TraceDecoder {
             guard let first = tokens.first else { malformed += 1; continue }
 
             if first == "begin" {
-                guard let header = parseBeginLine(tokens) else { malformed += 1; continue }
+                guard let header = parseBeginLine(tokens) else {
+                    throw ExtractionError.inconsistent(line: lineNumber)
+                }
+                guard open == nil else { throw ExtractionError.inconsistent(line: lineNumber) }
                 open = OpenBlock(
                     startLine: lineNumber, freq: header.freq, lost: header.lost,
                     stack: header.stack, exceptionStack: header.exceptionStack, events: []
@@ -317,8 +326,13 @@ extension TraceDecoder {
             }
 
             if first == "end" {
-                guard let count = parseEndLine(tokens) else { malformed += 1; continue }
+                guard let count = parseEndLine(tokens) else {
+                    throw ExtractionError.inconsistent(line: lineNumber)
+                }
                 guard let current = open else { malformed += 1; continue } // end without begin
+                guard count == UInt64(current.events.count) else {
+                    throw ExtractionError.inconsistent(line: lineNumber)
+                }
                 completed.append(TraceBlock(
                     startLine: current.startLine, freq: current.freq, lost: current.lost,
                     stack: current.stack, exceptionStack: current.exceptionStack,
@@ -330,8 +344,11 @@ extension TraceDecoder {
 
             // Only remaining valid shape is an event line; anything else
             // carrying the trace prefix fails the grammar outright.
-            guard first.hasPrefix("t=") else { malformed += 1; continue }
-            guard let event = parseEventLine(tokens) else { malformed += 1; continue }
+            guard first.hasPrefix("t="), let event = parseEventLine(tokens) else {
+                if open != nil { throw ExtractionError.inconsistent(line: lineNumber) }
+                malformed += 1
+                continue
+            }
             open?.events.append(event) // outside any block: silently dropped, not malformed
         }
 
@@ -494,7 +511,7 @@ extension TraceDecoder {
     }
 
     // Indexed by slot id from PreemptionRegion.swift, which is not declaration order.
-    static let regionNames = ["CLON", "UNMP", "DCMT", "TDWN", "RBCK", "TMAP"]
+    static let regionNames = ["CLON", "UNMP", "DCMT", "TDWN", "RBCK", "TMAP", "TRCE"]
 
     static func regionName(_ slot: UInt16) -> String {
         Int(slot) < regionNames.count ? regionNames[Int(slot)] : "slot#\(slot)"
@@ -770,18 +787,27 @@ extension TraceDecoder {
         }
     }
 
+    /// Dumps replay cumulative maxima alongside older records. Wire order
+    /// therefore cannot decide which observation is the largest.
+    static func irqOffMaxima(_ events: [TraceEvent]) -> [UInt16: UInt64] {
+        var maxima: [UInt16: UInt64] = [:]
+        for event in events where event.code == 0x0401 {
+            maxima[event.info] = max(maxima[event.info] ?? 0, event.a)
+        }
+        return maxima
+    }
+
     /// Wake-to-run and deadline lag per run, and each path's longest masked
-    /// stretch, which is the last `irqOff` record the ring kept for it.
+    /// stretch, including the cumulative snapshot records.
     private static func printLatency(_ block: TraceBlock) {
         var wakes: [Double] = []
         var lags : [Double] = []
-        var irqOff: [UInt16: Double] = [:]
+        let irqOff = irqOffMaxima(block.events)
 
         for event in block.events {
             switch event.code {
                 case 0x0203: wakes.append(micros(event.a, freq: block.freq))
                 case 0x0204: lags.append(micros(event.a, freq: block.freq))
-                case 0x0401: irqOff[event.info] = micros(event.a, freq: block.freq)
                 default: break
             }
         }
@@ -792,7 +818,7 @@ extension TraceDecoder {
         guard !irqOff.isEmpty else { print("  irq off      : (none in ring)"); return }
         print("  irq off      :")
         for path in irqOff.keys.sorted() {
-            print("    " + pad(irqOffPathName(path), 20) + "  " + fmt(irqOff[path]!) + "us")
+            print("    " + pad(irqOffPathName(path), 20) + "  " + fmt(micros(irqOff[path]!, freq: block.freq)) + "us")
         }
     }
 

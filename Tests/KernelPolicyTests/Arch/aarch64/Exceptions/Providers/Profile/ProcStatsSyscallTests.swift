@@ -80,7 +80,7 @@ struct ProcStatsSyscallTests {
                 withBuffer(fill: 0xC7) { buffer in
                     UserMemory.validationOverride = { address, size, permissions in
                         address == UInt64(UInt(bitPattern: buffer))
-                            && size == 152 && permissions == [.write, .user]
+                            && size == 160 && permissions == [.write, .user]
                     }
                     var frame = processFrame(
                         buffer: buffer,
@@ -103,7 +103,7 @@ struct ProcStatsSyscallTests {
                     #expect(stats.kernelHeapReservedBytes == 4096)
                     #expect(stats.physicalAllocatedPages + stats.physicalFreePages == stats.physicalTotalPages)
                     #expect(stats.pmuEventAvailability == 0 && stats.pmuEventCounters == 0)
-                    #expect(bytes(buffer, from: 152, count: 16) == Array(repeating: 0xC7, count: 16))
+                    #expect(bytes(buffer, from: 160, count: 16) == Array(repeating: 0xC7, count: 16))
                 }
             }
           }
@@ -124,6 +124,7 @@ struct ProcStatsSyscallTests {
 
             IrqOffStretch.fold(UInt64(UInt32.max) + 5, path: 49)
             IrqOffStretch.fold(10, path: 64)
+            IrqOffStretch.fold(12_345, path: UInt16(SyscallNumber.profileControl.rawValue))
             PreemptionSpans.merge(TaskMapAnonymous.self, stretch: 1_234, longestWindow: 0, cheapestWindow: 0, checkpoints: 3)
             PreemptionSpans.merge(AddressSpaceTeardown.self, stretch: 777, longestWindow: 0, cheapestWindow: 0, checkpoints: 1)
 
@@ -145,6 +146,7 @@ struct ProcStatsSyscallTests {
             #expect(stats.deadlineLagLongest    == 1_000)
             #expect(stats.irqOffLongest         == UInt32.max)
             #expect(stats.irqOffLongestPath     == 49)
+            #expect(stats.irqOffProfileLongest  == 12_345)
             #expect(stats.irqOffTaskMapLongest  == 1_234)
             #expect(stats.irqOffTeardownLongest == 777)
             #expect(stats.irqOffCloneLongest    == 0)

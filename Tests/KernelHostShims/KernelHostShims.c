@@ -48,7 +48,9 @@ unsigned char _text_end;
 
 void disable_interrupts(void) {}
 void enable_core_timer(void) {}
-void enable_interrupts(void) {}
+static void (*interrupt_window_hook)(void);
+void host_set_interrupt_window_hook(void (*hook)(void)) { interrupt_window_hook = hook; }
+void enable_interrupts(void) { if (interrupt_window_hook) interrupt_window_hook(); }
 void enable_mmu(uint64_t lowTable, uint64_t highTable) { (void)lowTable; (void)highTable; }
 // Ordered record of the ordering shims, so a host suite can assert the exact
 // sequence one leaf-descriptor operation emits.
@@ -204,7 +206,12 @@ void reset_dcache_clean_record(void) {
     dcache_clean_size  = 0;
 }
 void pl011_write_byte(void *base, uint8_t byte) { (void)base; (void)byte; }
-uint8_t pl011_try_write_byte(void *base, uint8_t byte) { (void)base; (void)byte; return 1; }
+static uint8_t (*serial_write_hook)(uint8_t);
+void host_set_serial_write_hook(uint8_t (*hook)(uint8_t)) { serial_write_hook = hook; }
+uint8_t pl011_try_write_byte(void *base, uint8_t byte) {
+    (void)base;
+    return serial_write_hook ? serial_write_hook(byte) : 1;
+}
 void pmu_init(void) {}
 uint64_t pmu_read_cycles(void) { return 0; }
 uint64_t pmu_read_event0(void) { return 0; }
@@ -243,7 +250,12 @@ void wait_for_interrupt(void) {}
 // Host stand-ins for the Reix userland syscall and ordering shims. The terminal
 // transport tests exercise only shared-page state, but linking `Reix` brings its
 // public syscall wrappers in as one module.
-void dmb_ish(void) { barrier_count += 1; }
+static void (*data_barrier_hook)(void);
+void host_set_data_barrier_hook(void (*hook)(void)) { data_barrier_hook = hook; }
+void dmb_ish(void) {
+    barrier_count += 1;
+    if (data_barrier_hook) data_barrier_hook();
+}
 uint64_t reix_pmu_cycles(void) { return 0; }
 uint64_t reix_pmu_event0(void) { return 0; }
 uint64_t _asm_syscall(uint64_t number, ...) { (void)number; return 0; }

@@ -15,9 +15,9 @@ import ReixABI
 /// memory, so every address past the first page is resolved through the
 /// region's extents and never computed from another page's.
 struct TraceExportBatch {
-    static let tailOffset    = 0
-    static let recordsOffset = 16
-    static let recordSize    = 32
+    static let tailOffset    = TraceExportRing.producerOffset
+    static let recordsOffset = TraceExportRing.recordsOffset
+    static let recordSize    = TraceExportRing.recordBytes
 
     /// The region page the ring starts on. Page 0 is the stats snapshot.
     static let firstPage: UInt32 = 1
@@ -118,21 +118,29 @@ struct TraceExportBatch {
 /// of blocks that may lie anywhere in physical memory, so the kernel reaches
 /// each page through the region's extents and never one page from another.
 ///
-/// Page 0 is a stats snapshot behind a seqlock:
+/// Page 0 is a stats snapshot behind a seqlock. Both sequence and attachment
+/// generation survive replacement; readers reject either changing mid-copy.
+/// Event readers also discard a batch if its attachment generation changed.
+///
+/// Page 0:
 ///
 ///     @0   seq          UInt32   odd while being written
-///     @4   reserved     UInt32
-///     @8   SystemStats  152 B
-///     @160 processCount UInt32
-///     @164 reserved     UInt32
-///     @168 ProcessStats 64 B each, up to 16
+///     @4   generation   UInt32   changes on attach
+///     @8   SystemStats  160 B
+///     @168 processCount UInt32
+///     @172 reserved     UInt32
+///     @176 ProcessStats 64 B each, up to 16
 ///
 /// Pages 1 and up are an event ring:
 ///
 ///     @0   tail    UInt32   producer, monotonic, the kernel's
-///     @4   head    UInt32   consumer, monotonic, the reader's
+///     @4   generation UInt32   attachment tag
 ///     @8   dropped UInt64
 ///     @16  records 32 B each, `capacity` of them
+///
+/// Page 0 at `TraceExportRing.consumerOffset` holds the consumer as one aligned
+/// UInt64: generation in the upper word, head in the lower. A resumed old reader
+/// cannot acknowledge a new attachment, even if it stores after replacement.
 ///
 /// `capacity` is the largest power of two that fits, so the producer masks
 /// rather than divides. Both cursors are monotonic and only ever masked at the
@@ -142,8 +150,8 @@ struct TraceExportBatch {
 /// The kernel never overwrites a record the reader has not taken. A profiler
 /// that silently replaced live data would make every measurement conditional on
 /// the reader having kept up; here a full ring simply stops being filled, the
-/// records wait their turn in `TraceRing`, and `dropped` counts only what was
-/// evicted there and can never be delivered. The reader is therefore always
+/// records wait their turn in `TraceRing`, and `dropped` counts both evicted
+/// records and new writes rejected while a dump protects unread history. The reader is therefore always
 /// told exactly how much of the stream it is missing.
 ///
 /// ## Lifetime
@@ -159,8 +167,8 @@ enum TraceExport {
 
     /// Byte offsets inside the ring header, which starts at page 1.
     private static let ringTailOffset    = TraceExportBatch.tailOffset
-    private static let ringHeadOffset    = 4
-    private static let ringDroppedOffset = 8
+    private static let ringGenerationOffset = TraceExportRing.generationOffset
+    private static let ringDroppedOffset = TraceExportRing.droppedOffset
     private static let ringRecordsOffset = TraceExportBatch.recordsOffset
 
     /// One `TraceEvent` on the wire: the six fields of the struct at their
@@ -231,19 +239,23 @@ enum TraceExport {
     /// The producer cursor, mirrored here so publishing does not have to read
     /// back a word the consumer is allowed to be reading.
     private static var producer: UInt32 = 0
+    private static var consumerCursor: UInt32 = 0
 
     /// Records the reader will never see: the ones `TraceRing` evicted before
     /// the export cursor reached them.
     private static var dropped: UInt64 = 0
 
     /// Where the last drain left off in `TraceRing`.
-    private static var exportCursor: UInt32 = 0
+    private static var exportCursor  : UInt32 = 0
+    private static var rejectedCursor: UInt64 = 0
 
     /// Ticks since attach, against `statsPeriod`.
     private static var ticks: UInt64 = 0
 
-    /// Seqlock generation. Even means page 0 is readable.
+    /// Sequences survive detach and replacement so a reader paused across an
+    /// attach cannot accept an old prefix and a new suffix under the same word.
     private static var sequence: UInt32 = 0
+    private static var generation: UInt32 = 0
 
 
     // MARK: - Attach
@@ -291,9 +303,13 @@ enum TraceExport {
         let ring = linearPage(TraceExportBatch.firstPage, of: backing, linearOffset: linearOffset)
 
         clear(base, bytes: pageSize)
+        generation &+= 1
+        base.storeBytes(of: generation, toByteOffset: StatsExportPage.generationOffset, as: UInt32.self)
 
         ring.storeBytes(of: UInt32(0), toByteOffset: ringTailOffset,    as: UInt32.self)
-        ring.storeBytes(of: UInt32(0), toByteOffset: ringHeadOffset,    as: UInt32.self)
+        ring.storeBytes(of: generation, toByteOffset: ringGenerationOffset, as: UInt32.self)
+        base.storeBytes(of: TraceExportRing.consumer(head: 0, generation: generation),
+            toByteOffset: TraceExportRing.consumerOffset, as: UInt64.self)
         ring.storeBytes(of: UInt64(0), toByteOffset: ringDroppedOffset, as: UInt64.self)
 
         Self.ringCapacity   = capacity
@@ -302,11 +318,12 @@ enum TraceExport {
         Self.heap           = heap
         Self.processManager = processManager
 
-        Self.producer     = 0
-        Self.dropped      = 0
-        Self.ticks        = 0
-        Self.sequence     = 0
-        Self.exportCursor = TraceRing.currentHead
+        Self.consumerCursor = 0
+        Self.producer       = 0
+        Self.dropped        = 0
+        Self.ticks          = 0
+        Self.exportCursor   = TraceRing.currentHead
+        Self.rejectedCursor = TraceRing.rejected
 
         Self.owner        = Arch.CPU.getCurrentProcess()?.pointee.pid ?? 0
         Self.backing      = backing
@@ -373,11 +390,12 @@ enum TraceExport {
         heap           = nil
         processManager = nil
 
-        producer     = 0
-        dropped      = 0
-        ticks        = 0
-        sequence     = 0
-        exportCursor = 0
+        consumerCursor = 0
+        producer       = 0
+        dropped        = 0
+        ticks          = 0
+        exportCursor   = 0
+        rejectedCursor = 0
 
         if let releasedBacking, let releasedPPM, let releasedHeap {
             _ = releaseSharedRegion(
@@ -429,7 +447,7 @@ enum TraceExport {
     /// six stores each, one `dsb ishst`, one cursor store, and one read of the
     /// consumer's head — bounded regardless of how far behind the kernel ring
     /// has fallen, since the budget never exceeds that constant. One tick in
-    /// 32 adds a stats refresh: one 96-byte store for the system counters, and
+    /// 32 adds a stats refresh: one 160-byte store for the system counters, and
     /// for at most sixteen processes a 62-byte store, a 16-byte name copy and
     /// one pass over that process's VMA list, which is O(its VMA count) and
     /// touches no page table. A few kilobytes of stores and sixteen short list
@@ -445,7 +463,7 @@ enum TraceExport {
 
         ticks &+= 1
 
-        drainEvents(into: ring, of: backing)
+        drainEvents(into: ring, of: backing, stats: base)
 
         guard ticks % statsPeriod == 0 else { return }
 
@@ -474,9 +492,10 @@ enum TraceExport {
     /// it is a hint that sizes the drain and never a hazard that could size
     /// it unboundedly.
     ///
-    /// The consumer's cursor is read once per tick rather than once per record:
-    /// it only moves forward, so a stale read costs a record its place on this
-    /// tick and nothing else.
+    /// The generation-tagged consumer is read once per tick. A stale tag leaves
+    /// the last accepted cursor intact, so a late old store cannot stall a newer
+    /// reader that has already made progress. The cursor only moves forward,
+    /// so a stale read can only defer copying until a later tick.
     ///
     /// - Note: `head` is a word user space can write anything into, so nothing
     ///   here may derive a length or an address from it. The subtraction is
@@ -484,10 +503,15 @@ enum TraceExport {
     ///   every value the consumer could put there.
     private static func drainEvents(
         into ring  : UnsafeMutableRawPointer,
-        of   region: UnsafeMutablePointer<SharedRegion>
+        of   region: UnsafeMutablePointer<SharedRegion>,
+        stats      : UnsafeMutableRawPointer
     ) {
-        let consumer = ring.load(fromByteOffset: ringHeadOffset, as: UInt32.self)
-        let used     = producer &- consumer
+        let tagged = stats.load(fromByteOffset: TraceExportRing.consumerOffset, as: UInt64.self)
+        if let candidate = TraceExportRing.head(of: tagged, generation: generation),
+           candidate &- consumerCursor <= producer &- consumerCursor {
+            consumerCursor = candidate
+        }
+        let used     = producer &- consumerCursor
         let free     = used >= ringCapacity ? 0 : Int(ringCapacity &- used)
 
         let occupancy = TraceRing.currentHead &- exportCursor
@@ -511,8 +535,11 @@ enum TraceExport {
             batch.append(event)
         }
 
-        if evicted != 0 {
-            dropped &+= UInt64(evicted)
+        let rejected = TraceRing.rejected
+        let missed   = UInt64(evicted) &+ (rejected &- rejectedCursor)
+        rejectedCursor = rejected
+        if missed != 0 {
+            dropped &+= missed
             ring.storeBytes(of: dropped, toByteOffset: ringDroppedOffset, as: UInt64.self)
         }
 

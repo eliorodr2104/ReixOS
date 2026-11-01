@@ -6,6 +6,7 @@
 
 
 import Testing
+import KernelHostShims
 @testable import Kernel
 
 /// This suite owns `LogSink` (mode, transmit queue, drop counter) and
@@ -50,6 +51,14 @@ struct IRQSerialPathTests {
                 a: UInt64.max,
                 b: UInt64.max
             ))
+        }
+
+        let savedBase = Kernel.platformInfo.uart.baseAddr
+        Kernel.platformInfo.uart.baseAddr = 1
+        host_set_serial_write_hook { _ in 0 }
+        defer {
+            host_set_serial_write_hook(nil)
+            Kernel.platformInfo.uart.baseAddr = savedBase
         }
 
         let dropsBefore = LogSink.droppedTransmissionRecords

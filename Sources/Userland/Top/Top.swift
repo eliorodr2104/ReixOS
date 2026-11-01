@@ -40,11 +40,13 @@ public func main() {
 
     let ringBytes    = Export.ringPages * Export.pageSize
     let ringCapacity = largestPowerOfTwo(
-        lessOrEqual: (ringBytes - EventRing.dataOffset) / EventRing.recordBytes
+        lessOrEqual: (ringBytes - ProfileEventRing.dataOffset) / ProfileEventRing.recordBytes
     )
-    let ring = EventRing(
+    var ring = ProfileEventRing(
         base: shmBase + Export.pageSize,
-        mask: UInt32(ringCapacity - 1)
+        stats: shmBase,
+        mask: UInt32(ringCapacity - 1),
+        barrier: dmbISH
     )
     guard environment.signalReady() else { exit(code: 1) }
     sleep(for: .seconds(5))
@@ -61,8 +63,9 @@ public func main() {
         for _ in 0..<Top.refreshes {
             sleep(for: .seconds(1))
 
-            let processCount = statsPage.read(sys: &sys, buffer: buffer)
-            let drained      = ring.drain()
+            let snapshot = statsPage.read(sys: &sys, buffer: buffer)
+            guard let drained = ring.drain(barrier: dmbISH), drained.generation == snapshot.generation else { continue }
+            let processCount = snapshot.count
 
             print("")
             if isNewScan {
@@ -112,8 +115,8 @@ public func main() {
 
             // Published DMA frames nobody holds, out of the free count until a reset.
             printDecPadded(UInt64(sys.physicalQuarantinedPages), width: 14)
-            printDecPadded(UInt64(drained), width: 11)
-            printDecPadded(ring.dropped, width: 10)
+            printDecPadded(UInt64(drained.count), width: 11)
+            printDecPadded(drained.dropped, width: 10)
             
             let normalizedRam = normalizeRam(pages: sys.physicalFreePages)
             

@@ -5,7 +5,8 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 04/08/2026.
 //
 
-/// Fixed-capacity ring of `TraceEvent`, oldest dropped first.
+/// Fixed-capacity ring of `TraceEvent`, oldest dropped first except while a
+/// dump protects unread history; new writes then count as lost instead.
 ///
 /// Lives in `.bss` as a plain `static var`, exactly like `LogRing` and for the
 /// same reason: the first records are written before the heap exists and the
@@ -19,12 +20,9 @@
 /// under strict-align codegen because every member of `TraceEvent` is naturally
 /// aligned inside a 32-byte record.
 ///
-/// - Invariant: **producer and consumer can never overlap.** This is
-///   `LogRing`'s invariant and it holds here for `LogRing`'s reason: EL1 is
-///   non-preemptible with IRQs masked (`daifset #3`) on every path that emits,
-///   and the dump runs inside a syscall body with the same mask, so a writer
-///   only ever runs between two whole records and so does the walk. That is why
-///   no cursor here is atomic and no barrier is issued anywhere in this file.
+/// - Invariant: a slot copy and a writer never overlap. Both run with IRQs
+///   masked on one core. Snapshot readers may open windows only after copying
+///   a whole value and must validate their cursor again before the next copy.
 enum TraceRing {
 
     /// Slots in the ring. Power of two so cursors are masked rather than
@@ -56,8 +54,16 @@ enum TraceRing {
     private static var head: UInt32 = 0
     private static var tail: UInt32 = 0
 
-    /// Records overwritten before anybody dumped them.
+    /// Records overwritten or rejected before anybody dumped them.
     private static var lostEvents: UInt64 = 0
+    private static var generation          : UInt64  = 0
+    private static var protectedCursor     : UInt32? = nil
+    private static var protectionGeneration: UInt64  = 0
+    private static var rejectedWrites      : UInt64  = 0
+
+    /// Monotonic even across reset, so an attached exporter can report writes
+    /// rejected while a dump protects unread history.
+    static var rejected: UInt64 { rejectedWrites }
 
 
     // MARK: - State
@@ -76,6 +82,11 @@ enum TraceRing {
     @inline(never)
     static func append(_ event: TraceEvent) {
         if head &- tail == capacity {
+            if protectedCursor == tail {
+                lostEvents &+= 1
+                rejectedWrites &+= 1
+                return
+            }
             tail       &+= 1
             lostEvents &+= 1
         }
@@ -95,6 +106,9 @@ enum TraceRing {
     static func reset() {
         tail       = head
         lostEvents = 0
+        generation &+= 1
+        protectedCursor = nil
+        protectionGeneration &+= 1
     }
 
 
@@ -130,29 +144,82 @@ enum TraceRing {
     }
 
 
+    /// Milestones are written once before the first syscall can dump them.
+    static func bootPhase(at index: Int) -> TraceEvent? {
+        guard index >= 0, index < bootPhases.count, bootPhases[index].code != 0 else { return nil }
+        return bootPhases[index]
+    }
+
+
     // MARK: - Read path
 
-    /// Visits every record, oldest first, and leaves the ring exactly as it was
-    /// found. Returns how many it visited.
-    ///
-    /// A walk rather than a consuming drain, because the ring is a history and
-    /// not a queue: two dumps in a row must report the same events, and the
-    /// second one reporting nothing would be the more surprising answer.
-    ///
-    /// - Invariant: as everywhere else in this file, the caller must have IRQs
-    ///   masked so no emit can evict underneath the walk.
-    @discardableResult
-    static func forEachEvent(_ body: (TraceEvent) -> Void) -> Int {
-        var cursor  = tail
-        var visited = 0
+    /// Captures positions, not pointers. A window may advance the live ring;
+    /// it cannot extend this interval or replace one of its records silently.
+    struct Snapshot {
+        private var cursor    : UInt32
+        private let end       : UInt32
+        private let generation: UInt64
+        private let protection: UInt64
+        let lost: UInt64
+        private(set) var invalidated = false
 
-        while cursor != head {
-            body(storage[Int(cursor & mask)])
+        var remaining: Int { Int(end &- cursor) }
 
-            cursor  &+= 1
-            visited &+= 1
+        fileprivate init(cursor: UInt32, end: UInt32, generation: UInt64, lost: UInt64, protection: UInt64 = 0) {
+            self.cursor     = cursor
+            self.end        = end
+            self.generation = generation
+            self.protection = protection
+            self.lost       = lost
         }
 
+        /// Each call must run with IRQs masked. Only the value copy survives
+        /// a window; an evicted unread slot or a reset invalidates the suffix.
+        mutating func next() -> TraceEvent? {
+            guard cursor != end, !invalidated else { return nil }
+            guard generation == TraceRing.generation,
+                  head &- cursor <= head &- tail else {
+                invalidated = true
+                return nil
+            }
+            let event = storage[Int(cursor & mask)]
+            cursor &+= 1
+            if protection != 0, protection == protectionGeneration {
+                protectedCursor = cursor == end ? nil : cursor
+            }
+            return event
+        }
+
+        /// A stale release cannot unprotect a newer dump or a reset ring.
+        func release() {
+            if protection != 0, protection == protectionGeneration { protectedCursor = nil }
+        }
+    }
+
+    /// A dump owns the unread suffix, without a second ring allocation. A full
+    /// producer rejects and counts new writes until the next copy frees a slot.
+    static func protectSnapshot() -> Snapshot? {
+        guard protectedCursor == nil else { return nil }
+        protectionGeneration &+= 1
+        if tail != head { protectedCursor = tail }
+        return Snapshot(cursor: tail, end: head, generation: generation,
+            lost: lostEvents, protection: protectionGeneration)
+    }
+
+    static func snapshot() -> Snapshot {
+        Snapshot(cursor: tail, end: head, generation: generation, lost: lostEvents)
+    }
+
+    /// A fixed interval even if the body lets a writer run. Callers needing
+    /// loss disclosure keep `Snapshot` and inspect `invalidated` themselves.
+    @discardableResult
+    static func forEachEvent(_ body: (TraceEvent) -> Void) -> Int {
+        var snapshot = snapshot()
+        var visited = 0
+        while let event = snapshot.next() {
+            body(event)
+            visited += 1
+        }
         return visited
     }
 

@@ -85,7 +85,6 @@ public struct ProfileControlSyscall: SyscallProvider {
                     processManager: context.processManager
                 ) ? 0 : 1
 
-                _ = LogSink.drain()
 
             case .setSampleDivider:
                 frame.pointee.x0 = TraceSampler.setDivider(argument) ? 0 : 1

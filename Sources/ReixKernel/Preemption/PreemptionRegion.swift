@@ -332,6 +332,19 @@ public enum TaskMapAnonymous: PreemptionRegion {
 }
 
 
+/// One trace line, one fixed stack span, or at most 32 UART bytes per step.
+/// The snapshot owns its unread suffix; timer windows cannot replace it.
+/// The transcript cannot be restarted or interleaved with another syscall,
+/// so this region services interrupts without rescheduling.
+public enum TraceConsoleDump: PreemptionRegion {
+    public static let slot     : Int              = 6
+    public static let name     : StaticString     = "[TRCE]"
+    public static let isEnabled: Bool             = true
+    public static let mode     : PreemptionMode   = .latencyOnly
+    public static let policy   : CheckpointPolicy = CheckpointPolicy(stepsPerProbe: 1, budget: 200)
+}
+
+
 /// When the driver stops to let interrupts in.
 ///
 /// ## The budget, and why it is time and not a step count

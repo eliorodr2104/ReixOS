@@ -125,12 +125,16 @@ enum IrqOffStretch {
     }
 
 
-    #if !hasFeature(Embedded)
-    /// The longest stretch recorded for `path`, for host suites.
+    /// One bounded value copy for a dump whose interrupt windows can update
+    /// the live maxima while the transcript is being formatted.
+    static func snapshot() -> InlineArray<66, UInt32> { longestPerPath }
+
+    /// The longest stretch recorded for one exception path.
     static func longest(onPath path: UInt16) -> UInt32 {
         Int(path) < longestPerPath.count ? longestPerPath[Int(path)] : 0
     }
 
+    #if !hasFeature(Embedded)
     /// Host suites share these statics; each starts from zero.
     static func reset() {
         since          = 0
