@@ -10,6 +10,7 @@
 // Procedure Params:
 //     x0 = TrapFrame Pointer
 //     x1 = User RootTable Address
+//     x2 = ASID of that root
 //
 // The EL1 exception stack is the single dedicated kernel stack reserved by
 // the linker (.stack section, symbol stack_top). It is intentionally not a
@@ -26,13 +27,10 @@ jump_to_user_mode:
 safe_high_half:
     msr     daifset, #3
 
-    // Untagged TTBR0 write: bits [63, 48] stay zero, so the first process runs
-    // under ASID 0 until the scheduler switches away from it and back through
-    // switch_user_address_space, which installs its real ASID. Its non-global
-    // entries are cached as ASID 0 and are simply re-walked at that point.
+    // Tagged like switch_user_address_space does it: entries cached under
+    // ASID 0 would escape every invalidation scoped to the process's own tag.
+    bfi     x1, x2, #48, #16
     msr     ttbr0_el1, x1
-    tlbi    vmalle1is
-    dsb     ish
     isb
 
     ldr     x2, =stack_top

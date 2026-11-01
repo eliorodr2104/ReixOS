@@ -106,7 +106,9 @@ void flush_tlb_sync(void) { mmu_trace_record(4, 0); }
 uint64_t get_current_process(void) { return current_process; }
 void instruction_barrier(void) { mmu_trace_record(6, 0); }
 uint8_t is_mmu_enabled(void) { return 0; }
-void jump_to_user_mode(void *trapFrame, uint64_t rootTable) { (void)trapFrame; (void)rootTable; }
+void jump_to_user_mode(void *trapFrame, uint64_t rootTable, uint16_t asid) {
+    (void)trapFrame; (void)rootTable; (void)asid;
+}
 void kernel_idle_loop(void) {}
 // Reads and writes host memory on the host, which is what a suite that hands
 // these a buffer of its own wants: the bounds are the behaviour under test, the

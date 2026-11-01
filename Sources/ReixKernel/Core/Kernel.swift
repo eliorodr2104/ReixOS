@@ -330,7 +330,8 @@ public struct Kernel: Loggable {
 
         jump_to_user_mode(
             trapFrame: trapFramePtr,
-            rootTable: firstProcess.pointee.addressSpace.rootTablePhysical
+            rootTable: firstProcess.pointee.addressSpace.rootTablePhysical,
+            asid     : firstProcess.pointee.addressSpace.asid
         )
     }
     
