@@ -238,7 +238,7 @@ struct SharingTests {
 
     /// What the rights cost, now that the word is sixty-four bits.
     ///
-    /// Nothing. The rights sit in the top eight of a sixty-four bit session and
+    /// Nothing. The rights sit in the top nine of a sixty-four bit session and
     /// the object number in the bottom ten, so the generation gets the full
     /// thirty-two a record's counter has - on this disk and on any disk. It used
     /// to get whatever was left of a thirty-two bit word after both, which was
@@ -261,11 +261,16 @@ struct SharingTests {
         // generation, so *that* is the number a slot may be reused.
         #expect(FSBadge(objectCount: 512).handles.generationSpan == 1 << 22)
 
+        // The ninth right, `claim`, moved the cliff down a bit and no further
+        // than that: the largest disk this build serves still keeps all 32.
+        let largest = UInt64(FSLayout.maxSupportedBlocks) * FSLayout.blockSize / FSLayout.bytesPerObject
+        #expect(FSBadge(objectCount: UInt32(largest)).generationSpan == 1 << 32)
+
         // Where the shape breaks down is now a disk with a slot for every
-        // fifty-six bit object number, which is not a disk. The old cliff was at
+        // fifty-five bit object number, which is not a disk. The old cliff was at
         // sixteen million slots.
         let saturated = FSBadge(objectCount: 1 << 24)
         #expect(saturated.objectBits == 25)
-        #expect(saturated.generationSpan == 1 << 31)
+        #expect(saturated.generationSpan == 1 << 30)
     }
 }

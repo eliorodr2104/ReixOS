@@ -38,7 +38,7 @@
 /// belongs to is not something that can be written.
 public struct FSBadge {
 
-    /// Where the rights sit: the top eight bits of the session word.
+    /// Where the rights sit: the top `FSRights.width` bits of the session word.
     static let rightsShift: UInt64 = 64 - UInt64(FSRights.width)
 
     /// Bits the object number occupies, low end of the word.

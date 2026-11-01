@@ -66,8 +66,8 @@ struct FSRightsTests {
             (.create,      .write),
             (.write,       .write),
             (.replace,     .write),
-            (.lock,        .write),
-            (.unlock,      .write),
+            (.lock,        .claim),
+            (.unlock,      .claim),
             (.compact,     .write),
             (.remove,      .remove),
             (.relocate,    .remove),
@@ -170,9 +170,21 @@ struct FSRightsTests {
         #expect(reader.contains(.lookup))
         #expect(reader.contains(.read))
 
-        for right in [FSRights.write, .remove, .delegate, .quota, .admin, .unmount] {
+        for right in [FSRights.write, .remove, .delegate, .quota, .admin, .unmount, .claim] {
             #expect(!reader.contains(right))
         }
+    }
+
+
+    /// A claim refuses every other writer, the owner included. A read-only loan
+    /// into somebody else's container that could claim could freeze its owner.
+    @Test("a reader cannot claim, and a tenant still can")
+    func claimingIsNotReading() {
+        #expect(!FSRights.reader.contains(FSRights.required(for: .lock)))
+
+        // `replaceAll` claims around its writes, so every writer still may.
+        #expect(FSRights.occupant.contains(FSRights.required(for: .lock)))
+        #expect(FSRights.everything.subtracting(.unmount).contains(FSRights.required(for: .lock)))
     }
 
 
@@ -202,7 +214,7 @@ struct FSRightsTests {
         let all = FSRights.everything
 
         let named: [FSRights] = [
-            .lookup, .read, .write, .remove, .delegate, .quota, .admin, .unmount
+            .lookup, .read, .write, .remove, .delegate, .quota, .admin, .unmount, .claim
         ]
 
         for right in named { #expect(all.contains(right)) }

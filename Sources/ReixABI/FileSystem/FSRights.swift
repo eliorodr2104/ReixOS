@@ -41,8 +41,7 @@ public struct FSRights: OptionSet {
     /// Read the bytes of a file.
     public static let read = FSRights(rawValue: 1 << 1)
 
-    /// Make things and change what they say: `create`, `write`, `replace`, and
-    /// the `lock`/`unlock` pair that exists to make a run of writes indivisible.
+    /// Make things and change what they say: `create`, `write`, `replace`.
     ///
     /// `compact` rides here too: putting an object back into one run of blocks
     /// rewrites it, and anybody who may rewrite it could have got the same
@@ -78,11 +77,21 @@ public struct FSRights: OptionSet {
     /// the machine.
     public static let unmount = FSRights(rawValue: 1 << 7)
 
+    /// Keep a file still: the `lock`/`unlock` pair, which refuses every other
+    /// writer until its holder lets go.
+    ///
+    /// Apart from `write` because keeping a file still is what a reader needs as
+    /// much as a writer. A loader copies a program over many reads, and a file
+    /// replaced between two of them is an image that was never on the disk. Apart
+    /// from `read` because a claim stops the owner writing its own file, and a
+    /// read-only loan into somebody else's container must not be able to do that.
+    public static let claim = FSRights(rawValue: 1 << 8)
+
 
     /// How wide the set is. The badge has to make room for exactly this many
     /// bits, and it takes them from the generation, so the number is a cost and
     /// not a free choice.
-    public static let width: UInt32 = 8
+    public static let width: UInt32 = 9
 
     /// Every right there is, which is what the machine's own container carries
     /// and what nothing else should.
@@ -93,7 +102,7 @@ public struct FSRights: OptionSet {
 
     /// May keep files in a container of its own, and nothing beyond it: no
     /// handing pieces away, no room to move, no volume to speak for.
-    public static let occupant: FSRights = [.lookup, .read, .write, .remove]
+    public static let occupant: FSRights = [.lookup, .read, .write, .remove, .claim]
 
 
     /// The right an operation needs, or none for the two that every holder may
@@ -114,8 +123,11 @@ public struct FSRights: OptionSet {
             case .read:
                 .read
 
-            case .create, .write, .replace, .lock, .unlock, .compact:
+            case .create, .write, .replace, .compact:
                 .write
+
+            case .lock, .unlock:
+                .claim
 
             // Two rights and not one. A container is room set aside, so making
             // one is a use of the room-moving authority as much as of the

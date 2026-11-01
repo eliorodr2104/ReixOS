@@ -119,14 +119,14 @@ struct DeliveryPackingTests {
     }
 
 
-    @Test("the rights come out of the top eight bits and nowhere else")
+    @Test("the rights come out of the top nine bits and nowhere else")
     func rightsAreWhereTheySay() {
         let layout = FSBadge(objectCount: 1024)
 
         // One right at a time, so a mask that reached one bit too far shows up as
         // the wrong right rather than as no right.
         let each: [FSRights] = [
-            .lookup, .read, .write, .remove, .delegate, .quota, .admin, .unmount
+            .lookup, .read, .write, .remove, .delegate, .quota, .admin, .unmount, .claim
         ]
 
         for right in each {
