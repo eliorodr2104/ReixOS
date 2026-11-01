@@ -144,6 +144,10 @@ public enum FSLayout {
     /// Bytes at the front of the seal before its group summaries. See `FSSeal`.
     public static let sealHeader: UInt64 = 32
 
+    /// How many file data checksums one block of the sum region holds: four
+    /// bytes each, one for every block of the disk, indexed by block number.
+    public static let sumsPerBlock: UInt64 = blockSize / 4
+
 
     /// Where each region starts, worked out from the size of the disk alone.
     ///
@@ -159,6 +163,12 @@ public enum FSLayout {
         public let sealBlocks  : UInt32
         public let tableStart  : UInt32
         public let tableBlocks : UInt32
+
+        /// The checksum of every block of file data, between the table and the
+        /// data. One per block of the disk rather than per block of data, so the
+        /// address of a checksum is the block number and nothing else.
+        public let sumStart    : UInt32
+        public let sumBlocks   : UInt32
         public let dataStart   : UInt32
         public let objectCount : UInt32
 
@@ -205,17 +215,21 @@ public enum FSLayout {
             let tableBlocks = divideUp(objects * FSLayout.objectSize, FSLayout.blockSize)
             let objectCount = tableBlocks * FSLayout.blockSize / FSLayout.objectSize
 
-            // A summary per bitmap block, a checksum per table block, and a quota
-            // index entry per container this disk could ever hold.
+            let sumBlocks = divideUp(blocks, FSLayout.sumsPerBlock)
+
+            // A summary per bitmap block, a checksum per table and sum block, and
+            // a quota index entry per container this disk could ever hold.
             let indexed    = objectCount < UInt64(FSLayout.maxContainers)
                 ? objectCount : UInt64(FSLayout.maxContainers)
             let sealBlocks = divideUp(
-                FSLayout.sealHeader + 8 * bitmapBlocks + 4 * tableBlocks + 8 * indexed,
+                FSLayout.sealHeader + 8 * bitmapBlocks + 4 * (tableBlocks + sumBlocks)
+                    + 8 * indexed,
                 FSLayout.blockSize
             )
 
             let front     = UInt64(FSLayout.reservedBlocks)
-            let dataStart = front + bitmapBlocks + sealBlocks + tableBlocks
+            let sumStart  = front + bitmapBlocks + sealBlocks + tableBlocks
+            let dataStart = sumStart + sumBlocks
             guard dataStart < blocks else { return nil }
 
             self.totalBlocks  = UInt32(blocks)
@@ -225,6 +239,8 @@ public enum FSLayout {
             self.sealBlocks   = UInt32(sealBlocks)
             self.tableStart   = UInt32(front + bitmapBlocks + sealBlocks)
             self.tableBlocks  = UInt32(tableBlocks)
+            self.sumStart     = UInt32(sumStart)
+            self.sumBlocks    = UInt32(sumBlocks)
             self.dataStart    = UInt32(dataStart)
             self.objectCount  = UInt32(objectCount)
         }

@@ -383,7 +383,15 @@ extension FileSystem {
             }
         }
 
-        // Every bitmap and table block has now been read off the medium.
+        // And every sum block, which nothing above reads, when what they hold is
+        // still to be learned. Once known, every read of one is checked anyway.
+        if !sumsKnown {
+            for block in plan.sumStart..<plan.dataStart {
+                guard readBlock(block, into: metaBuffer) == .ok else { return nil }
+            }
+        }
+
+        // Every bitmap, table and sum block has now been read off the medium.
         sumsKnown = true
 
         containerCount = census.tooManyContainers ? FSLayout.maxContainers : census.containers

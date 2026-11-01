@@ -199,10 +199,12 @@ struct ScaleTests {
             }
 
             // The shape, which no machine's speed changes: three table passes,
-            // the 64 for bitmap and folder reads, never a fourth pass.
+            // the sum region learnt once, the 64 for bitmap and folder reads,
+            // never a fourth pass.
             if plan.totalBlocks <= FSLayout.maxSupportedBlocks {
                 #expect(
-                    recoverReads <= 3 * Int(plan.tableBlocks) + Int(plan.bitmapBlocks) + 64,
+                    recoverReads <= 3 * Int(plan.tableBlocks) + Int(plan.sumBlocks)
+                        + Int(plan.bitmapBlocks) + 64,
                     "\(name): recovery read \(recoverReads) blocks"
                 )
             } else {

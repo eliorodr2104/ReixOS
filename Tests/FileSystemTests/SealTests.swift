@@ -457,7 +457,7 @@ struct SealTests {
         ] {
             sealed { disk, plan, _ in
                 forge(disk, plan) { seal in
-                    edit(&seal, FSSeal.indexOffset(0, groups: Int(plan.bitmapBlocks), tables: Int(plan.tableBlocks)))
+                    edit(&seal, FSSeal.indexOffset(0, groups: Int(plan.bitmapBlocks), tables: Int(plan.tableBlocks + plan.sumBlocks)))
                 }
 
                 mounting(disk) { fs, found, reads in
@@ -473,7 +473,7 @@ struct SealTests {
     func indexAgainstMapIsRefused() {
         sealed { disk, plan, _ in
             forge(disk, plan) { seal in
-                let at = FSSeal.indexOffset(1, groups: Int(plan.bitmapBlocks), tables: Int(plan.tableBlocks))
+                let at = FSSeal.indexOffset(1, groups: Int(plan.bitmapBlocks), tables: Int(plan.tableBlocks + plan.sumBlocks))
                 seal[at + 4] = seal[at + 4] &+ 1
             }
 

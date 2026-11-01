@@ -41,7 +41,7 @@ public struct FileSystem<Device: BlockDevice> {
     ///
     /// Five loose blocks, `heldBlocks` cached ones, then three regions that grow
     /// with the disk: the name scrub's target bitset, the journal's arena, and
-    /// the checksum of every bitmap and table block.
+    /// the checksum of every bitmap, table and sum block.
     ///
     /// The third loose one is the journal header's: replay copies an after-image
     /// out of a payload block and into its home block, and doing that through
@@ -64,7 +64,7 @@ public struct FileSystem<Device: BlockDevice> {
         }
 
         return Int(FSLayout.blockSize)
-            * (fixed + targetBlocks(plan) + arenaBlocks(plan) + sumBlocks(plan))
+            * (fixed + targetBlocks(plan) + arenaBlocks(plan) + knownSumBlocks(plan))
     }
 
     /// Enough scratch for every geometry `mount` and `format` accept.
@@ -88,10 +88,11 @@ public struct FileSystem<Device: BlockDevice> {
         Int(plan.bitmapBlocks) > FSJournal.capacity ? Int(plan.bitmapBlocks) : FSJournal.capacity
     }
 
-    /// Four bytes per bitmap block and per table block. See `sums`.
-    static func sumBlocks(_ plan: FSLayout.Plan) -> Int {
+    /// Four bytes per bitmap, table and sum block. See `sums`.
+    static func knownSumBlocks(_ plan: FSLayout.Plan) -> Int {
         Int(FSLayout.divideUp(
-            4 * (UInt64(plan.bitmapBlocks) + UInt64(plan.tableBlocks)), FSLayout.blockSize
+            4 * (UInt64(plan.bitmapBlocks) + UInt64(plan.tableBlocks) + UInt64(plan.sumBlocks)),
+            FSLayout.blockSize
         ))
     }
 
@@ -142,8 +143,9 @@ public struct FileSystem<Device: BlockDevice> {
     /// touches the medium not at all.
     private let images: UnsafeMutableRawPointer
 
-    /// What every bitmap block and every table block should checksum to: the
-    /// bitmap's first, then the table's, four bytes each.
+    /// What every bitmap, table and sum block should checksum to: the bitmap's
+    /// first, then the table's and the sum region's, which are adjacent, four
+    /// bytes each.
     ///
     /// Moved by every write of one of those blocks and asked by every read of
     /// one off the medium, so a block that changed behind this process's back -
@@ -528,18 +530,20 @@ public struct FileSystem<Device: BlockDevice> {
     }
 
 
-    /// Where `index`'s checksum sits in `sums`, if it is a bitmap or table block.
+    /// Where `index`'s checksum sits in `sums`, if it is a bitmap, table or sum
+    /// block.
     private func sumSlot(of index: UInt32) -> Int? {
         if index >= plan.bitmapStart, index - plan.bitmapStart < plan.bitmapBlocks {
             return Int(index - plan.bitmapStart)
         }
-        if index >= plan.tableStart, index - plan.tableStart < plan.tableBlocks {
+        if index >= plan.tableStart, index < plan.dataStart {
             return Int(plan.bitmapBlocks) + Int(index - plan.tableStart)
         }
         return nil
     }
 
-    /// What `index` should checksum to, for the seal. Bitmap and table only.
+    /// What `index` should checksum to, for the seal. Bitmap, table and sum
+    /// blocks only.
     func expectedSum(of index: UInt32) -> UInt32? {
         guard let slot = sumSlot(of: index) else { return nil }
         return sums.loadUnaligned(fromByteOffset: slot * 4, as: UInt32.self)

@@ -21,14 +21,16 @@
 /// ```
 /// header           32 bytes   magic, generation, groups, tables, containers
 /// group summaries  8 x groups  checksum and used count of each bitmap block
-/// table checksums  4 x tables  checksum of each object table block
+/// table checksums  4 x tables  checksum of each object table block, then of
+///                              each block of the sum region after it
 /// quota index      8 x boxes   each container's object number and its used,
 ///                              ascending, the machine's root first
 /// ```
 ///
 /// A group is the run of blocks one bitmap block accounts for. Its summary is
 /// what lets a mount check the map a block at a time without the table, and the
-/// table checksums are what let every later read of the table check itself. The
+/// table checksums are what let every later read of the table, and of the file
+/// data checksums, check itself. The
 /// quota index is the room walk's answer, kept, so that neither the mount nor
 /// the first container made after it has to walk the table to know it.
 enum FSSeal {

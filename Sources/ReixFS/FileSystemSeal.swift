@@ -12,8 +12,8 @@ import ReixABI
 /// **The check moved, it did not go.** A clean mount used to walk the whole
 /// object table, every name in every folder, and every container's room, before
 /// it served a byte. Now `unmount` does that walk, and only a volume it finds
-/// whole is sealed: the checksum of every bitmap and table block, a summary of
-/// every bitmap block, and the quota index. The next mount checks the seal
+/// whole is sealed: the checksum of every bitmap, table and sum block, a summary
+/// of every bitmap block, and the quota index. The next mount checks the seal
 /// against the clean mark, reads the bitmap against its summaries, and serves.
 ///
 /// What it does not read, it checks later. The seal hands every table block's
@@ -92,7 +92,7 @@ extension FileSystem {
         metaBuffer.storeBytes(of: FSSeal.magic, toByteOffset: FSSeal.Header.magic, as: UInt64.self)
         metaBuffer.storeBytes(of: superblockGeneration + 1, toByteOffset: FSSeal.Header.generation, as: UInt64.self)
         metaBuffer.storeBytes(of: plan.bitmapBlocks, toByteOffset: FSSeal.Header.groups, as: UInt32.self)
-        metaBuffer.storeBytes(of: plan.tableBlocks, toByteOffset: FSSeal.Header.tables, as: UInt32.self)
+        metaBuffer.storeBytes(of: plan.tableBlocks + plan.sumBlocks, toByteOffset: FSSeal.Header.tables, as: UInt32.self)
         metaBuffer.storeBytes(of: UInt32(census.containers), toByteOffset: FSSeal.Header.containers, as: UInt32.self)
 
         var pen = SealPen(at: Int(FSLayout.sealHeader))
@@ -109,7 +109,8 @@ extension FileSystem {
             else { return 0 }
         }
 
-        for table in 0..<plan.tableBlocks {
+        // The table and the sum region, which follow it.
+        for table in 0..<(plan.tableBlocks + plan.sumBlocks) {
             guard put(expectedSum(of: plan.tableStart + table) ?? 0, &pen) else { return 0 }
         }
 
@@ -193,7 +194,7 @@ extension FileSystem {
         guard named != 0 else { return .absent }
 
         let groups = Int(plan.bitmapBlocks)
-        let tables = Int(plan.tableBlocks)
+        let tables = Int(plan.tableBlocks + plan.sumBlocks)
 
         // The summaries are kept in the descriptor page while the bitmap is read.
         guard groups * 8 <= Int(FSLayout.blockSize) else { return .absent }
@@ -215,7 +216,7 @@ extension FileSystem {
 
         guard UInt64(magicHigh) << 32 | UInt64(magicLow) == FSSeal.magic,
               UInt64(genHigh) << 32 | UInt64(genLow) == superblockGeneration,
-              sealedGroups == plan.bitmapBlocks, sealedTables == plan.tableBlocks,
+              sealedGroups == plan.bitmapBlocks, sealedTables == UInt32(tables),
               containers > 0, Int(containers) <= limit
         else { return .absent }
 

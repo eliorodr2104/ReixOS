@@ -87,6 +87,8 @@ struct CensusTests {
             let findings = fs.scan(.blocks)
 
             #expect(findings.complete)
+            // And not the sum region: a mounted volume knows what it holds, and
+            // every read of one is checked.
             #expect(disk.reads - before == Int(fs.plan.tableBlocks) + Int(fs.plan.bitmapBlocks))
         }
     }
@@ -464,9 +466,9 @@ struct CensusTests {
 
         guard let plan = FSLayout.Plan(sectorCount: Self.wide, sectorSize: 512) else { return }
 
-        // Two superblocks and the journal header, then the census: the repair's
-        // first request comes straight after.
-        let first = 3 + Int(plan.tableBlocks) + Int(plan.bitmapBlocks) + 1
+        // Two superblocks and the journal header, then the census and the sum
+        // region it learns: the repair's first request comes straight after.
+        let first = 3 + Int(plan.tableBlocks) + Int(plan.bitmapBlocks) + Int(plan.sumBlocks) + 1
 
         var cut = 0
         for stop in first...(first + 24) {

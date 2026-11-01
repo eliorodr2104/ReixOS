@@ -225,7 +225,13 @@ struct FSSuperblock {
         guard stored == FSChecksum.over(base, count: FSSuperblockField.width, zeroing: FSSuperblockField.checksum)
         else { return .corrupt }
 
-        guard FSSuperblock(reading: base).describes(plan) else { return .corrupt }
+        // This disk's size with its regions elsewhere is another layout, not
+        // damage; anything else that does not describe this disk is damage.
+        let found = FSSuperblock(reading: base)
+        guard found.describes(plan) else {
+            return found.blockSize == UInt32(FSLayout.blockSize)
+                && found.totalBlocks == plan.totalBlocks ? .unrecognised : .corrupt
+        }
 
         return .whole
     }
