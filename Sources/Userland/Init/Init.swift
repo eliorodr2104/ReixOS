@@ -426,7 +426,7 @@ public func main() {
 
     // ProcessServer is still an initrd bootstrap service. It gets the legacy
     // spawn authority taskCreate needs, plus what its profiles may attenuate.
-    let processServer = programs.map { programDirectory in
+    func spawnProcessServer(_ programDirectory: UInt32) -> SpawnResult {
         withUnsafeTemporaryAllocation(
         of      : CapGrant.self,
         capacity: {
@@ -509,7 +509,9 @@ public func main() {
         }
     }
 
-    let processServerEndpoint = processServer.flatMap { spawned -> UInt32? in
+    func startProcessServer() -> (endpoint: UInt32, pid: PID)? {
+        guard let programs else { return nil }
+        let spawned = spawnProcessServer(programs)
         guard spawned.hasEndpoint else {
             print("[ INIT  ] ProcessServer bootstrap spawn was refused")
             return nil
@@ -524,13 +526,20 @@ public func main() {
         }
 
         UserBootPresentation.ready("[ INIT  ] ProcessServer endpoint ready")
-        return endpoint
+        return (endpoint, spawned.pid)
     }
 
     // Shell.elf held as a writer would hold it, in the mode that answers questions.
     let heldShell = UserBootPresentation.showsServices
         ? machineFiles.flatMap(shellProgram(in:))
         : nil
+
+    // A first ProcessServer that dies mid-load, then the one that serves the session.
+    if let machineFiles, let heldShell, let doomed = startProcessServer() {
+        loaderDeath(of: doomed, program: heldShell, files: machineFiles)
+    }
+
+    let processServerEndpoint = startProcessServer()?.endpoint
 
     if let machineFiles, let heldShell, let processServerEndpoint {
         launchRefusedWhileClaimed(heldShell, files: machineFiles, through: processServerEndpoint)
@@ -715,6 +724,51 @@ private func launchRefusedWhileClaimed(
     }
 
     print("[ INIT  ] a program held by a writer was refused, busy")
+}
+
+
+/// Has a ProcessServer die holding its claim on `Shell.elf`, then claims and
+/// writes that file from here.
+///
+/// The server exits part way through loading, so its claim sits under a dead
+/// identity, and only the file system's sweep (run before a refusal is given)
+/// can free it. The write puts back the byte it read, so the program is intact.
+/// This instance is not the session's: the real one is started after.
+private func loaderDeath(
+    of server : (endpoint: UInt32, pid: PID),
+    program   : UInt32,
+    files     : FileSystemClient
+) {
+    let name = "Shell.die" as StaticString
+    let died = launchProgram(
+        through: server.endpoint,
+        name   : name.utf8Start,
+        length : name.utf8CodeUnitCount
+    )
+    if let job = died.job { _ = capDrop(job) }
+
+    guard died.status != .ok else {
+        print("[ INIT  ] a loader that had to die launched the program instead")
+        return
+    }
+
+    _ = reapChild(for: server.pid)
+    _ = capDrop(server.endpoint)
+
+    var byte: UInt8 = 0
+    let read = withUnsafeMutablePointer(to: &byte) {
+        files.read(program, at: 0, into: UnsafeMutableRawPointer($0), count: 1)
+    }
+    let written = withUnsafePointer(to: &byte) {
+        files.write(program, at: 0, from: UnsafeRawPointer($0), count: 1)
+    }
+
+    guard read.status == .ok, written.status == .ok else {
+        print("[ INIT  ] a program its dead loader held cannot be written")
+        return
+    }
+
+    print("[ INIT  ] a program held by a loader that died was let go")
 }
 
 

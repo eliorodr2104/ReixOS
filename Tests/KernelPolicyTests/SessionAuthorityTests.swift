@@ -34,7 +34,7 @@ struct SessionAuthorityTests {
             encoding: .utf8
         )
 
-        let spawn = try #require(initSource.range(of: "let processServer = programs.map"))
+        let spawn = try #require(initSource.range(of: "func spawnProcessServer("))
         let drop  = try #require(
             initSource.range(of: "if let diagnostic { _ = capDrop(diagnostic) }")
         )

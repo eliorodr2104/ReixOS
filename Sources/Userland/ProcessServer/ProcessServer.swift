@@ -72,14 +72,45 @@ public struct ProcessServer: Service {
         }
     }
 
+    /// The diagnostic image's way to see a loader die holding its claim: a launch
+    /// of `Shell.die` loads `Shell.elf` and exits once the claim is taken. Any
+    /// other image refuses the name as it would any unknown program.
+    private static func asksToDie(
+        _ requested: (bytes: InlineArray<12, UInt8>, length: Int)
+    ) -> Bool {
+        guard UserBootPresentation.showsServices else { return false }
+
+        let name = programName("Shell.die")
+        guard requested.length == name.length else { return false }
+        for index in 0..<name.length where requested.bytes[index] != name.bytes[index] {
+            return false
+        }
+        return true
+    }
+
+    private static func programName(
+        _ text: StaticString
+    ) -> (bytes: InlineArray<12, UInt8>, length: Int) {
+        var bytes = InlineArray<12, UInt8>(repeating: 0)
+        for index in 0..<text.utf8CodeUnitCount { bytes[index] = text.utf8Start[index] }
+        return (bytes, text.utf8CodeUnitCount)
+    }
+
     private mutating func launch(request: inout ReceivedMessage) {
         guard request.grantedCap == nil,
-              let requested = ProcessLaunchRequest.name(from: request.message),
-              let profile   = ProgramProfile.identify(
-                requested.bytes,
-                length: requested.length
-              )
+              var requested = ProcessLaunchRequest.name(from: request.message)
         else {
+            _ = reply(message: ProcessServerStatus.badRequest.response)
+            return
+        }
+
+        let dies = Self.asksToDie(requested)
+        if dies { requested = Self.programName("Shell.elf") }
+
+        guard let profile = ProgramProfile.identify(
+            requested.bytes,
+            length: requested.length
+        ) else {
             _ = reply(message: ProcessServerStatus.badRequest.response)
             return
         }
@@ -114,6 +145,11 @@ public struct ProcessServer: Service {
         var built  : (task: UInt32, bootstrap: UInt32)? = nil
 
         let loaded = ProgramLoad.load(&source) { plan, claimed in
+            if dies {
+                print("[ PSRV  ] the loader exits with its claim held")
+                exit(code: 7)
+            }
+
             var taskName = requested.bytes
             let created = withUnsafeBytes(of: &taskName) { bytes in
                 taskCreate(
