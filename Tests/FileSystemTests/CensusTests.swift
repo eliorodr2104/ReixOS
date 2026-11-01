@@ -297,7 +297,7 @@ struct CensusTests {
         let ceiling = UInt64(FSLayout.maxSupportedBlocks) * (FSLayout.blockSize / 512)
         #expect(FileSystem<MemoryDisk>.scratchBytes
                 == FileSystem<MemoryDisk>.scratchBytes(sectorCount: ceiling, sectorSize: 512))
-        #expect(FileSystem<MemoryDisk>.scratchBytes(sectorCount: 32768, sectorSize: 512) == 108 * 1024)
+        #expect(FileSystem<MemoryDisk>.scratchBytes(sectorCount: 32768, sectorSize: 512) == 112 * 1024)
     }
 
 

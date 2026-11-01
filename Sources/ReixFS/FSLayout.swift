@@ -153,12 +153,14 @@ public enum FSLayout {
 
     /// The most blocks one write may overwrite in place.
     ///
-    /// Each of them is named in the journal before it is written, and a mount
-    /// that finds the name reads every one of them back. So this is the
-    /// recovery bill of the worst write: a thousand and twenty-four reads, about
-    /// fifty milliseconds against the one-second line. A client of the file
-    /// system server cannot get near it, because its window is four pages.
-    public static let overwriteLimit: UInt64 = 1024
+    /// Each of them is named in the journal header before it is written, with
+    /// the checksum its new bytes will have, and those checksums fill the header
+    /// block after its first sector: four bytes each, eight hundred and
+    /// ninety-six of them. A mount that finds the name reads every one back, so
+    /// this is also the recovery bill of the worst write, about forty-five
+    /// milliseconds against the one-second line. A client of the file system
+    /// server cannot get near it, because its window is four pages.
+    public static let overwriteLimit: UInt64 = (blockSize - 512) / 4
 
 
     /// Where each region starts, worked out from the size of the disk alone.

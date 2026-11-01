@@ -343,36 +343,104 @@ struct DataSumTests {
 
     // MARK: - What a named overwrite leaves for the mount
 
-    @Test("a prepared header naming an overwrite is settled from the medium, and only what it names")
-    func preparedIntentIsSettled() {
+    @Test("a named block takes its declared checksum or keeps its old one, and nothing else is believed")
+    func settleBelievesOldOrNew() {
         withFileSystem { fs, disk in
-            guard let file = makeFile(&fs, "named.bin", pattern(22, 2 * Self.block)) else { return }
-
-            let named   = physical(&fs, file, 0)
-            let unnamed = physical(&fs, file, 1)
-            let landed  = pattern(23, Self.block)
-
-            // Both overwrites reached the medium and neither commit did. Only the
-            // first was named before it was written.
-            disk.put(landed, block: named)
-            disk.put(pattern(24, Self.block), block: unnamed)
+            let old = pattern(22, 5 * Self.block)
+            let new = pattern(23, 4 * Self.block)
+            guard let file = makeFile(&fs, "named.bin", old) else { return }
 
             var intent = FSJournal.Intent()
-            let added  = intent.add(named)
-            #expect(added)
-            putHeader(disk, prepared: intent)
+            var sums   = [UInt32]()
+            for index in 0..<4 {
+                let added = intent.add(physical(&fs, file, index))
+                #expect(added)
+                sums.append(sum(Array(new[(index * Self.block)..<((index + 1) * Self.block)])))
+            }
+
+            // Block 0 written, 1 not reached, 2 rotted before the write reached it,
+            // 3 torn half way, 4 overwritten without being named.
+            disk.put(Array(new[0..<Self.block]), block: physical(&fs, file, 0))
+            rot(disk, physical(&fs, file, 2), at: 300)
+            disk.put(
+                Array(new[(3 * Self.block)..<(3 * Self.block + 2048)])
+                    + Array(old[(3 * Self.block + 2048)..<(4 * Self.block)]),
+                block: physical(&fs, file, 3)
+            )
+            disk.put(pattern(24, Self.block), block: physical(&fs, file, 4))
+            putHeader(disk, prepared: intent, declaring: sums)
 
             remount(disk) { again, found in
                 guard var again else { Issue.record("\(found)"); return }
 
                 let first = readBack(&again, file, count: Self.block)
                 #expect(first.status == .ok)
-                #expect(first.data == landed)
+                #expect(first.data == Array(new[0..<Self.block]))
 
-                #expect(readBack(&again, file, at: UInt64(Self.block), count: 1).status == .damaged)
+                let second = readBack(&again, file, at: UInt64(Self.block), count: Self.block)
+                #expect(second.status == .ok)
+                #expect(second.data == Array(old[Self.block..<(2 * Self.block)]))
+
+                for index in 2..<5 {
+                    let back = readBack(&again, file, at: UInt64(index * Self.block), count: 1)
+                    #expect(back.status == .damaged, "block \(index)")
+                }
+
+                #expect(again.scan(.data).damagedData == 3)
                 #expect(again.journalIsEmpty && again.unsettled.isEmpty)
+                #expect(!again.corrupted)
             }
         }
+    }
+
+
+    @Test("a declaration whose checksums did not reach the medium whole settles to the old ones")
+    func tornDeclarationKeepsTheOld() {
+        // Left out, and written then torn after the first sector.
+        for torn in [false, true] {
+            withFileSystem { fs, disk in
+                let old = pattern(25, 2 * Self.block)
+                let new = pattern(26, 2 * Self.block)
+                guard let file = makeFile(&fs, "torn.bin", old) else { return }
+
+                var intent = FSJournal.Intent()
+                let added = intent.add(physical(&fs, file, 0)) && intent.add(physical(&fs, file, 1))
+                #expect(added)
+
+                // No named block can have been written before the header was
+                // whole on the medium, so one holding new bytes is not believed.
+                disk.put(Array(new[Self.block...]), block: physical(&fs, file, 1))
+
+                if torn {
+                    let sums = [sum(Array(new[0..<Self.block])), sum(Array(new[Self.block...]))]
+                    putHeader(disk, prepared: intent, declaring: sums)
+
+                    let at = Int(FSLayout.journalHeaderBlock) * Self.block + FSJournal.Header.declared
+                    disk.poke(disk.byte(at: at) ^ 0x40, at: at)
+                } else {
+                    putHeader(disk, prepared: intent)
+                }
+
+                remount(disk) { again, found in
+                    guard var again else { Issue.record("torn \(torn): \(found)"); return }
+
+                    let first = readBack(&again, file, count: Self.block)
+                    #expect(first.status == .ok, "torn \(torn)")
+                    #expect(first.data == Array(old[0..<Self.block]), "torn \(torn)")
+
+                    #expect(readBack(&again, file, at: UInt64(Self.block), count: 1).status == .damaged)
+                    #expect(again.journalIsEmpty && again.unsettled.isEmpty && !again.declaredKnown)
+                }
+            }
+        }
+    }
+
+
+    @Test("a header's fields stay in its first sector and the declared checksums fill the rest")
+    func headerShape() {
+        #expect(FSJournal.Header.width <= FSJournal.Header.declared)
+        #expect(FSJournal.Header.declared + Int(FSLayout.overwriteLimit) * 4 == Self.block)
+        #expect(FSLayout.overwriteLimit == 896)
     }
 
 
@@ -607,35 +675,54 @@ struct DataSumTests {
 
     // MARK: - What it costs
 
-    @Test("an overwrite in place pays one header and one barrier more, an append none")
-    func costOfNaming() {
-        withFileSystem { fs, disk in
-            guard let file = makeFile(&fs, "bill.bin", pattern(27, 100)) else { return }
+    /// One kind of write, measured on a disk of its own: the file it starts
+    /// from, and what is done to it.
+    private struct Bill {
+        let name : String
+        let start: Int
+        let at   : Int
+        let count: Int
+    }
 
-            // Onto the block the file has: named first.
-            var writes  = disk.writes
-            var flushes = disk.flushes
-            var reads   = disk.reads
-            #expect(writeBytes(&fs, file, at: 100, pattern(28, 100)).status == .ok)
+    @Test("what each write costs: a declaration only for blocks overwritten in place")
+    func costOfWriting() {
+        let bills = [
+            Bill(name: "append into the tail",   start: 100,            at: 100,            count: 100),
+            Bill(name: "append across the tail", start: Self.block + 50, at: Self.block + 50, count: 5000),
+            Bill(name: "append onto a new block", start: 0,             at: 0,              count: 100),
+            Bill(name: "append whole blocks",    start: Self.block,     at: Self.block,     count: 2 * Self.block),
+            Bill(name: "overwrite, partial ends", start: 3 * Self.block, at: 1000,          count: 2 * Self.block),
+            Bill(name: "overwrite whole blocks", start: 3 * Self.block, at: Self.block,     count: 2 * Self.block),
+        ]
 
-            let inPlace = (disk.writes - writes, disk.flushes - flushes, disk.reads - reads)
+        // Writes, barriers, reads per row, from a committed file and a cold cache. The
+        // checksums ride in the declaration's header, so no row costs more than before.
+        let expected: [String: (Int, Int, Int)] = [
+            "append into the tail"   : (9, 5, 3),
+            "append across the tail" : (12, 5, 4),
+            "append onto a new block": (10, 4, 3),
+            "append whole blocks"    : (11, 4, 3),
+            "overwrite, partial ends": (11, 5, 6),
+            "overwrite whole blocks" : (10, 5, 2),
+        ]
 
-            // Data block, declaration, two payloads, three headers, two home
-            // writes; five barriers; one read, of the block being kept.
-            #expect(inPlace.0 == 9, "\(inPlace)")
-            #expect(inPlace.1 == 5, "\(inPlace)")
-            #expect(inPlace.2 == 1, "\(inPlace)")
+        print("write                     writes  barriers  reads")
+        for bill in bills {
+            withFileSystem { fs, disk in
+                guard let file = makeFile(&fs, "bill.bin", pattern(27, bill.start)) else { return }
+                fs.dropCache()
 
-            // Onto a block it does not have: nothing to name.
-            guard let other = makeFile(&fs, "fresh.bin", []) else { return }
-            writes  = disk.writes
-            flushes = disk.flushes
-            #expect(writeBytes(&fs, other, at: 0, pattern(29, 100)).status == .ok)
+                let before = (disk.writes, disk.flushes, disk.reads)
+                #expect(writeBytes(&fs, file, at: UInt64(bill.at), pattern(28, bill.count)).status == .ok)
+                let cost = (disk.writes - before.0, disk.flushes - before.1, disk.reads - before.2)
 
-            // The data block, three payloads (the bitmap too), three headers and
-            // three home writes; four barriers.
-            #expect(disk.writes - writes == 10)
-            #expect(disk.flushes - flushes == 4)
+                print("\(bill.name.padding(toLength: 26, withPad: " ", startingAt: 0))"
+                      + "\(cost.0)       \(cost.1)         \(cost.2)")
+
+                guard let want = expected[bill.name] else { return }
+                #expect(cost == want, "\(bill.name): \(cost)")
+                #expect(fs.object(file)?.extents == 1, "\(bill.name)")
+            }
         }
     }
 
@@ -728,17 +815,31 @@ struct DataSumTests {
         return middle
     }
 
-    private func putHeader(_ disk: MemoryDisk, prepared intent: FSJournal.Intent) {
+    private func putHeader(
+        _ disk  : MemoryDisk,
+        prepared intent: FSJournal.Intent,
+        declaring sums : [UInt32]? = nil
+    ) {
         var header = FSJournal()
         header.state  = .prepared
         header.intent = intent
-        putHeader(disk, header)
+        putHeader(disk, header, declaring: sums)
     }
 
-    private func putHeader(_ disk: MemoryDisk, _ header: FSJournal) {
+    private func putHeader(_ disk: MemoryDisk, _ header: FSJournal, declaring sums: [UInt32]? = nil) {
         var bytes = [UInt8](repeating: 0, count: Self.block)
-        bytes.withUnsafeMutableBytes { raw in header.write(to: raw.baseAddress!) }
+        bytes.withUnsafeMutableBytes { raw in
+            guard let sums else { return header.write(to: raw.baseAddress!) }
+            sums.withUnsafeBytes { declared in
+                header.write(to: raw.baseAddress!, declaring: declared.baseAddress!)
+            }
+        }
         disk.put(bytes, block: FSLayout.journalHeaderBlock)
+    }
+
+    /// What `bytes`, one block of them, checksum to.
+    private func sum(_ bytes: [UInt8]) -> UInt32 {
+        bytes.withUnsafeBytes { FSChecksum.over($0.baseAddress!, count: $0.count) }
     }
 }
 
@@ -777,18 +878,24 @@ struct DataSumCrashTests {
 
     /// Sweeps `operation` over a file holding `old` that should come to hold
     /// `new`, at every stop and under every policy.
+    ///
+    /// `rot` is a block of the file damaged before the operation starts. While
+    /// the medium still holds that damage it must read as damaged and be the
+    /// only thing a data scrub finds; once the write has replaced it, nothing
+    /// is damaged. Every other block reads, and every byte read is old or new.
     private func sweep(
         _ what     : String,
         old        : [UInt8],
         new        : [UInt8],
         initial    : [UInt8]? = nil,
+        rot        : Int? = nil,
         prepare    : (inout FileSystem<CrashDisk>, UInt32) -> Void = { _, _ in },
         operation  : (inout FileSystem<CrashDisk>, UInt32) -> Void
     ) {
         // How many requests the operation makes when nothing goes wrong, so the
         // sweep covers every one of them and one past the end.
         var requests = 0
-        fixture(initial ?? old, prepare) { fs, disk, file in
+        fixture(initial ?? old, rot: rot, prepare) { fs, disk, file in
             let before = disk.reads + disk.writes + disk.flushes
             operation(&fs, file)
             requests = disk.reads + disk.writes + disk.flushes - before
@@ -800,7 +907,7 @@ struct DataSumCrashTests {
 
         for stop in 1...(requests + 1) {
             for (label, policy) in Self.policies {
-                fixture(initial ?? old, prepare) { fs, disk, file in
+                fixture(initial ?? old, rot: rot, prepare) { fs, disk, file in
                     disk.failAfter(stop)
                     operation(&fs, file)
                     disk.powerCut(keeping: policy(stop))
@@ -820,34 +927,64 @@ struct DataSumCrashTests {
                     #expect(again.begin() == .ok, "\(where_): the journal was left holding something")
                     again.abort()
 
-                    let findings = again.scan(.data)
-                    #expect(findings.complete && findings.safeToServe, "\(where_)")
-                    #expect(findings.damagedData == 0, "\(where_): a block reads as damaged")
-
                     guard let record = again.object(file) else {
                         Issue.record("\(where_): the file is gone")
                         return
                     }
 
+                    // Whether the damage made before the operation is still there:
+                    // the write either replaced that block or it did not.
+                    var rotted: UInt32? = nil
+                    if let rot, let block = record.block(at: UInt64(rot * Self.block)),
+                       after.block(block) != Array(new[(rot * Self.block)..<((rot + 1) * Self.block)]) {
+                        rotted = block
+                    }
+
+                    let findings = again.scan(.data)
+                    #expect(findings.complete && findings.safeToServe, "\(where_)")
+                    #expect(
+                        findings.damagedData == (rotted == nil ? 0 : 1),
+                        "\(where_): \(findings.damagedData) damaged blocks"
+                    )
+
                     let size = Int(record.size)
                     #expect(size == old.count || size == new.count, "\(where_): size \(size)")
 
-                    var back = [UInt8](repeating: 0, count: size)
-                    let read = back.withUnsafeMutableBytes { raw in
-                        again.read(file, at: 0, into: raw.baseAddress!, count: UInt64(size))
-                    }
-                    #expect(read.status == .ok, "\(where_): \(read.status)")
+                    var back  = [UInt8](repeating: 0, count: size)
+                    var skip  = 0..<0
+                    var chunk = 0
+                    while chunk < size {
+                        let count = min(Self.block, size - chunk)
+                        let read  = back.withUnsafeMutableBytes { raw in
+                            again.read(
+                                file, at: UInt64(chunk),
+                                into: raw.baseAddress!.advanced(by: chunk), count: UInt64(count)
+                            )
+                        }
 
-                    for index in 0..<size {
+                        let damaged = rotted != nil && chunk / Self.block == rot
+                        #expect(read.status == (damaged ? .damaged : .ok), "\(where_): block \(chunk / Self.block) \(read.status)")
+                        if damaged { skip = chunk..<(chunk + count) }
+
+                        chunk += count
+                    }
+
+                    var sameAsNew = size == new.count
+                    var sameAsOld = size == old.count
+
+                    for index in 0..<size where !skip.contains(index) {
                         let was  = index < old.count ? old[index] : nil
                         let will = index < new.count ? new[index] : nil
+                        if back[index] != will { sameAsNew = false }
+                        if back[index] != was  { sameAsOld = false }
+
                         guard back[index] == was || back[index] == will else {
                             Issue.record("\(where_): byte \(index) is neither")
                             break
                         }
                     }
 
-                    if back == new { finished += 1 } else if back == old { undone += 1 }
+                    if sameAsNew { finished += 1 } else if sameAsOld { undone += 1 }
                 }
             }
         }
@@ -861,9 +998,11 @@ struct DataSumCrashTests {
     }
 
 
-    /// A formatted disk holding one file of `old`, made durable, then `body`.
+    /// A formatted disk holding one file of `old`, made durable, with block
+    /// `rot` of it then damaged behind the file system's back, then `body`.
     private func fixture(
         _ old    : [UInt8],
+        rot      : Int? = nil,
         _ prepare: (inout FileSystem<CrashDisk>, UInt32) -> Void,
         _ body   : (inout FileSystem<CrashDisk>, CrashDisk, UInt32) -> Void
     ) {
@@ -890,6 +1029,11 @@ struct DataSumCrashTests {
 
         prepare(&fs, made.object)
         #expect(disk.flush() == .ok)
+
+        if let rot, let block = fs.object(made.object)?.block(at: UInt64(rot * Self.block)) {
+            let at = Int(block) * Self.block + 300
+            disk.poke(disk.byte(at: at) ^ 0xA5, at: at)
+        }
 
         body(&fs, disk, made.object)
     }
@@ -958,6 +1102,32 @@ struct DataSumCrashTests {
         new.replaceSubrange(Self.block..<(3 * Self.block), with: over)
 
         sweep("overwrite whole", old: old, new: new) { fs, file in
+            write(&fs, file, at: Self.block, over)
+        }
+    }
+
+
+    @Test("an overwrite partial at both ends, a named block in the middle rotted")
+    func overwriteInsideOverRot() {
+        let old  = pattern(17, 3 * Self.block)
+        let over = pattern(18, 2 * Self.block)
+        var new  = old
+        new.replaceSubrange(1000..<(1000 + over.count), with: over)
+
+        sweep("overwrite inside, rot", old: old, new: new, rot: 1) { fs, file in
+            write(&fs, file, at: 1000, over)
+        }
+    }
+
+
+    @Test("an overwrite of whole blocks, the last named one rotted")
+    func overwriteWholeOverRot() {
+        let old  = pattern(19, 3 * Self.block)
+        let over = pattern(20, 2 * Self.block)
+        var new  = old
+        new.replaceSubrange(Self.block..<(3 * Self.block), with: over)
+
+        sweep("overwrite whole, rot", old: old, new: new, rot: 2) { fs, file in
             write(&fs, file, at: Self.block, over)
         }
     }

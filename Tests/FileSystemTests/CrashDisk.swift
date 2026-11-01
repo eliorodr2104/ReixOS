@@ -189,6 +189,12 @@ final class CrashDisk: BlockDevice {
         stable.storeBytes(of: value, toByteOffset: offset, as: UInt32.self)
     }
 
+    /// One whole block as the medium holds it.
+    func block(_ index: UInt32) -> [UInt8] {
+        let start = Int(index) * 4096
+        return (0..<4096).map { byte(at: start + $0) }
+    }
+
 
     private func land(_ write: Pending) {
         write.bytes.withUnsafeBufferPointer { buffer in

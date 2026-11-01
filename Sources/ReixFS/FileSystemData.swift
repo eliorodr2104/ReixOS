@@ -264,9 +264,10 @@ extension FileSystem {
     /// reached.
     ///
     /// Every block written carries its checksum in the same transaction. A block
-    /// the file already has is named in the journal before it is overwritten, so
-    /// a write that does not commit leaves it holding old bytes or new, both
-    /// readable, and never a block whose checksum describes neither.
+    /// the file already has is named in the journal, with its new checksum,
+    /// before it is overwritten, so a write that does not commit leaves it
+    /// holding old bytes or new, and a block that is neither reads as damaged
+    /// rather than being believed.
     public mutating func write(
         _    object   : UInt32,
         at   offset   : UInt64,
@@ -347,15 +348,8 @@ extension FileSystem {
             else { return (.tooFragmented, 0) }
         }
 
-        // A partial last block is read before the blocks are named, or damage
-        // found later would be settled over; the first is read in the loop.
-        let last = (end - 1) / FSLayout.blockSize
-        if end % FSLayout.blockSize != 0, last * FSLayout.blockSize < held, last > first {
-            guard let block = record.block(at: end - 1) else { return (.notFound, 0) }
-
-            let checked = readDataBlock(block, into: dataBuffer)
-            guard checked == .ok else { return (checked, 0) }
-        }
+        let summed = newSums(of: record, at: offset, from: source, count: count, blocks: inPlace)
+        guard summed == .ok else { return (summed, 0) }
 
         var moved = UInt64(0)
 
@@ -374,8 +368,9 @@ extension FileSystem {
             // publish them.
             //
             // Which is also one read fewer than reading always, on the commonest
-            // write there is: the first one into a new file.
-            if chunk != FSLayout.blockSize {
+            // write there is: the first one into a new file. A first block named
+            // in place was filled already, when its new checksum was worked out.
+            if chunk != FSLayout.blockSize, moved > 0 || inPlace == 0 {
                 if at - inside >= held {
                     dataBuffer.initializeMemory(
                         as: UInt8.self, repeating: 0, count: Int(FSLayout.blockSize)
@@ -422,6 +417,55 @@ extension FileSystem {
         }
 
         return (.ok, moved)
+    }
+
+
+    /// Works out the checksum each of the first `blocks` blocks of this write
+    /// will hold, into `declaredBuffer`, before any of them is written.
+    ///
+    /// A whole block is the caller's bytes. A partial one is the file's own
+    /// block, read and checked, with the caller's bytes laid over it: a damaged
+    /// block is refused here rather than declared over. Last block first, so
+    /// the first is what `dataBuffer` holds when the loop starts writing.
+    private mutating func newSums(
+        of   record: FSObject,
+        at   offset: UInt64,
+        from source: UnsafeRawPointer,
+             count : UInt64,
+             blocks: UInt64
+    ) -> FSStatus {
+
+        let end   = offset + count
+        let first = offset / FSLayout.blockSize
+
+        for back in 0..<blocks {
+            let index = blocks - 1 - back
+            let start = (first + index) * FSLayout.blockSize
+            let from  = offset > start ? offset : start
+            let to    = min(end, start + FSLayout.blockSize)
+
+            let sum: UInt32
+            if to - from == FSLayout.blockSize {
+                sum = FSChecksum.over(
+                    source.advanced(by: Int(start - offset)), count: Int(FSLayout.blockSize)
+                )
+            } else {
+                guard let block = record.block(at: start) else { return .notFound }
+
+                let loaded = readDataBlock(block, into: dataBuffer)
+                guard loaded == .ok else { return loaded }
+
+                dataBuffer.advanced(by: Int(from - start)).copyMemory(
+                    from     : source.advanced(by: Int(from - offset)),
+                    byteCount: Int(to - from)
+                )
+                sum = FSChecksum.over(dataBuffer, count: Int(FSLayout.blockSize))
+            }
+
+            declaredBuffer.storeBytes(of: sum, toByteOffset: Int(index) * 4, as: UInt32.self)
+        }
+
+        return .ok
     }
 
 

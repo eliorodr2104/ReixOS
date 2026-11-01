@@ -11,10 +11,10 @@ import ReixABI
 ///
 /// One block, at a fixed address, read once at mount and written three times per
 /// transaction: prepared, committed, and empty. Four for a write that lands on
-/// blocks a file already has, which names them in a `prepared` header first. It is the only thing on the disk
-/// whose state has to be believed without anything else to check it against, so
-/// every field of it is covered by a checksum and each payload carries one of its
-/// own.
+/// blocks a file already has, which names them and their new checksums in a
+/// `prepared` header first. It is the only thing on the disk whose state has to
+/// be believed without anything else to check it against, so every field of it
+/// is covered by a checksum and each payload carries one of its own.
 ///
 /// The empty mark carries the **checkpoint**: the generation of the newest
 /// transaction the home blocks hold. One write for both, because they are one
@@ -84,8 +84,22 @@ struct FSJournal {
         static let intentCount = records + FSJournal.capacity * recordWidth
         static let intentRuns  = intentCount + 4
 
+        /// The checksum over the declared checksums below.
+        static let declaredCheck = intentRuns + FSJournal.Intent.limit * 8
+
         /// Inside the first sector, so a write the device tears cannot tear it.
-        static var width: Int { intentRuns + FSJournal.Intent.limit * 8 }
+        static var width: Int { declaredCheck + 4 }
+
+        /// The new checksum of every block the intent names, in the order it
+        /// names them, from the second sector to the end of the block.
+        ///
+        /// Outside the first sector, so a torn header can carry a whole state
+        /// and half of these. `declaredCheck` says so, and the blocks they
+        /// describe cannot have been written yet: nothing is, until the header
+        /// that names them is durable. Every header written while an intent is
+        /// open carries the same bytes here, so a tear between two of them is
+        /// still whole.
+        static let declared = 512
     }
 
 
@@ -96,8 +110,9 @@ struct FSJournal {
     /// before the commit that carries its new checksum, and a power cut in
     /// between leaves new bytes under an old checksum. These are the only blocks
     /// that can be in that state. A `prepared` header carrying them is settled
-    /// before it is cleared: each one's checksum is taken from what the medium
-    /// holds, because none of the bytes in it was ever promised.
+    /// before it is cleared: a block that holds what its old checksum or its
+    /// declared new one describes is kept as that, and anything else, rot or a
+    /// block torn between the two, keeps the old checksum and reads as damaged.
     ///
     /// Runs, at most eight: one write touches one file, and a file has eight.
     struct Intent {
@@ -124,6 +139,13 @@ struct FSJournal {
             runs[count] = FSExtent(start: block, count: 1)
             count += 1
             return true
+        }
+
+        /// How many blocks the runs name. Only meaningful once `fits` holds.
+        var blocks: Int {
+            var total = 0
+            for index in 0..<count { total += Int(runs[index].count) }
+            return total
         }
 
         /// Whether every run is file data on this disk, and the whole of it
@@ -210,9 +232,23 @@ struct FSJournal {
 
 
     /// Lays the header over a whole block, checksum last.
-    func write(to base: UnsafeMutableRawPointer) {
+    ///
+    /// `declared` holds the new checksum of every block the intent names, four
+    /// bytes each in the intent's order. Without it the declared checksums are
+    /// left out and `declares` says so.
+    func write(to base: UnsafeMutableRawPointer, declaring declared: UnsafeRawPointer? = nil) {
 
         base.initializeMemory(as: UInt8.self, repeating: 0, count: Int(FSLayout.blockSize))
+
+        let width = intent.blocks * 4
+        if let declared, width > 0 {
+            base.advanced(by: Header.declared).copyMemory(from: declared, byteCount: width)
+        }
+
+        let check = FSChecksum.over(base.advanced(by: Header.declared), count: width)
+        base.storeBytes(
+            of: declared == nil ? ~check : check, toByteOffset: Header.declaredCheck, as: UInt32.self
+        )
 
         base.storeBytes(of: Self.magic,          toByteOffset: Header.magic,      as: UInt64.self)
         base.storeBytes(of: Self.version,        toByteOffset: Header.version,    as: UInt32.self)
@@ -265,6 +301,17 @@ struct FSJournal {
         let stored = base.loadUnaligned(fromByteOffset: Header.checksum, as: UInt32.self)
 
         return stored == FSChecksum.over(base, count: Header.width, zeroing: Header.checksum)
+    }
+
+
+    /// Whether `base`, a header whose intent fits this disk, holds the new
+    /// checksum of every block that intent names.
+    ///
+    /// False for a declaration torn on its way to the medium, and for one
+    /// written without them. Either way no named block has been written yet.
+    func declares(_ base: UnsafeRawPointer) -> Bool {
+        base.loadUnaligned(fromByteOffset: Header.declaredCheck, as: UInt32.self)
+            == FSChecksum.over(base.advanced(by: Header.declared), count: intent.blocks * 4)
     }
 
 

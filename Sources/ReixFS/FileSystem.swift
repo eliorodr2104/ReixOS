@@ -39,7 +39,7 @@ public struct FileSystem<Device: BlockDevice> {
     /// How much scratch memory to hand `mount` or `format` for a disk of this
     /// geometry. Contiguous, and all of it used.
     ///
-    /// Five loose blocks, `heldBlocks` cached ones, then three regions that grow
+    /// Six loose blocks, `heldBlocks` cached ones, then three regions that grow
     /// with the disk: the name scrub's target bitset, the journal's arena, and
     /// the checksum of every bitmap, table and sum block.
     ///
@@ -47,8 +47,9 @@ public struct FileSystem<Device: BlockDevice> {
     /// out of a payload block and into its home block, and doing that through
     /// either of the first two would be doing it through a buffer the operation
     /// around it is holding. The fourth is the scan's accumulator - a thousand and
-    /// twenty-four counters over one page - and the fifth the name scrub's
-    /// descriptor workspace.
+    /// twenty-four counters over one page - the fifth the name scrub's
+    /// descriptor workspace, and the sixth the new checksums an overwrite has
+    /// declared, which outlive every buffer the write passes through.
     ///
     /// The arena is one block per journal record, sixteen, and never fewer than
     /// one per bitmap block: outside a transaction it is where a scan builds the
@@ -58,7 +59,7 @@ public struct FileSystem<Device: BlockDevice> {
     ///
     /// A device no file system fits gets the smallest shape; `mount` refuses it.
     public static func scratchBytes(sectorCount: UInt64, sectorSize: UInt64) -> Int {
-        let fixed = 5 + heldBlocks
+        let fixed = 6 + heldBlocks
         guard let plan = FSLayout.Plan(sectorCount: sectorCount, sectorSize: sectorSize) else {
             return Int(FSLayout.blockSize) * (fixed + 1 + FSJournal.capacity + 1)
         }
@@ -118,6 +119,10 @@ public struct FileSystem<Device: BlockDevice> {
     /// The deep name scan's descriptor workspace. Only a scan touches it.
     private let scrub: UnsafeMutableRawPointer
 
+    /// The new checksum of every block `unsettled` names, in its order, for as
+    /// long as it names them. See `declare`.
+    private let declared: UnsafeMutableRawPointer
+
     /// `heldBlocks` blocks of the file system's own bookkeeping, kept so that a
     /// disk asked twice for the same one is asked once.
     ///
@@ -155,11 +160,17 @@ public struct FileSystem<Device: BlockDevice> {
     private let sums: UnsafeMutableRawPointer
 
     /// Blocks a `prepared` header on the disk names as overwritten in place and
-    /// whose checksums have not been taken from the medium yet. See `settle`.
+    /// whose checksums have not been settled against the medium yet. See
+    /// `settle`.
     ///
     /// Set when a write declares them and when a mount finds them, cleared once
     /// a commit carries their checksums or a settle has made them true.
     var unsettled = FSJournal.Intent()
+
+    /// Whether `declared` holds the new checksum of every block `unsettled`
+    /// names. Not after a mount that found a header torn before its blocks were
+    /// written, and then only the old checksums are true.
+    var declaredKnown = false
 
     /// Whether `sums` describes the disk yet.
     ///
@@ -309,19 +320,20 @@ public struct FileSystem<Device: BlockDevice> {
         ) else { return nil }
 
         let block = Int(FSLayout.blockSize)
-        let grown = 5 + Self.heldBlocks
+        let grown = 6 + Self.heldBlocks
 
-        self.device  = device
-        self.plan    = plan
-        self.meta    = scratch
-        self.data    = scratch.advanced(by: block)
-        self.jrnl    = scratch.advanced(by: block * 2)
-        self.tally   = scratch.advanced(by: block * 3)
-        self.scrub   = scratch.advanced(by: block * 4)
-        self.held    = scratch.advanced(by: block * 5)
-        self.targets = scratch.advanced(by: block * grown)
-        self.images  = scratch.advanced(by: block * (grown + Self.targetBlocks(plan)))
-        self.sums    = scratch.advanced(
+        self.device   = device
+        self.plan     = plan
+        self.meta     = scratch
+        self.data     = scratch.advanced(by: block)
+        self.jrnl     = scratch.advanced(by: block * 2)
+        self.tally    = scratch.advanced(by: block * 3)
+        self.scrub    = scratch.advanced(by: block * 4)
+        self.declared = scratch.advanced(by: block * 5)
+        self.held     = scratch.advanced(by: block * 6)
+        self.targets  = scratch.advanced(by: block * grown)
+        self.images   = scratch.advanced(by: block * (grown + Self.targetBlocks(plan)))
+        self.sums     = scratch.advanced(
             by: block * (grown + Self.targetBlocks(plan) + Self.arenaBlocks(plan))
         )
 
@@ -690,8 +702,9 @@ public struct FileSystem<Device: BlockDevice> {
     }
 
 
-    /// Names, on the disk, the blocks a write is about to overwrite in place,
-    /// and makes that durable before the first of them is written.
+    /// Names, on the disk, the blocks a write is about to overwrite in place
+    /// and the checksum each will have, and makes that durable before the first
+    /// of them is written. The checksums are in `declaredBuffer` already.
     ///
     /// One header and one barrier, paid only by a write that lands on blocks the
     /// file already has. Until the commit, a power cut can leave any of those
@@ -703,8 +716,9 @@ public struct FileSystem<Device: BlockDevice> {
 
         // Owed from here whether or not the header lands: a header the device
         // refused may still be on the medium.
-        unsettled = intent
-        journal   = .prepared
+        unsettled     = intent
+        declaredKnown = true
+        journal       = .prepared
 
         guard writeJournalHeader(transaction.declaration()) == .ok, barrier() == .ok else {
             return staging(refused: .deviceFailed)
@@ -714,20 +728,24 @@ public struct FileSystem<Device: BlockDevice> {
     }
 
 
-    /// Takes the checksum of every block `unsettled` names from what the medium
-    /// holds, and makes it durable. What clearing a `prepared` header owes.
+    /// Judges every block `unsettled` names against what the medium holds, and
+    /// makes the verdict durable. What clearing a `prepared` header owes.
     ///
-    /// Each named block holds the old bytes, the new ones, or a sector of each,
-    /// and none of them was promised, so whatever is there is what the file
-    /// holds: the guarantee the format had for those bytes before it had
-    /// checksums. Only the named entries change, so a power cut half way
-    /// through leaves a sum block whose other entries read the same either way,
-    /// and the next settle does it again.
+    /// Each named block was meant to hold the old bytes or the new ones, and
+    /// the sum region and the declaration say what each of those checksums to.
+    /// One that matches the new checksum takes it; one that matches the old is
+    /// left; anything else, rot or a block torn between the two, keeps the old
+    /// checksum and reads as damaged. Lost and said so, never believed.
+    ///
+    /// Only the named entries change, and only towards the new checksum, so a
+    /// power cut half way through leaves a sum block that the next settle
+    /// judges the same way.
     private mutating func settle() -> FSStatus {
 
         guard !unsettled.isEmpty else { return .ok }
 
         var loaded = Self.noBlock
+        var named  = 0
 
         for run in 0..<unsettled.count {
             let extent = unsettled.runs[run]
@@ -746,11 +764,13 @@ public struct FileSystem<Device: BlockDevice> {
 
                 guard readRawBlock(block, into: data) == .ok else { return .deviceFailed }
 
-                meta.storeBytes(
-                    of          : FSChecksum.over(data, count: Int(FSLayout.blockSize)),
-                    toByteOffset: sumOffset(of: block),
-                    as          : UInt32.self
-                )
+                let found = FSChecksum.over(data, count: Int(FSLayout.blockSize))
+                let new   = declared.loadUnaligned(fromByteOffset: named * 4, as: UInt32.self)
+                named += 1
+
+                guard declaredKnown, found == new else { continue }
+
+                meta.storeBytes(of: new, toByteOffset: sumOffset(of: block), as: UInt32.self)
             }
         }
 
@@ -758,7 +778,8 @@ public struct FileSystem<Device: BlockDevice> {
             return explain(.deviceFailed)
         }
 
-        unsettled = FSJournal.Intent()
+        unsettled     = FSJournal.Intent()
+        declaredKnown = false
         return .ok
     }
 
@@ -1213,8 +1234,9 @@ public struct FileSystem<Device: BlockDevice> {
         // From here the transaction exists whatever happens next, and nothing
         // short of a mount may clear it. Its images carry the checksums of every
         // block it overwrote, so nothing it named is owed a settle any more.
-        journal   = .committed
-        unsettled = FSJournal.Intent()
+        journal       = .committed
+        unsettled     = FSJournal.Intent()
+        declaredKnown = false
 
         guard applyJournal(header, live: true) == .ok, barrier() == .ok else {
             transaction.end()
@@ -1261,9 +1283,10 @@ public struct FileSystem<Device: BlockDevice> {
     }
 
 
-    /// Writes one journal header and nothing else.
+    /// Writes one journal header and nothing else, carrying the declared
+    /// checksums whenever it names an overwrite.
     private mutating func writeJournalHeader(_ header: FSJournal) -> FSStatus {
-        header.write(to: jrnl)
+        header.write(to: jrnl, declaring: declared)
 
         return writeRawBlock(plan.journalHeader, from: jrnl)
     }
@@ -1404,9 +1427,18 @@ public struct FileSystem<Device: BlockDevice> {
                 // Written and never promised. Nothing on the disk depends on
                 // these images, so they go, and the checkpoint stays where the
                 // last finished transaction left it. The file data it named as
-                // overwritten in place is settled first.
-                checkpoint = 0
-                unsettled  = header.intent
+                // overwritten in place is settled first, against the checksums
+                // it declared when they reached the medium whole.
+                checkpoint    = 0
+                unsettled     = header.intent
+                declaredKnown = header.declares(meta)
+
+                if declaredKnown {
+                    declared.copyMemory(
+                        from     : meta.advanced(by: FSJournal.Header.declared),
+                        byteCount: header.intent.blocks * 4
+                    )
+                }
                 return emptyJournal(checkpoint: 0)
 
             case .committed:
@@ -1702,6 +1734,7 @@ public struct FileSystem<Device: BlockDevice> {
     var tallyBuffer: UnsafeMutableRawPointer { tally }
     var targetBuffer: UnsafeMutableRawPointer { targets }
     var scrubBuffer: UnsafeMutableRawPointer { scrub }
+    var declaredBuffer: UnsafeMutableRawPointer { declared }
 
     /// The journal's arena, which a scan borrows outside a transaction.
     var arenaBuffer: UnsafeMutableRawPointer { images }
