@@ -11,7 +11,7 @@ extension ProcessManager {
     /// The returned process is unscheduled and cannot execute until `startTask`.
     ///
     /// The construction object is taken first because it is the cheapest
-    /// thing to give back: every refusal below leaves no slot and no cell.
+    /// thing to give back: every refusal below leaves no slot and no charge.
     ///
     /// - Parameter frameLimit: the ceiling the owner asks for the child, clamped
     ///   to the owner's own. `nil` inherits it whole.
@@ -21,7 +21,9 @@ extension ProcessManager {
         nameLength   : Int = 0,
         frameLimit   : UInt32? = nil
     ) -> (control: TaskControl, process: UnsafeMutablePointer<Process>)? {
-        guard let construction = makeConstruction() else { return nil }
+        guard let budget       = owner.pointee.metadata?.pointee.budget,
+              let construction = makeConstruction(chargedTo: budget)
+        else { return nil }
 
         guard let process = try? spawnProcess(
             name      : name,
@@ -336,17 +338,29 @@ extension ProcessManager {
     }
 
 
-    /// Give back a construction object. `nil` is a task that left
-    /// `configuring` before, so it had nothing left to give.
+    /// Give back a construction object and its frame. `nil` is a task that
+    /// left `configuring` before, so it had nothing left to give.
     func releaseConstruction(_ construction: UnsafeMutablePointer<TaskConstruction>?) {
         guard let construction else { return }
+
+        if let budget = construction.pointee.budget {
+            refundFrames(budget, 1)
+            releaseBudget(budget, heap: heap)
+        }
+
         heap.pointee.kfree(construction)
     }
 
 
-    /// An empty construction object, or nothing when the heap refuses.
-    private func makeConstruction() -> UnsafeMutablePointer<TaskConstruction>? {
+    /// A construction object charged one frame to `budget`, or nothing, with
+    /// the charge given back when the heap refuses.
+    private func makeConstruction(
+        chargedTo budget: UnsafeMutablePointer<FrameBudget>
+    ) -> UnsafeMutablePointer<TaskConstruction>? {
+        guard chargeFrames(budget, 1) else { return nil }
+
         guard let cell = heap.pointee.kmallocOrNil(TaskConstruction.self) else {
+            refundFrames(budget, 1)
             return nil
         }
 
@@ -361,6 +375,8 @@ extension ProcessManager {
             to      : TaskConstruction.self,
             capacity: 1
         )
+        construction.pointee.budget = budget
+        rxRetain(budget)
         return construction
     }
 }

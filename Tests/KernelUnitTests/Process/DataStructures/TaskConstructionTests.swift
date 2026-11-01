@@ -37,6 +37,7 @@ struct TaskConstructionTests {
         let construction = allocateZeroedStorage(TaskConstruction.self)
         defer { UnsafeMutableRawPointer(construction).deallocate() }
 
+        #expect(construction.pointee.budget == nil)
         #expect(construction.pointee.regionCount == 0)
         #expect(!construction.pointee.contextSet)
         #expect(!Self.isReady(construction))

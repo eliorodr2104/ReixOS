@@ -12,8 +12,8 @@ import KernelHostShims
 extension KernelPolicyTestRoot {
 
 /// The lifetime of a task's construction object through the process manager:
-/// what `taskCreate` takes, every refusal that has to leave nothing behind,
-/// every way out of `configuring` giving the object back, and
+/// what `taskCreate` charges, every refusal that has to leave nothing behind,
+/// every way out of `configuring` giving the object and its frame back, and
 /// the configuring operations refusing every other state.
 @Suite("Task construction lifetime", .serialized)
 struct ProcessManagerTasksTests {
@@ -28,10 +28,17 @@ struct ProcessManagerTasksTests {
 
     // MARK: - Create and start
 
-    @Test("start gives the construction back")
-    func startReleasesConstruction() {
+    @Test("create charges the owner one frame and a budget reference, and start gives both back")
+    func createChargesStartRefunds() {
         withTasks { fixture in
+            let budget = fixture.budget
+            let charged    = budget.pointee.charged
+            let references = budget.pointee.references
+
             guard let task = fixture.create() else { return }
+            #expect(budget.pointee.charged == charged + 1)
+            #expect(budget.pointee.references == references + 1)
+            #expect(TaskRegistry.configuring(task.control)?.construction.pointee.budget == budget)
 
             Self.makeReady(task.control, fixture)
             let live = fixture.heap.pointee.metricsLiveBytes
@@ -39,6 +46,8 @@ struct ProcessManagerTasksTests {
             let started = fixture.manager.pointee.startTask(task.control, context: fixture.context)
             #expect(started.result == .ok)
             #expect(started.pid == task.process.pointee.pid)
+            #expect(budget.pointee.charged == charged)
+            #expect(budget.pointee.references == references)
             #expect(live - fixture.heap.pointee.metricsLiveBytes == Self.constructionBucket)
             #expect(TaskRegistry.configuring(task.control) == nil)
             #expect(TaskRegistry.runningProcess(task.control) == task.process)
@@ -48,12 +57,14 @@ struct ProcessManagerTasksTests {
     }
 
 
-    @Test("a start that is not ready keeps the construction")
+    @Test("a start that is not ready keeps the construction and the charge")
     func unreadyStartKeepsConstruction() {
         withTasks { fixture in
             guard let task = fixture.create() else { return }
+            let charged = fixture.budget.pointee.charged
 
             #expect(fixture.manager.pointee.startTask(task.control, context: fixture.context).result == .invalidState)
+            #expect(fixture.budget.pointee.charged == charged)
             #expect(TaskRegistry.configuring(task.control) != nil)
 
             #expect(fixture.manager.pointee.abortTask(task.control, context: fixture.context) == .ok)
@@ -62,6 +73,28 @@ struct ProcessManagerTasksTests {
 
 
     // MARK: - Refusals at create
+
+    @Test("a create the budget refuses takes no slot, no charge, no frame and no heap")
+    func budgetExhaustedAtCreate() {
+        withTasks { fixture in
+            let budget = fixture.budget
+            budget.pointee.limit = budget.pointee.charged
+            let snapshot = fixture.snapshot()
+
+            #expect(fixture.create() == nil)
+            fixture.expectUnchanged(since: snapshot)
+
+            // One frame of headroom is exactly enough.
+            budget.pointee.limit = budget.pointee.charged + 1
+            guard let task = fixture.create() else {
+                Issue.record("a create with one frame of headroom was refused")
+                return
+            }
+            #expect(budget.pointee.charged == budget.pointee.limit)
+            #expect(fixture.manager.pointee.abortTask(task.control, context: fixture.context) == .ok)
+        }
+    }
+
 
     @Test("a create the heap refuses at the construction leaves nothing behind")
     func heapRefusesConstruction() {
@@ -120,7 +153,7 @@ struct ProcessManagerTasksTests {
 
     // MARK: - Teardown orders
 
-    @Test("an abort before start gives the construction and the address space back")
+    @Test("an abort before start gives the construction, the frame and the address space back")
     func abortBeforeStart() {
         withTasks { fixture in
             let snapshot = fixture.snapshot()
@@ -152,6 +185,7 @@ struct ProcessManagerTasksTests {
             TaskRegistry.retain(held.control)
             Self.makeReady(running.control, fixture)
             #expect(fixture.manager.pointee.startTask(running.control, context: fixture.context).result == .ok)
+            #expect(budget.pointee.charged == charged + 2)
 
             _ = fixture.manager.pointee.killProcess(fixture.owner, reason: .killed, context: fixture.context)
 

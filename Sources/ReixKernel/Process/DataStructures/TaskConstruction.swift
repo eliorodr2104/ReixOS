@@ -11,16 +11,21 @@ import ReixABI
 ///
 /// A heap cell of its own and not part of `TaskRecord`, because the registry's
 /// table is static and every slot used to carry this table for the whole life
-/// of the task, started or not. It is made at `taskCreate` and given back the
-/// moment the task leaves `configuring`, whichever way it leaves.
+/// of the task, started or not. It is made at `taskCreate`, charged one frame
+/// to the owner's budget, and given back the moment the task leaves
+/// `configuring`, whichever way it leaves.
 ///
-/// All-zero is a valid empty construction: it holds no optional, and a zero
-/// region is never read past `regionCount`. `ProcessManager.makeConstruction` relies on that to build it
+/// All-zero is a valid empty construction: the only optional is the budget
+/// pointer, whose zero is `nil`, and a zero region is never read past
+/// `regionCount`. `ProcessManager.makeConstruction` relies on that to build it
 /// in place instead of copying a temporary of this size off the stack.
 struct TaskConstruction: RXAllocatable {
 
     static let errorMessageAllocation: StaticString = "Failed to allocate a task construction"
 
+    /// The owner's budget, charged one frame for this cell and holding one
+    /// reference on it, so the refund always has a cell to land in.
+    var budget     : UnsafeMutablePointer<FrameBudget>?      // 8 Byte
     var regionCount: UInt8                                    // 1 Byte
     var contextSet : Bool                                     // 1 Byte
     var regions    : InlineArray<32, TaskRegion>              // 768 Byte
