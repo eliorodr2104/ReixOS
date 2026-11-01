@@ -371,8 +371,11 @@ public struct ProcessManager: RXAllocatable, Loggable {
     }
     
     
-    /// Tears `process`'s address space down in one run of the teardown region,
-    /// in the steps `AddressSpaceRelease` cuts it into.
+    /// Tears `process`'s address space down in one run of the teardown region.
+    ///
+    /// For the callers that release an address space on its own: an abort, a
+    /// spawn unwinding its child. A death runs `AddressSpaceRelease` as the first
+    /// stage of `ProcessTeardown` instead, inside that operation's one run.
     public func releaseAddressSpace(_ process: UnsafeMutablePointer<Process>) throws(PPMError) {
         _ = try Preemption.run(
             AddressSpaceTeardown.self,
@@ -410,7 +413,20 @@ public struct ProcessManager: RXAllocatable, Loggable {
     /// the exit code from its metadata. Frees the metadata block and the
     /// `Process` struct itself. Callers must ensure the process is no
     /// longer referenced by any scheduler queue.
+    ///
+    /// Three pieces, because `ProcessTeardown` takes them as three steps and a
+    /// window between two of them must find a consistent corpse.
     public func releaseProcess(_ process: UnsafeMutablePointer<Process>) {
+        unlinkCorpse(process)
+        releaseMetadata(of: process)
+        heap.pointee.kfree(process)
+    }
+
+
+    /// Takes the corpse out of every enumeration: the stats index, the trace
+    /// export and its parent's children, and clears a parent's wait on it.
+    /// What is left is reachable only through the pointer the caller holds.
+    func unlinkCorpse(_ process: UnsafeMutablePointer<Process>) {
 
         guard Self.unregisterForProcStats(process) else {
             Arch.CPU.panic("missing process in ProcStats index")
@@ -427,17 +443,20 @@ public struct ProcessManager: RXAllocatable, Loggable {
                 parentMeta.pointee.waitingChildPid = nil
             }
         }
+    }
 
-        if let metadata = process.pointee.metadata {
-            if let control = metadata.pointee.taskControl {
-                TaskRegistry.markProcessGone(control)
-            }
 
-            freeMetadata(metadata)
-            process.pointee.metadata = nil
+    /// Frees the metadata block, and the budget with it once nobody else holds
+    /// it, after telling the task registry the process is gone.
+    func releaseMetadata(of process: UnsafeMutablePointer<Process>) {
+        guard let metadata = process.pointee.metadata else { return }
+
+        if let control = metadata.pointee.taskControl {
+            TaskRegistry.markProcessGone(control)
         }
 
-        heap.pointee.kfree(process)
+        freeMetadata(metadata)
+        process.pointee.metadata = nil
     }
 
 
@@ -558,10 +577,14 @@ public struct ProcessManager: RXAllocatable, Loggable {
                 a   : process.pointee.pid
             )
 
-            try? context.processManager.pointee.releaseAddressSpace(process)
-            releaseCapabilitiesInSteps(of: process, context)
+            let parent = waitingParent(of: process)
 
-            return deliverCorpse(process, context)
+            _ = Preemption.run(
+                AddressSpaceTeardown.self,
+                ProcessTeardown(process: process, parent: parent, context: context)
+            )
+
+            return parent == nil
         }
 
         // Already a zombie: somebody else ran the teardown and left the corpse
@@ -569,11 +592,11 @@ public struct ProcessManager: RXAllocatable, Loggable {
         return true
     }
 
-    /// `releaseCapabilities` as steps of the teardown region, for the two paths
-    /// that end a process, `killProcess` and `abortTask`: a window can open
-    /// after any held slot, so a table full of endpoints and regions is not one
-    /// masked stretch added to the death. The region is the teardown's because
-    /// it is the same death and the same constraint: nobody left to resume.
+    /// `releaseCapabilities` as steps of the teardown region, for `abortTask`: a
+    /// window can open after any held slot, so a table full of endpoints and
+    /// regions is not one masked stretch added to the abort. The region is the
+    /// teardown's because it is the same constraint: nobody left to resume.
+    /// `killProcess` runs the same two pieces as stages of `ProcessTeardown`.
     func releaseCapabilitiesInSteps(
         of process: UnsafeMutablePointer<Process>,
         _  context: SyscallContext
@@ -589,39 +612,24 @@ public struct ProcessManager: RXAllocatable, Loggable {
     }
 
 
-    /// Hands a fresh corpse to whoever is entitled to it.
+    /// The parent parked in `reapChild` on this very process, which the corpse
+    /// is handed to, or `nil` when it goes to the `terminated` list instead.
     ///
-    /// Every death route ends here (`exit`, a fault, `terminate`, a `split`
-    /// unwinding its half-built child) because the two outcomes are exclusive
-    /// and a route that performed neither was doubly broken: the parent parked
-    /// in `reapChild` was never woken, and the unrecorded `Process` block was
-    /// left unreachable by any later reap.
-    ///
-    /// `releaseProcess` has to run before `wakeUp`, since it is what clears the
-    /// parent's `waitingChildPid`. A parent resumed while still claiming to
-    /// wait on a pid whose `Process` is gone would carry that claim into its
-    /// next death or reap and walk a freed block.
-    private func deliverCorpse(
-        _ process: UnsafeMutablePointer<Process>,
-        _ context: SyscallContext
-    ) -> Bool {
+    /// Asked before the teardown runs rather than after it, so `killProcess` can
+    /// still say which of the two happened once the operation is consumed. The
+    /// answer cannot change in between: a parent blocked in `reapChild` is on
+    /// no endpoint and under no deadline, so neither a window's interrupt nor the
+    /// release of this process's capabilities can resume it.
+    private func waitingParent(
+        of process: UnsafeMutablePointer<Process>
+    ) -> UnsafeMutablePointer<Process>? {
 
         guard let parent     = process.pointee.family.parent,
               let parentMeta = parent.pointee.metadata,
               parentMeta.pointee.waitingChildPid == process.pointee.pid
-        else {
-            context.scheduler.pointee.addZombie(process)
-            return true
-        }
+        else { return nil }
 
-        // Read the status before `releaseProcess` frees the metadata block it
-        // lives in.
-        parent.pointee.context?.pointee.x0 = Self.exitStatus(of: process)
-
-        releaseProcess(process)
-        try? context.scheduler.pointee.wakeUp(parent.pointee.pid)
-
-        return false
+        return parent
     }
 
     /// Visits every process in the family tree, zombies included.

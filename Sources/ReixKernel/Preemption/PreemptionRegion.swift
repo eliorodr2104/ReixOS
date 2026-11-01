@@ -276,18 +276,19 @@ public enum RegionDecommit: PreemptionRegion {
 }
 
 
-/// `VMAManager.teardown`, one batch of up to 32 pages per step, and the
-/// release of a dying process's capabilities, one held slot per step.
+/// A dying process: `ProcessTeardown` for a death, `AddressSpaceRelease` and
+/// `CapabilityRelease` on their own for an abort, `VMAManager.teardown` for a
+/// spawn unwinding. Per step, a batch of up to 32 pages, one held slot, a block
+/// back to the heap, or the walk of what is left of the tables.
 ///
-/// Every region of a dying address space in one run, so the budget spans the
-/// whole teardown rather than restarting at each region. The page cost is the
-/// two regions above, and so is the policy. `CapabilityRelease` runs under the
-/// same region because it is the same death under the same constraint, and its
-/// steps, an endpoint or a region freed, are no larger than a page batch.
+/// A whole death in one run, so the budget spans it rather than restarting at
+/// each piece, and the span reported is the death's and not its longest piece's.
+/// The page cost is the two regions above, and so is the policy. The other steps,
+/// an endpoint or a region freed, a heap free, the root and the handful of tables
+/// the retirement did not already prune, are no larger than a page batch.
 ///
 /// `.latencyOnly`, and this one is a hard constraint rather than a preference.
-/// `teardown` is reached only from `ProcessManager.releaseAddressSpace` and
-/// `destroyPartialAddressSpace`, both process-death paths, so there is no live
+/// Every operation under it runs on a process-death path, so there is no live
 /// process to park a continuation on and no syscall to re-execute to finish it:
 /// suspending would park state on something that is being freed, and would leave
 /// the frames of a dead address space owned by nobody. This is the reason
