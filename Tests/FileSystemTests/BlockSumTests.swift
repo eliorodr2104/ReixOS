@@ -153,26 +153,19 @@ struct BlockSumTests {
     }
 
 
-    @Test("until a dirty mount has read a block, a read records it rather than judging it")
-    func unknownSumsAreRecorded() {
+    @Test("a dirty mount judges a table block against the sum region before learning it")
+    func unknownTableSumsAreJudged() {
         withDisk { fs, disk in
             #expect(file(&fs, "a.bin") != nil)
 
-            // A block this process never wrote, read while the sums know nothing.
+            // Without a seal, plausible table bytes still need their on-disk sum.
             fs.sumsKnown = false
             disk.poke(UInt8(0x55), at: spareRootByte(fs.plan))
             fs.dropCache()
 
-            #expect(fs.object(FSLayout.rootObject) != nil)
-            #expect(!fs.corrupted)
-
-            // From then on it is known, and held to.
-            fs.sumsKnown = true
-            disk.poke(UInt8(0x56), at: spareRootByte(fs.plan))
-            fs.dropCache()
-
             #expect(fs.object(FSLayout.rootObject) == nil)
             #expect(fs.corrupted)
+
         }
     }
 }

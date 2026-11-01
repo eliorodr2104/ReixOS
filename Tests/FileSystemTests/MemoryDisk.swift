@@ -387,9 +387,18 @@ extension FileSystem {
     ///
     /// For a test whose poke is the fixture rather than the damage: a bitmap
     /// painted into a pattern, a counter moved to where years would leave it, a
-    /// contradiction only a scrub is meant to find. The next scan learns every
-    /// checksum again from what it reads.
+    /// contradiction only a scrub is meant to find. Restamp the table's on-disk
+    /// sums too, as a writer would, before learning the medium again.
     mutating func believeMedium() {
+        if let medium = device as? MemoryDisk {
+            for block in plan.tableStart..<plan.sumStart {
+                medium.stampBlock(at: Int(block) * Int(FSLayout.blockSize))
+            }
+        } else if let medium = device as? CrashDisk {
+            for block in plan.tableStart..<plan.sumStart {
+                medium.stampBlock(at: Int(block) * Int(FSLayout.blockSize))
+            }
+        }
         dropCache()
         sumsKnown = false
     }

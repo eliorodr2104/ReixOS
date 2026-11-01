@@ -185,6 +185,7 @@ struct CensusTests {
             let at = Int(fs.plan.tableStart) * Int(FSLayout.blockSize)
                 + Int(made.object) * Int(FSLayout.objectSize) + 36
             disk.poke(UInt32(disk.byte(at: at)) + 1, at: at)
+            disk.stampBlock(at: at)
 
             let space = UnsafeMutableRawPointer.allocate(byteCount: FileSystem<MemoryDisk>.scratchBytes, alignment: 8)
             defer { space.deallocate() }
@@ -322,6 +323,7 @@ struct CensusTests {
             let at = Int(fs.plan.tableStart) * Int(FSLayout.blockSize)
                 + Int(made.object) * Int(FSLayout.objectSize) + 36
             disk.poke(UInt32(disk.byte(at: at)) + 1, at: at)
+            disk.stampBlock(at: at)
 
             body(disk, [a, b])
         }
@@ -408,6 +410,7 @@ struct CensusTests {
             let at = Int(fs.plan.tableStart) * Int(FSLayout.blockSize)
                 + Int(box.object) * Int(FSLayout.objectSize) + 36
             disk.poke(UInt32(disk.byte(at: at)) + 1, at: at)
+            disk.stampBlock(at: at)
 
             body(disk, [made.object])
         }
@@ -469,7 +472,7 @@ struct CensusTests {
 
         // Two superblocks and the journal header, then the census and the sum
         // region it learns: the repair's first request comes straight after.
-        let first = 3 + Int(plan.tableBlocks) + Int(plan.bitmapBlocks) + Int(plan.sumBlocks) + 1
+        let first = 3 + Int(plan.tableBlocks) + Int(plan.bitmapBlocks) + Int(plan.sumBlocks) + Int(FSLayout.divideUp(UInt64(plan.tableBlocks), 4)) + 1
 
         var cut = 0
         for stop in first...(first + 24) {

@@ -323,6 +323,7 @@ struct RecoveryTests {
         // `used` at byte 36. Something plausible and wrong: the container claims
         // to be holding a block it is not.
         disk.poke(UInt32(7), at: at + 36)
+        disk.stampBlock(at: at)
     }
 
 

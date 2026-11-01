@@ -174,10 +174,10 @@ public struct FileSystem<Device: BlockDevice> {
 
     /// Whether `sums` describes the disk yet.
     ///
-    /// Not on a dirty mount until its scan has read every one of those blocks:
-    /// until then a read records what it found instead of judging it, because
-    /// there is nothing to judge it against. True from a format, a verified
-    /// seal, or a whole scan, and from then on every read is checked.
+    /// True from a format, a verified seal, or a whole scan. Until then table
+    /// blocks are judged against the sum region, while bitmap and sum blocks
+    /// are learned from the medium. The map is derived from the table; the sum
+    /// region itself has no dirty-mount anchor.
     var sumsKnown = false
 
     /// Whether a contradiction a scan finds holds the volume still.
@@ -530,6 +530,15 @@ public struct FileSystem<Device: BlockDevice> {
             return .ok
         }
 
+        // A dirty mount has no seal for the table. Its sum region is the same
+        // account a folder is checked against, before any record is believed.
+        var tableSum: UInt32? = nil
+        if !sumsKnown, index >= plan.tableStart, index < plan.sumStart, transaction.mode != .formatting {
+            let expected = dataSum(of: index)
+            guard expected.status == .ok else { return expected.status }
+            tableSum = expected.sum
+        }
+
         guard device.read(
             sectorsPerBlock,
             from: UInt64(index) * sectorsPerBlock,
@@ -538,7 +547,9 @@ public struct FileSystem<Device: BlockDevice> {
         ) == .ok else { return deviceRefused() }
 
         // Off the medium, so asked whether it is what was last written there.
-        guard believe(index, read: buffer) else {
+        guard believe(index, read: buffer),
+              tableSum == nil || tableSum == FSChecksum.over(buffer, count: Int(FSLayout.blockSize))
+        else {
             quarantine()
             return .quarantined
         }
@@ -650,13 +661,14 @@ public struct FileSystem<Device: BlockDevice> {
     }
 
 
-    /// Stages `buffer`'s checksum as what data block `index` holds.
+    /// Stages `buffer`'s checksum as what table or data block `index` holds.
     private mutating func stageSum(
         of  index : UInt32,
         for buffer: UnsafeRawPointer
     ) -> FSStatus {
 
-        guard index >= plan.dataStart else { return .deviceFailed }
+        guard (index >= plan.tableStart && index < plan.sumStart)
+                || index >= plan.dataStart else { return .deviceFailed }
 
         let home   = sumBlock(of: index)
         let loaded = readBlock(home, into: jrnl)
@@ -898,6 +910,10 @@ public struct FileSystem<Device: BlockDevice> {
         // bytes to the home block, and an abort drops the whole of it.
         forget(index)
         keep(index, from: buffer)
+
+        if index >= plan.tableStart, index < plan.sumStart {
+            return stageSum(of: index, for: image(slot))
+        }
 
         return .ok
     }
@@ -1694,6 +1710,19 @@ public struct FileSystem<Device: BlockDevice> {
 
         let written = store(root, at: FSLayout.rootObject)
         guard written == .ok else { return written }
+
+        // The table was just written, including its empty blocks. Nothing in
+        // the data region exists yet, so every other slot stays zero.
+        for home in sumBlock(of: plan.tableStart)...sumBlock(of: plan.sumStart - 1) {
+            meta.initializeMemory(as: UInt8.self, repeating: 0, count: Int(FSLayout.blockSize))
+            let first = max(plan.tableStart, (home - plan.sumStart) * UInt32(FSLayout.sumsPerBlock))
+            let last = min(plan.sumStart, (home - plan.sumStart + 1) * UInt32(FSLayout.sumsPerBlock))
+            for table in first..<last {
+                guard let sum = expectedSum(of: table) else { return .deviceFailed }
+                meta.storeBytes(of: sum, toByteOffset: sumOffset(of: table), as: UInt32.self)
+            }
+            guard writeRawBlock(home, from: meta) == .ok else { return .deviceFailed }
+        }
 
         // An empty journal, whole and checksummed, before anything can go looking
         // for one. A zeroed header is not an empty journal: it is a block that

@@ -283,9 +283,9 @@ struct TransactionTests {
             let writesBefore = disk.writes
             #expect(fs.commit() == .ok)
 
-            // One payload, three headers - prepared, committed, empty - and one
-            // home write. Eight separate images would be eight of each.
-            #expect(disk.writes - writesBefore == 5)
+            // One table image and its sum, three headers, and both home writes.
+            // Restaging the table coalesces its checksum image too.
+            #expect(disk.writes - writesBefore == 7)
 
             // The last one is what is there.
             #expect(Self.blockBytes(&fs, target)[0] == 7)
@@ -490,6 +490,14 @@ struct TransactionTests {
                 FSJournal.payload(of: 0), from: UnsafeRawPointer(payload)
             ) == .ok)
 
+            let sumHome = fs.sumBlock(of: target)
+            let sumPage = UnsafeMutableRawPointer.allocate(byteCount: Self.block, alignment: 8)
+            defer { sumPage.deallocate() }
+            #expect(fs.readRawBlock(sumHome, into: sumPage) == .ok)
+            sumPage.storeBytes(of: FSChecksum.over(payload, count: Self.block),
+                               toByteOffset: fs.sumOffset(of: target), as: UInt32.self)
+            #expect(fs.writeRawBlock(FSJournal.payload(of: 1), from: sumPage) == .ok)
+
             // Stamped with the mount being served, which is what a journal the
             // crashed mount left behind carries. See `JournalArenaTests`.
             guard let stamp = FSJournal.stamp(
@@ -499,9 +507,11 @@ struct TransactionTests {
             var header = FSJournal()
             header.state        = .committed
             header.generation   = stamp
-            header.recordCount  = 1
+            header.recordCount  = 2
             header.targets[0]   = target
             header.checksums[0] = FSChecksum.over(payload, count: Self.block)
+            header.targets[1]   = sumHome
+            header.checksums[1] = FSChecksum.over(sumPage, count: Self.block)
 
             Self.putHeader(&fs, header)
             #expect(disk.flush() == .ok)

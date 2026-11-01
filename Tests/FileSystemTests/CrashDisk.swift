@@ -6,6 +6,7 @@
 
 
 import ReixABI
+@testable import ReixFS
 
 /// A block device that loses power.
 ///
@@ -193,6 +194,15 @@ final class CrashDisk: BlockDevice {
     func block(_ index: UInt32) -> [UInt8] {
         let start = Int(index) * 4096
         return (0..<4096).map { byte(at: start + $0) }
+    }
+
+
+    /// Restamps a forged table block as a writer would, on the stable medium.
+    func stampBlock(at offset: Int) {
+        guard let plan = FSLayout.Plan(sectorCount: sectorCount, sectorSize: sectorSize) else { return }
+        let block = offset / Int(FSLayout.blockSize)
+        let sum = FSChecksum.over(stable.advanced(by: block * Int(FSLayout.blockSize)), count: Int(FSLayout.blockSize))
+        poke(sum, at: Int(plan.sumStart) * Int(FSLayout.blockSize) + block * 4)
     }
 
 

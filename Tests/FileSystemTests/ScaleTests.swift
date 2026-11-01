@@ -279,6 +279,7 @@ struct ScaleTests {
 
                 let at = Int(plan.tableStart) * Self.block + Int(box) * Int(FSLayout.objectSize)
                 disk.poke(UInt32(disk.byte(at: at + 36)) + 1, at: at + 36)
+                disk.stampBlock(at: at)
 
                 let before = disk.reads
                 let opened = ContinuousClock.now
