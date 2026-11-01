@@ -197,12 +197,22 @@ final class CrashDisk: BlockDevice {
     }
 
 
-    /// Restamps a forged table block as a writer would, on the stable medium.
+    /// Restamps a forged table block and the root as a writer would, on the
+    /// stable medium.
     func stampBlock(at offset: Int) {
         guard let plan = FSLayout.Plan(sectorCount: sectorCount, sectorSize: sectorSize) else { return }
         let block = offset / Int(FSLayout.blockSize)
         let sum = FSChecksum.over(stable.advanced(by: block * Int(FSLayout.blockSize)), count: Int(FSLayout.blockSize))
         poke(sum, at: Int(plan.sumStart) * Int(FSLayout.blockSize) + block * 4)
+        restampRoot(in: stable, plan)
+    }
+
+
+    /// Whether the newer whole superblock on the medium names the root of the
+    /// sum region the medium holds.
+    func rootAgrees() -> Bool {
+        guard let plan = FSLayout.Plan(sectorCount: sectorCount, sectorSize: sectorSize) else { return false }
+        return mediumRootAgrees(stable, plan)
     }
 
 

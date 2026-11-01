@@ -183,7 +183,10 @@ extension FileSystem {
     /// them; on anything else `sums` knows nothing and the mount checks in full.
     mutating func openSeal() -> SealCheck {
         let answer = readSeal()
-        if answer != .verified { sumsKnown = false }
+        if answer != .verified {
+            sumsKnown      = false
+            sumRegionKnown = false
+        }
         return answer
     }
 
@@ -268,6 +271,11 @@ extension FileSystem {
 
         // The seal is the shutdown's own. From here a disagreement is the disk's.
         sumsKnown = false
+
+        // Its sum blocks' checksums are the region the superblock's root covers,
+        // so the two agree with no read of the region.
+        guard sumRoot().root == namedRoot else { return .contradicted }
+        sumRegionKnown = true
 
         var used = UInt64(0)
 

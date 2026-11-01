@@ -175,8 +175,9 @@ final class MemoryDisk: BlockDevice {
         }
         if refuses() { return .deviceRefused }
 
-        if tearsOneWrite {
+        if tearsOneWrite || requests == tearing {
             tearsOneWrite = false
+            tearing       = nil
 
             bytes.advanced(by: Int(sector * sectorSize)).copyMemory(
                 from     : source,
@@ -359,7 +360,8 @@ final class MemoryDisk: BlockDevice {
 
 
     /// Rewrites the sum region's checksum of the block holding `offset` to
-    /// what that block now holds, behind the file system's back.
+    /// what that block now holds, and the superblocks' root over the region,
+    /// behind the file system's back.
     func stampBlock(at offset: Int) {
         guard let plan = FSLayout.Plan(sectorCount: sectorCount, sectorSize: sectorSize) else { return }
 
@@ -368,7 +370,23 @@ final class MemoryDisk: BlockDevice {
         let sum   = FSChecksum.over(UnsafeRawPointer(bytes.advanced(by: block * size)), count: size)
 
         poke(sum, at: Int(plan.sumStart) * size + block * 4)
+        restampRoot(in: bytes, plan)
     }
+
+
+    /// Whether the newer whole superblock names the root of the sum region.
+    func rootAgrees() -> Bool {
+        guard let plan = FSLayout.Plan(sectorCount: sectorCount, sectorSize: sectorSize) else { return false }
+        return mediumRootAgrees(bytes, plan)
+    }
+
+    /// Tears the `nth` request from now, if it is a write: its first half lands
+    /// and the device refuses it. A torn write at one chosen point of a commit.
+    func tearOnly(_ nth: Int) {
+        tearing = requests + nth
+    }
+
+    private var tearing: Int? = nil
 
 
     /// Zeroes the seal region, which is how a disk shut down without a seal
@@ -381,6 +399,45 @@ final class MemoryDisk: BlockDevice {
 }
 
 
+/// The root over the sum region `medium` holds, worked out here rather than
+/// asked of the file system: the checksum over each sum block's checksum.
+func sumRoot(of medium: UnsafeRawPointer, _ plan: FSLayout.Plan) -> UInt32 {
+    let size = Int(FSLayout.blockSize)
+    let sums = (plan.sumStart..<plan.dataStart).map {
+        FSChecksum.over(medium.advanced(by: Int($0) * size), count: size)
+    }
+    return sums.withUnsafeBytes { FSChecksum.over($0.baseAddress!, count: $0.count) }
+}
+
+/// Whether the newer whole superblock copy in `medium` names the root of the
+/// sum region the medium holds.
+func mediumRootAgrees(_ medium: UnsafeRawPointer, _ plan: FSLayout.Plan) -> Bool {
+    var newest: FSSuperblock? = nil
+
+    for copy in [FSLayout.superblockA, FSLayout.superblockB] {
+        let base = medium.advanced(by: Int(copy) * Int(FSLayout.blockSize))
+        guard FSSuperblock.verdict(of: base, against: plan) == .whole else { continue }
+
+        let found = FSSuperblock(reading: base)
+        if found.generation > newest?.generation ?? 0 { newest = found }
+    }
+
+    return newest?.sumRoot == sumRoot(of: medium, plan)
+}
+
+/// Sets both superblock copies in `medium` to the root of its sum region,
+/// rewriting each copy whole so its checksum covers it.
+func restampRoot(in medium: UnsafeMutableRawPointer, _ plan: FSLayout.Plan) {
+    let root = sumRoot(of: medium, plan)
+    for copy in [FSLayout.superblockA, FSLayout.superblockB] {
+        let base = medium.advanced(by: Int(copy) * Int(FSLayout.blockSize))
+        var block = FSSuperblock(reading: base)
+        block.sumRoot = root
+        block.write(to: base)
+    }
+}
+
+
 extension FileSystem {
 
     /// Takes the medium as it now stands as this file system's own writing.
@@ -388,7 +445,8 @@ extension FileSystem {
     /// For a test whose poke is the fixture rather than the damage: a bitmap
     /// painted into a pattern, a counter moved to where years would leave it, a
     /// contradiction only a scrub is meant to find. Restamp the table's on-disk
-    /// sums too, as a writer would, before learning the medium again.
+    /// sums and the root too, as a writer would, then learn the sum region and
+    /// the table's checksums again from the medium.
     mutating func believeMedium() {
         if let medium = device as? MemoryDisk {
             for block in plan.tableStart..<plan.sumStart {
@@ -401,5 +459,6 @@ extension FileSystem {
         }
         dropCache()
         sumsKnown = false
+        _ = learnSumRegion()
     }
 }

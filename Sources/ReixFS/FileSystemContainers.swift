@@ -546,9 +546,8 @@ extension FileSystem {
             else { return .badName }
         }
 
-        // Through the dual-copy protocol like every other superblock change, and
-        // not through the journal: the journal's targets are the disk's
-        // bookkeeping blocks, and the superblock is where the layout lives.
+        // Through the dual-copy protocol and not the journal: a name moves
+        // nothing else on the disk, so it has nothing to be atomic with.
         return rename(machine: text, length: length)
     }
 

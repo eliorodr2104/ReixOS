@@ -250,9 +250,9 @@ struct CostTests {
             // bitmap block and the table block, and staging used to write a
             // payload per call; now the arena holds the image and the commit
             // writes each one once, so two of the ten writes per append went.
-            // The checksums add the sum block's payload and its home write: ten
-            // per append onto blocks the file did not have.
-            #expect(disk.writes - writes == 160)
+            // The checksums add the sum block's payload and its home write, and
+            // the root the superblock copy carrying it: twelve per append.
+            #expect(disk.writes - writes == 192)
         }
     }
 

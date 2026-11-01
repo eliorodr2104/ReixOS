@@ -62,10 +62,12 @@ struct TrustAnchorTests {
         }
     }
 
-    @Test("an unused sum slot has no dirty-mount anchor and a scrub does not visit unused sum pages")
-    func unusedSumHasNoAnchor() {
+    @Test("a changed unused sum page is refused by mounts without a seal and by a data scrub")
+    func unusedSumIsRefused() {
+        // The root covers every block of the region, used or not. A sealed mount
+        // does not read the region: its data scrub does, and refuses it there.
         for damage in Damage.allCases {
-            for clean in [false, true] {
+            for mode in ["dirty", "unsealed", "sealed"] {
                 withVolume { fs, disk, _ in
                     let home = fs.plan.dataStart - 1
                     let old = disk.block(home)
@@ -73,7 +75,8 @@ struct TrustAnchorTests {
                     fs.metaBuffer.storeBytes(of: UInt32(0x12345678), toByteOffset: 200, as: UInt32.self)
                     #expect(fs.begin() == .ok)
                     #expect(fs.finish(fs.stageStructuralBlock(home, from: fs.metaBuffer)) == .ok)
-                    if clean { #expect(fs.unmount() == .ok) }
+                    if mode != "dirty" { #expect(fs.unmount() == .ok) }
+                    if mode == "unsealed" { disk.unseal(fs.plan) }
                     switch damage {
                         case .stale: disk.put(old, block: home)
                         case .misdirected: disk.put(disk.block(home - 1), block: home)
@@ -81,14 +84,22 @@ struct TrustAnchorTests {
                             let at = Int(home) * Self.block + 201
                             disk.poke(disk.byte(at: at) ^ 1, at: at)
                     }
+                    let writes = disk.writes
                     remount(disk) { again, found in
+                        guard mode == "sealed" else {
+                            #expect(again == nil, "\(damage) \(mode)")
+                            #expect(isCorrupt(found), "\(damage) \(mode): \(found)")
+                            return
+                        }
                         guard var again else { Issue.record("\(damage): \(found)"); return }
-                        again.dropCache()
-                        #expect(again.scan(.data).safeToServe)
-                        again.dropCache()
-                        let status = again.readBlock(home, into: again.metaBuffer)
-                        #expect(status == (clean ? .quarantined : .ok), "\(damage) clean \(clean)")
+                        let sealed = disk.writes
+                        #expect(again.scan(.everything).safeToServe, "\(damage)")
+                        let findings = again.scan(.data)
+                        #expect(!findings.complete && !findings.safeToServe, "\(damage)")
+                        #expect(again.corrupted)
+                        #expect(disk.writes == sealed)
                     }
+                    if mode != "sealed" { #expect(disk.writes == writes, "\(damage) \(mode)") }
                 }
             }
         }

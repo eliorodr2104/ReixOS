@@ -175,13 +175,18 @@ public struct FileSystem<Device: BlockDevice> {
     /// Whether `settle` is running, so its own failed commit does not start it again.
     private var settling = false
 
-    /// Whether `sums` describes the disk yet.
+    /// Whether `sums` describes the disk yet, bitmap included.
     ///
-    /// True from a format, a verified seal, or a whole scan. Until then table
-    /// blocks are judged against the sum region, while bitmap and sum blocks
-    /// are learned from the medium. The map is derived from the table; the sum
-    /// region itself has no dirty-mount anchor.
+    /// True from a format, a verified seal, or a whole scan. Until then bitmap
+    /// blocks are learned from the medium: the map is derived from the table.
     var sumsKnown = false
+
+    /// Whether the table and sum region slots of `sums` are known.
+    ///
+    /// From a format, a seal whose sum region agrees with the superblock's root,
+    /// or a read of the whole region that does. Every mount has one before it
+    /// believes a table or folder block. See `checkRoot`.
+    var sumRegionKnown = false
 
     /// Whether a contradiction a scan finds holds the volume still.
     ///
@@ -411,8 +416,10 @@ public struct FileSystem<Device: BlockDevice> {
         }
 
         // Dirty is recovered, clean and sealed is believed, and any other clean
-        // disk is checked in full, the way every clean mount used to be.
+        // disk is checked in full, the way every clean mount used to be. Both
+        // of those check the sum region against its root before anything else.
         if disk.wasDirty {
+            guard disk.checkRoot() == .ok else { return (nil, disk.corrupted ? .corrupt : .deviceFailed) }
             guard disk.putRight().safeToServe else { return (nil, .corrupt) }
         } else {
             switch journal.quiet ? disk.openSeal() : .absent {
@@ -421,6 +428,7 @@ public struct FileSystem<Device: BlockDevice> {
                 case .failed      : return (nil, .deviceFailed)
 
                 case .absent:
+                    guard disk.checkRoot() == .ok else { return (nil, disk.corrupted ? .corrupt : .deviceFailed) }
                     guard disk.scan(.everything).safeToServe else { return (nil, .corrupt) }
             }
         }
@@ -533,15 +541,6 @@ public struct FileSystem<Device: BlockDevice> {
             return .ok
         }
 
-        // A dirty mount has no seal for the table. Its sum region is the same
-        // account a folder is checked against, before any record is believed.
-        var tableSum: UInt32? = nil
-        if !sumsKnown, index >= plan.tableStart, index < plan.sumStart, transaction.mode != .formatting {
-            let expected = dataSum(of: index)
-            guard expected.status == .ok else { return expected.status }
-            tableSum = expected.sum
-        }
-
         guard device.read(
             sectorsPerBlock,
             from: UInt64(index) * sectorsPerBlock,
@@ -550,9 +549,7 @@ public struct FileSystem<Device: BlockDevice> {
         ) == .ok else { return deviceRefused() }
 
         // Off the medium, so asked whether it is what was last written there.
-        guard believe(index, read: buffer),
-              tableSum == nil || tableSum == FSChecksum.over(buffer, count: Int(FSLayout.blockSize))
-        else {
+        guard believe(index, read: buffer) else {
             quarantine()
             return .quarantined
         }
@@ -589,13 +586,13 @@ public struct FileSystem<Device: BlockDevice> {
     }
 
     /// Whether a block just read off the medium is the one this process last
-    /// knew to be there. Recorded instead of judged while `sumsKnown` is false.
+    /// knew to be there. Recorded instead of judged while its slot is unknown.
     private mutating func believe(_ index: UInt32, read buffer: UnsafeRawPointer) -> Bool {
         guard let slot = sumSlot(of: index) else { return true }
 
         let sum = FSChecksum.over(buffer, count: Int(FSLayout.blockSize))
 
-        guard sumsKnown else {
+        guard sumsKnown || (sumRegionKnown && index >= plan.tableStart) else {
             sums.storeBytes(of: sum, toByteOffset: slot * 4, as: UInt32.self)
             return true
         }
@@ -684,6 +681,75 @@ public struct FileSystem<Device: BlockDevice> {
         )
 
         return stageStructuralBlock(home, from: jrnl)
+    }
+
+
+    // MARK: - The root of the sum region
+
+    /// The checksum over every sum block's checksum, in block order, as this
+    /// transaction would leave them, and whether it stages any of them.
+    ///
+    /// Every block of the region, used or not: which ones are used is a fact
+    /// about the table, and the table is part of what the root anchors. No
+    /// memory of its own, because `sums` already holds each block's checksum.
+    func sumRoot() -> (root: UInt32, staged: Bool) {
+        var root   = FSChecksum.offsetBasis
+        var staged = false
+
+        for home in plan.sumStart..<plan.dataStart {
+            var sum = expectedSum(of: home) ?? 0
+
+            if let slot = transaction.staging(home) {
+                sum    = FSChecksum.over(image(slot), count: Int(FSLayout.blockSize))
+                staged = true
+            }
+
+            root = withUnsafeBytes(of: sum) {
+                FSChecksum.over($0.baseAddress!, count: 4, continuing: root)
+            }
+        }
+
+        return (root, staged)
+    }
+
+    /// Reads the whole sum region and holds the volume unless its root is the
+    /// superblock's. Before a mount with no seal believes any table or folder
+    /// block, so a stale pair or a changed unused page is refused, not learned.
+    mutating func checkRoot() -> FSStatus {
+        guard !sumRegionKnown else { return .ok }
+
+        let learned = learnSumRegion()
+        guard learned.status == .ok else { return learned.status }
+
+        guard learned.root == superblock?.sumRoot else {
+            quarantine()
+            return .quarantined
+        }
+
+        sumRegionKnown = true
+        return .ok
+    }
+
+    /// Records what every sum block checksums to and the table checksums
+    /// inside them, off the medium, and answers the root over what was read.
+    mutating func learnSumRegion() -> (status: FSStatus, root: UInt32) {
+        let per = UInt32(FSLayout.sumsPerBlock)
+
+        for home in plan.sumStart..<plan.dataStart {
+            guard readRawBlock(home, into: meta) == .ok else { return (.deviceFailed, 0) }
+
+            expect(FSChecksum.over(meta, count: Int(FSLayout.blockSize)), of: home)
+
+            let first = max(plan.tableStart, (home - plan.sumStart) * per)
+            let last  = min(plan.sumStart, (home - plan.sumStart + 1) * per)
+            guard first < last else { continue }
+
+            for table in first..<last {
+                expect(meta.loadUnaligned(fromByteOffset: sumOffset(of: table), as: UInt32.self), of: table)
+            }
+        }
+
+        return (.ok, sumRoot().root)
     }
 
 
@@ -1302,6 +1368,12 @@ public struct FileSystem<Device: BlockDevice> {
             return .ok
         }
 
+        let rooted = stageRoot()
+        guard rooted == .ok else {
+            abort()
+            return rooted
+        }
+
         let header = transaction.header(.committed)
 
         // Every image, once, and before any header names it. The barrier below
@@ -1341,6 +1413,48 @@ public struct FileSystem<Device: BlockDevice> {
 
         transaction.end()
         mutations &+= 1
+
+        return .ok
+    }
+
+
+    /// Stages the superblock copy that is not the live one, carrying the root
+    /// of the sum region as this transaction leaves it, when it changes any of
+    /// the region. Last, so the root covers every image staged before it.
+    ///
+    /// One image and two writes, and the same transaction: replay applies the
+    /// region and its root together, so after any power cut they agree. A fresh
+    /// generation, because it is the dual-copy protocol carried by the journal.
+    private mutating func stageRoot() -> FSStatus {
+        let summed = sumRoot()
+        guard summed.staged else { return .ok }
+
+        guard var block = superblock, block.generation < UInt64.max else { return .noSpace }
+
+        block.generation  += 1
+        block.sealChecksum = 0
+        block.sumRoot      = summed.root
+
+        let target = liveSuperblock == FSLayout.superblockA
+            ? FSLayout.superblockB
+            : FSLayout.superblockA
+
+        let slot: Int
+        switch transaction.slot(for: target) {
+            case .full:
+                transaction.overflowed()
+                return .tooManyChanges
+
+            case .again(let index): slot = index
+            case .fresh(let index): slot = index
+        }
+
+        block.write(to: image(slot))
+        transaction.staged(
+            target,
+            at      : slot,
+            checksum: FSChecksum.over(image(slot), count: Int(FSLayout.blockSize))
+        )
 
         return .ok
     }
@@ -1446,8 +1560,17 @@ public struct FileSystem<Device: BlockDevice> {
                 return .quarantined
             }
 
-            guard writeRawBlock(header.targets[index], from: jrnl) == .ok else {
-                return .deviceFailed
+            let target = header.targets[index]
+            guard writeRawBlock(target, from: jrnl) == .ok else { return .deviceFailed }
+
+            // The root's copy, newer than the live one whenever this journal is
+            // current: then it is the live one, and the next update goes to the other.
+            if target == FSLayout.superblockA || target == FSLayout.superblockB {
+                let image = FSSuperblock(reading: jrnl)
+                if image.generation > superblockGeneration {
+                    superblock     = image
+                    liveSuperblock = target
+                }
             }
         }
 
@@ -1530,22 +1653,31 @@ public struct FileSystem<Device: BlockDevice> {
                         byteCount: header.intent.blocks * 4
                     )
                 }
+
+                // A settle reads and restages sum blocks, so they are checked first.
+                let rooted = checkRoot()
+                guard rooted == .ok else { return rooted }
+
                 return emptyJournal(checkpoint: 0)
 
             case .committed:
+                // Its own root image may be the newest superblock already: the
+                // apply has no barrier inside it, so that copy can land first.
+                let current = stamped == serving || (stamped < serving && carriesLive(header))
+
                 // **A committed journal from an earlier mount is stale.** Its
                 // whole-block after-images would overwrite metadata written since
                 // that mount, so it is discarded rather than replayed. This is
                 // cross-mount stale-journal rejection on the current medium, not
                 // storage anti-rollback; a whole-medium rollback is not detected.
-                if stamped < serving {
+                if stamped < serving, !current {
                     checkpoint = header.generation
                     return emptyJournal(checkpoint: header.generation)
                 }
 
                 // Above the newest superblock, and no mount serves before
                 // publishing one: the disk has lost a write it acknowledged.
-                guard stamped == serving else {
+                guard current else {
                     quarantine()
                     return .quarantined
                 }
@@ -1562,7 +1694,11 @@ public struct FileSystem<Device: BlockDevice> {
                         FSJournal.payload(of: index), into: jrnl
                     ) == .ok else { return .deviceFailed }
 
-                    guard FSChecksum.over(jrnl, count: Int(FSLayout.blockSize))
+                    let target = header.targets[index]
+                    let layout = target >= FSLayout.reservedBlocks
+                        || FSSuperblock.verdict(of: jrnl, against: plan) == .whole
+
+                    guard layout, FSChecksum.over(jrnl, count: Int(FSLayout.blockSize))
                             == header.checksums[index]
                     else {
                         quarantine()
@@ -1578,6 +1714,21 @@ public struct FileSystem<Device: BlockDevice> {
 
                 return emptyJournal(checkpoint: header.generation)
         }
+    }
+
+
+    /// Whether `header` stages the very superblock this volume is mounted from.
+    private mutating func carriesLive(_ header: FSJournal) -> Bool {
+        guard let block = superblock else { return false }
+
+        block.write(to: jrnl)
+        let live = FSChecksum.over(jrnl, count: Int(FSLayout.blockSize))
+
+        for index in 0..<header.recordCount
+        where header.targets[index] == liveSuperblock && header.checksums[index] == live {
+            return true
+        }
+        return false
     }
 
 
@@ -1670,6 +1821,7 @@ public struct FileSystem<Device: BlockDevice> {
 
         block.generation += 1
         block.state       = state
+        block.sumRoot     = sumRoot().root
 
         block.write(to: meta)
 
@@ -1780,7 +1932,8 @@ public struct FileSystem<Device: BlockDevice> {
 
         // Mounted, because `format` hands back a mounted volume. A clean mark
         // here would be a disk that says nobody is using it while somebody is.
-        block.state = 1
+        block.state   = 1
+        block.sumRoot = sumRoot().root
 
         block.write(to: meta)
         guard writeRawBlock(FSLayout.superblockA, from: meta) == .ok,
@@ -1802,6 +1955,7 @@ public struct FileSystem<Device: BlockDevice> {
         // Every bitmap and table block was just written by this process, so its
         // checksum is known from here on.
         sumsKnown      = true
+        sumRegionKnown = true
 
         return .ok
     }
@@ -1853,7 +2007,11 @@ public struct FileSystem<Device: BlockDevice> {
         return block.sealChecksum
     }
 
+    /// The root of the sum region the superblock this volume was read from names.
+    var namedRoot: UInt32 { superblock?.sumRoot ?? 0 }
+
     /// Which write of the superblock this volume is reading. Bumped by every
-    /// mount, unmount and rename, so it separates two mounts of one disk.
+    /// mount, unmount and rename, so it separates two mounts of one disk, and
+    /// by every transaction that changes the sum region.
     var superblockGeneration: UInt64 { superblock?.generation ?? 0 }
 }

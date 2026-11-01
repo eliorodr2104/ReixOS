@@ -128,8 +128,8 @@ struct JournalArenaTests {
     }
 
 
-    @Test("sixteen kilobytes cost six journal writes")
-    func sixteenKilobytesCostSix() {
+    @Test("sixteen kilobytes cost seven journal writes")
+    func sixteenKilobytesCostSeven() {
         withDisk { fs, disk in
             guard let file = make(&fs, "big.bin") else { return }
 
@@ -141,18 +141,18 @@ struct JournalArenaTests {
 
             #expect(fs.write(file, at: 0, from: bytes, count: 16384).status == .ok)
 
-            // Three payloads (bitmap, table and sum block) and three headers; it
-            // was seven, one payload per block of the file.
+            // Four payloads (bitmap, table, sum block and the root's superblock)
+            // and three headers; it was seven, one payload per block of the file.
             #expect(
-                disk.journalWrites - journal <= 6,
+                disk.journalWrites - journal <= 7,
                 "\(disk.journalWrites - journal) journal writes"
             )
         }
     }
 
 
-    @Test("four appends of sixteen kilobytes cost twenty-four")
-    func fourAppendsCostTwentyFour() {
+    @Test("four appends of sixteen kilobytes cost twenty-eight")
+    func fourAppendsCostTwentyEight() {
         withDisk { fs, disk in
             guard let file = make(&fs, "grow.bin") else { return }
 
@@ -168,10 +168,10 @@ struct JournalArenaTests {
                 ).status == .ok, "append \(step)")
             }
 
-            // Six each, nothing shared: each append is its own transaction, on
+            // Seven each, nothing shared: each append is its own transaction, on
             // blocks the file did not have, so none names one first.
             #expect(
-                disk.journalWrites - journal <= 24,
+                disk.journalWrites - journal <= 28,
                 "\(disk.journalWrites - journal) journal writes"
             )
         }
@@ -333,7 +333,9 @@ struct JournalArenaTests {
 
             let header = FSJournal(reading: raw)
             #expect(header.state == .empty)
-            #expect(FSJournal.mount(of: header.generation) == fs.superblockGeneration)
+            // The mount half is the generation the transaction began under; its
+            // root image moved the superblock one on.
+            #expect(FSJournal.mount(of: header.generation) == fs.superblockGeneration - 1)
             #expect(FSJournal.step(of: header.generation) > 0)
         }
     }

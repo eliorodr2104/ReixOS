@@ -30,7 +30,8 @@
 /// A group is the run of blocks one bitmap block accounts for. Its summary is
 /// what lets a mount check the map a block at a time without the table, and the
 /// table checksums are what let every later read of the table, and of the file
-/// data checksums, check itself. The
+/// data checksums, check itself. Those of the sum region must also add up to
+/// the superblock's root, which costs no read of the region. The
 /// quota index is the room walk's answer, kept, so that neither the mount nor
 /// the first container made after it has to walk the table to know it.
 enum FSSeal {

@@ -353,6 +353,9 @@ extension FileSystem {
             else { return (.tooFragmented, 0) }
         }
 
+        // A settle of them must fit one transaction. See `FSJournal.Intent.fits`.
+        guard intent.fits(plan) else { return (.tooManyChanges, 0) }
+
         let summed = newSums(of: record, at: offset, from: source, count: count, blocks: inPlace)
         guard summed == .ok else { return (summed, 0) }
 

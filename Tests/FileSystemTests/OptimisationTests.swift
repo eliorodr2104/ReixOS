@@ -91,9 +91,10 @@ struct OptimisationTests {
         // Four blocks of file, and the bitmap block that says so was changed
         // four times inside the one transaction. It reaches its own place once,
         // and so do the object table block that the record, the quota charge
-        // and the size all live in, and the sum block the four checksums live in.
+        // and the size all live in, the sum block the four checksums live in,
+        // and the superblock copy carrying the root over the sum region.
         #expect(disk.dataWrites - data == 4)
-        #expect(disk.homeWrites - home == 3, "\(disk.homeWrites - home) home writes")
+        #expect(disk.homeWrites - home == 4, "\(disk.homeWrites - home) home writes")
 
         // Which is the whole of what the coalescing has to buy: without it the
         // bitmap block would reach its place once per block touched, and the

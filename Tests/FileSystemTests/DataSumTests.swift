@@ -455,6 +455,7 @@ struct DataSumTests {
                 remount(disk) { again, found in
                     guard var mounted = again else { Issue.record("stop \(stop): \(found)"); return }
                     #expect(mounted.journalIsEmpty, "stop \(stop)")
+                    #expect(disk.rootAgrees(), "stop \(stop)")
 
                     // The block that landed takes its declared checksum and reads.
                     let findings = mounted.scan(.data)
@@ -790,14 +791,14 @@ struct DataSumTests {
         ]
 
         // Writes, barriers, reads per row, from a committed file and a cold cache. The
-        // tail's image replaces the declaration (was 9, 5, 3 and 12, 5, 4).
+        // tail's image replaces the declaration; the root adds two writes to every row.
         let expected: [String: (Int, Int, Int)] = [
-            "append into the tail"   : (9, 4, 3),
-            "append across the tail" : (12, 4, 4),
-            "append onto a new block": (10, 4, 3),
-            "append whole blocks"    : (11, 4, 3),
-            "overwrite, partial ends": (11, 5, 6),
-            "overwrite whole blocks" : (10, 5, 2),
+            "append into the tail"   : (11, 4, 3),
+            "append across the tail" : (14, 4, 4),
+            "append onto a new block": (12, 4, 3),
+            "append whole blocks"    : (13, 4, 3),
+            "overwrite, partial ends": (13, 5, 6),
+            "overwrite whole blocks" : (12, 5, 2),
         ]
 
         print("write                     writes  barriers  reads")
@@ -1038,6 +1039,9 @@ struct DataSumCrashTests {
                     #expect(again.begin() == .ok, "\(where_): the journal was left holding something")
                     again.abort()
 
+                    // Replayed or discarded, the region and its root are one fact.
+                    #expect(after.rootAgrees(), "\(where_): the root is not the sum region's")
+
                     guard let record = again.object(file) else {
                         Issue.record("\(where_): the file is gone")
                         return
@@ -1165,6 +1169,33 @@ struct DataSumCrashTests {
             fs.write(
                 file, at: UInt64(offset), from: raw.baseAddress!,
                 count: UInt64(bytes.count), replacing: replacing
+            )
+        }
+    }
+
+
+    @Test("a change to the table alone")
+    func tableChange() {
+        let old = pattern(25, 100)
+
+        sweep("table change", old: old, new: old) { fs, _ in
+            guard var root = fs.object(FSLayout.rootObject) else { return }
+            root.created += 1
+            guard fs.begin() == .ok else { return }
+            _ = fs.finish(fs.store(root, at: FSLayout.rootObject))
+        }
+    }
+
+
+    @Test("a create beside the file")
+    func createBeside() {
+        let old = pattern(26, 100)
+
+        sweep("create", old: old, new: old) { fs, _ in
+            let name: StaticString = "beside.bin"
+            _ = fs.create(
+                UnsafeRawPointer(name.utf8Start), length: name.utf8CodeUnitCount,
+                kind: .file, in: FSLayout.rootObject
             )
         }
     }

@@ -59,6 +59,11 @@ struct FSSuperblock {
     /// shut down cleanly and sealed. Zero means there is no seal to believe.
     var sealChecksum : UInt32
 
+    /// What the sum region's root is, on every copy whatever its state: the one
+    /// account of the region a mount without a seal can check it against.
+    /// Moved by the transaction that changes the region, as one of its images.
+    var sumRoot      : UInt32
+
 
     /// A fresh superblock for `plan`, named `machine`.
     init(describing plan: FSLayout.Plan, generation: UInt64, machine: StaticString) {
@@ -79,6 +84,7 @@ struct FSSuperblock {
         self.sealStart     = plan.sealStart
         self.sealBlocks    = plan.sealBlocks
         self.sealChecksum  = 0
+        self.sumRoot       = 0
 
         var letters = InlineArray<24, UInt8>(repeating: 0)
         for index in 0..<min(machine.utf8CodeUnitCount, FSLayout.machineNameLimit) {
@@ -108,6 +114,7 @@ struct FSSuperblock {
         self.sealStart     = base.loadUnaligned(fromByteOffset: FSSuperblockField.sealStart,     as: UInt32.self)
         self.sealBlocks    = base.loadUnaligned(fromByteOffset: FSSuperblockField.sealBlocks,    as: UInt32.self)
         self.sealChecksum  = base.loadUnaligned(fromByteOffset: FSSuperblockField.sealChecksum,  as: UInt32.self)
+        self.sumRoot       = base.loadUnaligned(fromByteOffset: FSSuperblockField.sumRoot,       as: UInt32.self)
 
         var letters = InlineArray<24, UInt8>(repeating: 0)
         let bytes = base.advanced(by: FSSuperblockField.name).assumingMemoryBound(to: UInt8.self)
@@ -141,6 +148,7 @@ struct FSSuperblock {
         base.storeBytes(of: sealStart,     toByteOffset: FSSuperblockField.sealStart,     as: UInt32.self)
         base.storeBytes(of: sealBlocks,    toByteOffset: FSSuperblockField.sealBlocks,    as: UInt32.self)
         base.storeBytes(of: sealChecksum,  toByteOffset: FSSuperblockField.sealChecksum,  as: UInt32.self)
+        base.storeBytes(of: sumRoot,       toByteOffset: FSSuperblockField.sumRoot,       as: UInt32.self)
 
         let letters = base.advanced(by: FSSuperblockField.name).assumingMemoryBound(to: UInt8.self)
         for index in 0..<FSLayout.machineNameLimit { letters[index] = name[index] }

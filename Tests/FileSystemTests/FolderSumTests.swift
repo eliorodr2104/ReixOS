@@ -186,7 +186,7 @@ struct FolderSumTests {
     @Test("a create and a remove each stage one sum block more")
     func costOfChecking() {
         // Writes, barriers and reads from a cold cache. Before folder blocks had
-        // checksums these were 7, 4, 3 and 9, 4, 5.
+        // checksums these were 7, 4, 3 and 9, 4, 5; the root adds two writes.
         withFileSystem { fs, disk in
             guard make(&fs, "first.bin") != nil else { return }
             fs.dropCache()
@@ -194,7 +194,7 @@ struct FolderSumTests {
             let before = (disk.writes, disk.flushes, disk.reads)
             #expect(create(&fs, "second.bin", in: FSLayout.rootObject) == .ok)
             let made = (disk.writes - before.0, disk.flushes - before.1, disk.reads - before.2)
-            #expect(made == (9, 4, 4), "\(made)")
+            #expect(made == (11, 4, 4), "\(made)")
         }
 
         // A file with a block of data, whose sum block is a different one.
@@ -210,7 +210,7 @@ struct FolderSumTests {
             let before = (disk.writes, disk.flushes, disk.reads)
             #expect(remove(&fs, "first.bin", from: FSLayout.rootObject) == .ok)
             let gone = (disk.writes - before.0, disk.flushes - before.1, disk.reads - before.2)
-            #expect(gone == (11, 4, 6), "\(gone)")
+            #expect(gone == (13, 4, 6), "\(gone)")
         }
     }
 

@@ -105,28 +105,26 @@ struct TableTrustTests {
         }
     }
 
-    @Test("a dirty mount still accepts an old table paired with its old sum block")
-    func stalePairHasNoAnchor() {
-        for clean in [false, true] {
+    @Test("an old table paired with its old sum block is refused by every mount")
+    func stalePairIsRefused() {
+        // Dirty and unsealed mounts check the sum region against the superblock's
+        // root before any table is read; a sealed one has the seal's checksums.
+        for mode in ["dirty", "unsealed", "sealed"] {
             withDisk { fs, disk in
                 let home = fs.plan.tableStart
                 let table = disk.block(home)
                 let sum = disk.block(fs.sumBlock(of: home))
-                let old = fs.object(FSLayout.rootObject)!.created
                 changeRoot(&fs)
-                if clean { #expect(fs.unmount() == .ok) }
+                if mode != "dirty" { #expect(fs.unmount() == .ok) }
+                if mode == "unsealed" { disk.unseal(fs.plan) }
                 disk.put(table, block: home)
                 disk.put(sum, block: fs.sumBlock(of: home))
+                let before = disk.writes
                 remount(disk) { again, found in
-                    if clean {
-                        #expect(again == nil)
-                        #expect(isCorrupt(found))
-                    } else {
-                        guard var again else { Issue.record("\(found)"); return }
-                        #expect(again.object(FSLayout.rootObject)?.created == old)
-                        #expect(again.scan(.data).safeToServe)
-                    }
+                    #expect(again == nil, "\(mode)")
+                    #expect(isCorrupt(found), "\(mode): \(found)")
                 }
+                #expect(disk.writes == before, "\(mode)")
             }
         }
     }
@@ -137,7 +135,7 @@ struct TableTrustTests {
             fs.dropCache()
             let before = (disk.reads, disk.writes, disk.flushes)
             changeRoot(&fs)
-            #expect((disk.reads - before.0, disk.writes - before.1, disk.flushes - before.2) == (2, 7, 4))
+            #expect((disk.reads - before.0, disk.writes - before.1, disk.flushes - before.2) == (2, 9, 4))
             print("table-only reads \(disk.reads - before.0) writes \(disk.writes - before.1) barriers \(disk.flushes - before.2)")
         }
     }

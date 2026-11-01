@@ -109,7 +109,8 @@ extension FileSystem {
         /// The superblock generation when the scan ran.
         ///
         /// Bumped by every mount, so it separates two mounts of one disk: a set
-        /// of findings taken before a reboot cannot be applied after it.
+        /// of findings taken before a reboot cannot be applied after it. Every
+        /// transaction that moves the sum region's root bumps it too.
         public var generation: UInt64 = 0
 
         /// How many transactions the volume had committed when the scan ran.
@@ -401,15 +402,8 @@ extension FileSystem {
             }
         }
 
-        // And every sum block, which nothing above reads, when what they hold is
-        // still to be learned. Once known, every read of one is checked anyway.
-        if !sumsKnown {
-            for block in plan.sumStart..<plan.dataStart {
-                guard readBlock(block, into: metaBuffer) == .ok else { return nil }
-            }
-        }
-
-        // Every bitmap, table and sum block has now been read off the medium.
+        // Every bitmap and table block has now been read off the medium, and the
+        // sum region was known before the first of them: see `checkRoot`.
         sumsKnown = true
 
         containerCount = census.tooManyContainers ? FSLayout.maxContainers : census.containers
@@ -423,7 +417,26 @@ extension FileSystem {
     /// One pass over the table, and one read per block of data: the whole of
     /// what is stored. False when the device stopped answering, or the table or
     /// a sum block did not check out, which holds the volume.
+    ///
+    /// The whole sum region first, off the medium, against the root of what this
+    /// process knows it holds: a page no file uses is checked too.
     private mutating func scanData(_ findings: inout Findings) -> Bool {
+
+        var root = FSChecksum.offsetBasis
+
+        for home in plan.sumStart..<plan.dataStart {
+            guard readRawBlock(home, into: metaBuffer) == .ok else { return false }
+
+            let sum = FSChecksum.over(metaBuffer, count: Int(FSLayout.blockSize))
+            root = withUnsafeBytes(of: sum) {
+                FSChecksum.over($0.baseAddress!, count: 4, continuing: root)
+            }
+        }
+
+        guard root == sumRoot().root else {
+            hold()
+            return false
+        }
 
         let perTableBlock = Int(FSLayout.blockSize / FSLayout.objectSize)
 

@@ -166,14 +166,18 @@ struct TransactionTests {
         header.recordCount = 1
 
         // Replaying an image over the journal header would rewrite the thing that
-        // says what to replay; over a superblock, it would put a bitmap block
-        // where the layout lives.
+        // says what to replay. A superblock carries the sum region's root.
         for target in [
-            UInt32(0), 1, FSLayout.journalHeaderBlock, FSLayout.journalStart,
+            FSLayout.journalHeaderBlock, FSLayout.journalStart,
             FSLayout.reservedBlocks - 1, plan.totalBlocks, UInt32.max
         ] {
             header.targets[0] = target
             #expect(!header.targetsFit(plan), "target \(target)")
+        }
+
+        for target in [FSLayout.superblockA, FSLayout.superblockB] {
+            header.targets[0] = target
+            #expect(header.targetsFit(plan), "target \(target)")
         }
 
         header.targets[0] = FSLayout.reservedBlocks
@@ -283,9 +287,9 @@ struct TransactionTests {
             let writesBefore = disk.writes
             #expect(fs.commit() == .ok)
 
-            // One table image and its sum, three headers, and both home writes.
-            // Restaging the table coalesces its checksum image too.
-            #expect(disk.writes - writesBefore == 7)
+            // A table image, its sum and the root, three headers, three home
+            // writes. Restaging the table coalesces its checksum image too.
+            #expect(disk.writes - writesBefore == 9)
 
             // The last one is what is there.
             #expect(Self.blockBytes(&fs, target)[0] == 7)
@@ -498,6 +502,12 @@ struct TransactionTests {
                                toByteOffset: fs.sumOffset(of: target), as: UInt32.self)
             #expect(fs.writeRawBlock(FSJournal.payload(of: 1), from: sumPage) == .ok)
 
+            // And the superblock carrying the root the sum block moved to.
+            let rootPage = UnsafeMutableRawPointer.allocate(byteCount: Self.block, alignment: 8)
+            defer { rootPage.deallocate() }
+            let rootHome = Self.rootImage(&fs, sumHome, sumPage, into: rootPage)
+            #expect(fs.writeRawBlock(FSJournal.payload(of: 2), from: rootPage) == .ok)
+
             // Stamped with the mount being served, which is what a journal the
             // crashed mount left behind carries. See `JournalArenaTests`.
             guard let stamp = FSJournal.stamp(
@@ -507,11 +517,13 @@ struct TransactionTests {
             var header = FSJournal()
             header.state        = .committed
             header.generation   = stamp
-            header.recordCount  = 2
+            header.recordCount  = 3
             header.targets[0]   = target
             header.checksums[0] = FSChecksum.over(payload, count: Self.block)
             header.targets[1]   = sumHome
             header.checksums[1] = FSChecksum.over(sumPage, count: Self.block)
+            header.targets[2]   = rootHome
+            header.checksums[2] = FSChecksum.over(rootPage, count: Self.block)
 
             Self.putHeader(&fs, header)
             #expect(disk.flush() == .ok)
@@ -612,9 +624,15 @@ struct TransactionTests {
                 FSJournal.payload(of: 0), from: UnsafeRawPointer(payload)
             ) == .ok)
 
+            // Current, so the replay reaches the image: a superblock target must
+            // hold a whole superblock of this disk, and this one does not.
+            guard let stamp = FSJournal.stamp(
+                mount: fs.superblockGeneration, step: 1
+            ) else { Issue.record("no stamp"); return }
+
             var header = FSJournal()
             header.state        = .committed
-            header.generation   = 1
+            header.generation   = stamp
             header.recordCount  = 1
             header.targets[0]   = FSLayout.superblockA
             header.checksums[0] = FSChecksum.over(payload, count: Self.block)
@@ -1199,6 +1217,38 @@ struct TransactionTests {
 
     /// Puts a header on the disk behind the file system's back, which is how a
     /// crash at a chosen step is arranged.
+    /// The superblock image a writer stages with a sum block: the copy that is
+    /// not the newer one, a generation on, carrying the root with `page` at
+    /// `home`. Answers which copy it is for.
+    private static func rootImage(
+        _ fs: inout FileSystem<CrashDisk>, _ home: UInt32, _ page: UnsafeRawPointer,
+        into image: UnsafeMutableRawPointer
+    ) -> UInt32 {
+        var sums: [UInt32] = []
+        for at in fs.plan.sumStart..<fs.plan.dataStart {
+            if at == home {
+                sums.append(FSChecksum.over(page, count: block))
+            } else {
+                _ = fs.readRawBlock(at, into: image)
+                sums.append(FSChecksum.over(image, count: block))
+            }
+        }
+        let root = sums.withUnsafeBytes { FSChecksum.over($0.baseAddress!, count: $0.count) }
+
+        _ = fs.readRawBlock(FSLayout.superblockA, into: image)
+        let a = FSSuperblock(reading: image)
+        _ = fs.readRawBlock(FSLayout.superblockB, into: image)
+        let b = FSSuperblock(reading: image)
+
+        var newer = a.generation >= b.generation ? a : b
+        newer.generation  += 1
+        newer.sumRoot      = root
+        newer.sealChecksum = 0
+        newer.write(to: image)
+
+        return a.generation >= b.generation ? FSLayout.superblockB : FSLayout.superblockA
+    }
+
     private static func putHeader(_ fs: inout FileSystem<CrashDisk>, _ header: FSJournal) {
         let raw = UnsafeMutableRawPointer.allocate(byteCount: block, alignment: 8)
         defer { raw.deallocate() }

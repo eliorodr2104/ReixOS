@@ -23,7 +23,8 @@ import ReixABI
 ///
 /// A **redo** journal, of metadata. What goes in it is the after-image of whole
 /// structural blocks: a bitmap block, an object table block, a sum block, a
-/// directory block. Whole images rather than deltas is what makes replay
+/// directory block, and the superblock copy that carries the sum region's new
+/// root whenever a sum block changes. Whole images rather than deltas is what makes replay
 /// idempotent, which is what makes a crash during replay survivable - replaying
 /// twice is replaying once. File contents are not in here, with one exception:
 /// the partly filled last block an append rewrites goes through as an image, so
@@ -151,8 +152,12 @@ struct FSJournal {
 
         /// Whether every run is file data on this disk, and the whole of it
         /// within `FSLayout.overwriteLimit`. A settle reads every block named.
+        ///
+        /// And whether a settle fits one transaction: it stages every sum block
+        /// the runs reach and the superblock carrying the new root.
         func fits(_ plan: FSLayout.Plan) -> Bool {
             var total = UInt64(0)
+            var homes = UInt64(0)
 
             for index in 0..<count {
                 let run = runs[index]
@@ -163,9 +168,10 @@ struct FSJournal {
                 else { return false }
 
                 total += UInt64(run.count)
+                homes += (end - 1) / FSLayout.sumsPerBlock - UInt64(run.start) / FSLayout.sumsPerBlock + 1
             }
 
-            return total <= FSLayout.overwriteLimit
+            return total <= FSLayout.overwriteLimit && homes < UInt64(FSJournal.capacity)
         }
     }
 
@@ -319,10 +325,10 @@ struct FSJournal {
     /// Whether every record names a block this journal may write over, and the
     /// intent names only file data.
     ///
-    /// The journal's own blocks and the superblocks are not among them: a record
-    /// pointing at the header would have replay rewrite the thing that says what
-    /// to replay, and one pointing at a superblock would put a metadata image
-    /// where the layout lives.
+    /// The journal's own blocks are not among them: a record pointing at the
+    /// header would have replay rewrite the thing that says what to replay. A
+    /// superblock is, because the root of the sum region moves with the region,
+    /// and replay checks that such an image is a whole superblock of this disk.
     func targetsFit(_ plan: FSLayout.Plan) -> Bool {
 
         guard intent.fits(plan) else { return false }
@@ -330,7 +336,8 @@ struct FSJournal {
         for index in 0..<recordCount {
             let target = targets[index]
 
-            guard target >= FSLayout.reservedBlocks,
+            guard target == FSLayout.superblockA || target == FSLayout.superblockB
+                    || target >= FSLayout.reservedBlocks,
                   target < plan.totalBlocks
             else { return false }
         }
@@ -366,11 +373,12 @@ struct FSJournal {
     /// generations read as mount zero, which no live mount ever is. It is not an
     /// anti-rollback counter; it only rejects a committed earlier-mount journal
     /// while a newer superblock is present on this medium.
-    /// `nil` above the bound: the mount half is a word, so a volume opened four
-    /// thousand million times has run out of stamps rather than started reusing
-    /// them. Unreachable, and a refusal for the same reason `publishSuperblock`
-    /// refuses at the top of its own counter: a stamp handed out twice is a
-    /// journal a replay cannot place.
+    /// `nil` above the bound: the mount half is a word, so a volume whose
+    /// superblock was written four thousand million times has run out of stamps
+    /// rather than started reusing them. Every mount writes it, and so does every
+    /// transaction that moves the sum region's root: a lifetime bill, refused
+    /// for the same reason `publishSuperblock` refuses at the top of its own
+    /// counter. A stamp handed out twice is a journal a replay cannot place.
     static func stamp(mount: UInt64, step: UInt32) -> UInt64? {
         guard mount <= UInt64(UInt32.max) else { return nil }
 
