@@ -55,7 +55,7 @@ struct FSTransaction {
 
     private(set) var active     = false
     private(set) var mode       = Mode.serving
-    private(set) var generation = UInt64(0)
+    private(set) var generation = UInt128(0)
     private(set) var recordCount = 0
 
     /// The first refusal a staging call met inside this transaction.
@@ -91,7 +91,7 @@ struct FSTransaction {
 
     // MARK: - Opening and closing
 
-    mutating func begin(generation: UInt64) {
+    mutating func begin(generation: UInt128) {
         self.active        = true
         self.generation    = generation
         self.recordCount   = 0

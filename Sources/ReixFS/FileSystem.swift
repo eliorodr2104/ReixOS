@@ -266,17 +266,16 @@ public struct FileSystem<Device: BlockDevice> {
     /// In memory only, and it restarts at zero every mount - which is exactly why
     /// the number that goes on the disk carries the superblock generation with it.
     /// See `FSJournal.stamp`.
-    private var transactions: UInt32 = 0
+    private var transactions: UInt64 = 0
 
     /// The newest transaction the home blocks are known to hold.
     ///
     /// Read off the journal header at mount and moved by every commit, so a
     /// committed journal from an earlier mount is discarded rather than replayed
     /// over metadata that has moved on since. This is cross-mount stale-journal
-    /// rejection on the current medium, not storage anti-rollback. Zero on a
-    /// disk written by a build that did not stamp its journals, which no live
-    /// mount ever matches.
-    private var checkpoint: UInt64 = 0
+    /// rejection on the current medium, not storage anti-rollback. Both halves
+    /// are kept without truncation, including in an empty checkpoint.
+    private var checkpoint: UInt128 = 0
 
     /// How many transactions this mount has committed.
     ///
@@ -1285,7 +1284,7 @@ public struct FileSystem<Device: BlockDevice> {
     private mutating func start() -> FSStatus {
 
         // Refused rather than wrapped: see `FSJournal.stamp`.
-        guard transactions < UInt32.max else { return .noSpace }
+        guard transactions < UInt64.max else { return .noSpace }
         transactions += 1
 
         // Stamped with the mount as well as the step. See `FSJournal.stamp`.
@@ -1503,7 +1502,7 @@ public struct FileSystem<Device: BlockDevice> {
     /// and discards a committed earlier-mount journal, which stops one that
     /// outlived its mount going back over newer same-medium metadata. It does not
     /// make a claim about rollback of the complete storage medium.
-    private mutating func emptyJournal(checkpoint: UInt64) -> FSStatus {
+    private mutating func emptyJournal(checkpoint: UInt128) -> FSStatus {
 
         // What a `prepared` header named is put right before the header goes.
         // A settle that changed a checksum committed it, which emptied the journal.

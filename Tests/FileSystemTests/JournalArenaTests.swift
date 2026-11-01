@@ -343,8 +343,8 @@ struct JournalArenaTests {
 
     @Test("the two halves of a stamp come back out of it")
     func stampRoundTrips() {
-        for mount in [UInt64(0), 1, 2, 0xFFFF_FFFF] {
-            for step in [UInt32(0), 1, 7, UInt32.max] {
+        for mount in [UInt64(0), 1, 2, 0xFFFF_FFFF, 0x1_0000_0000, UInt64.max - 1] {
+            for step in [UInt64(0), 1, 7, 0x1_0000_0000, UInt64.max] {
                 guard let stamp = FSJournal.stamp(mount: mount, step: step) else {
                     Issue.record("\(mount)/\(step) would not stamp")
                     return
@@ -355,14 +355,8 @@ struct JournalArenaTests {
             }
         }
 
-        // Above the bound there is no stamp, rather than one that aliases an
-        // older mount's.
-        #expect(FSJournal.stamp(mount: 0x1_0000_0000, step: 1) == nil)
+        // The last generation leaves no successor for a root image.
         #expect(FSJournal.stamp(mount: UInt64.max, step: 0) == nil)
-
-        // One packed stamp in the existing field, not an anti-rollback counter:
-        // an unstamped journal from an older build reads as mount zero, which no
-        // live mount is.
         #expect(FSJournal.mount(of: 5) == 0)
 
         guard let newer = FSJournal.stamp(mount: 2, step: 1),
@@ -373,6 +367,95 @@ struct JournalArenaTests {
         }
 
         #expect(newer > older)
+    }
+
+
+    @Test("a generation above one word commits through the last available root")
+    func generationExhaustion() {
+        withDisk { fs, disk in
+            seedGeneration(UInt64.max - 3, disk)
+            let space = scratch()
+            defer { space.deallocate() }
+            guard var high = FileSystem.mount(disk, scratch: space).disk else {
+                Issue.record("the high generation would not mount")
+                return
+            }
+            #expect(high.superblockGeneration == UInt64.max - 2)
+
+            for generation in [UInt64.max - 1, UInt64.max] {
+                guard var root = high.object(FSLayout.rootObject) else {
+                    Issue.record("the root was lost")
+                    return
+                }
+                root.created += 1
+                #expect(high.begin() == .ok)
+                #expect(high.finish(high.store(root, at: FSLayout.rootObject)) == .ok)
+                #expect(high.superblockGeneration == generation)
+                let header = disk.block(FSLayout.journalHeaderBlock).withUnsafeBytes {
+                    FSJournal(reading: $0.baseAddress!)
+                }
+                #expect(FSJournal.mount(of: header.generation) == generation - 1)
+            }
+
+            let writes = disk.writes
+            #expect(high.begin() == .noSpace)
+            #expect(disk.writes == writes)
+        }
+    }
+
+
+    @Test("a seal compares every bit of a generation above one word")
+    func highSealGeneration() {
+        withDisk { fs, disk in
+            seedGeneration(0x1234_5678_0000_0000, disk)
+            let space = scratch()
+            defer { space.deallocate() }
+            guard var high = FileSystem.mount(disk, scratch: space).disk else {
+                Issue.record("the high generation would not mount")
+                return
+            }
+            #expect(high.unmount() == .ok)
+            let reads = disk.reads
+            let mounted = FileSystem.mount(disk, scratch: space)
+            #expect(mounted.disk?.superblockGeneration == 0x1234_5678_0000_0003)
+            #expect(disk.reads - reads < 10)
+        }
+    }
+
+
+    @Test("an earlier journal layout is refused without a write")
+    func earlierJournalIsRefused() {
+        withDisk { fs, disk in
+            let at = Int(FSLayout.journalHeaderBlock) * Self.block
+            disk.poke(UInt32(1), at: at + FSJournal.Header.version)
+            let page = disk.block(FSLayout.journalHeaderBlock)
+            let check = page.withUnsafeBytes {
+                FSChecksum.over($0.baseAddress!, count: FSJournal.Header.width,
+                                zeroing: FSJournal.Header.checksum)
+            }
+            disk.poke(check, at: at + FSJournal.Header.checksum)
+            let writes = disk.writes
+            let space = scratch()
+            defer { space.deallocate() }
+            let mounted = FileSystem.mount(disk, scratch: space)
+            #expect(mounted.disk == nil)
+            if case .corrupt = mounted.found {} else { Issue.record("\(mounted.found)") }
+            #expect(disk.writes == writes)
+        }
+    }
+
+
+    private func seedGeneration(_ generation: UInt64, _ disk: MemoryDisk) {
+        for home in [FSLayout.superblockA, FSLayout.superblockB] {
+            let at = Int(home) * Self.block
+            disk.poke(generation, at: at + FSSuperblockField.generation)
+            let page = disk.block(home)
+            let check = page.withUnsafeBytes {
+                FSChecksum.over($0.baseAddress!, count: FSSuperblockField.width,
+                                zeroing: FSSuperblockField.checksum)
+            }
+            disk.poke(check, at: at + FSSuperblockField.checksum)
+        }
     }
 
 

@@ -97,7 +97,7 @@ struct TransactionTests {
 
         var header = FSJournal()
         header.state       = .committed
-        header.generation  = 0x1234_5678_9ABC_DEF0
+        header.generation  = 0x1234_5678_9ABC_DEF0_FEDC_BA98_7654_3210
         header.recordCount = 3
         header.targets[0]  = 100; header.checksums[0] = 0xAAAA
         header.targets[1]  = 200; header.checksums[1] = 0xBBBB
@@ -109,7 +109,7 @@ struct TransactionTests {
 
         let back = FSJournal(reading: raw)
         #expect(back.state == .committed)
-        #expect(back.generation == 0x1234_5678_9ABC_DEF0)
+        #expect(back.generation == 0x1234_5678_9ABC_DEF0_FEDC_BA98_7654_3210)
         #expect(back.recordCount == 3)
         #expect(back.targets[1] == 200)
         #expect(back.checksums[2] == 0xCCCC)
@@ -134,6 +134,7 @@ struct TransactionTests {
         for offset in [
             FSJournal.Header.state,
             FSJournal.Header.generation,
+            FSJournal.Header.generation + 8,
             FSJournal.Header.recordCount,
             FSJournal.Header.records,
             FSJournal.Header.records + 4

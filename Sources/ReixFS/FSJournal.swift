@@ -40,7 +40,7 @@ struct FSJournal {
     /// `RXJRNL` and a version, so a hex dump of block two says what it is.
     static let magic: UInt64 = 0x3130_4C4E_524A_5852      // "RXJRNL01"
 
-    static let version: UInt32 = 1
+    static let version: UInt32 = 2
 
     /// How many after-images one transaction may hold. The payload blocks are
     /// laid down consecutively from `FSLayout.journalStart`.
@@ -74,11 +74,11 @@ struct FSJournal {
         static let version     = 8
         static let state       = 12
         static let generation  = 16
-        static let recordCount = 24
-        static let checksum    = 28
+        static let recordCount = 32
+        static let checksum    = 36
 
         /// Sixteen pairs of `{ target block, payload checksum }`.
-        static let records     = 32
+        static let records     = 40
         static let recordWidth = 8
 
         /// How many runs of file data the transaction overwrites in place, then
@@ -177,7 +177,7 @@ struct FSJournal {
 
 
     var state      : State
-    var generation : UInt64
+    var generation : UInt128
     var recordCount: Int
 
     var targets  : InlineArray<16, UInt32>
@@ -204,9 +204,9 @@ struct FSJournal {
             rawValue: base.loadUnaligned(fromByteOffset: Header.state, as: UInt32.self)
         ) ?? .empty
 
-        self.generation = base.loadUnaligned(
-            fromByteOffset: Header.generation, as: UInt64.self
-        )
+        let step = base.loadUnaligned(fromByteOffset: Header.generation, as: UInt64.self)
+        let mount = base.loadUnaligned(fromByteOffset: Header.generation + 8, as: UInt64.self)
+        self.generation = UInt128(mount) << 64 | UInt128(step)
 
         let raw = base.loadUnaligned(fromByteOffset: Header.recordCount, as: UInt32.self)
         self.recordCount = Int(raw) <= Self.capacity ? Int(raw) : Self.capacity
@@ -260,7 +260,10 @@ struct FSJournal {
         base.storeBytes(of: Self.magic,          toByteOffset: Header.magic,      as: UInt64.self)
         base.storeBytes(of: Self.version,        toByteOffset: Header.version,    as: UInt32.self)
         base.storeBytes(of: state.rawValue,      toByteOffset: Header.state,      as: UInt32.self)
-        base.storeBytes(of: generation,          toByteOffset: Header.generation, as: UInt64.self)
+        base.storeBytes(of: UInt64(truncatingIfNeeded: generation),
+                        toByteOffset: Header.generation, as: UInt64.self)
+        base.storeBytes(of: UInt64(generation >> 64),
+                        toByteOffset: Header.generation + 8, as: UInt64.self)
         base.storeBytes(of: UInt32(recordCount), toByteOffset: Header.recordCount, as: UInt32.self)
 
         for index in 0..<Self.capacity {
@@ -354,44 +357,30 @@ struct FSJournal {
 
     // MARK: - Which mount wrote this
 
-    /// A generation, as the mount that wrote it and the step within that mount.
+    /// A stamp names the superblock generation and the step within that mount.
     ///
-    /// **The two halves are the checkpoint.** The high word is the superblock
-    /// generation the volume was serving under, which every mount bumps and which
-    /// is durable in two copies; the low word counts transactions inside that
-    /// mount. So a journal says not only "the fourth transaction" but "the fourth
-    /// transaction *of that mount*", and a mount can tell a journal it is meant to
-    /// finish from one that was finished before it started.
+    /// Each half is sixty-four bits. The generation moves on every mount and
+    /// every transaction that moves the sum root, so a thirty-two-bit half was
+    /// a lifetime limit a busy disk could reach. The whole stamp is kept in the
+    /// journal and compared without truncation, including its empty checkpoint.
+    /// It rejects a stale journal on this medium, not a rollback of the medium.
     ///
-    /// Which is the whole point. The step alone restarted at zero every mount, so
-    /// a crash could leave a committed journal numbered below one that had already
-    /// been applied, and nothing on the disk said which of the two the home blocks
-    /// held. A whole-block after-image applied over newer metadata is silent.
-    ///
-    /// Still one packed sixty-four-bit stamp in the field it always was, so no
-    /// disk written by an older build has to be read differently: its small
-    /// generations read as mount zero, which no live mount ever is. It is not an
-    /// anti-rollback counter; it only rejects a committed earlier-mount journal
-    /// while a newer superblock is present on this medium.
-    /// `nil` above the bound: the mount half is a word, so a volume whose
-    /// superblock was written four thousand million times has run out of stamps
-    /// rather than started reusing them. Every mount writes it, and so does every
-    /// transaction that moves the sum region's root: a lifetime bill, refused
-    /// for the same reason `publishSuperblock` refuses at the top of its own
-    /// counter. A stamp handed out twice is a journal a replay cannot place.
-    static func stamp(mount: UInt64, step: UInt32) -> UInt64? {
-        guard mount <= UInt64(UInt32.max) else { return nil }
+    /// The last generation cannot begin a transaction: a commit may need its
+    /// successor for the root. Refused rather than wrapped, like a superblock
+    /// update at the top of its counter.
+    static func stamp(mount: UInt64, step: UInt64) -> UInt128? {
+        guard mount < UInt64.max else { return nil }
 
-        return (mount << 32) | UInt64(step)
+        return (UInt128(mount) << 64) | UInt128(step)
     }
 
-    /// The superblock generation the mount that wrote this was serving under.
-    static func mount(of generation: UInt64) -> UInt64 {
-        generation >> 32
+    /// The superblock generation the writer was serving under.
+    static func mount(of generation: UInt128) -> UInt64 {
+        UInt64(generation >> 64)
     }
 
     /// Which transaction of that mount this was.
-    static func step(of generation: UInt64) -> UInt32 {
-        UInt32(truncatingIfNeeded: generation)
+    static func step(of generation: UInt128) -> UInt64 {
+        UInt64(truncatingIfNeeded: generation)
     }
 }
