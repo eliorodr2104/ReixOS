@@ -27,7 +27,6 @@ public struct TaskTerminateSyscall: SyscallProvider {
 
         frame.pointee.x0 = context.processManager.pointee.terminateTask(
             access.control,
-            frame  : frame,
             context: context
         ).rawValue
     }

@@ -294,19 +294,15 @@ extension ProcessManager {
         return .ok
     }
 
+    /// The job may name the caller or one of its owners, so the caller can be
+    /// dead on return; the syscall handler then schedules away.
     @discardableResult
     func terminateTask(
         _ control: TaskControl,
-        frame    : UnsafeMutablePointer<Arch.TrapFrame>,
         context  : SyscallContext
     ) -> TaskResult {
         guard let process = TaskRegistry.runningProcess(control) else {
             return .invalidState
-        }
-
-        if process == Arch.CPU.getCurrentProcess() {
-            killCurrent(frame: frame, reason: .killed, context: context)
-            return .ok
         }
 
         _ = killProcess(process, reason: .killed, context: context)

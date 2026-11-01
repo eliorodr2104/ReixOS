@@ -58,6 +58,12 @@ public struct SyscallHandler: RXAllocatable {
         ) {
             dispatch(type: type, frame: frame, context: context)
         }
+
+        // A caller its own syscall killed, as the target or as an owned task, is
+        // off the CPU already; it leaves the way `exit` does, never to user mode.
+        if Arch.CPU.getCurrentProcess() == nil {
+            processManager.pointee.leaveDeadCaller(frame: frame, context: context)
+        }
     }
 
 

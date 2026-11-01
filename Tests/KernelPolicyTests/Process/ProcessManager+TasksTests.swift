@@ -294,7 +294,7 @@ struct ProcessManagerTasksTests {
             let source = VirtualAddress(UInt(bitPattern: fixture.scratch))
 
             guard let started = fixture.create() else { return }
-            #expect(fixture.manager.pointee.terminateTask(started.control, frame: fixture.frame, context: fixture.context) == .invalidState)
+            #expect(fixture.manager.pointee.terminateTask(started.control, context: fixture.context) == .invalidState)
             Self.makeReady(started.control, fixture)
             #expect(fixture.manager.pointee.startTask(started.control, context: fixture.context).result == .ok)
 
@@ -373,7 +373,6 @@ struct ProcessManagerTasksTests {
         let scheduler: UnsafeMutablePointer<KernelScheduler>
         let context  : SyscallContext
         let owner    : UnsafeMutablePointer<Process>
-        let frame    : UnsafeMutablePointer<Arch.TrapFrame>
         let scratch  : UnsafeMutablePointer<UInt8>
 
         var budget: UnsafeMutablePointer<FrameBudget> { owner.pointee.metadata.pointee.budget }
@@ -435,9 +434,6 @@ struct ProcessManagerTasksTests {
             ipc.initialize(to: KernelIPC(ppm: ram.ppm, scheduler: scheduler, heap: heap))
             defer { ipc.deinitialize(count: 1); ipc.deallocate() }
 
-            let frame = allocateZeroedStorage(Arch.TrapFrame.self)
-            defer { UnsafeMutableRawPointer(frame).deallocate() }
-
             let scratch = UnsafeMutablePointer<UInt8>.allocate(capacity: 16)
             defer { scratch.deallocate() }
 
@@ -460,7 +456,6 @@ struct ProcessManagerTasksTests {
                 scheduler: scheduler,
                 context  : context,
                 owner    : owner,
-                frame    : frame,
                 scratch  : scratch
             ))
         }

@@ -380,7 +380,7 @@ public struct ProcessManager: RXAllocatable, Loggable {
     ///
     /// `destroyAddressSpace` has to detach the root it is about to free, and it
     /// does so by installing the kernel identity root. That is right when the
-    /// caller is dying, since `killCurrent` clears the current process first and
+    /// caller is dying, since `beginDeath` clears the current process first and
     /// the scheduler installs whoever runs next, but every other caller is a live
     /// process destroying *somebody else's* space: a parent in `terminate`, or a
     /// failed `spawn`/`split` unwinding its half-built child. Those return
@@ -478,10 +478,19 @@ public struct ProcessManager: RXAllocatable, Loggable {
         context: SyscallContext
     ) {
         if let oldProcess = Arch.CPU.getCurrentProcess() {
-            Arch.CPU.setCurrentProcess(0)
             killProcess(oldProcess, reason: reason, context: context)
         }
 
+        leaveDeadCaller(frame: frame, context: context)
+    }
+
+
+    /// Puts the next ready process in `frame`, or idles, for a trap whose caller
+    /// is dead and off the CPU. Nothing else may be written to `frame` after this.
+    func leaveDeadCaller(
+        frame  : UnsafeMutablePointer<Arch.TrapFrame>,
+        context: SyscallContext
+    ) {
         if let trapFrame = context.scheduler.pointee.yield() {
             if let next = Arch.CPU.getCurrentProcess() {
                 
@@ -509,6 +518,11 @@ public struct ProcessManager: RXAllocatable, Loggable {
     /// release it. Returns `false` when it went to a parent already blocked in
     /// `reapChild`: that hand-off frees the `Process` block, so `process` is
     /// dangling on return and must not be touched again.
+    ///
+    /// The death may take the running process with it, as `process` or as a
+    /// task it owns at any depth, which a delegated job allows. `beginDeath`
+    /// then clears the CPU, and the caller must leave through
+    /// `leaveDeadCaller` instead of returning to user mode.
     @discardableResult
     public func killProcess(
         _ process: UnsafeMutablePointer<Process>,
@@ -539,6 +553,9 @@ public struct ProcessManager: RXAllocatable, Loggable {
     /// additionally proves queue membership, so an unfinished death is not a
     /// corpse a parent can free. The outgoing reply link is walked in steps;
     /// its server stays alive until that walk ends, before any owned task dies.
+    ///
+    /// The running process stops being current here, however the death reached
+    /// it, so no window and no later step sees a dead process on the CPU.
     func beginDeath(
         _ process: UnsafeMutablePointer<Process>,
         reason   : ExitReason,
@@ -547,6 +564,8 @@ public struct ProcessManager: RXAllocatable, Loggable {
     ) -> UnsafeMutablePointer<Process>? {
         let status = process.pointee.status
         let server = process.pointee.replyPartner
+
+        if process == Arch.CPU.getCurrentProcess() { Arch.CPU.setCurrentProcess(0) }
 
         SleepSyscall.unpark(pid: process.pointee.pid)
         _ = KernelDeadlineQueue.shared.cancel(process)
