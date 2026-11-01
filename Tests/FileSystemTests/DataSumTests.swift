@@ -436,6 +436,35 @@ struct DataSumTests {
     }
 
 
+    @Test("a settle is a transaction of its own, finished after a stop at any request of the mount")
+    func settleSweep() {
+        var requests = 0
+        withDeclaration { disk in
+            let before = disk.reads + disk.writes + disk.flushes
+            remount(disk) { again, found in #expect(again != nil, "\(found)") }
+            requests = disk.reads + disk.writes + disk.flushes - before
+        }
+        #expect(requests > 0)
+
+        for stop in 1...(requests + 1) {
+            withDeclaration { disk in
+                disk.failAfter(stop)
+                remount(disk) { _, _ in }
+                disk.recover()
+
+                remount(disk) { again, found in
+                    guard var mounted = again else { Issue.record("stop \(stop): \(found)"); return }
+                    #expect(mounted.journalIsEmpty, "stop \(stop)")
+
+                    // The block that landed takes its declared checksum and reads.
+                    let findings = mounted.scan(.data)
+                    #expect(findings.complete && findings.damagedData == 0, "stop \(stop)")
+                }
+            }
+        }
+    }
+
+
     @Test("a header's fields stay in its first sector and the declared checksums fill the rest")
     func headerShape() {
         #expect(FSJournal.Header.width <= FSJournal.Header.declared)
@@ -878,6 +907,23 @@ struct DataSumTests {
 
         #expect(fs.object(middle)?.extents == 2)
         return middle
+    }
+
+    /// A file of five blocks with a `prepared` header naming its first two: the
+    /// first holds its declared new bytes, the second its old ones.
+    private func withDeclaration(_ body: (MemoryDisk) -> Void) {
+        withFileSystem { fs, disk in
+            guard let file = makeFile(&fs, "named.bin", pattern(41, 5 * Self.block)) else { return }
+
+            let new = pattern(42, Self.block)
+            var intent = FSJournal.Intent()
+            for index in 0..<2 { _ = intent.add(physical(&fs, file, index)) }
+
+            disk.put(new, block: physical(&fs, file, 0))
+            putHeader(disk, prepared: intent, declaring: [sum(new), sum(pattern(43, Self.block))])
+
+            body(disk)
+        }
     }
 
     private func putHeader(

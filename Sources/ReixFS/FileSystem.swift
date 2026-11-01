@@ -172,6 +172,9 @@ public struct FileSystem<Device: BlockDevice> {
     /// written, and then only the old checksums are true.
     var declaredKnown = false
 
+    /// Whether `settle` is running, so its own failed commit does not start it again.
+    private var settling = false
+
     /// Whether `sums` describes the disk yet.
     ///
     /// True from a format, a verified seal, or a whole scan. Until then table
@@ -790,49 +793,70 @@ public struct FileSystem<Device: BlockDevice> {
     /// left; anything else, rot or a block torn between the two, keeps the old
     /// checksum and reads as damaged. Lost and said so, never believed.
     ///
-    /// Only the named entries change, and only towards the new checksum, so a
-    /// power cut half way through leaves a sum block that the next settle
-    /// judges the same way.
+    /// A transaction of its own, like every other change to the sum region, so
+    /// its blocks move together. Its headers carry the same declaration, so a
+    /// power cut before its commit leaves the next settle the same blocks to
+    /// judge the same way.
     private mutating func settle() -> FSStatus {
 
         guard !unsettled.isEmpty else { return .ok }
 
-        var loaded = Self.noBlock
-        var named  = 0
+        // Reached again only from inside its own commit failing.
+        guard !settling else { return explain(.deviceFailed) }
+        settling = true
+        defer { settling = false }
+
+        // A declaration that never reached the medium whole: nothing it named
+        // was written, so every old checksum is still the true one.
+        if declaredKnown {
+            let opened = start()
+            guard opened == .ok else { return opened }
+
+            transaction.intend(unsettled)
+
+            let judged = judgeUnsettled()
+            guard judged == .ok else {
+                transaction.end()
+                dropCache()
+                return judged
+            }
+
+            let committed = commit()
+            guard committed == .ok else { return committed }
+        }
+
+        unsettled     = FSJournal.Intent()
+        declaredKnown = false
+        return .ok
+    }
+
+    /// Stages the declared checksum of every named block that holds it, into
+    /// the transaction `settle` opened.
+    private mutating func judgeUnsettled() -> FSStatus {
+        var named = 0
 
         for run in 0..<unsettled.count {
             let extent = unsettled.runs[run]
 
             for block in extent.start..<(extent.start + extent.count) {
-                let home = sumBlock(of: block)
-
-                if home != loaded {
-                    if loaded != Self.noBlock {
-                        guard writeHomeBlock(loaded, from: meta) == .ok else { return explain(.deviceFailed) }
-                    }
-
-                    guard readBlock(home, into: meta) == .ok else { return explain(.deviceFailed) }
-                    loaded = home
-                }
-
                 guard readRawBlock(block, into: data) == .ok else { return .deviceFailed }
 
-                let found = FSChecksum.over(data, count: Int(FSLayout.blockSize))
-                let new   = declared.loadUnaligned(fromByteOffset: named * 4, as: UInt32.self)
+                let new = declared.loadUnaligned(fromByteOffset: named * 4, as: UInt32.self)
                 named += 1
 
-                guard declaredKnown, found == new else { continue }
+                guard FSChecksum.over(data, count: Int(FSLayout.blockSize)) == new else { continue }
+
+                let home   = sumBlock(of: block)
+                let loaded = readBlock(home, into: meta)
+                guard loaded == .ok else { return loaded }
 
                 meta.storeBytes(of: new, toByteOffset: sumOffset(of: block), as: UInt32.self)
+
+                let staged = stageStructuralBlock(home, from: meta)
+                guard staged == .ok else { return staged }
             }
         }
 
-        guard writeHomeBlock(loaded, from: meta) == .ok, barrier() == .ok else {
-            return explain(.deviceFailed)
-        }
-
-        unsettled     = FSJournal.Intent()
-        declaredKnown = false
         return .ok
     }
 
@@ -1186,6 +1210,14 @@ public struct FileSystem<Device: BlockDevice> {
         // A promise, and only a mount may finish one.
         guard journal == .empty else { return explain(.deviceFailed) }
 
+        return start()
+    }
+
+
+    /// Opens the transaction itself, stamped. For `begin`, and for `settle`,
+    /// which opens one while the declaration it settles is still the header.
+    private mutating func start() -> FSStatus {
+
         // Refused rather than wrapped: see `FSJournal.stamp`.
         guard transactions < UInt32.max else { return .noSpace }
         transactions += 1
@@ -1360,7 +1392,9 @@ public struct FileSystem<Device: BlockDevice> {
     private mutating func emptyJournal(checkpoint: UInt64) -> FSStatus {
 
         // What a `prepared` header named is put right before the header goes.
+        // A settle that changed a checksum committed it, which emptied the journal.
         guard settle() == .ok else { return .deviceFailed }
+        guard journal != .empty else { return .ok }
 
         var header = FSJournal()
         header.generation = checkpoint
