@@ -159,12 +159,12 @@ public struct FileSystemServer: Service {
 
         UserBootPresentation.ready("[ FS    ] disk found, mounting")
 
-        // One scratch allocation, used by whichever of the two doors is taken.
+        // One scratch allocation for mount, format and re-anchor.
         let scratch = Self.scratch(for: device)
 
         let attempt = FileSystem.mount(device, scratch: scratch)
 
-        guard let disk = attempt.disk ?? Self.formatIfBlessed(
+        guard let disk = attempt.disk ?? Self.openIfBlessed(
             attempt.found,
             device : device,
             scratch: scratch
@@ -264,12 +264,11 @@ public struct FileSystemServer: Service {
 
     /// What to do about a disk that would not mount.
     ///
-    /// Only one of the five refusals is a disk anybody may write over, and even
-    /// that one is not this process's to decide about: it asks whoever started
-    /// it and formats only if the answer is yes. Everything else is reported and
-    /// left exactly as it was found, down to the byte. There is no path from
-    /// here to `format` that a disk can take by being unreadable.
-    private static func formatIfBlessed(
+    /// A blank disk may be formatted and a lone sum-root disagreement may be
+    /// re-anchored. Both need a yes from whoever handed this process the disk.
+    /// Every other refusal is reported and left alone. An unreadable disk
+    /// cannot reach either writing path by being unreadable.
+    private static func openIfBlessed(
         _ found: FSMount,
           device : BlockClient,
           scratch: UnsafeMutableRawPointer
@@ -307,11 +306,20 @@ public struct FileSystemServer: Service {
                 return nil
 
             case .corrupt:
-                // Not touched, and this is the whole correction: a superblock
-                // that does not add up used to be formatted, so a torn write or
-                // another system's disk was erased for looking unfamiliar.
-                print("[ FS    ] there is something on this disk and it is not a file system this build can mount, so nothing was written")
-                return nil
+                guard FileSystem<BlockClient>.reanchorOffered(device, scratch: scratch) else {
+                    print("[ FS    ] there is something on this disk and it is not a file system this build can mount, so nothing was written")
+                    return nil
+                }
+
+                let repaired = FileSystem<BlockClient>.reanchor(
+                    device, scratch: scratch, consent: askedTo(.sumRootMismatch)
+                )
+                guard let disk = repaired.disk else {
+                    print("[ FS    ] the sum root stayed refused")
+                    return nil
+                }
+                print("[ FS    ] the sum region was re-anchored as asked")
+                return disk
 
             case .unrecognised:
                 // A disk an earlier build laid down: ours by name, not by layout.
@@ -319,7 +327,7 @@ public struct FileSystemServer: Service {
                 return nil
 
             case .blank:
-                guard askedToFormat() else {
+                guard askedTo(.blankDisk) else {
                     print("[ FS    ] the disk is empty and nobody said to format it")
                     return nil
                 }
@@ -338,20 +346,20 @@ public struct FileSystemServer: Service {
     }
 
 
-    /// Asks whoever started this process whether an empty disk may be formatted.
+    /// Asks whoever handed over the disk whether the named act is allowed.
     ///
     /// A question and not a notice, so the answer can be no. The parent is the
     /// process that handed this one the disk in the first place, which is what
     /// makes it the one entitled to say.
-    private static func askedToFormat() -> Bool {
+    private static func askedTo(_ question: BootMessage) -> Bool {
 
         guard let parent = parentEndpoint() else { return false }
 
         // A reply that never came is a no, which is the right way round: the
-        // only outcome of not being told to format is not formatting.
+        // only outcome of not being told to write is not writing.
         guard case .success(let answer) = call(
             handle : parent,
-            message: BootMessage.blankDisk.message
+            message: question.message
         ) else { return false }
 
         return answer.message.tag.label == BootMessage.allowed.rawValue

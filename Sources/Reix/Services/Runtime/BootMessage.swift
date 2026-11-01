@@ -25,8 +25,8 @@ public enum BootMessage: UInt32, IPCLabel {
     ///
     /// A blank disk is the one a file system could safely write over, and it
     /// still does not, because "safely" is not the same as "its decision". A
-    /// disk that was anything other than empty is never asked about at all: it
-    /// is refused where it was read, unwritten.
+    /// disk that was anything other than empty is never asked about for erasure:
+    /// it is refused where it was read, unwritten.
     case blankDisk
 
     /// Yes, to whatever was asked.
@@ -35,6 +35,10 @@ public enum BootMessage: UInt32, IPCLabel {
     /// No. The default for a question nobody answered, and for an answer that
     /// never arrived, because both mean the same thing: nobody said to.
     case refused
+
+    /// Only the sum root disagrees after a complete scan. May the medium's
+    /// sums be believed, even though a stale table and sum pair can pass?
+    case sumRootMismatch
 
     public var message: Message {
         Message(

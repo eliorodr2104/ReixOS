@@ -313,9 +313,9 @@ public struct FileSystem<Device: BlockDevice> {
     /// Sets the fields up over `device` without touching a single sector.
     ///
     /// Private, and that is the whole of this design: a `FileSystem` that has
-    /// not read a superblock is not a mounted one, and the only two ways to get
-    /// one from outside are `mount` and `format`. They used to be one door with
-    /// a fall-through, which is how an unreadable disk got erased.
+    /// not read a superblock is not a mounted one. The doors from outside are
+    /// `mount`, `format` and a consented `reanchor`; the latter two are deliberate
+    /// acts, never a fall-through from a disk being unreadable.
     private init?(
         over device : Device,
              scratch: UnsafeMutableRawPointer
@@ -439,6 +439,94 @@ public struct FileSystem<Device: BlockDevice> {
         guard disk.publishSuperblock(state: 1) == .ok else { return (nil, .deviceFailed) }
 
         return (disk, .ok)
+    }
+
+
+    /// Whether a refused root is the only disagreement a whole scan finds.
+    ///
+    /// Reads only. The medium's sum region is believed for this check, so a
+    /// stale table and its stale sums can pass together. Only the process that
+    /// handed over the disk may consent to making that account the new root.
+    public static func reanchorOffered(
+        _ device : Device,
+          scratch: UnsafeMutableRawPointer
+    ) -> Bool {
+        reanchorCandidate(device, scratch: scratch) != nil
+    }
+
+
+    /// Believes the medium's sum region after consent and a fresh, complete scan.
+    ///
+    /// The scan is repeated after the question, including every table, folder
+    /// and file block against its sum. Nothing is written if it finds anything
+    /// else. Both superblocks carry the new root in one redo transaction, so a
+    /// cut leaves either the refusal or a committed repair a mount can finish.
+    public static func reanchor(
+        _ device : Device,
+          scratch: UnsafeMutableRawPointer,
+          consent: Bool
+    ) -> (disk: FileSystem?, found: FSMount) {
+        guard consent, var disk = reanchorCandidate(device, scratch: scratch) else {
+            return (nil, .corrupt)
+        }
+        guard var block = disk.superblock, disk.begin() == .ok else {
+            return (nil, .deviceFailed)
+        }
+
+        block.generation  += 1
+        block.state        = 1
+        block.sealChecksum = 0
+        block.sumRoot      = disk.sumRoot().root
+
+        let a = disk.stageSuperblock(block, at: FSLayout.superblockA)
+        let b = a == .ok ? disk.stageSuperblock(block, at: FSLayout.superblockB) : a
+        guard disk.finish(b) == .ok else { return (nil, .deviceFailed) }
+        return (disk, .ok)
+    }
+
+
+    /// A read-only check, with no journal replay and no derived repairs.
+    private static func reanchorCandidate(
+        _ device : Device,
+          scratch: UnsafeMutableRawPointer
+    ) -> FileSystem? {
+        guard device.durability != .unknown,
+              var disk = FileSystem(over: device, scratch: scratch),
+              disk.plan.totalBlocks <= FSLayout.maxSupportedBlocks,
+              case .ok = disk.readSuperblocks(),
+              disk.superblockGeneration < UInt64.max,
+              let header = disk.readJournalHeader(),
+              header.state != .committed, header.intent.isEmpty,
+              FSJournal.step(of: header.generation) < UInt64.max
+        else { return nil }
+
+        if !disk.wasDirty, header.state == .empty {
+            switch disk.openSeal() {
+                case .verified, .failed: return nil
+                case .absent: break
+                case .contradicted:
+                    guard disk.sumRoot().root != disk.namedRoot else { return nil }
+            }
+            disk.dropCache()
+            disk.sumsKnown = false
+            disk.sumRegionKnown = false
+        }
+
+        let learned = disk.learnSumRegion()
+        guard learned.status == .ok, learned.root != disk.namedRoot else { return nil }
+        disk.sumRegionKnown = true
+
+        let findings = disk.scan(.data)
+        guard findings.complete, findings.safeToServe, !findings.damaged,
+              findings.damagedData == 0, !disk.corrupted, !disk.deviceStopped
+        else { return nil }
+
+        // An unpromised header with no overwritten data may be discarded, but
+        // only after consent. Keep its step, since no new mount was published.
+        disk.journal = header.state
+        disk.checkpoint = header.state == .empty ? header.generation : 0
+        disk.transactions = FSJournal.step(of: header.generation)
+        return disk
     }
 
 
@@ -1438,6 +1526,12 @@ public struct FileSystem<Device: BlockDevice> {
             ? FSLayout.superblockB
             : FSLayout.superblockA
 
+        return stageSuperblock(block, at: target)
+    }
+
+
+    /// Stages one whole superblock image, also used by a consented re-anchor.
+    private mutating func stageSuperblock(_ block: FSSuperblock, at target: UInt32) -> FSStatus {
         let slot: Int
         switch transaction.slot(for: target) {
             case .full:

@@ -792,18 +792,12 @@ private func loaderLetGo(
 }
 
 
-/// Waits for the machine's container, answering the one question the file
-/// system may ask on the way.
+/// Waits for the machine's container, answering a disk question on its channel.
 ///
-/// That question is whether an empty disk may be formatted, and init is asked
-/// because init is what handed the disk over. The answer is yes for an empty
-/// disk and the question is never put for any other kind: a disk with something
-/// on it that this build cannot read is refused by the file system itself,
-/// unread and unwritten, and the machine comes up without one.
-///
-/// So there is exactly one place in the system where a disk gets erased, it is
-/// reached by a request and a reply between two processes, and the request is
-/// only ever made about a disk that is provably empty.
+/// Init handed over the disk, so erasing a blank one or believing an otherwise
+/// clean sum region needs its explicit reply. Re-anchoring believes the medium:
+/// a stale table and its stale sums cannot be told from a good pair. Every
+/// other refusal leaves the disk alone and the machine comes up without it.
 private func awaitContainer(from files: UInt32) -> UInt32? {
 
     // Bounded, and only as a backstop. A file system that refuses the disk says
@@ -823,6 +817,10 @@ private func awaitContainer(from files: UInt32) -> UInt32? {
 
             case BootMessage.blankDisk.rawValue:
                 print("[ INIT  ] the disk is empty, telling the file system to format it")
+                _ = reply(message: BootMessage.allowed.message)
+
+            case BootMessage.sumRootMismatch.rawValue:
+                print("[ INIT  ] re-anchoring trusts the medium's sum region and cannot tell a stale table and sum pair from a good one; telling the file system to proceed")
                 _ = reply(message: BootMessage.allowed.message)
 
             case BootMessage.refused.rawValue:
