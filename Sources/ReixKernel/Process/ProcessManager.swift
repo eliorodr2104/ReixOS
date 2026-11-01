@@ -1083,6 +1083,7 @@ public struct ProcessManager: RXAllocatable, Loggable {
             vmm              : vmm,
             ppm              : ppm,
             rootTablePhysical: addressSpace.rootTablePhysical,
+            asid             : addressSpace.asid,
             budget           : budget
         ))
 

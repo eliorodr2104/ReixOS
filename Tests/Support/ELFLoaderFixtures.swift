@@ -202,7 +202,8 @@ public func loadELFFixture(
             heap             : heap,
             vmm              : vmm,
             ppm              : ppm,
-            rootTablePhysical: rootPhysical
+            rootTablePhysical: rootPhysical,
+            asid             : 0
         ))
         defer {
             vmaManager.deinitialize(count: 1)
@@ -589,7 +590,8 @@ public func withLoadedELFImage(
             heap             : heap,
             vmm              : ram.vmm,
             ppm              : ram.ppm,
-            rootTablePhysical: ram.rootTablePhysical
+            rootTablePhysical: ram.rootTablePhysical,
+            asid             : 0
         ))
         defer {
             vmaManager.deinitialize(count: 1)

@@ -344,6 +344,7 @@ struct ScatteredSharedRegionTests {
             for virtual in [start + 5 * Self.page, start - Self.page] {
                 #expect((try? ram.vmm.pointee.installUserPage(
                     rootTable: creator.pointee.addressSpace.rootTablePhysical,
+                    asid     : creator.pointee.addressSpace.asid,
                     virtual  : virtual,
                     physical : squatter.address,
                     flags    : VMAPermissions([.read, .user]).toPageFlags(),

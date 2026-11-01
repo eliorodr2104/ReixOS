@@ -69,6 +69,10 @@ struct RegionClone: ResumableOperation {
     /// the parent's address space besides the list it walks.
     private let parentRoot: PhysicalAddress
 
+    /// The tag `parentRoot` runs under, which the batched downgrade below hands
+    /// on; `cloneRegions` is what retires it, once, at the end.
+    private let parentASID: ASID
+
     /// The parent's brk region, so the step that registers its copy can point the
     /// child's cache at it.
     private let parentBrk: UnsafeMutablePointer<VirtualMemoryArea>?
@@ -100,12 +104,14 @@ struct RegionClone: ResumableOperation {
         manager   : UnsafeMutablePointer<VMAManager>,
         context   : PagingContext,
         parentRoot: PhysicalAddress,
+        parentASID: ASID,
         parentBrk : UnsafeMutablePointer<VirtualMemoryArea>?,
         from first: UnsafeMutablePointer<VirtualMemoryArea>?
     ) {
         self.manager    = manager
         self.context    = context
         self.parentRoot = parentRoot
+        self.parentASID = parentASID
         self.parentBrk  = parentBrk
         self.node       = first
         self.cursor     = 0
@@ -187,13 +193,13 @@ struct RegionClone: ResumableOperation {
     ///
     /// The child's side is an install: its address space is empty until this
     /// runs. The parent's downgrade is a protect, the same frame with the write
-    /// bit taken out, and it asks for `invalidate: false` because
-    /// `cloneRegions` ends in one `flushTLB` that covers the whole walk. One
-    /// full flush beats a `tlbi vaae1is` plus `dsb ish` plus `isb` per
-    /// downgraded page, and it is correct only because the parent cannot run
-    /// between the downgrade and that flush. T29 (concurrent VM) and T35 have
-    /// to revisit exactly this: on a second core the parent is running, and the
-    /// deferred flush would have to become per-page invalidation plus a
+    /// bit taken out, and it asks for `batched: true` because `cloneRegions`
+    /// ends in one `tlbi aside1is` for the parent's tag that covers the whole
+    /// walk. One invalidation of the parent beats a `tlbi vale1is` plus `dsb ish`
+    /// plus `isb` per downgraded page, and it is correct only because the parent
+    /// cannot run between the downgrade and that flush. T29 (concurrent VM) and
+    /// T35 have to revisit exactly this: on a second core the parent is running,
+    /// and the deferred flush would have to become per-page invalidation plus a
     /// shootdown.
     ///
     /// Every retain below is also a page charged to the child: a reference is a
@@ -299,6 +305,7 @@ struct RegionClone: ResumableOperation {
             do {
                 try vmm.pointee.installUserPage(
                     rootTable: context.rootTablePhysical,
+                    asid     : context.asid,
                     virtual  : va,
                     physical : parentPhys,
                     flags    : pageFlags,
@@ -312,11 +319,12 @@ struct RegionClone: ResumableOperation {
                 // Safe only while the parent cannot run before we return.
                 if downgradeParentPermissions {
                     try vmm.pointee.protectUserPage(
-                        rootTable : parentRoot,
-                        virtual   : va,
-                        flags     : pageFlags,
-                        type      : vma.memoryType,
-                        invalidate: false
+                        rootTable: parentRoot,
+                        asid     : parentASID,
+                        virtual  : va,
+                        flags    : pageFlags,
+                        type     : vma.memoryType,
+                        batched  : true
                     )
                 }
 

@@ -81,7 +81,8 @@ struct VMAMetricsBenchmark {
                 heap: heap,
                 vmm: ram.vmm,
                 ppm: ram.ppm,
-                rootTablePhysical: ram.rootTablePhysical
+                rootTablePhysical: ram.rootTablePhysical,
+                asid: 0
             ))
             var nodes: [UnsafeMutablePointer<VirtualMemoryArea>] = []
 

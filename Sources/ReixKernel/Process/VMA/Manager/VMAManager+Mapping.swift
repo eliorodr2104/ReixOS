@@ -214,6 +214,7 @@ extension VMAManager {
             do {
                 try context.vmm.pointee.installUserPage(
                     rootTable: context.rootTablePhysical,
+                    asid     : context.asid,
                     virtual  : start + currentVirtualPage,
                     physical : physical(i),
                     flags    : permissions.toPageFlags(),

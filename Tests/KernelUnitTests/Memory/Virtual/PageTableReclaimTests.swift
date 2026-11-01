@@ -51,7 +51,7 @@ struct PageTableReclaimTests {
     /// no table this suite frees can be mistaken for one of the kernel's.
     private func withAddressSpace(
         pages : Int = 256,
-        _ body: (HostRAM, PhysicalAddress) -> Void
+        _ body: (HostRAM, PhysicalAddress, ASID) -> Void
     ) {
         withKernelTestGlobals {
             withHostRAM(pages: pages) { ram in
@@ -77,7 +77,7 @@ struct PageTableReclaimTests {
                     return
                 }
 
-                body(ram, space.rootTablePhysical)
+                body(ram, space.rootTablePhysical, space.asid)
 
                 try? ram.vmm.pointee.destroyAddressSpace(addressSpace: space)
             }
@@ -88,13 +88,15 @@ struct PageTableReclaimTests {
     private func context(
         _ ram : HostRAM,
         _ root: PhysicalAddress,
+        _ asid: ASID,
         budget: UnsafeMutablePointer<FrameBudget>? = nil
     ) -> PagingContext {
         PagingContext(
             vmm              : ram.vmm,
             ppm              : ram.ppm,
             rootTablePhysical: root,
-            budget           : budget
+            budget           : budget,
+            asid             : asid
         )
     }
 
@@ -104,6 +106,7 @@ struct PageTableReclaimTests {
     private func install(
         _ ram  : HostRAM,
         _ root : PhysicalAddress,
+        _ asid : ASID,
         virtual: VirtualAddress
     ) -> PhysicalAddress? {
         guard let frame = try? ram.ppm.pointee.alloc(4096) else {
@@ -114,6 +117,7 @@ struct PageTableReclaimTests {
         let error = refusal {
             try ram.vmm.pointee.installUserPage(
                 rootTable: root,
+                asid     : asid,
                 virtual  : virtual,
                 physical : frame.address,
                 flags    : Self.readWrite,
@@ -135,11 +139,12 @@ struct PageTableReclaimTests {
     private func retire(
         _ ram  : HostRAM,
         _ root : PhysicalAddress,
+        _ asid : ASID,
         virtual: VirtualAddress,
         pages  : UInt64 = 1
     ) {
         PageRetirement.retire(
-            context: context(ram, root),
+            context: context(ram, root, asid),
             start  : virtual,
             end    : virtual + pages * Self.pageSize,
             backing: .anonymous
@@ -204,14 +209,14 @@ struct PageTableReclaimTests {
 
     @Test("unmapping every sparse span gives back every table it built")
     func sparseSpansReturnEveryTable() {
-        withAddressSpace { ram, root in
+        withAddressSpace { ram, root, asid in
             let spans = 8
             let quiet = ram.pmmStateSnapshot()
 
             #expect(tablePages(ram, root) == 0)
 
             for index in 0..<spans {
-                install(ram, root, virtual: Self.base + UInt64(index) * Self.spanSize)
+                install(ram, root, asid, virtual: Self.base + UInt64(index) * Self.spanSize)
             }
 
             // One L1, one L2 and one L3 per span: the whole user region lives in
@@ -219,7 +224,7 @@ struct PageTableReclaimTests {
             #expect(tablePages(ram, root) == 2 + spans)
 
             for index in 0..<spans {
-                retire(ram, root, virtual: Self.base + UInt64(index) * Self.spanSize)
+                retire(ram, root, asid, virtual: Self.base + UInt64(index) * Self.spanSize)
             }
 
             #expect(tablePages(ram, root) == 0)
@@ -243,12 +248,12 @@ struct PageTableReclaimTests {
 
     @Test("a span with pages left keeps its table and its other descriptors")
     func partialSpanKeepsItsTable() {
-        withAddressSpace { ram, root in
+        withAddressSpace { ram, root, asid in
             var frames: [PhysicalAddress] = []
 
             for index in 0..<4 {
                 guard let frame = install(
-                    ram, root,
+                    ram, root, asid,
                     virtual: Self.base + UInt64(index) * Self.pageSize
                 ) else { return }
 
@@ -257,7 +262,7 @@ struct PageTableReclaimTests {
 
             #expect(tablePages(ram, root) == 3)
 
-            retire(ram, root, virtual: Self.base, pages: 2)
+            retire(ram, root, asid, virtual: Self.base, pages: 2)
 
             // Two of four gone, so the table is still carrying the other two and
             // stays exactly where it was.
@@ -278,15 +283,15 @@ struct PageTableReclaimTests {
 
     @Test("a span emptied beside a mapped one gives back only its own table")
     func onlyTheEmptyLeafIsFreed() {
-        withAddressSpace { ram, root in
+        withAddressSpace { ram, root, asid in
             let neighbour = Self.base + Self.spanSize
 
-            install(ram, root, virtual: Self.base)
-            install(ram, root, virtual: neighbour)
+            install(ram, root, asid, virtual: Self.base)
+            install(ram, root, asid, virtual: neighbour)
 
             #expect(tablePages(ram, root) == 4)
 
-            retire(ram, root, virtual: Self.base)
+            retire(ram, root, asid, virtual: Self.base)
 
             // The L3 of the emptied span, and nothing above it: the L2 still
             // holds the neighbour's table, so the L1 and the L0 entry stand.
@@ -300,8 +305,8 @@ struct PageTableReclaimTests {
 
     @Test("a table the kernel master shares is never pruned")
     func kernelSharedTablesAreLeftAlone() {
-        withAddressSpace { ram, root in
-            install(ram, root, virtual: Self.base)
+        withAddressSpace { ram, root, asid in
+            install(ram, root, asid, virtual: Self.base)
 
             // The master adopts the address space's own L1, which is the shape
             // `createAddressSpace` copies by reference.
@@ -312,7 +317,7 @@ struct PageTableReclaimTests {
 
             let shared = rootTable[Self.base.l0].physicalAddress
 
-            retire(ram, root, virtual: Self.base)
+            retire(ram, root, asid, virtual: Self.base)
 
             // The L3 and the L2 went, the L1 stayed: a shared table is not this
             // address space's to free, whoever emptied it.
@@ -330,11 +335,11 @@ struct PageTableReclaimTests {
 
     @Test("a prune invalidates the parent descriptor before the TLB and the free")
     func pruneOrdersTheUnlink() {
-        withAddressSpace { ram, root in
+        withAddressSpace { ram, root, asid in
             // A neighbour keeps the L2 occupied, so exactly one table is pruned
             // and the trace holds one unlink rather than three.
-            install(ram, root, virtual: Self.base)
-            install(ram, root, virtual: Self.base + Self.spanSize)
+            install(ram, root, asid, virtual: Self.base)
+            install(ram, root, asid, virtual: Self.base + Self.spanSize)
 
             guard let leaf = ram.vmm.pointee.leafTable(rootTable: root, virtual: Self.base),
                   let slot = Self.parentSlot(ram, root, virtual: Self.base)
@@ -349,22 +354,51 @@ struct PageTableReclaimTests {
             // The probe is the L2 descriptor that names the L3 table, sampled at
             // every shim call, so the window it is invalid in is observable.
             mmu_trace_reset(slot)
-            retire(ram, root, virtual: Self.base)
+            retire(ram, root, asid, virtual: Self.base)
 
-            // The batch's own per-page invalidation first, then the unlink: the
-            // store, its `dsb ishst`, and the flush that covers every walk entry.
-            #expect(Self.ops() == [.barrier, .tlbPageNoSync, .tlbSync, .barrier, .tlbAll])
+            // The batch's own leaf invalidation first, then the unlink: the store,
+            // its `dsb ishst`, every level of the walk for the span, and the wait.
+            #expect(mmuOps() == [.barrier, .tlbLeaf, .tlbSync, .barrier, .tlbTable, .tlbSync])
 
-            let flush = mmu_trace_length() - 1
+            // Both scoped to this space's tag and to an address the table spans:
+            // the walk-cache entry naming the table is used for every one of them.
+            #expect(mmu_trace_arg(1) == tlbiOperand(Self.base, asid: asid))
+            #expect(mmu_trace_arg(4) == tlbiOperand(Self.base, asid: asid))
 
             // Invalid at the invalidation, which is the whole ordering: a prune
             // that flushed first would sample the live descriptor here.
-            #expect(mmu_trace_descriptor(flush)     == 0)
-            #expect(mmu_trace_descriptor(flush - 1) == 0)
+            #expect(mmu_trace_descriptor(3) == 0)
+            #expect(mmu_trace_descriptor(4) == 0)
+            #expect(mmu_trace_descriptor(5) == 0)
 
             // And freed only after it: the page is nobody's once the trace ends,
             // and it was still the table's at the invalidation.
             #expect(ram.ppm.pointee.refCount(of: leafPhysical) == 0)
+
+            // No invalidation reached past this space: nothing global, no tag.
+            #expect(mmuCount(.tlbAll)  == 0)
+            #expect(mmuCount(.tlbASID) == 0)
+        }
+    }
+
+
+    @Test("a prune that empties every level invalidates each table it takes out")
+    func pruneInvalidatesEveryLevel() {
+        withAddressSpace { ram, root, asid in
+            install(ram, root, asid, virtual: Self.base + 7 * Self.pageSize)
+
+            mmu_trace_reset(nil)
+            retire(ram, root, asid, virtual: Self.base + 7 * Self.pageSize)
+
+            // The L3, the L2 and the L1, youngest first, one invalidation each and
+            // each with an address inside the span its own descriptor named.
+            let operand = tlbiOperand(Self.base, asid: asid)
+            let tables  = mmuCalls().filter { $0.op == .tlbTable }
+
+            #expect(tables.count == 3)
+            #expect(tables.allSatisfy { $0.arg == operand })
+            #expect(mmuCount(.tlbSync) == 4)
+            #expect(tablePages(ram, root) == 0)
         }
     }
 
@@ -391,29 +425,6 @@ struct PageTableReclaimTests {
     }
 
 
-    /// The shims, in the op codes `KernelHostShims.h` assigns them.
-    private enum Shim: UInt32 {
-        case barrier       = 1
-        case tlbPage       = 2
-        case tlbPageNoSync = 3
-        case tlbSync       = 4
-        case tlbAll        = 5
-        case isb           = 6
-    }
-
-    private static func ops() -> [Shim] {
-        var result: [Shim] = []
-        var index : UInt64 = 0
-
-        while index < mmu_trace_length() {
-            result.append(Shim(rawValue: mmu_trace_op(index)) ?? .isb)
-            index += 1
-        }
-
-        return result
-    }
-
-
     // MARK: - The creating walk that fails
 
     @Test("an install that runs out of frames leaves no table behind")
@@ -421,7 +432,7 @@ struct PageTableReclaimTests {
         // One allowed allocation, then two: the walk gets its L1 and fails at
         // L2, then gets L1 and L2 and fails at L3. Both have something to undo.
         for allowed in [1, 2] {
-            withAddressSpace { ram, root in
+            withAddressSpace { ram, root, asid in
                 let quiet = ram.pmmStateSnapshot()
 
                 guard let frame = try? ram.ppm.pointee.alloc(4096) else {
@@ -436,6 +447,7 @@ struct PageTableReclaimTests {
                 let error = refusal {
                     try ram.vmm.pointee.installUserPage(
                         rootTable: root,
+                        asid     : asid,
                         virtual  : Self.base,
                         physical : frame.address,
                         flags    : Self.readWrite,
@@ -460,9 +472,52 @@ struct PageTableReclaimTests {
     }
 
 
+    @Test("a failed walk invalidates each table it undoes under the install's ASID")
+    func failedInstallInvalidatesWhatItUnlinked() {
+        withAddressSpace { ram, root, asid in
+            guard let frame = try? ram.ppm.pointee.alloc(4096) else {
+                Issue.record("the arena gave no frame")
+                return
+            }
+
+            // L1 and L2 built and linked, L3 refused: two tables to take back out,
+            // and a speculative walk may already have cached either of them.
+            PPMFaultInjection.failAllocationsAfter = 2
+            mmu_trace_reset(nil)
+
+            let error = refusal {
+                try ram.vmm.pointee.installUserPage(
+                    rootTable: root,
+                    asid     : asid,
+                    virtual  : Self.base,
+                    physical : frame.address,
+                    flags    : Self.readWrite,
+                    type     : .normal
+                )
+            }
+
+            PPMFaultInjection.failAllocationsAfter = nil
+
+            #expect(error == "allocationFailed")
+
+            // Two tables published, then each taken out youngest first: the store's
+            // barrier, every level for the address under the tag, and the wait.
+            #expect(mmuOps() == [
+                .barrier, .barrier,
+                .barrier, .tlbTable, .tlbSync,
+                .barrier, .tlbTable, .tlbSync
+            ])
+            #expect(mmu_trace_arg(3) == tlbiOperand(Self.base, asid: asid))
+            #expect(mmu_trace_arg(6) == tlbiOperand(Self.base, asid: asid))
+
+            try? ram.ppm.pointee.release(frame.address)
+        }
+    }
+
+
     @Test("a walk that fails at its first level has nothing to undo")
     func firstLevelFailureLeavesNothing() {
-        withAddressSpace { ram, root in
+        withAddressSpace { ram, root, asid in
             guard let frame = try? ram.ppm.pointee.alloc(4096) else {
                 Issue.record("the arena gave no frame")
                 return
@@ -475,6 +530,7 @@ struct PageTableReclaimTests {
             let error = refusal {
                 try ram.vmm.pointee.installUserPage(
                     rootTable: root,
+                    asid     : asid,
                     virtual  : Self.base,
                     physical : frame.address,
                     flags    : Self.readWrite,
@@ -492,10 +548,10 @@ struct PageTableReclaimTests {
 
     @Test("a walk over tables that were already there rolls back none of them")
     func existingTablesSurviveAFailedWalk() {
-        withAddressSpace { ram, root in
+        withAddressSpace { ram, root, asid in
             // A first page builds L1, L2 and the L3 of its own span. The second
             // address needs only an L3, which is the allocation that fails.
-            install(ram, root, virtual: Self.base)
+            install(ram, root, asid, virtual: Self.base)
 
             let standing = tablePages(ram, root)
             #expect(standing == 3)
@@ -510,6 +566,7 @@ struct PageTableReclaimTests {
             let error = refusal {
                 try ram.vmm.pointee.installUserPage(
                     rootTable: root,
+                    asid     : asid,
                     virtual  : Self.base + Self.spanSize,
                     physical : frame.address,
                     flags    : Self.readWrite,
@@ -563,13 +620,14 @@ struct PageTableReclaimTests {
                 }
 
                 let root = space.rootTablePhysical
+                let asid = space.asid
 
-                install(ram, root, virtual: Self.base)
-                let resident = install(ram, root, virtual: Self.base + Self.spanSize)
+                install(ram, root, asid, virtual: Self.base)
+                let resident = install(ram, root, asid, virtual: Self.base + Self.spanSize)
 
                 // One span emptied and pruned, one left resident, so teardown
                 // meets a tree a prune has already been through.
-                retire(ram, root, virtual: Self.base)
+                retire(ram, root, asid, virtual: Self.base)
                 #expect(tablePages(ram, root) == 3)
 
                 // The pruned table's page goes straight back out as somebody
@@ -604,6 +662,99 @@ struct PageTableReclaimTests {
                 #expect(after.allocatedPages == quiet.allocatedPages)
                 #expect(after.metadata       == quiet.metadata)
             }
+        }
+    }
+
+
+    // MARK: - The tag a teardown gives back
+
+    @Test("teardown retires its tag with one invalidation and nothing global")
+    func teardownRetiresItsTagOnce() {
+        withAddressSpace { ram, root, asid in
+            install(ram, root, asid, virtual: Self.base)
+
+            mmu_trace_reset(nil)
+
+            guard let space = try? ram.vmm.pointee.createAddressSpace() else {
+                Issue.record("the arena gave no second address space")
+                return
+            }
+
+            #expect(space.asid != asid)
+            #expect(mmu_trace_length() == 0)
+
+            try? ram.vmm.pointee.destroyAddressSpace(addressSpace: space)
+
+            // The whole space, by its tag, once: neither a second flush after the
+            // free nor anything that reaches the kernel's global entries.
+            #expect(mmuCalls() == [MMUCall(
+                op: .tlbASID, arg: UInt64(space.asid)
+            )])
+        }
+    }
+
+
+    @Test("a tag is invalidated before it is reissued, and only then")
+    func reissuedTagIsInvalidatedFirst() {
+        withAddressSpace { ram, root, asid in
+            guard let first = try? ram.vmm.pointee.createAddressSpace() else {
+                Issue.record("the arena gave no address space")
+                return
+            }
+
+            let tag = first.asid
+
+            mmu_trace_reset(nil)
+            try? ram.vmm.pointee.destroyAddressSpace(addressSpace: first)
+
+            let retired = mmuCalls()
+
+            guard let second = try? ram.vmm.pointee.createAddressSpace() else {
+                Issue.record("the arena gave no address space after the teardown")
+                return
+            }
+
+            // The allocator hands the freed tag straight back, which is the case
+            // the rule exists for: by then its invalidation has already run.
+            #expect(second.asid == tag)
+            #expect(retired.map(\.op) == [.tlbASID])
+            #expect(retired.first?.arg == UInt64(tag))
+
+            // And issuing it costs nothing more: the new owner starts empty.
+            #expect(mmu_trace_length() == UInt64(retired.count))
+
+            try? ram.vmm.pointee.destroyAddressSpace(addressSpace: second)
+        }
+    }
+
+
+    @Test("a tag freed by a refused creation was never live and is not invalidated")
+    func refusedCreationReleasesWithoutInvalidating() {
+        withAddressSpace { ram, root, asid in
+            let budget = UnsafeMutablePointer<FrameBudget>.allocate(capacity: 1)
+            defer { budget.deallocate() }
+
+            budget.initialize(to: FrameBudget())
+            budget.pointee.limit = budget.pointee.charged
+
+            mmu_trace_reset(nil)
+
+            let refused = refusal {
+                _ = try ram.vmm.pointee.createAddressSpace(budget: budget)
+            }
+
+            #expect(refused == "budgetExceeded")
+            #expect(mmu_trace_length() == 0)
+
+            // The tag went back: the next creation gets the same one.
+            guard let next = try? ram.vmm.pointee.createAddressSpace() else {
+                Issue.record("the arena gave no address space")
+                return
+            }
+
+            #expect(next.asid == asid + 1)
+
+            try? ram.vmm.pointee.destroyAddressSpace(addressSpace: next)
         }
     }
 }

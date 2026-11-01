@@ -1098,6 +1098,7 @@ struct FrameBudgetTests {
                 vmm              : ram.vmm,
                 ppm              : ram.ppm,
                 rootTablePhysical: process.pointee.addressSpace.rootTablePhysical,
+                asid             : process.pointee.addressSpace.asid,
                 budget           : budget(of: process),
                 nodeLimit        : limit
             )

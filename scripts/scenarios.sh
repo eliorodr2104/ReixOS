@@ -364,8 +364,7 @@ post_pte_bbm() {
             /^[0-9a-f]+ <.*>:$/ { inside = index($0, "breakBeforeMake") > 0; next }
             !inside                                 { next }
             index($0, "<page_table_barrier>")       { seq = seq "B"; next }
-            index($0, "<flush_tlb_page_nosync>")    { seq = seq "T"; next }
-            index($0, "<flush_tlb_page>")           { seq = seq "T"; next }
+            index($0, "<flush_tlb_leaf_nosync>")    { seq = seq "T"; next }
             index($0, "<flush_tlb_sync>")           { seq = seq "Y"; next }
             /[ \t](str|stur|stp)[ \t]/ {
                 if (index($0, "sp") == 0) seq = seq "S"
@@ -391,8 +390,13 @@ post_pte_bbm() {
         return 1
     fi
 
-    if ! pte_body "$pb_out" 'flush_tlb_page_nosync' | grep -qE 'tlbi[[:space:]]+vaae1is'; then
-        printf 'flush_tlb_page_nosync does not invalidate the address'
+    if ! pte_body "$pb_out" '<flush_tlb_leaf_nosync>' | grep -qE 'tlbi[[:space:]]+vale1is'; then
+        printf 'flush_tlb_leaf_nosync does not invalidate the leaf of the address'
+        return 1
+    fi
+
+    if ! pte_body "$pb_out" '<flush_tlb_leaf_nosync>' | grep -qE 'bfi[[:space:]]+x0, x1, #48, #16'; then
+        printf 'flush_tlb_leaf_nosync does not put the ASID in the operand'
         return 1
     fi
 
@@ -452,13 +456,14 @@ post_pte_prune() {
     fi
 
     # Same alphabet as pte-bbm: S a descriptor store, B a `dsb ishst`, T the TLB
-    # invalidation. Stack traffic is not a descriptor store.
+    # invalidation, Y the `dsb ish` that completes it.
     pp_seq=$(
         awk '
             /^[0-9a-f]+ <.*>:$/ { inside = index($0, "unlinkTableAndFree") > 0; next }
-            !inside                           { next }
-            index($0, "<page_table_barrier>") { seq = seq "B"; next }
-            index($0, "<flush_tlb>")          { seq = seq "T"; next }
+            !inside                              { next }
+            index($0, "<page_table_barrier>")    { seq = seq "B"; next }
+            index($0, "<flush_tlb_table_nosync>") { seq = seq "T"; next }
+            index($0, "<flush_tlb_sync>")        { seq = seq "Y"; next }
             /[ \t](str|stur|stp)[ \t]/ {
                 if (index($0, "sp") == 0) seq = seq "S"
                 next
@@ -468,54 +473,175 @@ post_pte_prune() {
     )
 
     case $pp_seq in
-        SBT*) ;;
+        SBTY*) ;;
         *)
-            printf 'the table unlink is out of order: read "%s", wanted "SBT..."' \
+            printf 'the table unlink is out of order: read "%s", wanted "SBTY..."' \
                    "$pp_seq"
             return 1
             ;;
     esac
 
-    if ! pte_body "$pp_out" 'unlinkTableAndFree' | grep -qE '<flush_tlb>'; then
-        printf 'the table unlink does not invalidate the TLB'
+    # Not the last-level form: that one leaves the walk-cache entry naming the
+    # table, which is the entry this invalidation exists for.
+    if ! pte_body "$pp_out" '<flush_tlb_table_nosync>' | grep -qE 'tlbi[[:space:]]+vae1is'; then
+        printf 'flush_tlb_table_nosync does not invalidate every level of the walk'
         return 1
     fi
 
-    if ! pte_body "$pp_out" '<flush_tlb>' | grep -qE 'tlbi[[:space:]]+vmalle1is'; then
-        printf 'flush_tlb does not invalidate every cached walk entry'
+    if ! pte_body "$pp_out" '<flush_tlb_table_nosync>' | grep -qE 'bfi[[:space:]]+x0, x1, #48, #16'; then
+        printf 'flush_tlb_table_nosync does not put the ASID in the operand'
         return 1
     fi
 
-    # The free, after the invalidation. It is whatever the region branches or
-    # calls away to last, followed one level in case the optimizer outlined it.
-    pp_tail=$(pte_body "$pp_out" 'unlinkTableAndFree' | awk '
-        index($0, "<flush_tlb>") { seen = 1; next }
-        !seen                    { next }
-        /[ \t](bl|b)[ \t]/       { line = $0 }
-        END { print line }
+    # The free, after the invalidation has completed: one of the calls that
+    # follow it, followed one level in case the optimizer outlined it.
+    pp_calls=$(pte_body "$pp_out" 'unlinkTableAndFree' | awk '
+        index($0, "<flush_tlb_sync>") { seen = 1; next }
+        !seen                         { next }
+        /[ \t](bl|b)[ \t]/            { print }
     ')
 
-    if [ -z "$pp_tail" ]; then
+    if [ -z "$pp_calls" ]; then
         printf 'nothing is called after the invalidation: the page is never freed'
         return 1
     fi
 
-    case $pp_tail in
+    case $pp_calls in
         *freeOwned*) return 0 ;;
     esac
 
-    pp_target=$(printf '%s\n' "$pp_tail" | sed -n 's/.*[[:space:]]0x\([0-9a-f]*\)[[:space:]]*<.*/\1/p')
+    for pp_target in $(printf '%s\n' "$pp_calls" |
+                       sed -n 's/.*[[:space:]]0x\([0-9a-f]*\)[[:space:]]*<.*/\1/p'); do
+        pp_target=$(printf '%016s\n' "$pp_target" | tr ' ' '0')
 
-    if [ -z "$pp_target" ]; then
-        printf 'could not read the call target after the invalidation: %s' "$pp_tail"
+        if pte_body_at "$pp_out" "$pp_target" | grep -q 'freeOwned'; then
+            return 0
+        fi
+    done
+
+    printf 'nothing called after the invalidation frees the table: %s' "$pp_calls"
+    return 1
+}
+
+# Prints, once each, the symbol of every function with a call or branch whose
+# target contains $2: `<name>` for one symbol, a bare fragment for a mangled one.
+callers_of() {
+    awk -v want="$2" '
+        /^[0-9a-f]+ <.*>:$/                  { name = $2; next }
+        /[ \t](bl|b)[ \t]/ && index($0, want) { print name }
+    ' "$1" | sort -u
+}
+
+# Prints, once each, the symbol of every function whose body matches the
+# extended regular expression $2, compared in lower case.
+holders_of() {
+    awk -v want="$2" '
+        /^[0-9a-f]+ <.*>:$/   { name = $2; next }
+        tolower($0) ~ want    { print name }
+    ' "$1" | sort -u
+}
+
+# post=tlb-scope: every TLB invalidation of a user translation is scoped to its
+# ASID, read out of the linked image. QEMU's soft TLB ignores the ASID of a
+# by-address invalidation and flushes itself on every ASID switch, so no row in
+# this matrix fails on a kernel that scoped to the wrong tag, or to none. The
+# instructions, and the order of the teardown that recycles a tag, are the proof.
+post_tlb_scope() {
+    ts_out=$2
+
+    if [ ! -f "$KERNEL_ELF" ]; then
+        printf 'no %s to read the sequences out of' "$KERNEL_ELF"
         return 1
     fi
 
-    pp_target=$(printf '%016s\n' "$pp_target" | tr ' ' '0')
+    "$OBJDUMP" -d "$KERNEL_ELF" > "$ts_out" 2>&1 || {
+        printf 'could not disassemble %s' "$KERNEL_ELF"
+        return 1
+    }
 
-    if ! pte_body_at "$pp_out" "$pp_target" | grep -q 'freeOwned'; then
-        printf 'what runs after the invalidation at %s does not free the table' \
-               "$pp_target"
+    if grep -qE 'tlbi[[:space:]]+vaal?e1' "$ts_out"; then
+        printf 'an invalidation by address across every ASID is still in the image'
+        return 1
+    fi
+
+    # The one invalidation of global entries runs once, when the VMM brings the
+    # MMU up; everything after boot is somebody's tag.
+    ts_all=$(holders_of "$ts_out" 'tlbi[ \t]+vmalle1is')
+    if [ "$ts_all" != '<flush_tlb>:' ]; then
+        printf 'tlbi vmalle1is outside flush_tlb: %s' "$ts_all"
+        return 1
+    fi
+
+    ts_callers=$(callers_of "$ts_out" '<flush_tlb>')
+    case $ts_callers in
+        *VirtualMemoryManagerV6ppmPtr*) ;;
+        *)
+            printf 'flush_tlb is called from outside the VMM initializer: %s' "$ts_callers"
+            return 1
+            ;;
+    esac
+
+    if [ "$(printf '%s\n' "$ts_callers" | wc -l)" -ne 1 ]; then
+        printf 'flush_tlb has callers besides boot: %s' "$ts_callers"
+        return 1
+    fi
+
+    # B `dsb ishst`, T the invalidation, Y `dsb ish`, I `isb`.
+    ts_asid=$(pte_body "$ts_out" '<flush_tlb_asid>' | awk '
+        /dsb[ \t]+ishst/     { s = s "B"; next }
+        /tlbi[ \t]+aside1is/ { s = s "T"; next }
+        /dsb[ \t]+ish$/      { s = s "Y"; next }
+        /[ \t]isb$/          { s = s "I"; next }
+        END { print s }
+    ')
+    if [ "$ts_asid" != BTYI ]; then
+        printf 'flush_tlb_asid is not dsb ishst; tlbi aside1is; dsb ish; isb: read "%s"' "$ts_asid"
+        return 1
+    fi
+
+    if ! pte_body "$ts_out" '<flush_tlb_asid>' | grep -qE 'lsl[[:space:]]+x0, x0, #48'; then
+        printf 'flush_tlb_asid does not put the ASID in bits 63:48'
+        return 1
+    fi
+
+    # The teardown that hands a tag back: S the root leaves TTBR0, I the tag is
+    # invalidated, F a table or the root is freed, R the tag is released.
+    ts_down=$(pte_body "$ts_out" 'destroyAddressSpace' | awk '
+        index($0, "<switch_user_address_space>") { s = s "S"; next }
+        index($0, "<flush_tlb_asid>")            { s = s "I"; next }
+        index($0, "<flush_tlb>")                 { s = s "X"; next }
+        index($0, "freePageTables")              { s = s "F"; next }
+        index($0, "freeOwned")                   { s = s "F"; next }
+        index($0, "ASIDAllocatorV7release")      { s = s "R"; next }
+        END { print s }
+    ')
+    case $ts_down in
+        SIF*R) ;;
+        *)
+            printf 'the teardown does not detach, invalidate, free, then release: read "%s"' \
+                   "$ts_down"
+            return 1
+            ;;
+    esac
+
+    case $ts_down in
+        *X*)
+            printf 'the teardown still flushes every ASID'
+            return 1
+            ;;
+    esac
+
+    # The first entry to EL0 tags TTBR0 the way every later switch does, and
+    # needs no invalidation for it: a fresh tag holds nothing.
+    ts_first=$(pte_body "$ts_out" '<safe_high_half>' | awk '
+        /bfi[ \t]+x1, x2, #48, #16/ { s = s "A"; next }
+        /msr[ \t]+TTBR0_EL1/        { s = s "M"; next }
+        /tlbi/                      { s = s "T"; next }
+        END { print s }
+    ')
+    if [ "$ts_first" != AM ]; then
+        printf 'the first entry to user mode does not write a tagged TTBR0 alone: read "%s"' \
+               "$ts_first"
         return 1
     fi
 
@@ -722,6 +848,7 @@ run_post() {
             dma-barriers) post_dma_barriers "$2" "$rp_out" || return 1 ;;
             pte-bbm)      post_pte_bbm "$2" "$rp_out" || return 1 ;;
             pte-prune)    post_pte_prune "$2" "$rp_out" || return 1 ;;
+            tlb-scope)    post_tlb_scope "$2" "$rp_out" || return 1 ;;
             queue-depth)  post_queue_depth "$2" "$rp_out" || return 1 ;;
             shell-closed) post_shell_closed "$2" "$rp_out" || return 1 ;;
             terminal-baseline)  post_terminal_baseline "$2" "$rp_out" || return 1 ;;

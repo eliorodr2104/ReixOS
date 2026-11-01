@@ -349,13 +349,25 @@ public struct VirtualMemoryManager: Loggable {
     }
 
 
+    /// Free every table of `addressSpace` and give its ASID back.
+    ///
+    /// One `tlbi aside1is` for the whole space, and the order around it is the
+    /// point. The root leaves TTBR0 first, so once the invalidation has run no
+    /// walk can name this tag again: every walk-cache entry is gone before a
+    /// table page is freed, and the tag is empty when `asids` reissues it, which
+    /// is what lets `switchUserAddressSpace` install a fresh tag with no
+    /// invalidation at all. The kernel's global entries are not touched.
+    ///
+    /// `@inline(never)` so the sequence keeps a symbol for the `tlb-scope`
+    /// post-check in `scripts/scenarios.sh`.
+    @inline(never)
     public mutating func destroyAddressSpace(
         addressSpace: consuming AddressSpace,
         budget      : UnsafeMutablePointer<FrameBudget>? = nil
     ) throws(PPMError) {
         
         Arch.MMU.switchUserAddressSpace(self.identityTableAddress, asid: 0)
-        Arch.MMU.flushTLB()
+        Arch.MMU.flushTLB(asid: addressSpace.asid)
 
         freePageTables(rootTable: addressSpace.rootTablePhysical, budget: budget)
 
@@ -365,7 +377,6 @@ public struct VirtualMemoryManager: Loggable {
             PhysicalPage(address: addressSpace.rootTablePhysical, order: 0)
         )
 
-        Arch.MMU.flushTLB()
         asids.release(addressSpace.asid)
     }
 
@@ -452,6 +463,7 @@ public struct VirtualMemoryManager: Loggable {
     /// free; the L0 test in `pruneSpan` is the second lock on the same door.
     public func pruneEmptyTables(
         rootTable : PhysicalAddress,
+        asid      : ASID,
         from start: VirtualAddress,
         to end    : VirtualAddress,
         budget    : UnsafeMutablePointer<FrameBudget>? = nil
@@ -465,7 +477,7 @@ public struct VirtualMemoryManager: Loggable {
                   span <  UserSpaceLayout.userMax
             else { continue }
 
-            pruneSpan(rootTable: rootTable, virtual: span, budget: budget)
+            pruneSpan(rootTable: rootTable, asid: asid, virtual: span, budget: budget)
         }
     }
 
@@ -477,6 +489,7 @@ public struct VirtualMemoryManager: Loggable {
     /// a span whose neighbours are still mapped costs one scan and no store.
     private func pruneSpan(
         rootTable: PhysicalAddress,
+        asid     : ASID,
         virtual  : VirtualAddress,
         budget   : UnsafeMutablePointer<FrameBudget>?
     ) {
@@ -498,11 +511,23 @@ public struct VirtualMemoryManager: Loggable {
         let level3Table: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(level2.physicalAddress)
         guard Self.isEmpty(table: level3Table) else { return }
 
-        unlinkTableAndFree(slot: level2Table + virtual.l2, table: level2.physicalAddress, budget: budget)
+        unlinkTableAndFree(
+            slot   : level2Table + virtual.l2,
+            table  : level2.physicalAddress,
+            asid   : asid,
+            virtual: virtual,
+            budget : budget
+        )
 
         guard Self.isEmpty(table: level2Table) else { return }
 
-        unlinkTableAndFree(slot: level1Table + virtual.l1, table: level1.physicalAddress, budget: budget)
+        unlinkTableAndFree(
+            slot   : level1Table + virtual.l1,
+            table  : level1.physicalAddress,
+            asid   : asid,
+            virtual: virtual,
+            budget : budget
+        )
 
         guard Self.isEmpty(table: level1Table) else { return }
 
@@ -511,7 +536,13 @@ public struct VirtualMemoryManager: Loggable {
         let kernelMaster: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(self.identityTableAddress)
         guard level0.physicalAddress != kernelMaster[virtual.l0].physicalAddress else { return }
 
-        unlinkTableAndFree(slot: level0Table + virtual.l0, table: level0.physicalAddress, budget: budget)
+        unlinkTableAndFree(
+            slot   : level0Table + virtual.l0,
+            table  : level0.physicalAddress,
+            asid   : asid,
+            virtual: virtual,
+            budget : budget
+        )
     }
 
 
@@ -536,29 +567,37 @@ public struct VirtualMemoryManager: Loggable {
     /// while a walk cache still reads it as a table, which is the walker
     /// following whatever the new owner writes there.
     ///
-    /// `tlbi vmalle1is` and not the per-address form. DDI 0487 lets an
-    /// implementation cache intermediate levels of a walk, and a walk may be
-    /// speculative: the L2 descriptor naming this L3 table can be cached for any
-    /// address in the 2 MiB span, including addresses that were never mapped and
-    /// so were never invalidated by the batch. Covering the span by address is
-    /// 512 `tlbi vaae1is`, which is Linux's own threshold for giving up and
-    /// flushing everything, and this runs at most once per 512 pages retired.
+    /// `tlbi vae1is` for one address of the span, under the space's ASID.
+    /// DDI 0487 lets an implementation cache intermediate levels of a walk, and
+    /// a walk may be speculative, so the descriptor naming this table can be
+    /// cached for any address it spans, mapped or not. The last-level form
+    /// would leave that entry; the form without "last level" removes every
+    /// cached entry from any level used to translate the address, and the one
+    /// naming this table is used for every address in its span, `virtual`
+    /// included. One address therefore covers the span, and Linux frees a page
+    /// table on exactly that, one non-last-level invalidation at its address.
     /// See DDI 0487 "TLB maintenance", D8.17 in issue M.b; the section number
     /// moves between issues and the title does not.
+    ///
+    /// `virtual` has to lie in the span `slot` translates, and `asid` has to be
+    /// the root's: a walk-cache entry is tagged like the walk that made it.
     ///
     /// `@inline(never)` so the sequence keeps a symbol of its own: the
     /// `pte-prune` post-check in `scripts/scenarios.sh` reads it back out of the
     /// linked image, `pte-bbm`'s sibling and for `pte-bbm`'s reason.
     @inline(never)
     private func unlinkTableAndFree(
-        slot  : UnsafeMutablePointer<Arch.PageTableEntry>,
-        table : PhysicalAddress,
-        budget: UnsafeMutablePointer<FrameBudget>?
+        slot   : UnsafeMutablePointer<Arch.PageTableEntry>,
+        table  : PhysicalAddress,
+        asid   : ASID,
+        virtual: VirtualAddress,
+        budget : UnsafeMutablePointer<FrameBudget>?
     ) {
         slot.pointee = Arch.PageTableEntry(rawValue: 0)
         Arch.MMU.pageTableBarrier()
 
-        Arch.MMU.flushTLB()
+        Arch.MMU.flushTLBTableNoSync(virtual, asid: asid)
+        Arch.MMU.flushTLBSync()
 
         // On the unlink and not on the free: the descriptor is already invalid,
         // so this address space no longer holds the table either way.
@@ -635,8 +674,12 @@ public struct VirtualMemoryManager: Loggable {
     /// `type` has no default on purpose. It decides the MAIR index and the
     /// shareability of the descriptor, and getting it wrong is silent: a caller
     /// that forgets it is a compile error, not a device window turned cacheable.
+    ///
+    /// `asid` is the root's own, and is used only if the walk has to unlink a
+    /// table it had just made: see `unlinkTableAndFree`.
     public func installUserPage(
         rootTable: PhysicalAddress,
+        asid     : ASID,
         virtual  : VirtualAddress,
         physical : PhysicalAddress,
         flags    : VirtualPageFlags,
@@ -647,6 +690,7 @@ public struct VirtualMemoryManager: Loggable {
 
         let slot = try leafSlot(
             table  : tablePointer,
+            asid   : asid,
             virtual: virtual,
             budget : budget
         )
@@ -676,6 +720,7 @@ public struct VirtualMemoryManager: Loggable {
     ) throws(PPMError) {
         try installUserPage(
             rootTable: addressSpace.rootTablePhysical,
+            asid     : addressSpace.asid,
             virtual  : virtual,
             physical : physical,
             flags    : flags,
@@ -721,28 +766,32 @@ public struct VirtualMemoryManager: Loggable {
     ///   requires break-before-make for. The output address cannot drift at all:
     ///   only the flag bits of the existing descriptor are written.
     ///
-    /// Emits the descriptor store, then `dsb ishst; tlbi vaae1is; dsb ish; isb`
-    /// through `flushTLBPage`. A permission or XN change needs no
-    /// break-before-make, but the old entry still has to leave the TLB or the
-    /// new permissions are simply not in effect.
+    /// Emits the descriptor store, then `dsb ishst`, `tlbi vale1is` for the
+    /// address under `asid`, `dsb ish` and `isb`. A permission or XN change
+    /// needs no break-before-make, but the old entry still has to leave the TLB
+    /// or the new permissions are simply not in effect. Last level only: no
+    /// table above the leaf changed.
     ///
     /// A descriptor that becomes executable also publishes the frame's bytes to
     /// the instruction stream first. See `publishInstructionStream`: this is the
     /// only operation that can make already written code fetchable without its
     /// frame changing.
     ///
-    /// - Parameter invalidate: `false` publishes the descriptor with `dsb ishst`
-    ///   and leaves the invalidation to the caller. `RegionClone` is the only
-    ///   caller that asks for it: it downgrades a run of the parent's pages
-    ///   while the parent cannot run, and `cloneRegions` flushes once at the
-    ///   end. That trade is correct on one core and no more than that, so
-    ///   whoever makes this kernel run on several has to revisit it.
+    /// - Parameter batched: `true` publishes the descriptor with `dsb ishst` and
+    ///   leaves the invalidation to the caller, which settles a whole range at
+    ///   once. `protectTaskRegion` does
+    ///   it for a task nobody can run yet. `RegionClone` does it for the
+    ///   parent's downgraded pages, and `cloneRegions` retires the parent's ASID
+    ///   once at the end: correct on one core, where the parent cannot run in
+    ///   between, and no more than that, so whoever makes this kernel run on
+    ///   several has to revisit it.
     public func protectUserPage(
-        rootTable : PhysicalAddress,
-        virtual   : VirtualAddress,
-        flags     : VirtualPageFlags,
-        type      : MemoryType,
-        invalidate: Bool = true
+        rootTable: PhysicalAddress,
+        asid     : ASID,
+        virtual  : VirtualAddress,
+        flags    : VirtualPageFlags,
+        type     : MemoryType,
+        batched  : Bool = false
     ) throws(PPMError) {
         let tablePointer: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable)
 
@@ -763,12 +812,12 @@ public struct VirtualMemoryManager: Loggable {
 
         leaf[virtual.l3] = entry
 
-        guard invalidate else {
-            Arch.MMU.pageTableBarrier()
-            return
-        }
+        Arch.MMU.pageTableBarrier()
 
-        Arch.MMU.flushTLBPage(virtual)
+        guard !batched else { return }
+
+        Arch.MMU.flushTLBLeafNoSync(virtual, asid: asid)
+        Arch.MMU.flushTLBSync()
     }
 
 
@@ -787,6 +836,7 @@ public struct VirtualMemoryManager: Loggable {
     /// checked for. The copy-on-write fault is the only caller.
     public func replaceUserPage(
         rootTable: PhysicalAddress,
+        asid     : ASID,
         virtual  : VirtualAddress,
         physical : PhysicalAddress,
         flags    : VirtualPageFlags,
@@ -822,6 +872,7 @@ public struct VirtualMemoryManager: Loggable {
         Self.breakBeforeMake(
             slot      : leaf + virtual.l3,
             virtual   : virtual,
+            asid      : asid,
             entry     : entry,
             executable: executable
         )
@@ -864,9 +915,10 @@ public struct VirtualMemoryManager: Loggable {
 
     /// The kernel's one break-before-make sequence.
     ///
-    /// In order: the invalid descriptor, `dsb ishst`, `tlbi vaae1is` for the
-    /// address, `dsb ish` and `isb`, the new descriptor, `dsb ishst`, and a
-    /// final `isb` when the page may be fetched from. The first store and the
+    /// In order: the invalid descriptor, `dsb ishst`, `tlbi vale1is` for the
+    /// address under `asid`, `dsb ish` and `isb`, the new descriptor, `dsb
+    /// ishst`, and a final `isb` when the page may be fetched from. The last
+    /// level is enough because only the leaf changes. The first store and the
     /// invalidation together are the window in which the address has no
     /// translation at all; publishing the new descriptor before that window
     /// closes is what leaves two live translations for one address.
@@ -879,13 +931,14 @@ public struct VirtualMemoryManager: Loggable {
     private static func breakBeforeMake(
         slot      : UnsafeMutablePointer<Arch.PageTableEntry>,
         virtual   : VirtualAddress,
+        asid      : ASID,
         entry     : Arch.PageTableEntry,
         executable: Bool
     ) {
         slot.pointee = Arch.PageTableEntry(rawValue: 0)
         Arch.MMU.pageTableBarrier()
 
-        Arch.MMU.flushTLBPageNoSync(virtual)
+        Arch.MMU.flushTLBLeafNoSync(virtual, asid: asid)
         Arch.MMU.flushTLBSync()
 
         slot.pointee = entry
@@ -982,6 +1035,7 @@ public struct VirtualMemoryManager: Loggable {
     @inline(never)
     private func leafSlot(
         table  : UnsafeMutablePointer<Arch.PageTableEntry>,
+        asid   : ASID,
         virtual: VirtualAddress,
         budget : UnsafeMutablePointer<FrameBudget>?
     ) throws(PPMError) -> UnsafeMutablePointer<Arch.PageTableEntry> {
@@ -1007,10 +1061,12 @@ public struct VirtualMemoryManager: Loggable {
 
             } catch {
                 rollbackCreatedTables(
-                    slots : createdSlots,
-                    pages : createdPages,
-                    count : createdCount,
-                    budget: budget
+                    slots  : createdSlots,
+                    pages  : createdPages,
+                    count  : createdCount,
+                    asid   : asid,
+                    virtual: virtual,
+                    budget : budget
                 )
 
                 throw error
@@ -1033,15 +1089,23 @@ public struct VirtualMemoryManager: Loggable {
     /// linked, which is the order teardown walks in and the only one in which
     /// every store lands in a page that is still the caller's.
     private func rollbackCreatedTables(
-        slots : InlineArray<3, UnsafeMutablePointer<Arch.PageTableEntry>>,
-        pages : InlineArray<3, PhysicalAddress>,
-        count : Int,
-        budget: UnsafeMutablePointer<FrameBudget>?
+        slots  : InlineArray<3, UnsafeMutablePointer<Arch.PageTableEntry>>,
+        pages  : InlineArray<3, PhysicalAddress>,
+        count  : Int,
+        asid   : ASID,
+        virtual: VirtualAddress,
+        budget : UnsafeMutablePointer<FrameBudget>?
     ) {
         var index = count - 1
 
         while index >= 0 {
-            unlinkTableAndFree(slot: slots[index], table: pages[index], budget: budget)
+            unlinkTableAndFree(
+                slot   : slots[index],
+                table  : pages[index],
+                asid   : asid,
+                virtual: virtual,
+                budget : budget
+            )
             index -= 1
         }
     }
@@ -1065,7 +1129,8 @@ public struct VirtualMemoryManager: Loggable {
         defaultFlags: VirtualPageFlags = [.valid, .page, .accessFlag]
     ) throws(PPMError) {
 
-        let slot = try leafSlot(table: table, virtual: virtual, budget: nil)
+        // ASID 0: these tables are the kernel roots', and their leaves global.
+        let slot = try leafSlot(table: table, asid: 0, virtual: virtual, budget: nil)
 
         var entry = slot.pointee
         entry.physicalAddress = physical

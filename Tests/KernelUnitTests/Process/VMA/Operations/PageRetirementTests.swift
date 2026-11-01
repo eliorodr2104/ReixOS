@@ -7,6 +7,7 @@
 import Testing
 @testable import Kernel
 import KernelTestSupport
+import KernelHostShims
 
 /// The retirement contract the initrd page-sharing design rests on: a
 /// non-anonymous region is unmap only, and the frames under it are left exactly as
@@ -30,6 +31,7 @@ struct PageRetirementTests {
 
     private static let pageSize: UInt64 = 4096
     private static let base    : VirtualAddress = UserSpaceLayout.elfBaseTypical
+    private static let asid    : ASID = 0x51
 
 
     @Test("a file-backed retirement drops the mappings and releases no frame")
@@ -169,6 +171,174 @@ struct PageRetirementTests {
     }
 
 
+    // MARK: - Invalidation
+
+    @Test("an anonymous batch invalidates each page it cleared under the tag, with one wait")
+    func anonymousBatchInvalidatesByTag() {
+        withRetirementRAM(pages: 16) { ram in
+            _ = map(ram, pages: 4)
+
+            mmu_trace_reset(nil)
+            defer { mmu_trace_reset(nil) }
+
+            PageRetirement.retire(
+                context: context(ram),
+                start  : Self.base,
+                end    : Self.base + 4 * Self.pageSize,
+                backing: .anonymous
+            )
+
+            // Four clears, each with its own `dsb ishst`, then four last-level
+            // invalidations and the one `dsb ish; isb` the whole batch waits on.
+            let calls = mmuCalls()
+            #expect(calls.prefix(9).map(\.op) == [
+                .barrier, .barrier, .barrier, .barrier,
+                .tlbLeaf, .tlbLeaf, .tlbLeaf, .tlbLeaf,
+                .tlbSync
+            ])
+            #expect(calls.dropFirst(4).prefix(4).map(\.arg) == (0..<4).map {
+                tlbiOperand(Self.base + UInt64($0) * Self.pageSize, asid: Self.asid)
+            })
+
+            // The rest is the prune of the emptied span, one table invalidation per
+            // level under the same tag, and nothing reaches past this space.
+            let prune = calls.dropFirst(9)
+            #expect(prune.filter { $0.op == .tlbTable }.allSatisfy {
+                $0.arg == tlbiOperand(Self.base, asid: Self.asid)
+            })
+            #expect(mmuCount(.tlbTable) == 3)
+            #expect(mmuCount(.tlbSync)  == 4)
+            #expect(mmuCount(.tlbAll)   == 0)
+            #expect(mmuCount(.tlbASID)  == 0)
+        }
+    }
+
+
+    @Test("an anonymous batch invalidates only the pages it found resident")
+    func anonymousBatchSkipsHoles() {
+        withRetirementRAM(pages: 16) { ram in
+            let first = ram.page(8)
+            let third = ram.page(9)
+            ram.setOwnedFrame(at: first, refCount: 2)
+            ram.setOwnedFrame(at: third, refCount: 2)
+            ram.mapPage(virtual: Self.base,                     physical: first)
+            ram.mapPage(virtual: Self.base + 2 * Self.pageSize, physical: third)
+
+            mmu_trace_reset(nil)
+            defer { mmu_trace_reset(nil) }
+
+            PageRetirement.retire(
+                context: context(ram),
+                start  : Self.base,
+                end    : Self.base + 4 * Self.pageSize,
+                backing: .anonymous
+            )
+
+            let leaves = mmuCalls().filter { $0.op == .tlbLeaf }.map(\.arg)
+            #expect(leaves == [
+                tlbiOperand(Self.base,                     asid: Self.asid),
+                tlbiOperand(Self.base + 2 * Self.pageSize, asid: Self.asid)
+            ])
+        }
+    }
+
+
+    @Test("a range with nothing resident costs no invalidation and no wait")
+    func emptyAnonymousRangeInvalidatesNothing() {
+        withRetirementRAM(pages: 16) { ram in
+            mmu_trace_reset(nil)
+            defer { mmu_trace_reset(nil) }
+
+            PageRetirement.retire(
+                context: context(ram),
+                start  : Self.base,
+                end    : Self.base + 8 * Self.pageSize,
+                backing: .anonymous
+            )
+
+            #expect(mmu_trace_length() == 0)
+        }
+    }
+
+
+    @Test("a short range is invalidated page by page and waited on once")
+    func shortRangeIsInvalidatedByPage() {
+        for pages: UInt64 in [1, 2, 32] {
+            mmu_trace_reset(nil)
+
+            PageRetirement.invalidate(
+                asid : Self.asid,
+                start: Self.base,
+                end  : Self.base + pages * Self.pageSize
+            )
+
+            let calls = mmuCalls()
+            #expect(calls.map(\.op) == Array(repeating: .tlbLeaf, count: Int(pages)) + [.tlbSync])
+            #expect(calls.dropLast().map(\.arg) == (0..<pages).map {
+                tlbiOperand(Self.base + $0 * Self.pageSize, asid: Self.asid)
+            })
+        }
+
+        mmu_trace_reset(nil)
+    }
+
+
+    @Test("past the limit a range is invalidated by its tag alone")
+    func longRangeIsInvalidatedByTag() {
+        for pages: UInt64 in [33, 512] {
+            mmu_trace_reset(nil)
+
+            PageRetirement.invalidate(
+                asid : Self.asid,
+                start: Self.base,
+                end  : Self.base + pages * Self.pageSize
+            )
+
+            // This space's tag and nobody else's: not `vmalle1is` any more.
+            #expect(mmuCalls() == [MMUCall(
+                op: .tlbASID, arg: UInt64(Self.asid)
+            )])
+        }
+
+        mmu_trace_reset(nil)
+    }
+
+
+    @Test("an empty range invalidates nothing")
+    func emptyRangeInvalidatesNothing() {
+        mmu_trace_reset(nil)
+
+        PageRetirement.invalidate(asid: Self.asid, start: Self.base, end: Self.base)
+
+        #expect(mmu_trace_length() == 0)
+    }
+
+
+    @Test("a long file-backed retirement retires the tag once")
+    func longFileBackedRangeUsesTheTag() {
+        withRetirementRAM(pages: 16) { ram in
+            _ = map(ram, pages: 2)
+
+            mmu_trace_reset(nil)
+            defer { mmu_trace_reset(nil) }
+
+            PageRetirement.retire(
+                context: context(ram),
+                start  : Self.base,
+                end    : Self.base + 40 * Self.pageSize,
+                backing: .fileBacked
+            )
+
+            let ops = mmuOps()
+            #expect(Array(ops.prefix(3)) == [.barrier, .barrier, .tlbASID])
+            #expect(mmuCount(.tlbASID) == 1)
+            #expect(mmuCount(.tlbLeaf) == 0)
+            #expect(mmuCount(.tlbAll)  == 0)
+            #expect(mmu_trace_arg(2) == UInt64(Self.asid))
+        }
+    }
+
+
     /// Maps `pages` consecutive user pages at `base` onto the arena's own frames,
     /// each carrying two references, and hands back the frames used.
     private func map(
@@ -201,7 +371,8 @@ struct PageRetirementTests {
             vmm              : ram.vmm,
             ppm              : ram.ppm,
             rootTablePhysical: ram.rootTablePhysical,
-            budget           : budget
+            budget           : budget,
+            asid             : Self.asid
         )
     }
 }

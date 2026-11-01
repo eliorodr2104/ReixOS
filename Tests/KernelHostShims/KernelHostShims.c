@@ -21,6 +21,8 @@
 
 #include <stdint.h>
 
+#include "include/KernelHostShims.h"
+
 static uint64_t barrier_count;
 
 // Stands in for TPIDR_EL1, which is where the machine keeps the running process.
@@ -62,7 +64,9 @@ void enable_mmu(uint64_t lowTable, uint64_t highTable) { (void)lowTable; (void)h
 //
 // The probe is read through a `volatile` pointer because the whole point is to
 // sample memory the caller is writing between calls.
-#define MMU_TRACE_CAPACITY 64
+// Room for a full retirement batch of 32 pages, its stores, invalidations and
+// prune, with the length still counting past it so an overflow is visible.
+#define MMU_TRACE_CAPACITY 256
 
 static uint32_t mmu_trace_ops[MMU_TRACE_CAPACITY];
 static uint64_t mmu_trace_args[MMU_TRACE_CAPACITY];
@@ -78,6 +82,12 @@ static void mmu_trace_record(uint32_t op, uint64_t arg) {
             mmu_trace_probe ? *(const volatile uint64_t *)mmu_trace_probe : 0;
     }
     mmu_trace_len += 1;
+}
+
+// The operand a by-address invalidation hands the hardware: VA[55:12] in bits
+// [43:0] and the ASID in [63:48], so a suite reads address and scope together.
+static uint64_t tlbi_operand(uint64_t virtualAddress, uint16_t asid) {
+    return ((virtualAddress >> 12) & ((1ULL << 44) - 1)) | ((uint64_t)asid << 48);
 }
 
 void mmu_trace_reset(const uint64_t *probe) {
@@ -99,12 +109,17 @@ uint64_t mmu_trace_descriptor(uint64_t index) {
     return index < MMU_TRACE_CAPACITY ? mmu_trace_descriptors[index] : 0;
 }
 
-void flush_tlb(void) { mmu_trace_record(5, 0); }
-void flush_tlb_page(uint64_t virtualAddress) { mmu_trace_record(2, virtualAddress); }
-void flush_tlb_page_nosync(uint64_t virtualAddress) { mmu_trace_record(3, virtualAddress); }
-void flush_tlb_sync(void) { mmu_trace_record(4, 0); }
+void flush_tlb(void) { mmu_trace_record(MMU_OP_TLB_ALL, 0); }
+void flush_tlb_sync(void) { mmu_trace_record(MMU_OP_TLB_SYNC, 0); }
+void flush_tlb_asid(uint16_t asid) { mmu_trace_record(MMU_OP_TLB_ASID, asid); }
+void flush_tlb_leaf_nosync(uint64_t virtualAddress, uint16_t asid) {
+    mmu_trace_record(MMU_OP_TLB_LEAF, tlbi_operand(virtualAddress, asid));
+}
+void flush_tlb_table_nosync(uint64_t virtualAddress, uint16_t asid) {
+    mmu_trace_record(MMU_OP_TLB_TABLE, tlbi_operand(virtualAddress, asid));
+}
 uint64_t get_current_process(void) { return current_process; }
-void instruction_barrier(void) { mmu_trace_record(6, 0); }
+void instruction_barrier(void) { mmu_trace_record(MMU_OP_INSTRUCTION_BARRIER, 0); }
 uint8_t is_mmu_enabled(void) { return 0; }
 void jump_to_user_mode(void *trapFrame, uint64_t rootTable, uint16_t asid) {
     (void)trapFrame; (void)rootTable; (void)asid;
@@ -116,7 +131,7 @@ void kernel_idle_loop(void) {}
 uint32_t mmio_read32(void *address) { return *(volatile uint32_t *)address; }
 void mmio_write32(void *address, uint32_t value) { *(volatile uint32_t *)address = value; }
 void nop(void) {}
-void page_table_barrier(void) { barrier_count += 1; mmu_trace_record(1, 0); }
+void page_table_barrier(void) { barrier_count += 1; mmu_trace_record(MMU_OP_PAGE_TABLE_BARRIER, 0); }
 uint64_t page_table_barrier_count(void) { return barrier_count; }
 void reset_page_table_barrier_count(void) { barrier_count = 0; }
 

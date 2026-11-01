@@ -14,9 +14,15 @@ void reset_instruction_cache_sync_record(void);
 
 // The ordered record of the page-table ordering shims. `mmu_trace_reset` takes
 // the descriptor to sample at every call, or NULL for none.
-//
-// Op codes: 1 page_table_barrier, 2 flush_tlb_page, 3 flush_tlb_page_nosync,
-// 4 flush_tlb_sync, 5 flush_tlb, 6 instruction_barrier.
+enum MMUTraceOp {
+    MMU_OP_PAGE_TABLE_BARRIER     = 1,
+    MMU_OP_TLB_SYNC               = 4,
+    MMU_OP_TLB_ALL                = 5,
+    MMU_OP_INSTRUCTION_BARRIER    = 6,
+    MMU_OP_TLB_ASID               = 7,  // arg: the ASID
+    MMU_OP_TLB_LEAF               = 8,  // arg: VA[55:12] | ASID << 48
+    MMU_OP_TLB_TABLE              = 9,  // arg: VA[55:12] | ASID << 48
+};
 void mmu_trace_reset(const uint64_t *probe);
 uint64_t mmu_trace_length(void);
 uint32_t mmu_trace_op(uint64_t index);

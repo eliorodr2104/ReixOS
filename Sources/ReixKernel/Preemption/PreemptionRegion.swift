@@ -379,7 +379,7 @@ public enum TaskMapAnonymous: PreemptionRegion {
 ///
 /// A batch that cleared anything also ends by scanning the 512 entries of each
 /// 2 MiB span it touched and giving back the tables that are now empty: 512 to
-/// 1024 loads against 32 page retires, plus one `tlbi vmalle1is` on the one
+/// 1024 loads against 32 page retires, plus one `tlbi vae1is` on the one
 /// batch in sixteen that empties a span. That is inside the noise of the
 /// estimate above rather than a term of it.
 ///

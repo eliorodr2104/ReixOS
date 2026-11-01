@@ -26,8 +26,8 @@ enum PageRetirement {
     /// filling a batch.
     static let pagesPerBatch: UInt64 = 32
 
-    /// Beyond this many pages a range is retired with one full TLB flush
-    /// instead of per-page invalidations.
+    /// Beyond this many pages a range is retired with one `tlbi aside1is` for
+    /// the whole address space instead of per-page invalidations.
     private static let rangeInvalidationLimit: UInt64 = 32
 
 
@@ -135,12 +135,13 @@ enum PageRetirement {
                 va += UserSpaceLayout.pageSize
             }
 
-            invalidate(start: start, end: end)
+            invalidate(asid: context.asid, start: start, end: end)
 
             guard cleared else { return }
 
             context.vmm.pointee.pruneEmptyTables(
                 rootTable: context.rootTablePhysical,
+                asid     : context.asid,
                 from     : start,
                 to       : end,
                 budget   : context.budget
@@ -187,7 +188,7 @@ enum PageRetirement {
 
             var index = 0
             while index < pending {
-                Arch.MMU.flushTLBPageNoSync(virtuals[index])
+                Arch.MMU.flushTLBLeafNoSync(virtuals[index], asid: context.asid)
                 index += 1
             }
             Arch.MMU.flushTLBSync()
@@ -207,6 +208,7 @@ enum PageRetirement {
 
         context.vmm.pointee.pruneEmptyTables(
             rootTable: context.rootTablePhysical,
+            asid     : context.asid,
             from     : start,
             to       : end,
             budget   : context.budget
@@ -214,22 +216,32 @@ enum PageRetirement {
     }
 
 
-    /// Retire the cached translations of `[start, end)` once its leaf
-    /// descriptors have been cleared.
+    /// Retire the cached translations of `[start, end)` under `asid` once its
+    /// leaf descriptors have been cleared or rewritten, each store already
+    /// published with its own `dsb ishst`.
+    ///
+    /// One `dsb ish` and one `isb` for the range, however many pages: a
+    /// `tlbi vale1is` per page and one wait for all of them. Last level only,
+    /// because only leaves changed; a table taken out on the way is
+    /// `pruneEmptyTables`' to invalidate. Above `rangeInvalidationLimit` the
+    /// whole tag goes instead, which is still this address space alone.
     static func invalidate(
+        asid : ASID,
         start: VirtualAddress,
         end  : VirtualAddress
     ) {
+        guard end > start else { return }
+
         let pages = (end - start) / UserSpaceLayout.pageSize
 
         guard pages <= rangeInvalidationLimit else {
-            Arch.MMU.flushTLB()
+            Arch.MMU.flushTLB(asid: asid)
             return
         }
 
         var va = start
         while va < end {
-            Arch.MMU.flushTLBPageNoSync(va)
+            Arch.MMU.flushTLBLeafNoSync(va, asid: asid)
             va += UserSpaceLayout.pageSize
         }
 

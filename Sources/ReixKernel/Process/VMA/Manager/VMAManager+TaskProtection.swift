@@ -12,10 +12,13 @@ extension VMAManager {
     /// Every PTE is changed before the logical VMA permission is published. A
     /// hardware mapping refusal restores the pages already changed.
     ///
-    /// `protectUserPage` invalidates the address it rewrites, so there is no
-    /// separate flush here and no page left permitted by a stale TLB entry. It
-    /// also refuses an absent descriptor, which this range cannot have: `taskMap`
-    /// backs every page of it before the region can be protected.
+    /// One batch for the whole range: every descriptor is rewritten with its
+    /// own `dsb ishst`, then `PageRetirement.invalidate` retires the old entries
+    /// under this space's tag with a single `dsb ish` and `isb`. No page is left
+    /// permitted by a stale TLB entry once this returns.
+    ///
+    /// `protectUserPage` refuses an absent descriptor, which this range cannot
+    /// have: `taskMap` backs every page of it before the region can be protected.
     mutating func protectTaskRegion(
         start      : VirtualAddress,
         end        : VirtualAddress,
@@ -36,9 +39,11 @@ extension VMAManager {
             do {
                 try context.vmm.pointee.protectUserPage(
                     rootTable: context.rootTablePhysical,
+                    asid     : context.asid,
                     virtual  : cursor,
                     flags    : permissions.toPageFlags(),
-                    type     : region.pointee.memoryType
+                    type     : region.pointee.memoryType,
+                    batched  : true
                 )
 
             } catch {
@@ -46,17 +51,23 @@ extension VMAManager {
                 while rollback < cursor {
                     try? context.vmm.pointee.protectUserPage(
                         rootTable: context.rootTablePhysical,
+                        asid     : context.asid,
                         virtual  : rollback,
                         flags    : previous.toPageFlags(),
-                        type     : region.pointee.memoryType
+                        type     : region.pointee.memoryType,
+                        batched  : true
                     )
                     rollback += UserSpaceLayout.pageSize
                 }
+
+                PageRetirement.invalidate(asid: context.asid, start: start, end: cursor)
                 return false
             }
 
             cursor += UserSpaceLayout.pageSize
         }
+
+        PageRetirement.invalidate(asid: context.asid, start: start, end: end)
 
         region.pointee.permissions = permissions
         return true

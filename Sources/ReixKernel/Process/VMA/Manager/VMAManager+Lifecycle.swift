@@ -59,16 +59,18 @@ extension VMAManager {
     ///
     /// The flush covers the throwing exits too, and has to: the parent's own
     /// descriptors are downgraded in place as the walk proceeds, with
-    /// `protectUserPage(invalidate: false)` asking for exactly this flush
-    /// instead of paying a per-page invalidation. An exit without it leaves the
-    /// parent holding read-only descriptors in memory and stale writable entries
-    /// in the TLB, with no later path flushing on its behalf.
+    /// `protectUserPage(batched: true)` asking for exactly this flush instead
+    /// of paying a per-page invalidation. An exit without it leaves the parent
+    /// holding read-only descriptors in memory and stale writable entries in
+    /// the TLB, with no later path flushing on its behalf.
     ///
     /// One flush at the end is the cheaper of the two correct answers here, and
     /// it is correct only because this kernel runs on one core and the parent
-    /// cannot run between the downgrade and the flush. See `RegionClone`.
+    /// cannot run between the downgrade and the flush. See `RegionClone`. It is
+    /// the parent's tag alone: the child's has never been in TTBR0, so it holds
+    /// nothing to retire, and nobody else's entries changed.
     public mutating func cloneRegions(from parent: VMAManager) throws(VMAError) {
-        defer { Arch.MMU.flushTLB() }
+        defer { Arch.MMU.flushTLB(asid: parent.context.asid) }
 
         _ = try Preemption.run(
             AddressSpaceClone.self,
@@ -76,6 +78,7 @@ extension VMAManager {
                 manager   : managerPointer(),
                 context   : context,
                 parentRoot: parent.context.rootTablePhysical,
+                parentASID: parent.context.asid,
                 parentBrk : parent.brkVMA,
                 from      : parent.vmaList.head
             )

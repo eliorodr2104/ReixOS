@@ -197,7 +197,8 @@ struct VMADecommitTests {
                 heap             : heap,
                 vmm              : ram.vmm,
                 ppm              : ram.ppm,
-                rootTablePhysical: ram.rootTablePhysical
+                rootTablePhysical: ram.rootTablePhysical,
+                asid             : 0
             ))
 
             body(ram, manager)

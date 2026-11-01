@@ -171,6 +171,7 @@ extension VMAManager {
             do {
                 try context.vmm.pointee.protectUserPage(
                     rootTable: context.rootTablePhysical,
+                    asid     : context.asid,
                     virtual  : aligned,
                     flags    : flags,
                     type     : vma.memoryType
@@ -238,6 +239,7 @@ extension VMAManager {
         do {
             try context.vmm.pointee.replaceUserPage(
                 rootTable: context.rootTablePhysical,
+                asid     : context.asid,
                 virtual  : aligned,
                 physical : page.address,
                 flags    : flags,
@@ -349,6 +351,7 @@ extension VMAManager {
         do {
             try context.vmm.pointee.installUserPage(
                 rootTable: context.rootTablePhysical,
+                asid     : context.asid,
                 virtual  : aligned,
                 physical : page.address,
                 flags    : flags,

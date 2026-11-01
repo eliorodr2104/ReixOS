@@ -48,7 +48,7 @@ public struct VMAManager: RXAllocatable {
 
     /// The page tables and the frame allocator of this address space, read once
     /// and handed to every operation the manager drives.
-    let context: PagingContext // 24 Byte
+    let context: PagingContext // 34 Byte
 
     /// Cached pointer to the single VMA covering the brk heap, if any.
     /// `nil` until the first successful `extendBreak`.
@@ -78,6 +78,7 @@ public struct VMAManager: RXAllocatable {
         vmm              : UnsafeMutablePointer<VirtualMemoryManager>,
         ppm              : UnsafeMutablePointer<KernelPPM>,
         rootTablePhysical: PhysicalAddress,
+        asid             : ASID,
         budget           : UnsafeMutablePointer<FrameBudget>? = nil,
         nodeLimit        : UInt16 = VMAList.defaultNodeLimit
     ) {
@@ -86,7 +87,8 @@ public struct VMAManager: RXAllocatable {
             vmm              : vmm,
             ppm              : ppm,
             rootTablePhysical: rootTablePhysical,
-            budget           : budget
+            budget           : budget,
+            asid             : asid
         )
         self.vmaList = VMAList(
             minAddress: UserSpaceLayout.userMin,

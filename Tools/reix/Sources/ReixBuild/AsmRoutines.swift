@@ -144,18 +144,32 @@ private func mmuHandlers() -> [AsmRoutine] {
             ret()
         },
 
-        fn("flush_tlb_page") {
+        // flush_tlb_asid(asid): every entry the tag holds, walk-cache entries
+        // included, and no global one. The shift keeps the tag's 16 bits.
+        fn("flush_tlb_asid") {
             dsb("ishst")
-            raw("    lsr x0, x0, #12")
-            raw("    tlbi vaae1is, x0")
+            raw("    lsl x0, x0, #48")
+            raw("    tlbi aside1is, x0")
             dsb("ish")
             isb()
             ret()
         },
 
-        fn("flush_tlb_page_nosync") {
-            raw("    lsr x0, x0, #12")
-            raw("    tlbi vaae1is, x0")
+        // flush_tlb_leaf_nosync(va, asid): VA[55:12] in bits [43:0], the tag in
+        // [63:48], and [47:44] zero, which FEAT_TTL reads as "no level hint".
+        fn("flush_tlb_leaf_nosync") {
+            raw("    ubfx x0, x0, #12, #44")
+            raw("    bfi x0, x1, #48, #16")
+            raw("    tlbi vale1is, x0")
+            ret()
+        },
+
+        // flush_tlb_table_nosync(va, asid): the same operand, every level of
+        // the walk, for a table taken out rather than a leaf rewritten.
+        fn("flush_tlb_table_nosync") {
+            raw("    ubfx x0, x0, #12, #44")
+            raw("    bfi x0, x1, #48, #16")
+            raw("    tlbi vae1is, x0")
             ret()
         },
 

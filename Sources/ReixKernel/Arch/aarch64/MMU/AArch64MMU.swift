@@ -29,22 +29,31 @@ public struct AArch64MMU {
         size: UInt64
     )
     
+    /// Every translation, global ones included: `tlbi vmalle1is`. Only for when
+    /// the kernel's own entries changed, which after boot is never; a user
+    /// address space is retired with `flushTLB(asid:)`.
     @_silgen_name("flush_tlb")
     public static func flushTLB()
 
-    /// Invalidate only the translation for `virtual` (4 KiB granule), across
-    /// every ASID, inner-shareable. Self-contained: it publishes the pending
-    /// page-table stores and synchronizes the instruction stream itself.
-    @_silgen_name("flush_tlb_page")
-    public static func flushTLBPage(_ virtual: VirtualAddress)
+    /// Every translation `asid` tagged, walk-cache entries included, and no
+    /// global one: `dsb ishst; tlbi aside1is; dsb ish; isb`. Self-contained.
+    @_silgen_name("flush_tlb_asid")
+    public static func flushTLB(asid: ASID)
 
-    /// Barrier-free variant of `flushTLBPage` for invalidating a run of pages.
-    /// Every call must be followed, once, after the last page, by
-    /// `flushTLBSync()`.
-    @_silgen_name("flush_tlb_page_nosync")
-    public static func flushTLBPageNoSync(_ virtual: VirtualAddress)
+    /// `tlbi vale1is` for `virtual` under `asid`: the last-level entry alone,
+    /// for a leaf cleared or rewritten while every table above it stayed.
+    ///
+    /// No barrier on either side. The descriptor store before it needs its
+    /// `pageTableBarrier()`, and a run of these ends in one `flushTLBSync()`.
+    @_silgen_name("flush_tlb_leaf_nosync")
+    public static func flushTLBLeafNoSync(_ virtual: VirtualAddress, asid: ASID)
 
-    /// `dsb ish` + `isb`: completes a batch of `flushTLBPageNoSync(_:)`.
+    /// `tlbi vae1is` for `virtual` under `asid`: every level of the walk, for a
+    /// table that was unlinked. The same contract as `flushTLBLeafNoSync`.
+    @_silgen_name("flush_tlb_table_nosync")
+    public static func flushTLBTableNoSync(_ virtual: VirtualAddress, asid: ASID)
+
+    /// `dsb ish` + `isb`: completes a run of `NoSync` invalidations.
     @_silgen_name("flush_tlb_sync")
     public static func flushTLBSync()
 
@@ -68,6 +77,9 @@ public struct AArch64MMU {
     /// Install `rootTable` in TTBR0_EL1 tagged with `asid`, without any TLB
     /// invalidation: the outgoing space's non-global entries stay cached and
     /// simply stop matching. `asid` 0 is reserved for the kernel identity root.
+    ///
+    /// Sound for a tag that was just issued because of the rule `ASIDAllocator`
+    /// keeps: a tag goes back only after `flushTLB(asid:)` emptied it.
     @_silgen_name("switch_user_address_space")
     public static func switchUserAddressSpace(
         _ rootTable: PhysicalAddress,

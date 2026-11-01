@@ -114,6 +114,7 @@ struct TaskMapFillTests {
             #expect(throws: Never.self) {
                 try ram.vmm.pointee.installUserPage(
                     rootTable: root,
+                    asid     : child.pointee.addressSpace.asid,
                     virtual  : address,
                     physical : occupant.address,
                     flags    : VMAPermissions([.read, .write, .user]).toPageFlags(),

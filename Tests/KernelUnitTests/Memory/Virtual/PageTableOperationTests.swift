@@ -20,9 +20,14 @@ import KernelHostShims
 /// machine: the descriptor has to read invalid at the invalidation, and a
 /// sequence that merely has the right calls in the right count fails here.
 ///
-/// What this cannot see is inside a shim: `flush_tlb_page` is one host function
-/// where the machine has four instructions. That half is checked on the linked
-/// image by the `pte-bbm` post-check in `scripts/scenarios.sh`.
+/// Scope is the other half. Every invalidation is recorded with the operand the
+/// hardware would get, address and ASID together, so an invalidation of the
+/// right address under the wrong tag fails here too, which QEMU, flushing its
+/// soft TLB on every ASID switch, never would.
+///
+/// What this cannot see is inside a shim: `flush_tlb_leaf_nosync` is one host
+/// function where the machine has three instructions. That half is checked on
+/// the linked image by the `pte-bbm` post-check in `scripts/scenarios.sh`.
 ///
 /// `.serialized`, and the run needs `--no-parallel`: the recorder is one global
 /// in the shim object, as `TraceExportBatchTests`' barrier counter already was.
@@ -33,34 +38,14 @@ import KernelHostShims
 struct PageTableOperationTests {
 
     private static let va       : VirtualAddress   = UserSpaceLayout.elfBaseTypical
+    private static let asid     : ASID             = 0x2A7
     private static let readWrite: VirtualPageFlags = [.present, .userAccess, .pxn, .uxn]
     private static let readOnly : VirtualPageFlags = [.present, .userAccess, .readOnly, .pxn, .uxn]
     private static let execute  : VirtualPageFlags = [.present, .userAccess, .pxn]
 
+    /// What every invalidation of `va` in this suite must carry.
+    private static let operand = tlbiOperand(va, asid: asid)
 
-    // MARK: - Reading the recorder back
-
-    /// The shims, in the op codes `KernelHostShims.h` assigns them.
-    private enum Shim: UInt32 {
-        case barrier       = 1
-        case tlbPage       = 2
-        case tlbPageNoSync = 3
-        case tlbSync       = 4
-        case tlbAll        = 5
-        case isb           = 6
-    }
-
-    private static func ops() -> [Shim] {
-        var result: [Shim] = []
-        var index: UInt64 = 0
-
-        while index < mmu_trace_length() {
-            result.append(Shim(rawValue: mmu_trace_op(index)) ?? .tlbAll)
-            index += 1
-        }
-
-        return result
-    }
 
     // MARK: - Fixture
 
@@ -118,6 +103,7 @@ struct PageTableOperationTests {
             let installed = refusal {
                 try ram.vmm.pointee.installUserPage(
                     rootTable: root,
+                    asid     : Self.asid,
                     virtual  : Self.va,
                     physical : frame.address,
                     flags    : Self.readWrite,
@@ -155,6 +141,7 @@ struct PageTableOperationTests {
             let error = refusal {
                 try ram.vmm.pointee.installUserPage(
                     rootTable: root,
+                    asid     : Self.asid,
                     virtual  : Self.va,
                     physical : frame,
                     flags    : Self.readWrite,
@@ -166,7 +153,7 @@ struct PageTableOperationTests {
 
             // One `dsb ishst` and nothing else. The missing invalidation is the
             // contract `removeUserPage` keeps, not an omission.
-            #expect(Self.ops() == [.barrier])
+            #expect(mmuOps() == [.barrier])
             #expect(mmu_trace_descriptor(0) == slot.pointee)
             #expect(ram.translate(Self.va) == frame)
 
@@ -193,6 +180,7 @@ struct PageTableOperationTests {
             let error = refusal {
                 try ram.vmm.pointee.installUserPage(
                     rootTable: root,
+                    asid     : Self.asid,
                     virtual  : Self.va,
                     physical : other.address,
                     flags    : Self.readWrite,
@@ -213,7 +201,7 @@ struct PageTableOperationTests {
 
     // MARK: - Protect
 
-    @Test("protect rewrites the permissions in place and invalidates the address")
+    @Test("protect rewrites the permissions in place and invalidates the leaf under its ASID")
     func protectInvalidatesAfterTheStore() {
         withPage { ram, root, frame, slot in
             mmu_trace_reset(slot)
@@ -221,6 +209,7 @@ struct PageTableOperationTests {
             let error = refusal {
                 try ram.vmm.pointee.protectUserPage(
                     rootTable: root,
+                    asid     : Self.asid,
                     virtual  : Self.va,
                     flags    : Self.readOnly,
                     type     : .normal
@@ -228,12 +217,13 @@ struct PageTableOperationTests {
             }
 
             #expect(error == "none")
-            #expect(Self.ops() == [.tlbPage])
-            #expect(mmu_trace_arg(0) == Self.va)
+            #expect(mmuOps() == [.barrier, .tlbLeaf, .tlbSync])
+            #expect(mmu_trace_arg(1) == Self.operand)
 
-            // Not break-before-make: the new descriptor is already standing when
-            // the invalidation runs, which is what a permission change may do.
+            // Not break-before-make: the new descriptor is already standing and
+            // published when the invalidation runs, which a permission change may do.
             #expect(mmu_trace_descriptor(0) == slot.pointee)
+            #expect(mmu_trace_descriptor(1) == slot.pointee)
 
             #expect(ram.translate(Self.va) == frame)
             #expect(Self.flags(ram, root)?.contains(.readOnly)  == true)
@@ -242,26 +232,51 @@ struct PageTableOperationTests {
     }
 
 
-    @Test("protect defers the invalidation when the caller batches it")
+    @Test("protect scopes its invalidation to the ASID it is given")
+    func protectInvalidatesTheGivenTag() {
+        withPage { ram, root, _, slot in
+            for tag: ASID in [1, 0xFF, 0x100, 0xFFFF] {
+                mmu_trace_reset(slot)
+
+                let error = refusal {
+                    try ram.vmm.pointee.protectUserPage(
+                        rootTable: root,
+                        asid     : tag,
+                        virtual  : Self.va,
+                        flags    : Self.readOnly,
+                        type     : .normal
+                    )
+                }
+
+                #expect(error == "none")
+                #expect(mmu_trace_arg(1) == tlbiOperand(Self.va, asid: tag))
+                #expect(mmu_trace_arg(1) >> 48 == UInt64(tag))
+            }
+        }
+    }
+
+
+    @Test("a batched protect publishes the descriptor and leaves the invalidation to the caller")
     func protectCanDeferTheInvalidation() {
         withPage { ram, root, _, slot in
             mmu_trace_reset(slot)
 
             let error = refusal {
                 try ram.vmm.pointee.protectUserPage(
-                    rootTable : root,
-                    virtual   : Self.va,
-                    flags     : Self.readOnly,
-                    type      : .normal,
-                    invalidate: false
+                    rootTable: root,
+                    asid     : Self.asid,
+                    virtual  : Self.va,
+                    flags    : Self.readOnly,
+                    type     : .normal,
+                    batched  : true
                 )
             }
 
             #expect(error == "none")
 
-            // The clone's path: the descriptor is published, the invalidation is
-            // the one `cloneRegions` runs at the end of the whole walk.
-            #expect(Self.ops() == [.barrier])
+            // The clone's and the seal's path: the descriptor is published, the
+            // invalidation is the one their caller runs at the end of the range.
+            #expect(mmuOps() == [.barrier])
         }
     }
 
@@ -276,6 +291,7 @@ struct PageTableOperationTests {
             let typeChange = refusal {
                 try ram.vmm.pointee.protectUserPage(
                     rootTable: root,
+                    asid     : Self.asid,
                     virtual  : Self.va,
                     flags    : Self.readWrite,
                     type     : .device
@@ -293,6 +309,7 @@ struct PageTableOperationTests {
             let absent = refusal {
                 try ram.vmm.pointee.protectUserPage(
                     rootTable: root,
+                    asid     : Self.asid,
                     virtual  : Self.va,
                     flags    : Self.readWrite,
                     type     : .normal
@@ -307,12 +324,14 @@ struct PageTableOperationTests {
 
     @Test("protect that makes a page executable publishes the instruction stream")
     func protectPublishesNewlyExecutableCode() {
-        withPage { ram, root, frame, _ in
+        withPage { ram, root, frame, slot in
             reset_instruction_cache_sync_record()
+            mmu_trace_reset(slot)
 
             let error = refusal {
                 try ram.vmm.pointee.protectUserPage(
                     rootTable: root,
+                    asid     : Self.asid,
                     virtual  : Self.va,
                     flags    : Self.execute,
                     type     : .normal
@@ -326,6 +345,8 @@ struct PageTableOperationTests {
             #expect(instruction_cache_sync_calls() == 1)
             #expect(instruction_cache_synced_base() == frame)
             #expect(instruction_cache_synced_size() == UserSpaceLayout.pageSize)
+            #expect(mmuOps() == [.barrier, .tlbLeaf, .tlbSync])
+            #expect(mmu_trace_arg(1) == Self.operand)
         }
     }
 
@@ -345,6 +366,7 @@ struct PageTableOperationTests {
             let error = refusal {
                 try ram.vmm.pointee.replaceUserPage(
                     rootTable: root,
+                    asid     : Self.asid,
                     virtual  : Self.va,
                     physical : fresh.address,
                     flags    : Self.readWrite,
@@ -353,8 +375,8 @@ struct PageTableOperationTests {
             }
 
             #expect(error == "none")
-            #expect(Self.ops() == [.barrier, .tlbPageNoSync, .tlbSync, .barrier])
-            #expect(mmu_trace_arg(1) == Self.va)
+            #expect(mmuOps() == [.barrier, .tlbLeaf, .tlbSync, .barrier])
+            #expect(mmu_trace_arg(1) == Self.operand)
 
             // The window. The descriptor is invalid from the publication of the
             // break through the completion of the invalidation, and only then
@@ -383,6 +405,7 @@ struct PageTableOperationTests {
             let error = refusal {
                 try ram.vmm.pointee.replaceUserPage(
                     rootTable: root,
+                    asid     : Self.asid,
                     virtual  : Self.va,
                     physical : fresh.address,
                     flags    : Self.execute,
@@ -391,7 +414,8 @@ struct PageTableOperationTests {
             }
 
             #expect(error == "none")
-            #expect(Self.ops() == [.barrier, .tlbPageNoSync, .tlbSync, .barrier, .isb])
+            #expect(mmuOps() == [.barrier, .tlbLeaf, .tlbSync, .barrier, .isb])
+            #expect(mmu_trace_arg(1) == Self.operand)
         }
     }
 
@@ -406,6 +430,7 @@ struct PageTableOperationTests {
             let sameFrame = refusal {
                 try ram.vmm.pointee.replaceUserPage(
                     rootTable: root,
+                    asid     : Self.asid,
                     virtual  : Self.va,
                     physical : frame,
                     flags    : Self.readOnly,
@@ -424,6 +449,7 @@ struct PageTableOperationTests {
             let absent = refusal {
                 try ram.vmm.pointee.replaceUserPage(
                     rootTable: root,
+                    asid     : Self.asid,
                     virtual  : Self.va,
                     physical : frame,
                     flags    : Self.readWrite,
@@ -448,7 +474,7 @@ struct PageTableOperationTests {
 
             // One `dsb ishst`. The invalidation belongs to `PageRetirement`'s
             // batch, which is also what has to run before the frame is released.
-            #expect(Self.ops() == [.barrier])
+            #expect(mmuOps() == [.barrier])
             #expect(mmu_trace_descriptor(0) == 0)
             #expect(slot.pointee == 0)
             #expect(ram.translate(Self.va) == nil)

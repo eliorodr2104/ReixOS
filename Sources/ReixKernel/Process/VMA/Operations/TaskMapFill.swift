@@ -71,6 +71,7 @@ struct TaskMapFill: ResumableOperation {
         do {
             try vmm.pointee.installUserPage(
                 rootTable: root,
+                asid     : vma.pointee.context.asid,
                 virtual  : cursor,
                 physical : page.address,
                 flags    : VMAPermissions([.read, .write, .user]).toPageFlags(),

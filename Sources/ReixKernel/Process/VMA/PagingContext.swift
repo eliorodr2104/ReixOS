@@ -27,4 +27,8 @@ struct PagingContext {
     /// `releaseProcess`, later, frees the metadata block. Optional for the host
     /// fixtures alone, which drive an address space with no process behind it.
     let budget           : UnsafeMutablePointer<FrameBudget>?         // 8 Byte
+
+    /// The tag `rootTablePhysical` is installed with, which is what scopes
+    /// every invalidation an operation on this space issues.
+    let asid             : ASID                                       // 2 Byte
 }

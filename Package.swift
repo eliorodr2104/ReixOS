@@ -267,7 +267,7 @@ let package = Package(
             name: "KernelTestSupport",
             // `@testable import Kernel` inside makes this debug-only: a host
             // `-c release` build fails ModuleNotTestable. `make release` is fine.
-            dependencies: ["Kernel", "ReixABI"],
+            dependencies: ["Kernel", "ReixABI", "KernelHostShims"],
             path: "Tests/Support"
         ),
 

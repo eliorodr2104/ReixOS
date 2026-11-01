@@ -7,6 +7,7 @@ import Testing
 @testable import Kernel
 import ReixABI
 import KernelTestSupport
+import KernelHostShims
 
 /// Copy-on-write on one core: what each fault kind is allowed to do to a cloned
 /// region, and what the reference counts read afterwards.
@@ -223,6 +224,7 @@ struct CopyOnWriteFaultTests {
 
             try? ram.vmm.pointee.protectUserPage(
                 rootTable: fixture.parent.pointee.addressSpace.rootTablePhysical,
+                asid     : fixture.parent.pointee.addressSpace.asid,
                 virtual  : fixture.address,
                 flags    : readOnly.toPageFlags(),
                 type     : .normal
@@ -252,6 +254,63 @@ struct CopyOnWriteFaultTests {
 
 
     // MARK: - The faults that are refused
+
+    @Test("the copy breaks the faulting process's translation under its own tag")
+    func copyInvalidatesTheFaultingTag() {
+        withProcessManager(pages: 160) { ram, _, manager in
+            guard let fixture = fork(ram, manager) else { return }
+            defer { Arch.CPU.setCurrentProcess(0); mmu_trace_reset(nil) }
+
+            Arch.CPU.setCurrentProcess(UInt64(UInt(bitPattern: fixture.child)))
+            mmu_trace_reset(nil)
+
+            #expect(fixture.childVMA.pointee.handlePageFault(
+                at    : fixture.address,
+                cause : .permission,
+                access: .write
+            ) == .handled)
+
+            // Break-before-make on the child's leaf, by the child's tag alone:
+            // the parent's entry for the same address is the parent's business.
+            #expect(mmuOps() == [.barrier, .tlbLeaf, .tlbSync, .barrier])
+            #expect(mmu_trace_arg(1) == tlbiOperand(
+                fixture.address, asid: fixture.child.pointee.addressSpace.asid
+            ))
+            #expect(fixture.child.pointee.addressSpace.asid != fixture.parent.pointee.addressSpace.asid)
+        }
+    }
+
+
+    @Test("a promotion in place invalidates the faulting process's leaf under its tag")
+    func promotionInvalidatesTheFaultingTag() {
+        withProcessManager(pages: 160) { ram, _, manager in
+            guard let fixture = fork(ram, manager) else { return }
+            defer { Arch.CPU.setCurrentProcess(0); mmu_trace_reset(nil) }
+
+            // The child goes, so the parent's write finds itself alone on the frame.
+            Arch.CPU.setCurrentProcess(UInt64(UInt(bitPattern: fixture.child)))
+            #expect(fixture.childVMA.pointee.handlePageFault(
+                at    : fixture.address,
+                cause : .permission,
+                access: .write
+            ) == .handled)
+
+            Arch.CPU.setCurrentProcess(UInt64(UInt(bitPattern: fixture.parent)))
+            mmu_trace_reset(nil)
+
+            #expect(fixture.parentVMA.pointee.handlePageFault(
+                at    : fixture.address,
+                cause : .permission,
+                access: .write
+            ) == .handled)
+
+            #expect(mmuOps() == [.barrier, .tlbLeaf, .tlbSync])
+            #expect(mmu_trace_arg(1) == tlbiOperand(
+                fixture.address, asid: fixture.parent.pointee.addressSpace.asid
+            ))
+        }
+    }
+
 
     @Test("an instruction fetch on an NX copy-on-write page is refused without allocating")
     func instructionFetchRefused() {

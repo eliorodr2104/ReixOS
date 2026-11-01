@@ -6,6 +6,16 @@
 /// Live address spaces own their tags until their translations are invalidated
 /// and their roots destroyed. Flushing at counter wrap cannot make two live
 /// roots with the same tag safe.
+///
+/// ## A reissued tag is empty
+///
+/// Every invalidation of a user translation is scoped to its tag, so a stale
+/// entry left under a tag would be read by whoever gets that tag next. The rule
+/// that prevents it: a tag comes back only from `destroyAddressSpace`, after its
+/// root has left TTBR0 and `flushTLB(asid:)` has run, so no walk can have tagged
+/// anything with it since; or from a failed `createAddressSpace`, before any
+/// TTBR0 ever named it. TTBR0 is written with the tag from the first entry to
+/// user mode on, so no user entry is ever cached under the kernel's tag 0.
 struct ASIDAllocator {
     private var used = InlineArray<4, UInt64>(repeating: 0)
     private var extended: UnsafeMutablePointer<UInt64>?
@@ -43,7 +53,8 @@ struct ASIDAllocator {
         return nil
     }
 
-    /// The caller must complete TLB invalidation before releasing the tag.
+    /// The caller must complete the tag's TLB invalidation, with its root no
+    /// longer in TTBR0, before releasing it. See the type's rule above.
     mutating func release(_ asid: ASID) {
         let word = Int(asid) / 64
         guard asid != 0, word < wordCount else { return }

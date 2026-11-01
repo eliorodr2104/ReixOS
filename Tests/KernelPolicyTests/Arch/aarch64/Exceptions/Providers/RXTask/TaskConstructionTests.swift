@@ -150,6 +150,8 @@ struct TaskConstructionTests {
 
             var sealText = Arch.TrapFrame()
             reset_instruction_cache_sync_record()
+            mmu_trace_reset(nil)
+            defer { mmu_trace_reset(nil) }
             sealText.x0 = UInt64(taskHandle)
             sealText.x1 = text
             sealText.x2 = 1
@@ -162,7 +164,12 @@ struct TaskConstructionTests {
                 rootTable: child.pointee.addressSpace.rootTablePhysical, virtual: text
             ))
 
+            // Under the child's own tag, with one wait for the seal.
+            #expect(mmuOps() == [.barrier, .tlbLeaf, .tlbSync])
+            #expect(mmu_trace_arg(1) == tlbiOperand(text, asid: child.pointee.addressSpace.asid))
+
             var sealStack = Arch.TrapFrame()
+            mmu_trace_reset(nil)
             sealStack.x0 = UInt64(taskHandle)
             sealStack.x1 = stack
             sealStack.x2 = 1
@@ -170,6 +177,7 @@ struct TaskConstructionTests {
             TaskSealAndProtectSyscall.handle(frame: &sealStack, context: context)
             #expect(sealStack.x0 == TaskResult.ok.rawValue)
             #expect(instruction_cache_sync_calls() == 1)
+            #expect(mmuOps() == [.barrier, .tlbLeaf, .tlbSync])
 
             var setContext = Arch.TrapFrame()
             setContext.x0 = UInt64(taskHandle)
