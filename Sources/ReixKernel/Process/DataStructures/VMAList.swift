@@ -250,7 +250,8 @@ public struct VMAList: VMAStructure {
     ) throws(VMAError) -> UnsafeMutablePointer<VirtualMemoryArea> {
 
         guard address > region.pointee.startAddress,
-              address < region.pointee.endAddress
+              address < region.pointee.endAddress,
+              region.pointee.backingType.permitsSplit
         else { throw .invalidLayout }
 
         // Before the heap, so a refused split allocates nothing.
@@ -271,10 +272,6 @@ public struct VMAList: VMAStructure {
                 sharedRegion: region.pointee.sharedRegion
             )
         )
-
-        if let sharedRegion = region.pointee.sharedRegion {
-            retainSharedRegion(sharedRegion)
-        }
 
         let truncated = VirtualMemoryArea(
             startAddress: region.pointee.startAddress,

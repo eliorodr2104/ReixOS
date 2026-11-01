@@ -56,7 +56,7 @@ public struct SharedRegion: RXObject, ~Copyable {
     /// its capability and keeps the mapping still holds the frames.
     ///
     /// Taken by `RendezvousIPC.retain` (table and in flight),
-    /// `VMAManager.registerRegion` and `VMAList.split` (windows). Given back by
+    /// `VMAManager.registerRegion` (whole windows). Given back by
     /// `RendezvousIPC.release`, `VMAManager.unregister` and `ListRetirement`.
     /// The frame charge is not this count: see `owner`.
     public var references  : UInt32

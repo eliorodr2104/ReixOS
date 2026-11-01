@@ -63,4 +63,18 @@ public enum BackingType {
     /// Device memory mapped for a driver. The frames are not RAM at all, so
     /// nothing here may ever hand them to the allocator.
     case device
+
+
+    /// Whether a window may be cut without fragmenting one kernel object.
+    ///
+    /// Anonymous frames retire page by page, and initrd frames have no window
+    /// reference to release. SHM and DMA windows each hold one whole region;
+    /// device windows preserve the extent granted by their capability.
+    /// The brk cache imposes a further restriction on its anonymous VMA.
+    var permitsSplit: Bool {
+        switch self {
+            case .anonymous, .fileBacked: true
+            case .shared, .device      : false
+        }
+    }
 }

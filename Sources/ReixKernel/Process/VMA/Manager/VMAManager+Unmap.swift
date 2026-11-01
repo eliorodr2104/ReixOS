@@ -146,12 +146,13 @@ extension VMAManager {
     }
 
 
-    /// The lowest VMA overlapping `range`, refusing a request that would take the
-    /// brk region apart.
+    /// The lowest VMA overlapping `range`, refusing cuts of object windows and
+    /// the brk heap before either edge is split.
     ///
-    /// The brk heap is one VMA the manager keeps a pointer to, so it may be
-    /// unmapped whole or not at all: a partial unmap would split it and leave the
-    /// cache pointing at a node that no longer describes the break.
+    /// `BackingType.permitsSplit` also guards the list's split operation, but a
+    /// refusal there could leave the first edge split before reaching the second.
+    /// The brk heap has the same whole-or-nothing rule because the manager caches
+    /// its single node, even though its backing is anonymous.
     private func unmappableRegions(
         over range: (start: VirtualAddress, end: VirtualAddress)
     ) throws(VMAError) -> UnsafeMutablePointer<VirtualMemoryArea> {
@@ -164,7 +165,7 @@ extension VMAManager {
         var probe: UnsafeMutablePointer<VirtualMemoryArea>? = overlapping
         while let nodePtr = probe, nodePtr.pointee.startAddress < range.end {
 
-            if nodePtr == brkVMA {
+            if nodePtr == brkVMA || !nodePtr.pointee.backingType.permitsSplit {
                 guard nodePtr.pointee.startAddress >= range.start,
                       nodePtr.pointee.endAddress   <= range.end
                 else { throw .invalidLayout }
