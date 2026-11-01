@@ -13,10 +13,9 @@ import KernelHostShims
 ///
 /// The parent's writable pages are downgraded in place while the walk runs and
 /// the child's pages, code included, are installed into a space nobody has run.
-/// Both are settled once, when `cloneRegions` returns: one `tlbi aside1is` for
-/// the parent's tag and one completion for the child's code. Per page, which is
-/// the cost this replaced, a fork of a process with fifty pages of text paid
-/// fifty whole-cache invalidations.
+/// The parent's tag is retired once. Already published code needs nothing on
+/// VIPT and PIPT caches; other policies keep the conservative publication.
+/// A copied frame or a page newly made executable still needs publication.
 ///
 /// `.serialized`, and the run needs `--no-parallel`: the recorder, the loaded
 /// cache type, `PPMBackend.physicalOffset` and `ProcessStatsIndex` are globals.
@@ -28,9 +27,29 @@ struct RegionCloneTests {
     private static let text = UserSpaceLayout.elfBaseTypical
 
 
-    @Test("a clone retires the parent's tag once and publishes the child's code once")
-    func cloneSettlesOnce() {
-        withParent(dataPages: 3, codePages: 2) { ram, parent, child, code in
+    struct Cache: Sendable, CustomTestStringConvertible {
+        let name : String
+        let ctr  : UInt64
+        let clean: Int
+        let all  : Int
+
+        var testDescription: String { name }
+    }
+
+    static let caches: [Cache] = [
+        Cache(name: "VIPT", ctr: cortexA53CacheType, clean: 0, all: 0),
+        Cache(name: "PIPT", ctr: 0x8444_C004, clean: 0, all: 0),
+        Cache(name: "VIPT IDC", ctr: 0x9444_8004, clean: 0, all: 0),
+        Cache(name: "PIPT IDC DIC", ctr: 0xB444_C004, clean: 0, all: 0),
+        Cache(name: "legacy AIVIVT", ctr: 0x8444_4004, clean: 16, all: 1),
+        Cache(name: "reserved, formerly VPIPT", ctr: 0x8444_0004, clean: 16, all: 1),
+        Cache(name: "never loaded", ctr: 0, clean: 16, all: 1),
+    ]
+
+
+    @Test("a clone reuses published code only on known physically tagged caches", arguments: caches)
+    func cloneSettlesOnce(_ cache: Cache) {
+        withParent(dataPages: 3, codePages: 16, cacheType: cache.ctr) { ram, parent, child, code in
             let parentASID = parent.pointee.addressSpace.asid
 
             mmu_trace_reset(nil)
@@ -46,11 +65,9 @@ struct RegionCloneTests {
 
             let calls = mmuCalls()
 
-            // One invalidation, the parent's tag, then the one completion, last.
-            #expect(Array(calls.suffix(2).map(\.op)) == [.tlbASID, .icacheAll])
-            #expect(calls.suffix(2).first?.arg == UInt64(parentASID))
-            #expect(mmuCount(.tlbASID)   == 1)
-            #expect(mmuCount(.icacheAll) == 1)
+            #expect(calls.filter { $0.op == .tlbASID }.map(\.arg) == [UInt64(parentASID)])
+            #expect(mmuCount(.icacheAll)   == cache.all)
+            #expect(mmuCount(.icacheLines) == 0)
 
             // Nothing per page, and nothing past the parent's own entries.
             #expect(mmuCount(.tlbLeaf)  == 0)
@@ -59,14 +76,18 @@ struct RegionCloneTests {
             #expect(mmuCount(.tlbAll)   == 0)
             #expect(mmuCount(.stream)   == 0)
 
-            // Each code page staged once, through the kernel alias of its frame.
-            #expect(calls.filter { $0.op == .cleanPoU }.map(\.arg) == code)
+            #expect(calls.filter { $0.op == .cleanPoU }.map(\.arg)
+                == (cache.clean == 0 ? [] : code))
+            #expect(calls.last?.op == (cache.all == 0 ? .tlbASID : .icacheAll))
 
-            // And the child's code is in place, sharing the parent's frames.
-            #expect(ram.vmm.pointee.physicalAddressOf(
-                rootTable: child.pointee.addressSpace.rootTablePhysical,
-                virtual  : Self.text
-            ) == code.first)
+            for (index, frame) in code.enumerated() {
+                #expect(ram.vmm.pointee.physicalAddressOf(
+                    rootTable: child.pointee.addressSpace.rootTablePhysical,
+                    virtual  : Self.text + UInt64(index) * Self.page
+                ) == frame)
+                #expect(ram.ppm.pointee.refCount(of: frame) == 2)
+            }
+            print("clone \(cache.name): clean=\(mmuCount(.cleanPoU)) lines=\(mmuCount(.icacheLines)) all=\(mmuCount(.icacheAll)) stream=\(mmuCount(.stream)) parentTLBI=\(mmuCount(.tlbASID))")
         }
     }
 
@@ -95,9 +116,111 @@ struct RegionCloneTests {
                 try childVMA.pointee.cloneRegions(from: parentVMA.pointee)
             }
 
-            #expect(Array(mmuOps().suffix(2)) == [.tlbASID, .icacheAll])
-            #expect(mmuCalls().suffix(2).first?.arg == UInt64(parentASID))
+            #expect(mmuOps().last == .tlbASID)
+            #expect(mmuCalls().last?.arg == UInt64(parentASID))
+            #expect(mmuCount(.icacheAll) == 0)
             #expect(mmuCount(.tlbAll) == 0)
+        }
+    }
+
+
+    @Test("a clone with no executable pages has no instruction batch", arguments: [0, 3])
+    func noCodeHasNoCompletion(_ dataPages: Int) {
+        withParent(dataPages: dataPages, codePages: 0, cacheType: 0x8444_4004) { _, parent, child, _ in
+            mmu_trace_reset(nil)
+            defer { mmu_trace_reset(nil) }
+
+            #expect(throws: Never.self) {
+                try child.pointee.addressSpace.vmaManager!.pointee.cloneRegions(
+                    from: parent.pointee.addressSpace.vmaManager!.pointee
+                )
+            }
+            #expect(mmuCount(.tlbASID) == 1)
+            #expect(mmuCount(.cleanPoU) == 0)
+            #expect(mmuCount(.icacheAll) == 0)
+            #expect(mmuCount(.stream) == 0)
+        }
+    }
+
+
+    @Test("a clone that first makes a page executable publishes it", arguments: [cortexA53CacheType, 0x8444_C004])
+    func newlyExecutableCodeIsPublished(_ cacheType: UInt64) {
+        withParent(dataPages: 0, codePages: 1, cacheType: cacheType, parentExecutable: false) { _, parent, child, code in
+            mmu_trace_reset(nil)
+            defer { mmu_trace_reset(nil) }
+
+            #expect(throws: Never.self) {
+                try child.pointee.addressSpace.vmaManager!.pointee.cloneRegions(
+                    from: parent.pointee.addressSpace.vmaManager!.pointee
+                )
+            }
+            #expect(mmuCalls().filter { $0.op == .cleanPoU }.map(\.arg) == code)
+            #expect(mmuCount(.icacheAll) == (cacheType == cortexA53CacheType ? 1 : 0))
+            #expect(mmuCount(.icacheLines) == (cacheType == cortexA53CacheType ? 0 : 1))
+            #expect(mmuOps().last == (cacheType == cortexA53CacheType ? .icacheAll : .stream))
+        }
+    }
+
+
+    @Test("a throwing clone completes code already staged", arguments: [0, 4])
+    func failedCodeCloneCompletes(_ allowance: UInt32) {
+        withParent(dataPages: 0, codePages: 2, cacheType: 0x8444_4004) { _, parent, child, code in
+            let budget = child.pointee.metadata.pointee.budget!
+            budget.pointee.limit = budget.pointee.charged + allowance
+
+            mmu_trace_reset(nil)
+            defer { mmu_trace_reset(nil) }
+
+            #expect(throws: VMAError.self) {
+                try child.pointee.addressSpace.vmaManager!.pointee.cloneRegions(
+                    from: parent.pointee.addressSpace.vmaManager!.pointee
+                )
+            }
+            #expect(mmuCalls().filter { $0.op == .cleanPoU }.map(\.arg)
+                == (allowance == 0 ? [] : [code[0]]))
+            #expect(mmuCount(.icacheAll) == (allowance == 0 ? 0 : 1))
+            #expect(mmuCount(.tlbASID) == 1)
+        }
+    }
+
+
+    @Test("the private code copied after a clone still needs publication", arguments: [cortexA53CacheType, 0x8444_C004])
+    func copiedCodeIsPublished(_ cacheType: UInt64) {
+        withParent(
+            dataPages: 0,
+            codePages: 1,
+            cacheType: cacheType,
+            codePermissions: [.read, .write, .execute, .user]
+        ) { ram, parent, child, code in
+            let childVMA = child.pointee.addressSpace.vmaManager!
+            mmu_trace_reset(nil)
+            defer { mmu_trace_reset(nil) }
+
+            #expect(throws: Never.self) {
+                try childVMA.pointee.cloneRegions(from: parent.pointee.addressSpace.vmaManager!.pointee)
+            }
+            #expect(mmuCount(.cleanPoU) == 0)
+            #expect(mmuCount(.icacheAll) == 0)
+            #expect(mmuCount(.icacheLines) == 0)
+            #expect(mmuCount(.stream) == 0)
+
+            Arch.CPU.setCurrentProcess(UInt64(UInt(bitPattern: child)))
+            mmu_trace_reset(nil)
+
+            #expect(childVMA.pointee.handlePageFault(
+                at: Self.text, cause: .permission, access: .write
+            ) == .handled)
+
+            guard let copy = ram.vmm.pointee.physicalAddressOf(
+                rootTable: child.pointee.addressSpace.rootTablePhysical,
+                virtual: Self.text
+            ) else { Issue.record("the child lost its code mapping"); return }
+            #expect(copy != code.first)
+            #expect(mmuCalls().filter { $0.op == .cleanPoU }.map(\.arg) == [copy])
+            #expect(mmuCount(.icacheAll) == (cacheType == cortexA53CacheType ? 1 : 0))
+            #expect(mmuCount(.icacheLines) == (cacheType == cortexA53CacheType ? 0 : 1))
+            let bytes: UnsafeMutablePointer<UInt8> = ram.vmm.pointee.physToVirt(copy)
+            #expect(bytes[0] == 0x5A)
         }
     }
 
@@ -110,6 +233,9 @@ struct RegionCloneTests {
     private func withParent(
         dataPages: Int,
         codePages: Int,
+        cacheType: UInt64 = cortexA53CacheType,
+        codePermissions: VMAPermissions = [.read, .execute, .user],
+        parentExecutable: Bool = true,
         _ body   : (
             HostRAM,
             UnsafeMutablePointer<Process>,
@@ -118,15 +244,20 @@ struct RegionCloneTests {
         ) -> Void
     ) {
         withProcessManager(pages: 256) { ram, _, manager in
-            withCacheType(cortexA53CacheType) {
+            withCacheType(cacheType) {
                 guard let parent    = try? manager.pointee.spawnProcess(),
                       let child     = try? manager.pointee.spawnProcess(),
-                      let parentVMA = parent.pointee.addressSpace.vmaManager,
-                      let data      = try? parentVMA.pointee.mmapAnonymous(
+                      let parentVMA = parent.pointee.addressSpace.vmaManager
+                else { Issue.record("could not spawn the pair"); return }
+
+                var data: VirtualAddress = 0
+                if dataPages > 0 {
+                    guard let address = try? parentVMA.pointee.mmapAnonymous(
                         size       : UInt64(dataPages) * Self.page,
                         permissions: [.read, .write, .user]
-                      )
-                else { Issue.record("could not spawn the pair"); return }
+                    ) else { Issue.record("could not register data"); return }
+                    data = address
+                }
 
                 Arch.CPU.setCurrentProcess(UInt64(UInt(bitPattern: parent)))
                 defer { Arch.CPU.setCurrentProcess(0) }
@@ -142,7 +273,7 @@ struct RegionCloneTests {
                 var code: [PhysicalAddress] = []
 
                 if codePages > 0 {
-                    let permissions: VMAPermissions = [.read, .execute, .user]
+                    let permissions = codePermissions
 
                     #expect(throws: Never.self) {
                         try parentVMA.pointee.registerRegion(
@@ -161,13 +292,18 @@ struct RegionCloneTests {
                             return
                         }
 
+                        let bytes: UnsafeMutablePointer<UInt8> = ram.vmm.pointee.physToVirt(frame.address)
+                        bytes.initialize(repeating: 0x5A, count: Int(Self.page))
+                        var flags = permissions.toPageFlags()
+                        if !parentExecutable { flags.insert(.uxn) }
+
                         #expect(throws: Never.self) {
                             try ram.vmm.pointee.installUserPage(
                                 rootTable: parent.pointee.addressSpace.rootTablePhysical,
                                 asid     : parent.pointee.addressSpace.asid,
                                 virtual  : Self.text + UInt64(index) * Self.page,
                                 physical : frame.address,
-                                flags    : permissions.toPageFlags(),
+                                flags    : flags,
                                 type     : .normal
                             )
                         }

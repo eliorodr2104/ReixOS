@@ -124,6 +124,13 @@ extension AArch64MMU {
     /// lines a fetch through the user alias would hit. A VIPT cache may not.
     static var instructionCacheIsPIPT: Bool { (cacheType >> 14) & 0b11 == 0b11 }
 
+    /// The IVIPT rule makes translation changes transparent on VIPT and PIPT
+    /// caches: an unchanged PA needs no second publication under a new ASID.
+    ///
+    /// Keep the conservative path for AIVIVT and the reserved encoding formerly
+    /// used for VPIPT, which is also what a cache type not yet loaded decodes as.
+    static var canReusePublishedInstructions: Bool { (cacheType >> 14) & 0b10 != 0 }
+
     /// Bytes per line, from DminLine and IminLine, which count 4-byte words.
     static var dataLine       : UInt64 { 4 << ((cacheType >> 16) & 0xF) }
     static var instructionLine: UInt64 { 4 << (cacheType & 0xF) }

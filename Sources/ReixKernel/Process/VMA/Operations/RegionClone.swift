@@ -77,6 +77,10 @@ struct RegionClone: ResumableOperation {
     /// child's cache at it.
     private let parentBrk: UnsafeMutablePointer<VirtualMemoryArea>?
 
+    /// The caller's batch, set only after an executable install staged bytes.
+    /// AddressSpaceClone cannot suspend, so the pointer never outlives its call.
+    private let instructionPublicationPending: UnsafeMutablePointer<Bool>
+
     /// The parent VMA being cloned, `nil` once the walk is over.
     private var node: UnsafeMutablePointer<VirtualMemoryArea>?
 
@@ -101,18 +105,20 @@ struct RegionClone: ResumableOperation {
     ///   forward from it and covers all of it, so a `nil` head is a clone with
     ///   nothing to do.
     init(
-        manager   : UnsafeMutablePointer<VMAManager>,
-        context   : PagingContext,
-        parentRoot: PhysicalAddress,
-        parentASID: ASID,
-        parentBrk : UnsafeMutablePointer<VirtualMemoryArea>?,
-        from first: UnsafeMutablePointer<VirtualMemoryArea>?
+        manager                      : UnsafeMutablePointer<VMAManager>,
+        context                      : PagingContext,
+        parentRoot                   : PhysicalAddress,
+        parentASID                   : ASID,
+        parentBrk                    : UnsafeMutablePointer<VirtualMemoryArea>?,
+        instructionPublicationPending: UnsafeMutablePointer<Bool>,
+        from first                   : UnsafeMutablePointer<VirtualMemoryArea>?
     ) {
         self.manager    = manager
         self.context    = context
         self.parentRoot = parentRoot
         self.parentASID = parentASID
         self.parentBrk  = parentBrk
+        self.instructionPublicationPending = instructionPublicationPending
         self.node       = first
         self.cursor     = 0
         self.registered = false
@@ -173,7 +179,7 @@ struct RegionClone: ResumableOperation {
     }
 
 
-    /// Share or copy one batch of `vma`'s resident pages, and answer where the
+    /// Share one batch of `vma`'s resident pages, and answer where the
     /// next step picks up.
     ///
     /// An anonymous writable region is mapped read-only into both processes and
@@ -195,7 +201,7 @@ struct RegionClone: ResumableOperation {
     /// runs. The parent's downgrade is a protect, the same frame with the write
     /// bit taken out, and both are `batched` because `cloneRegions` ends in one
     /// `tlbi aside1is` for the parent's tag that covers the whole walk, and in
-    /// one completion of the child's code pages. One invalidation of the parent
+    /// one completion if any code needed publication. One parent invalidation
     /// beats a `tlbi vale1is` plus `dsb ish` plus `isb` per downgraded page, and
     /// it is correct only because the parent cannot run between the downgrade
     /// and that flush. T29 (concurrent VM) and T35 have to revisit exactly this:
@@ -261,6 +267,7 @@ struct RegionClone: ResumableOperation {
             }
 
             let parentPhys = parentEntry.physicalAddress
+            let instructionsAlreadyPublished = !parentEntry.flags.contains(.uxn)
 
             let pageFlags                 : VirtualPageFlags
             let downgradeParentPermissions: Bool
@@ -306,15 +313,21 @@ struct RegionClone: ResumableOperation {
 
             do {
                 try vmm.pointee.installUserPage(
-                    rootTable: context.rootTablePhysical,
-                    asid     : context.asid,
-                    virtual  : va,
-                    physical : parentPhys,
-                    flags    : pageFlags,
-                    type     : vma.memoryType,
-                    budget   : context.budget,
-                    batched  : true
+                    rootTable                   : context.rootTablePhysical,
+                    asid                        : context.asid,
+                    virtual                     : va,
+                    physical                    : parentPhys,
+                    flags                       : pageFlags,
+                    type                        : vma.memoryType,
+                    budget                      : context.budget,
+                    batched                     : true,
+                    instructionsAlreadyPublished: instructionsAlreadyPublished
                 )
+
+                if !pageFlags.contains(.uxn),
+                   !instructionsAlreadyPublished || !Arch.MMU.canReusePublishedInstructions {
+                    instructionPublicationPending.pointee = true
+                }
 
                 manager.pointee.noteMapped(1)
 
@@ -322,12 +335,13 @@ struct RegionClone: ResumableOperation {
                 // Safe only while the parent cannot run before we return.
                 if downgradeParentPermissions {
                     try vmm.pointee.protectUserPage(
-                        rootTable: parentRoot,
-                        asid     : parentASID,
-                        virtual  : va,
-                        flags    : pageFlags,
-                        type     : vma.memoryType,
-                        batched  : true
+                        rootTable                   : parentRoot,
+                        asid                        : parentASID,
+                        virtual                     : va,
+                        flags                       : pageFlags,
+                        type                        : vma.memoryType,
+                        batched                     : true,
+                        instructionsAlreadyPublished: instructionsAlreadyPublished
                     )
                 }
 

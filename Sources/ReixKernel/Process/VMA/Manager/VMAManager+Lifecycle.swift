@@ -52,8 +52,8 @@ extension VMAManager {
     /// `split`/`fork`).
     ///
     /// Every parent VMA is registered here carrying the parent's backing type, and
-    /// its resident pages are then shared or copied according to that backing: only
-    /// `.anonymous` regions are this address space's to duplicate, so a writable one
+    /// its resident pages share the parent's frames: only `.anonymous` regions
+    /// are this address space's to retain, so a writable one
     /// is mapped read-only in both processes and marked `.copyOnWrite`. See
     /// `RegionClone` for what a step does and what it leaves behind.
     ///
@@ -70,24 +70,34 @@ extension VMAManager {
     /// the parent's tag alone: the child's has never been in TTBR0, so it holds
     /// nothing to retire, and nobody else's entries changed.
     ///
-    /// The child's code pages were staged as they were installed and are
-    /// published by the one completion here, before the child can be scheduled.
+    /// The clone shares frames without writing them. On VIPT and PIPT caches,
+    /// executable parent mappings therefore carry their publication with them.
+    /// Any code that still needed staging is completed once here, including on
+    /// a throwing exit, before the child can be scheduled or destroyed.
     public mutating func cloneRegions(from parent: VMAManager) throws(VMAError) {
+        var instructionPublicationPending = false
+
         defer {
             Arch.MMU.flushTLB(asid: parent.context.asid)
-            Arch.MMU.completeInstructionPublication()
+            if instructionPublicationPending {
+                Arch.MMU.completeInstructionPublication()
+            }
         }
 
-        _ = try Preemption.run(
-            AddressSpaceClone.self,
-            RegionClone(
-                manager   : managerPointer(),
-                context   : context,
-                parentRoot: parent.context.rootTablePhysical,
-                parentASID: parent.context.asid,
-                parentBrk : parent.brkVMA,
-                from      : parent.vmaList.head
+        try withUnsafeMutablePointer(to: &instructionPublicationPending) {
+            (pending: UnsafeMutablePointer<Bool>) throws(VMAError) in
+            _ = try Preemption.run(
+                AddressSpaceClone.self,
+                RegionClone(
+                    manager                      : managerPointer(),
+                    context                      : context,
+                    parentRoot                   : parent.context.rootTablePhysical,
+                    parentASID                   : parent.context.asid,
+                    parentBrk                    : parent.brkVMA,
+                    instructionPublicationPending: pending,
+                    from                         : parent.vmaList.head
+                )
             )
-        )
+        }
     }
 }

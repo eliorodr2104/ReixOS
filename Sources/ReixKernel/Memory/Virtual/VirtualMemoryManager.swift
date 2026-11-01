@@ -683,15 +683,20 @@ public struct VirtualMemoryManager: Loggable {
     /// - Parameter batched: `true` stages an executable page's bytes and leaves
     ///   the completion to the caller's `completeInstructionPublication`. See
     ///   `publishInstructionStream` for the rule a caller then has to keep.
+    /// - Parameter instructionsAlreadyPublished: the same frame's bytes have
+    ///   completed publication and have not been written since. A clone sharing
+    ///   that frame can reuse the publication on caches where translation
+    ///   changes are transparent. A copied or written frame must leave this false.
     public func installUserPage(
-        rootTable: PhysicalAddress,
-        asid     : ASID,
-        virtual  : VirtualAddress,
-        physical : PhysicalAddress,
-        flags    : VirtualPageFlags,
-        type     : MemoryType,
-        budget   : UnsafeMutablePointer<FrameBudget>? = nil,
-        batched  : Bool = false
+        rootTable                   : PhysicalAddress,
+        asid                        : ASID,
+        virtual                     : VirtualAddress,
+        physical                    : PhysicalAddress,
+        flags                       : VirtualPageFlags,
+        type                        : MemoryType,
+        budget                      : UnsafeMutablePointer<FrameBudget>? = nil,
+        batched                     : Bool = false,
+        instructionsAlreadyPublished: Bool = false
     ) throws(PPMError) {
         let tablePointer: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable)
 
@@ -704,7 +709,12 @@ public struct VirtualMemoryManager: Loggable {
 
         guard !slot.pointee.isPresent else { throw .pageAlreadyMapped }
 
-        publishInstructionStream(physical: physical, flags: flags, batched: batched)
+        publishInstructionStream(
+            physical        : physical,
+            flags           : flags,
+            batched         : batched,
+            alreadyPublished: instructionsAlreadyPublished
+        )
 
         slot.pointee = Self.userDescriptor(
             from    : slot.pointee,
@@ -718,23 +728,25 @@ public struct VirtualMemoryManager: Loggable {
 
 
     public func installUserPage(
-        addressSpace: borrowing AddressSpace,
-        virtual     : VirtualAddress,
-        physical    : PhysicalAddress,
-        flags       : VirtualPageFlags,
-        type        : MemoryType,
-        budget      : UnsafeMutablePointer<FrameBudget>? = nil,
-        batched     : Bool = false
+        addressSpace                : borrowing AddressSpace,
+        virtual                     : VirtualAddress,
+        physical                    : PhysicalAddress,
+        flags                       : VirtualPageFlags,
+        type                        : MemoryType,
+        budget                      : UnsafeMutablePointer<FrameBudget>? = nil,
+        batched                     : Bool = false,
+        instructionsAlreadyPublished: Bool = false
     ) throws(PPMError) {
         try installUserPage(
-            rootTable: addressSpace.rootTablePhysical,
-            asid     : addressSpace.asid,
-            virtual  : virtual,
-            physical : physical,
-            flags    : flags,
-            type     : type,
-            budget   : budget,
-            batched  : batched
+            rootTable                   : addressSpace.rootTablePhysical,
+            asid                        : addressSpace.asid,
+            virtual                     : virtual,
+            physical                    : physical,
+            flags                       : flags,
+            type                        : type,
+            budget                      : budget,
+            batched                     : batched,
+            instructionsAlreadyPublished: instructionsAlreadyPublished
         )
     }
 
@@ -764,12 +776,18 @@ public struct VirtualMemoryManager: Loggable {
     /// still `.configuring`, an image the loader is still building, a child the
     /// clone has not handed to the scheduler. A live space keeps the unbatched
     /// order, one page at a time.
+    ///
+    /// Already published bytes need nothing on a known VIPT or PIPT cache.
+    /// An ASID change does not change physical tags, and the earlier whole-cache
+    /// invalidation on VIPT covered every alias. Other policies keep publishing.
     private func publishInstructionStream(
-        physical: PhysicalAddress,
-        flags   : VirtualPageFlags,
-        batched : Bool
+        physical        : PhysicalAddress,
+        flags           : VirtualPageFlags,
+        batched         : Bool,
+        alreadyPublished: Bool = false
     ) {
         guard !flags.contains(.uxn) else { return }
+        guard !alreadyPublished || !Arch.MMU.canReusePublishedInstructions else { return }
 
         let bytes: UnsafeMutablePointer<UInt8> = physToVirt(physical)
 
@@ -811,13 +829,16 @@ public struct VirtualMemoryManager: Loggable {
     ///   once at the end: correct on one core, where the parent cannot run in
     ///   between, and no more than that, so whoever makes this kernel run on
     ///   several has to revisit it.
+    /// - Parameter instructionsAlreadyPublished: the unchanged bytes have already
+    ///   completed publication, as in a clone's write-permission downgrade.
     public func protectUserPage(
-        rootTable: PhysicalAddress,
-        asid     : ASID,
-        virtual  : VirtualAddress,
-        flags    : VirtualPageFlags,
-        type     : MemoryType,
-        batched  : Bool = false
+        rootTable                   : PhysicalAddress,
+        asid                        : ASID,
+        virtual                     : VirtualAddress,
+        flags                       : VirtualPageFlags,
+        type                        : MemoryType,
+        batched                     : Bool = false,
+        instructionsAlreadyPublished: Bool = false
     ) throws(PPMError) {
         let tablePointer: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable)
 
@@ -832,7 +853,12 @@ public struct VirtualMemoryManager: Loggable {
               entry.shareability == attrs.share
         else { throw .pageAttributesImmutable }
 
-        publishInstructionStream(physical: entry.physicalAddress, flags: flags, batched: batched)
+        publishInstructionStream(
+            physical        : entry.physicalAddress,
+            flags           : flags,
+            batched         : batched,
+            alreadyPublished: instructionsAlreadyPublished
+        )
 
         entry.flags = flags.union(Self.userLeafFlags)
 
