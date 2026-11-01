@@ -237,7 +237,7 @@ public struct FileSystemServer: Service {
         }
         guard append(.status, findings.safeToServe ? FSStatus.ok.rawValue : FSStatus.deviceFailed.rawValue),
               append(.complete, findings.complete ? 1 : 0),
-              append(.scrubDepth, findings.depth == .everything ? 1 : 0),
+              append(.scrubDepth, Self.depthCode(findings.depth)),
               append(.quotasChecked, findings.quotasChecked ? 1 : 0),
               append(.reclaimableBlocks, findings.reclaimable), append(.ownedButFree, findings.ownedButFree),
               append(.claimedTwice, findings.claimedTwice), append(.impossible, findings.impossible),
@@ -247,9 +247,18 @@ public struct FileSystemServer: Service {
               append(.wrongQuota, findings.wrongQuota), append(.strayCharges, findings.strayCharges),
               append(.selfParented, findings.selfParented), append(.roomsMended, findings.roomsMended),
               append(.mapMended, findings.mapMended ? 1 : 0), append(.tooManyContainers, findings.tooManyContainers ? 1 : 0),
-              append(.safeToServe, findings.safeToServe ? 1 : 0)
+              append(.safeToServe, findings.safeToServe ? 1 : 0),
+              append(.damagedBlocks, findings.damagedData)
         else { return 0 }
         return writer.finish()
+    }
+
+    private static func depthCode(_ depth: FileSystem<BlockClient>.Scrub) -> UInt32 {
+        switch depth {
+            case .blocks    : 0
+            case .everything: 1
+            case .data      : 2
+        }
     }
 
 
@@ -580,7 +589,7 @@ public struct FileSystemServer: Service {
                     return
                 }
 
-                let findings = disk.scan(.everything)
+                let findings = disk.scan(.data)
                 guard let slot = slot(for: request.identity), let window = window(slot),
                       let length = UInt32(exactly: Self.encodeScrub(
                         findings,

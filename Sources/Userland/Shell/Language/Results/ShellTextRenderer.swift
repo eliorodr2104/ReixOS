@@ -331,6 +331,7 @@ public enum ShellTextRenderer {
             case .selfParented: label = "self-parented: "
             case .roomsMended: label = "rooms-mended: "
             case .mapMended: label = "map-mended: "
+            case .damagedBlocks: label = "damaged-blocks: "
             case .text: return false
         }
         guard count <= bytes.count - label.utf8CodeUnitCount - 11 else { return false }

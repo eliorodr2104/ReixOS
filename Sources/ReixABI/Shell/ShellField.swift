@@ -29,4 +29,5 @@ public enum ShellField: UInt16, Equatable {
     case selfParented             = 20
     case roomsMended              = 21
     case mapMended                = 22
+    case damagedBlocks            = 23
 }

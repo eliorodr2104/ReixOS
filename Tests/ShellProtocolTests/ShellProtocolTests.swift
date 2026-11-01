@@ -114,7 +114,8 @@ struct ShellProtocolTests {
 
     @Test("all filesystem findings render in bounded ordered chunks")
     func findingsChunks() {
-        var storage = [UInt8](repeating: 0, count: 256)
+        // Twenty-one scalars of twelve bytes behind a sixteen-byte header.
+        var storage = [UInt8](repeating: 0, count: 512)
         let written = storage.withUnsafeMutableBufferPointer { bytes -> Int in
             guard var writer = ShellFrameWriter(
                 bytes.baseAddress!, capacity: bytes.count, schema: .fileSystemFindings,
@@ -123,7 +124,7 @@ struct ShellProtocolTests {
             let fields: [(ShellField, UInt32)] = [
                 (.status, FSStatus.deviceFailed.rawValue),
                 (.complete, 1),
-                (.scrubDepth, 1),
+                (.scrubDepth, 2),
                 (.quotasChecked, 1),
                 (.reclaimableBlocks, UInt32.max),
                 (.ownedButFree, UInt32.max),
@@ -141,6 +142,7 @@ struct ShellProtocolTests {
                 (.mapMended, 1),
                 (.tooManyContainers, 1),
                 (.safeToServe, 0),
+                (.damagedBlocks, UInt32.max),
             ]
             for (field, value) in fields {
                 guard writer.appendScalar(field == .status ? .status : .scalar, field: field, value: value) else {
@@ -162,7 +164,7 @@ struct ShellProtocolTests {
             }
         }
         let expected = Array(
-            "status: 1\ncomplete: 1\nscrub-depth: 1\nquotas-checked: 1\nreclaimable-blocks: 4294967295\nowned-but-free: 4294967295\nclaimed-twice: 4294967295\nimpossible: 4294967295\nstray-names: 4294967295\nduplicate-names: 4294967295\nduplicate-targets: 4294967295\nbroken-entries: 4294967295\nname-scrub-budget-exhausted: 1\nwrong-quota: 4294967295\nstray-charges: 4294967295\nself-parented: 4294967295\nrooms-mended: 4294967295\nmap-mended: 1\ntoo-many-containers: 1\nsafe-to-serve: 0\n".utf8
+            "status: 1\ncomplete: 1\nscrub-depth: 2\nquotas-checked: 1\nreclaimable-blocks: 4294967295\nowned-but-free: 4294967295\nclaimed-twice: 4294967295\nimpossible: 4294967295\nstray-names: 4294967295\nduplicate-names: 4294967295\nduplicate-targets: 4294967295\nbroken-entries: 4294967295\nname-scrub-budget-exhausted: 1\nwrong-quota: 4294967295\nstray-charges: 4294967295\nself-parented: 4294967295\nrooms-mended: 4294967295\nmap-mended: 1\ntoo-many-containers: 1\nsafe-to-serve: 0\ndamaged-blocks: 4294967295\n".utf8
         )
         #expect(didRender)
         #expect(chunks == 5)

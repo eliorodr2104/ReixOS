@@ -7,7 +7,7 @@
 
 public enum ShellFindingsFrame {
 
-    public static let recordCount = 20
+    public static let recordCount = 21
 
     public static func validates(_ frame: ShellFrame) -> Bool {
 
@@ -15,7 +15,7 @@ public enum ShellFindingsFrame {
               frame.recordCount == recordCount
         else { return false }
 
-        var values = InlineArray<20, UInt32>(repeating: 0)
+        var values = InlineArray<21, UInt32>(repeating: 0)
         for index in 0..<recordCount {
 
             guard let scalar = frame.scalar(at: index),
@@ -26,13 +26,13 @@ public enum ShellFindingsFrame {
             values[index] = scalar.value
         }
 
-        guard values[1] <= 1, values[2] <= 1, values[3] <= 1, values[12] <= 1,
+        guard values[1] <= 1, values[2] <= 2, values[3] <= 1, values[12] <= 1,
               values[17] <= 1, values[18] <= 1, values[19] <= 1
         else { return false }
 
         if values[19] == 1 {
             return values[0] == FSStatus.ok.rawValue && frame.envelope.flags == [.end]
-                && values[1]  == 1 && values[2]  == 1 && values[3]  == 1
+                && values[1]  == 1 && values[2]  != 0 && values[3]  == 1
                 && values[5]  == 0 && values[6]  == 0 && values[7]  == 0
                 && values[8]  == 0 && values[9]  == 0 && values[10] == 0
                 && values[11] == 0 && values[12] == 0 && values[13] == 0
@@ -72,6 +72,7 @@ public enum ShellFindingsFrame {
 
             case 18: .tooManyContainers
             case 19: .safeToServe
+            case 20: .damagedBlocks
             default: nil
         }
     }
