@@ -28,24 +28,29 @@ The process traversal uses `UInt64.max` for both exhaustion and failure. System 
 
 ### `SystemStats`
 
-152 bytes, members aligned in declaration order. A group whose `availability` bit is clear reads zero and means "not measured".
+164 bytes, stride 168, alignment 8; members aligned in declaration order. [SystemStats](../../../Sources/ReixABI/ProcessStats/SystemStats.swift#L42) defines the record and [ABILayoutTests.statsLayout](../../../Tests/ABILayoutTests/ABILayoutTests.swift#L225) checks its size, stride and every field offset. A group whose `availability` bit is clear reads zero and means "not measured".
 
 | Offset | Fields | Type | Group / meaning |
 | --- | --- | --- | --- |
-| 0 | `physicalTotalPages`, `physicalAllocatedPages`, `physicalFreePages` | `UInt64` | Physical frames, machine-wide. |
-| 24 | `physicalQuarantinedPages`, `physicalQuarantinedRegions` | `UInt32` | DMA buffers nobody holds, kept out of the page manager until their device is declared reset. Counted as allocated. |
+| 0, 8, 16 | `physicalTotalPages`, `physicalAllocatedPages`, `physicalFreePages` | `UInt64` | Physical frames, machine-wide. |
+| 24, 28 | `physicalQuarantinedPages`, `physicalQuarantinedRegions` | `UInt32` | DMA buffers nobody holds, kept out of the page manager until their device is declared reset. Counted as allocated. |
 | 32 | `physicalRefusedPages` | `UInt32` | Frames of quarantined DMA blocks whose reclaim the page manager refused; held until its books make sense. Counted as allocated. |
 | 36 | `physicalDoubleFrees` | `UInt32` | DMA blocks found already free at reclaim. |
-| 40 | `kernelHeapLive*`, `kernelHeapReserved*` (bytes and high-water) | `UInt64` | Kernel heap: rounded live capacity and physical backing. |
+| 40, 48, 56, 64 | `kernelHeapLiveBytes`, `kernelHeapLiveHighWaterBytes`, `kernelHeapReservedBytes`, `kernelHeapReservedHighWaterBytes` | `UInt64` | Kernel heap: rounded live capacity and physical backing. |
 | 72 | `timerFrequency` | `UInt64` | Generic-timer Hz; the unit of every latency field. |
 | 80 | `traceLost` | `UInt64` | Trace events dropped. |
 | 88 | `availability` | `UInt32` | `SystemMetricAvailability` bits: physical memory, kernel heap, stacks, timer, PMU cycle counter, latency (`1 << 5`). |
-| 92 | `kernelStack*`, `exceptionStack*` (used and capacity) | `UInt32` | Stack high-water marks from the poison scan. |
-| 108 | `pmuEventAvailability`, `pmuEventCounters` | `UInt16` | PMU events advertised and counters implemented. |
+| 92, 96, 100, 104 | `kernelStackUsedBytes`, `kernelStackCapacity`, `exceptionStackUsedBytes`, `exceptionStackCapacity` | `UInt32` | Stack high-water marks from the poison scan. |
+| 108, 110 | `pmuEventAvailability`, `pmuEventCounters` | `UInt16` | PMU events advertised and counters implemented. |
 | 112 | `wakeToRunLongest` | `UInt32` | Worst wake-to-run, counter units, saturated. |
 | 116 | `deadlineLagLongest` | `UInt32` | Worst lag from a kernel deadline to its process running. |
-| 120 | `irqOffLongest`, `irqOffLongestPath` | `UInt32` | Longest IRQ-off stretch and its `IrqOffPath`: a syscall number below 64, 64 for an interrupt, 65 for any other exception. |
-| 128 | `irqOffCloneLongest`, `irqOffUnmapLongest`, `irqOffDecommitLongest`, `irqOffTeardownLongest`, `irqOffRollbackLongest`, `irqOffTaskMapLongest` | `UInt32` | Longest stretch inside each preemption region. |
+| 120, 124 | `irqOffLongest`, `irqOffLongestPath` | `UInt32` | Longest IRQ-off stretch and its `IrqOffPath`: a syscall number below 64, 64 for an interrupt, 65 for any other exception. |
+| 128, 132, 136, 140, 144, 148 | `irqOffCloneLongest`, `irqOffUnmapLongest`, `irqOffDecommitLongest`, `irqOffTeardownLongest`, `irqOffRollbackLongest`, `irqOffTaskMapLongest` | `UInt32` | Longest stretch inside each named preemption region. |
+| 152 | `irqOffProfileLongest` | `UInt32` | Longest stretch on the `profileControl` syscall path. |
+| 156 | `irqOffTraceDumpLongest` | `UInt32` | Longest stretch inside `TraceConsoleDump`. |
+| 160 | `irqOffCreateLongest` | `UInt32` | Longest stretch inside `ProcessCreation`. |
+
+[StatsExportPage](../../../Sources/ReixABI/ProcessStats/SystemStats.swift#L125) derives the shared-page offsets from the stride: `SystemStats` starts at byte 8, process count at 176 and process slots at 184. Readers validate both the seqlock and the attachment generation. Event consumers acknowledge a cursor and generation together, so a reader resumed after replacement cannot acknowledge the new attachment, even when its physical page is reused.
 
 The latency fields are described in [Scheduling](../Scheduling.md#latency-measurement).
 

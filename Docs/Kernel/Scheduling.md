@@ -40,14 +40,14 @@ The current scheduler is a single global instance. Separate native threads, mult
 | Function | Parameters | Returns | Meaning |
 | --- | --- | --- | --- |
 | [<code>RoundRobin.addTask(_:)</code>](../../Sources/ReixKernel/Scheduler/RoundRobin.swift#L74) | <code>_ process: UnsafeMutablePointer&lt;Process&gt;</code> | <code>Void; throws(SchedulerError)</code> | Adds a newly created process to the runnable queue; rejects an invalid starting state. |
-| [<code>RoundRobin.selectNextTask()</code>](../../Sources/ReixKernel/Scheduler/RoundRobin.swift#L135) | <code>—</code> | <code>UnsafeMutablePointer&lt;Process&gt;?</code> | Returns the next process to run, or `nil` when no process is runnable. |
-| [<code>RoundRobin.onTick()</code>](../../Sources/ReixKernel/Scheduler/RoundRobin.swift#L312) | <code>—</code> | <code>Bool</code> | Spends one tick of the running process's quantum; returns `true` when it is gone, and on every tick while idle. |
+| [<code>RoundRobin.selectNextTask()</code>](../../Sources/ReixKernel/Scheduler/RoundRobin.swift#L135) | <code>None</code> | <code>UnsafeMutablePointer&lt;Process&gt;?</code> | Returns the next process to run, or `nil` when no process is runnable. |
+| [<code>RoundRobin.onTick()</code>](../../Sources/ReixKernel/Scheduler/RoundRobin.swift#L312) | <code>None</code> | <code>Bool</code> | Spends one tick of the running process's quantum; returns `true` when it is gone, and on every tick while idle. |
 | [<code>KernelDeadlineQueue.arm(_:kind:deadline:)</code>](../../Sources/ReixKernel/Scheduler/KernelDeadlineQueue.swift#L31) | <code>_ process : UnsafeMutablePointer&lt;Process&gt;, kind : KernelDeadlineKind, deadline: UInt64</code> | <code>Bool</code> | Arms the process deadline; reports whether insertion succeeded. |
 | [<code>KernelDeadlineQueue.poll(now:budget:_:)</code>](../../Sources/ReixKernel/Scheduler/KernelDeadlineQueue.swift#L73) | <code>now : UInt64, budget: Int, _ body : (UnsafeMutablePointer&lt;Process&gt;, KernelDeadlineKind, UInt64) -&gt; Void</code> | <code>Int</code> | Processes up to the supplied number of due entries and returns the count. The body also receives the expired deadline, for measuring lag. |
 
 ## Keeping long operations interruptible
 
-Long memory operations use explicit work objects implementing `ResumableOperation`. Each call to `step()` performs a bounded part of the operation. `Preemption.run` checks elapsed counter time between steps and may briefly enable interrupts.
+Long kernel operations use explicit work objects implementing `ResumableOperation`. Each call to `step()` performs a bounded part of the operation. `Preemption.run` checks elapsed counter time between steps and may briefly enable interrupts.
 
 ### Modes
 
@@ -69,9 +69,13 @@ The budget counts from when the exception masked interrupts, not from when the r
 | 0 | `AddressSpaceClone` | `[CLON]` | `latencyOnly` | Address-space clone. |
 | 1 | `RegionUnmap` | `[UNMP]` | `rescheduling` | `munmap` retirement. |
 | 2 | `RegionDecommit` | `[DCMT]` | `rescheduling` | Decommit. |
-| 3 | `AddressSpaceTeardown` | `[TDWN]` | `latencyOnly` | Address-space teardown, then the dying process's capabilities, one held slot per step. |
+| 3 | `AddressSpaceTeardown` | `[TDWN]` | `latencyOnly` | A whole death: reply links, owned tasks, children, address space, waits, capabilities and corpse. |
 | 4 | `RegionUnmapRollback` | `[RBCK]` | `latencyOnly` | Rollback of a refused unmap. |
 | 5 | `TaskMapAnonymous` | `[TMAP]` | `latencyOnly` | `mapTaskAnonymous`, one page per step: charge, allocate, zero and install. |
+| 6 | `TraceConsoleDump` | `[TRCE]` | `latencyOnly` | One complete trace line, one fixed stack-watermark span or at most 32 UART bytes per step. |
+| 7 | `ProcessCreation` | `[CREATE]` | `latencyOnly` | Private process preparation, one allocation stage or ELF page per step. |
+
+[ProcessTeardown](../../Sources/ReixKernel/Process/ProcessTeardown.swift#L32) drives a whole death as one operation. Before its first window, `beginDeath` publishes death, clears the CPU pointer if this is the running process, and removes live queue and deadline membership. The prologue walks outgoing replies, owned tasks, children and incoming reply waiters one item per step. Owned tasks use an iterative continuation chain through pending owners' unused queue links, so deeper ownership adds neither nested drivers nor kernel stack. Address-space retirement, heap frees, capability release and the corpse remain stages of that same run; see [Processes](Processes.md#creation-and-termination).
 
 Only the outer active driver owns interrupt windows. The driver avoids opening one while `LogRing` is recording. `PreemptionSpans` aggregates checkpoint and stretch measurements for diagnostics.
 
@@ -86,6 +90,10 @@ The kernel keeps three worst cases, in raw counter units. `procStats` publishes 
 | Wake to run | A process made ready by an event → it is on the CPU. | `wakeRun` (0x0203), one per rotation that runs a woken process. |
 | Deadline lag | The instant a kernel deadline was due → its process is on the CPU. The tick handler reads the instant from the timer's compare value, before the rearm. | `deadlineLag` (0x0204). |
 | IRQ-off stretch | Exception entry → `eret`, per path: syscall number, interrupt or other exception. A preemption window splits the stretch. | `irqOff` (0x0401), filed only when a path's own worst grows. |
+
+IRQ-off maxima are cumulative across runtime trace-mask changes. The dump includes a snapshot of each path's maximum even when the ring has lost its earlier record. `SystemStats` also reports the `profileControl` path and every region's longest stretch, including the dump and creation regions. A region's maximum covers the work inside its driver; the path maximum also includes work before and after it. The checkpoint budget can overshoot by one step, and atomic work such as a fixed stack scan or the final table destruction still determines a worst case.
+
+A console dump protects a fixed unread interval of the trace ring. Timer windows may record events, but a write that would replace unread history is rejected and counted as lost. Lines close before windows open, UART draining is bounded, and the dump never reschedules while its transcript is open. The host decoder rejects nested framing, drop notices, malformed payloads and count mismatches; it takes the largest IRQ-off observation per path regardless of record order.
 
 The figures are kept in static variables, which is correct on one core. With SMP they become per-CPU state.
 

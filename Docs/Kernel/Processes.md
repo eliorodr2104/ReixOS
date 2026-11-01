@@ -15,7 +15,7 @@
 | `pid` | `PID` (`UInt64`) | Process identifier. |
 | `identity` | `Identity` (`UInt32`) | Principal identifier used by IPC and ownership checks. |
 | `context` | `UnsafeMutablePointer<Arch.TrapFrame>?` | Saved execution frame. |
-| `status` | `ProcessStatus` | New, runnable, running, waiting, IPC-blocked or terminated. |
+| `status` | `ProcessStatus` | New, runnable, running, waiting, IPC-blocked or terminated. The terminated tag is published before cleanup; only membership in the terminated queue makes a corpse reapable. |
 | `addressSpace` | `AddressSpace` | User translations and VMAs. |
 | `metadata` | `UnsafeMutablePointer<ProcessMetadata>!` | Capability table, image metadata, name and exit information. |
 | `cpuTime`, `scheduledAt` | `UInt64` | Closed CPU slices and the counter value at the start of an open slice. |
@@ -29,7 +29,20 @@
 
 The kernel still contains a bootstrap path that loads a named ELF from the embedded tar archive. The suspended-task path instead creates an empty process for a userland loader. Both exist in the current checkout; [ProcessServer](../Userland/ProcessLaunch.md) handles the ordinary disk-backed application path.
 
-Termination removes scheduling and IPC participation and releases resources according to the process/task lifecycle. `killProcess` and `abortTask` release the capability table one held slot per step under the teardown preemption region, so a long table does not keep interrupts masked. An exit status can outlive an address space until the relevant parent or job observer consumes it. Kernel cleanup and userland supervision are different responsibilities.
+[ProcessPreparation](../../Sources/ReixKernel/Process/Operations/ProcessPreparation.swift#L10) keeps metadata and its frame budget, the address-space root, the VMA manager and the optional trap frame private, with a checkpoint between allocation stages under `ProcessCreation`. The initrd loader fills registered ranges and copies segments one destination page per step, then completes instruction publication before the process can run. A refused allocation, mapping or copy returns the completed prefix while its budget is still alive. Only after preparation finishes is the process published and task authority installed; a suspended task waits for `taskStart` before running.
+
+[ProcessManager.beginDeath](../../Sources/ReixKernel/Process/ProcessManager.swift#L559) clears the current CPU pointer when the death reaches the running process, cancels sleep and deadline membership, removes IRQ and endpoint wait membership or live scheduler membership, and publishes `.terminated`, the exit reason and the task lifecycle result before the first window. A dying caller is excluded from live IPC lookup while its outgoing reply link is walked. The tag alone never authorizes reaping: the scheduler must own the corpse in its terminated queue.
+
+`ProcessTeardown` drives the rest of a death in one `latencyOnly` run under `AddressSpaceTeardown`:
+
+1. Unlink the outgoing reply, visit owned task slots, collect queued child corpses or reparent other children, and resume incoming reply waiters with `peerDied`, one item per step. An owned running task dies and a configuring one aborts within the same iterative driver. Pending owners lend their unused scheduler links to the continuation chain; sibling order is preserved.
+2. Step `AddressSpaceRelease`: detach the trace export and move the VMA list out, retire page batches, free the emptied manager, free the trap frame and clear image metadata, then destroy the remaining tables. The final table step detaches the root, invalidates its tag, frees the tables and root, and only then releases the ASID. A refused table free ends this stage without skipping the rest of the death.
+3. Release waits, then the capability table one held slot per step.
+4. Put the corpse on the terminated list, or hand it to the parent parked in `reapChild`. The hand-off writes the exit status and unlinks the stats, trace and family records while clearing the wait claim; a separate step releases metadata and budget, and another frees the process block before waking the parent.
+
+The parent destination is stable across interrupt windows: a parent waiting in `reapChild` has neither an endpoint wait nor a deadline that could resume it. An exit status can outlive an address space until its parent or job observer consumes it. Kernel cleanup and userland supervision are different responsibilities.
+
+A delegated job can name the caller or any of its owners. When its death also kills the caller, `beginDeath` leaves the CPU pointer clear through later windows. After the syscall provider finishes, the handler calls `leaveDeadCaller` to install the next ready process in the exception frame or idle; it never returns to the dead caller or writes a result over the next process's registers.
 
 `ProcessStatsIndex` maintains an intrusive AVL index for bounded traversal. It is not the scheduler's ready queue. See [Task control](Processes.md) for generation-checked handles and [Scheduling](Scheduling.md) for execution.
 
@@ -38,10 +51,10 @@ Termination removes scheduling and IPC participation and releases resources acco
 | Function | Parameters | Returns | Meaning |
 | --- | --- | --- | --- |
 | [<code>ProcessManager.spawnProcess(path:)</code>](../../Sources/ReixKernel/Process/ProcessManager.swift#L112) | <code>path: UnsafePointer&lt;CChar&gt;</code> | <code>UnsafeMutablePointer&lt;Process&gt;; throws(ProcessManagerError)</code> | Loads an initrd ELF and returns a process pointer, or throws a process-manager error. |
-| [<code>ProcessManager.spawnProcess(name:nameLength:)</code>](../../Sources/ReixKernel/Process/ProcessManager.swift#L287) | <code>name : InlineArray&lt;16, UInt8&gt;? = nil, nameLength: Int = 0</code> | <code>UnsafeMutablePointer&lt;Process&gt;; throws(ProcessManagerError)</code> | Creates an empty process record/address space for controlled configuration. |
-| [<code>ProcessManager.killProcess(_:reason:context:)</code>](../../Sources/ReixKernel/Process/ProcessManager.swift#L526) | <code>_ process: UnsafeMutablePointer&lt;Process&gt;, reason : ExitReason, context: SyscallContext</code> | <code>Bool</code> | Attempts termination of the selected process and reports success. |
-| [<code>ProcessManager.isAlive(identity:)</code>](../../Sources/ReixKernel/Process/ProcessManager.swift#L681) | <code>identity: Identity</code> | <code>Bool</code> | Reports whether that principal is still alive. |
-| [<code>Process.takePending()</code>](../../Sources/ReixKernel/Process/Process.swift#L194) | <code>—</code> | <code>PendingMessage?</code> | Returns and clears the pending IPC message. |
+| [<code>ProcessManager.spawnProcess(name:nameLength:frameLimit:)</code>](../../Sources/ReixKernel/Process/ProcessManager.swift#L265) | <code>name : InlineArray&lt;16, UInt8&gt;? = nil, nameLength: Int = 0, frameLimit: UInt32? = nil</code> | <code>UnsafeMutablePointer&lt;Process&gt;; throws(ProcessManagerError)</code> | Creates an empty process record/address space for controlled configuration. |
+| [<code>ProcessManager.killProcess(_:reason:context:)</code>](../../Sources/ReixKernel/Process/ProcessManager.swift#L527) | <code>_ process: UnsafeMutablePointer&lt;Process&gt;, reason : ExitReason, context: SyscallContext</code> | <code>Bool</code> | Ends the process; returns whether its corpse is on the terminated queue rather than consumed by a waiting parent. |
+| [<code>ProcessManager.isAlive(identity:)</code>](../../Sources/ReixKernel/Process/ProcessManager.swift#L678) | <code>identity: Identity</code> | <code>Bool</code> | Reports whether that principal is still alive. |
+| [<code>Process.takePending()</code>](../../Sources/ReixKernel/Process/Process.swift#L194) | <code>None</code> | <code>PendingMessage?</code> | Returns and clears the pending IPC message. |
 
 ## Configuring a task before execution
 
@@ -84,9 +97,9 @@ The registry keeps a compact live record per task. Everything only a task still 
 | Exit from `configuring` | Where |
 | --- | --- |
 | Start | `startTask`, after the readiness check and once the task is marked running. |
-| Abort, including the owner's death | `abortTask`. |
+| Abort, including the owner's death | `abortTask`, or the configuring-task branch of the owner's `ProcessTeardown`. |
 | Exit before start | The process-exit path, through `TaskRegistry.markExited`. |
-| A seal the construction disagrees with | `sealTaskRegion` aborts the task. |
+| A seal the construction disagrees with | `sealTaskRegion` calls `abortTask` with the syscall context, releasing capabilities, address space, process and construction charge, and returns `invalidState`. |
 | A create that cannot get a process or a slot | `createSuspendedTask`, before it returns. |
 
 The lifecycle enum carries the pointer, so no state other than `configuring` can name a cell that was already given back.
@@ -100,6 +113,6 @@ These limits describe today's implementation. The dynamic TCB budget in [Concurr
 | [<code>ProcessManager.createSuspendedTask(ownedBy:name:nameLength:frameLimit:)</code>](../../Sources/ReixKernel/Process/ProcessManager+Tasks.swift#L18) | <code>ownedBy owner: UnsafeMutablePointer&lt;Process&gt;, name : InlineArray&lt;16, UInt8&gt;? = nil, nameLength : Int = 0, frameLimit : UInt32? = nil</code> | <code>(control: TaskControl, process: UnsafeMutablePointer&lt;Process&gt;)?</code> | Charges the owner one frame for the construction cell, then returns the control token and process; `nil`, with nothing held, if the budget, the process or a registry slot is refused. |
 | [<code>ProcessManager.mapTaskAnonymous(_:at:pages:)</code>](../../Sources/ReixKernel/Process/ProcessManager+Tasks.swift#L52) | <code>_ control : TaskControl, at address: VirtualAddress, pages : UInt32</code> | <code>TaskResult</code> | Creates a checked anonymous configuration region; returns a typed status. Fills it one page per step under the `[TMAP]` preemption region, and each step undoes its own charge and frame if it fails. |
 | [<code>ProcessManager.writeTask(_:at:from:count:)</code>](../../Sources/ReixKernel/Process/ProcessManager+Tasks.swift#L113) | <code>_ control : TaskControl, at address : VirtualAddress, from source: VirtualAddress, count : UInt64</code> | <code>TaskResult</code> | Copies bytes from the caller into a writable configuration region. |
-| [<code>ProcessManager.sealTaskRegion(_:at:pages:permissions:)</code>](../../Sources/ReixKernel/Process/ProcessManager+Tasks.swift#L174) | <code>_ control : TaskControl, at address : VirtualAddress, pages : UInt32, permissions: TaskMemoryPermissions</code> | <code>TaskResult</code> | Finalizes a region’s protection and rejects conflicting permissions. |
-| [<code>ProcessManager.startTask(_:context:)</code>](../../Sources/ReixKernel/Process/ProcessManager+Tasks.swift#L254) | <code>_ control: TaskControl, context : SyscallContext</code> | <code>TaskStartResult</code> | Transitions a fully configured task into execution and reports its result. |
-| [<code>ProcessManager.taskStatus(_:)</code>](../../Sources/ReixKernel/Process/ProcessManager+Tasks.swift#L315) | <code>_ control: TaskControl</code> | <code>TaskStatus</code> | Returns the task state and exit information represented by the control token. |
+| [<code>ProcessManager.sealTaskRegion(_:at:pages:permissions:context:)</code>](../../Sources/ReixKernel/Process/ProcessManager+Tasks.swift#L174) | <code>_ control : TaskControl, at address : VirtualAddress, pages : UInt32, permissions: TaskMemoryPermissions, context: SyscallContext</code> | <code>TaskResult</code> | Finalizes a region’s protection and rejects conflicting permissions. |
+| [<code>ProcessManager.startTask(_:context:)</code>](../../Sources/ReixKernel/Process/ProcessManager+Tasks.swift#L255) | <code>_ control: TaskControl, context : SyscallContext</code> | <code>TaskStartResult</code> | Transitions a fully configured task into execution and reports its result. |
+| [<code>ProcessManager.taskStatus(_:)</code>](../../Sources/ReixKernel/Process/ProcessManager+Tasks.swift#L312) | <code>_ control: TaskControl</code> | <code>TaskStatus</code> | Returns the task state and exit information represented by the control token. |

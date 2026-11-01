@@ -62,6 +62,10 @@ Filesystem operations carry `FSRights` in their service authority model, distinc
 
 The session badge is 64 bits: the rights in the top nine, the object slot plus one in the low bits, and the object's generation between them, capped at 32 bits. The generation is checked on every request, so a capability cannot name a different file that reused its slot. `FSStatus.busy` is also what a refused change to a claimed file answers.
 
+Filesystem reads can return `FSStatus.damaged` when a file block fails its checksum, with progress ending before that block. This leaves the volume serviceable; a table, folder or sum-region contradiction instead quarantines it. `tooManyChanges` also covers writes exceeding the bounded overwrite declaration. See [storage integrity](../Architecture/Storage.md#integrity-checks-and-the-seal).
+
+The shell scrub response uses `ShellFindingsFrame`: 21 ordered fields, ending in `damagedBlocks` (field ID 23). `scrubDepth` distinguishes blocks (0), metadata (1) and data (2). `safeToServe` does not imply zero damaged file blocks. See [scrub results](../Userland/Storage.md#scrub-results).
+
 ## Evolving a contract
 
 Update the producer, receiver and shared encoding together. Check tag length, word interpretation, shared-buffer bounds and ownership on error paths. For a disk-layout change, also account for existing bytes on disk; changing a Swift struct is not a migration.

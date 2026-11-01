@@ -4,6 +4,8 @@
 
 The kernel validates capability targets and rights before exposing MMIO, interrupt ownership or bus-derived authority. Runtime device protocols live in userland drivers. DMA allocation is listed with [memory syscalls](Memory.md).
 
+A `mapDevice` window preserves the extent granted by its capability. `munmap` accepts a whole-window or enclosing removal and refuses a partial cut before changing any region. See [region operations](../Memory.md#region-operations).
+
 An IRQ wait reports pending bits in an interrupt set, not raw GIC interrupt numbers. The driver must service its device and acknowledge the corresponding bits to allow further delivery.
 
 All raw argument/result registers are `UInt64`; narrower payload types are noted below. Pointers are virtual addresses in the caller unless stated otherwise.

@@ -45,6 +45,10 @@ The load plan comes from the ELF headers and the bytes from the segments, many r
 
 ProcessServer's view of the program folder holds `FSRights.loader`: `lookup`, `read` and `claim`. It can read a program and hold it still, and cannot write one. While the claim is held, a remove or rename of the file by another client is refused as busy. The binding check runs before the claim, so a refusal that does not depend on the file holds nothing. On `busy` the shell prints that the program is being changed and to try again.
 
+The diagnostic image alone accepts `Shell.die`, a launch that claims `Shell.elf` and exits during loading. Init reaps that sacrificial ProcessServer, checks that the file can be read and written again after the dead holder is swept, and starts a fresh server for the session. The request, helper and exit are compiled only under `REIX_BOOT_DIAGNOSTIC`. [check-loader-hook.sh](../../scripts/check-loader-hook.sh) runs after `make image` and `make release`; standard and verbose builds inspect both linked and stripped Init and ProcessServer ELFs for the diagnostic name.
+
+Profile scenario markers are ordered only within their output stream. Init's endpoint-ready and application-ready reports retain their order; Shell statistics, Shell and ProcessServer identities, Shell-attributed marks and Shell completion are required independently of Init's readiness output. Mixed-profile terminal output, StorageCheck completion and the direct trace framing are checked separately. [The marker fixture](../../Tests/Scenarios/profile-authority.sh) accepts either readiness order and rejects missing or misattributed evidence.
+
 ## Policy and mechanism
 
 | Component | Owns |

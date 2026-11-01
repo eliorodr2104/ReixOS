@@ -63,7 +63,11 @@ There is no IOMMU, so a device given a buffer's physical address can keep writin
 | Larger mapping unit used for eligible aligned RAM | 2 MiB level-2 block |
 | Kernel/user roots | TTBR1 kernel mappings; TTBR0 process-side mappings |
 
-The VMM applies section permissions and leaves the stack guard unmapped. Its mapping window is not permission to dereference every possible physical address. ASIDs distinguish user address spaces, and the kernel invalidates a user translation only under the tag of the space that changed it. A tag is reissued only after its space has been fully invalidated, so a new owner never sees stale entries. Code written through the kernel's alias is cleaned and, where the instruction cache needs it, invalidated before it can be fetched. See [Translation and instruction-cache maintenance](../Kernel/Memory.md#translation-and-instruction-cache-maintenance).
+The VMM applies section permissions and leaves the stack guard unmapped. Its mapping window is not permission to dereference every possible physical address. ASIDs distinguish user address spaces, and the kernel invalidates a user translation only under the tag of the space that changed it. A tag is reissued only after its space has been fully invalidated, so a new owner never sees stale entries. Code written through the kernel's alias is cleaned and, where the instruction cache needs it, invalidated before it can be fetched.
+
+Boot-time `MIDR_EL1` selects `dc civac` for Cortex-A53 r0p0 through r0p2; other cores use `dc cvau` when a clean is needed. A clone reuses completed publication for unchanged shared code on VIPT and PIPT instruction caches.
+
+SHM, DMA, device windows and the `brk` VMA require whole-region unmap; anonymous and raw initrd splits retain their fault and clone attributes. See [Translation and instruction-cache maintenance](../Kernel/Memory.md#translation-and-instruction-cache-maintenance).
 
 ## User virtual layout
 

@@ -6,7 +6,7 @@ These operations distinguish a virtual reservation, resident backing and the cap
 
 The sentinel conventions differ: `mmap`/`shmMap` return 0 on failure, while `brk` and the range-retirement operations use `UInt64.max`. Check the result of the specific operation.
 
-`munmap` removes the reservation. `decommit` releases backing while preserving the reservation. The kernel may suspend and resume a long retirement before returning its final status. See [Memory management](../Memory.md).
+`munmap` removes the reservation. SHM and DMA windows and the `brk` VMA must be removed whole; an exact or enclosing range is allowed, but a partial cut is refused without changing mappings or charges. Anonymous and raw initrd regions may split, preserving their permissions, memory type and lazy/COW flags. `decommit` releases backing while preserving the reservation. The kernel may suspend and resume a long retirement before returning its final status. See [Memory management](../Memory.md).
 
 All raw argument/result registers are `UInt64`; narrower payload types are noted below. Pointers are virtual addresses in the caller unless stated otherwise.
 

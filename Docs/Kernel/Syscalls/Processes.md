@@ -30,7 +30,7 @@ All raw argument/result registers are `UInt64`; narrower payload types are noted
 | 52 | [`taskSetContext`](../../../Sources/ReixKernel/Arch/aarch64/Exceptions/Providers/RXTask/TaskSetContextSyscall.swift) | `x0`: task; `x1`: entry PC; `x2`: stack pointer; `x3`: program break | `x0`: `TaskResult`. |
 | 53 | [`taskStart`](../../../Sources/ReixKernel/Arch/aarch64/Exceptions/Providers/RXTask/TaskStartSyscall.swift) | `x0`: task handle | `x0`: `TaskResult`; `x1`: PID, or 0 on failure. The control capability transitions to a job view on success. |
 | 54 | [`taskAbort`](../../../Sources/ReixKernel/Arch/aarch64/Exceptions/Providers/RXTask/TaskAbortSyscall.swift) | `x0`: task handle | `x0`: `TaskResult`; aborts configuration. |
-| 55 | [`taskTerminate`](../../../Sources/ReixKernel/Arch/aarch64/Exceptions/Providers/RXTask/TaskTerminateSyscall.swift) | `x0`: job/control handle with termination rights | `x0`: `TaskResult`. |
+| 55 | [`taskTerminate`](../../../Sources/ReixKernel/Arch/aarch64/Exceptions/Providers/RXTask/TaskTerminateSyscall.swift) | `x0`: job/control handle with termination rights | `x0`: `TaskResult` if the caller survives. Does not return when the job's death takes the caller, directly or through owned tasks. |
 | 56 | [`taskStatus`](../../../Sources/ReixKernel/Arch/aarch64/Exceptions/Providers/RXTask/TaskStatusSyscall.swift) | `x0`: job/control handle with status rights | `x0`: `TaskState`; `x1`: exit code. Invalid authority returns `.invalid`, 0. |
 
 ## Userland API
