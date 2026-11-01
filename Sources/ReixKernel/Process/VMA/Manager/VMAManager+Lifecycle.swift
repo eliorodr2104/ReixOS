@@ -23,6 +23,14 @@ extension VMAManager {
     /// `AddressSpaceTeardown` is `.latencyOnly`: see `PreemptionRegion` for why a
     /// dying address space must not park a continuation.
     public mutating func teardown() {
+        _ = Preemption.run(AddressSpaceTeardown.self, retirement())
+    }
+
+
+    /// `teardown` without the run, for a death that steps the retirement inside
+    /// its own operation: a `Preemption.run` nested in that one would open no
+    /// windows. The manager is left exactly as `teardown` leaves it.
+    mutating func retirement() -> ListRetirement {
         let pending = vmaList.detachAll()
 
         brkVMA       = nil
@@ -37,14 +45,7 @@ extension VMAManager {
         suspendedDecommit = nil
         suspendedUnmap    = nil
 
-        _ = Preemption.run(
-            AddressSpaceTeardown.self,
-            ListRetirement(
-                heap   : heap,
-                context: context,
-                nodes  : pending
-            )
-        )
+        return ListRetirement(heap: heap, context: context, nodes: pending)
     }
 
 

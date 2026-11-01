@@ -371,35 +371,12 @@ public struct ProcessManager: RXAllocatable, Loggable {
     }
     
     
+    /// Tears `process`'s address space down in one run of the teardown region,
+    /// in the steps `AddressSpaceRelease` cuts it into.
     public func releaseAddressSpace(_ process: UnsafeMutablePointer<Process>) throws(PPMError) {
-
-        TraceExport.detach(pid: process.pointee.pid)
-
-        if let vmaManager = process.pointee.addressSpace.vmaManager {
-            vmaManager.pointee.teardown()
-
-            heap.pointee.kfree(vmaManager)
-            process.pointee.addressSpace.vmaManager = nil
-        }
-        
-        if let metadata = process.pointee.metadata {
-            metadata.pointee.elfImage    = nil
-            metadata.pointee.elfLoadBase = 0
-            metadata.pointee.elfLoadEnd  = 0
-        }
-        
-        if let trapFrame = process.pointee.context {
-            heap.pointee.kfree(trapFrame)
-            process.pointee.context = nil
-        }
-
-        defer { reinstallCurrentAddressSpace() }
-
-        // The metadata block, and with it the budget, is freed later by
-        // `releaseProcess`: the page tables can still be refunded here.
-        try vmm.pointee.destroyAddressSpace(
-            addressSpace: process.pointee.addressSpace,
-            budget      : process.pointee.metadata?.pointee.budget
+        _ = try Preemption.run(
+            AddressSpaceTeardown.self,
+            AddressSpaceRelease(process: process, heap: heap, vmm: vmm)
         )
     }
 
@@ -409,8 +386,8 @@ public struct ProcessManager: RXAllocatable, Loggable {
     ///
     /// `destroyAddressSpace` has to detach the root it is about to free, and it
     /// does so by installing the kernel identity root. That is right when the
-    /// caller is dying' then`killCurrent` clears the current process first, and the
-    /// scheduler installs whoever runs next, but every other caller is a live
+    /// caller is dying, since `killCurrent` clears the current process first and
+    /// the scheduler installs whoever runs next, but every other caller is a live
     /// process destroying *somebody else's* space: a parent in `terminate`, or a
     /// failed `spawn`/`split` unwinding its half-built child. Those return
     /// straight to EL0, and the identity root carries no user mapping at all, so
@@ -420,7 +397,7 @@ public struct ProcessManager: RXAllocatable, Loggable {
     /// A nil current process is therefore the signal to leave TTBR0 alone; it is
     /// the only case where the outgoing root was the running one.
     @inline(__always)
-    private func reinstallCurrentAddressSpace() {
+    static func reinstallCurrentAddressSpace() {
         guard let current = Arch.CPU.getCurrentProcess() else { return }
 
         Arch.MMU.switchUserAddressSpace(
@@ -1105,6 +1082,6 @@ public struct ProcessManager: RXAllocatable, Loggable {
         
         try? vmm.pointee.destroyAddressSpace(addressSpace: space, budget: budget)
 
-        reinstallCurrentAddressSpace()
+        Self.reinstallCurrentAddressSpace()
     }
 }
