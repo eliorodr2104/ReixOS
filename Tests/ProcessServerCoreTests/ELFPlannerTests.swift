@@ -111,7 +111,7 @@ private struct MemoryELF: ELFByteSource {
     }
 }
 
-private func validImage() -> [UInt8] {
+func validImage() -> [UInt8] {
     var bytes = [UInt8](repeating: 0, count: 0x3100)
     writeHeader(&bytes, count: 3, entry: TaskABI.programBase)
 

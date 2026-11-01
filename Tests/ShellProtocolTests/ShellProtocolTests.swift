@@ -386,6 +386,27 @@ struct ShellProtocolTests {
         }
     }
 
+    /// ProcessServer refuses a program a writer holds instead of waiting for it,
+    /// so the person at the prompt is the one told to ask again.
+    @Test("a launch refused as busy says to try again, any other failure does not")
+    func processStartRefusals() {
+        let name: StaticString = "Shell.elf"
+
+        func rendered(_ status: UInt64) -> String? {
+            var result = ShellResult()
+            guard result.appendProcessStart(status, name: name.utf8Start, count: name.utf8CodeUnitCount),
+                  let record = result.record(at: 0),
+                  let presentation = ShellTextRenderer.render(record)
+            else { return nil }
+
+            return String(decoding: (0..<presentation.count).map { presentation.bytes[$0] }, as: UTF8.self)
+        }
+
+        #expect(rendered(1) == "could not start Shell.elf\n")
+        #expect(rendered(2) == "could not start Shell.elf, it is being changed; try again\n")
+        #expect(rendered(3) == nil)
+    }
+
     @Test("block and filesystem values retain typed fields before rendering")
     func storageCommandResults() {
         var result   = ShellResult()

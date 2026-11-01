@@ -99,7 +99,7 @@ struct DeliveryPackingTests {
 
         for object in [UInt32(0), 1, 1023] {
             for generation in [UInt32(0), 1, 1 << 21, UInt32.max] {
-                for rights in [FSRights.everything, .occupant, .reader, []] {
+                for rights in [FSRights.everything, .occupant, .reader, .loader, []] {
 
                     let badge = layout.encode(
                         object: object, generation: generation, rights: rights

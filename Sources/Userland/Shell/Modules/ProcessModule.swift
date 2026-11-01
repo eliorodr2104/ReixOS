@@ -176,7 +176,7 @@ private func spawn(
     )
 
     guard result.status == .ok, let job = result.job else {
-        _ = records.appendProcessStart(1, name: name, count: length)
+        _ = records.appendProcessStart(result.status == .busy ? 2 : 1, name: name, count: length)
         return
     }
 

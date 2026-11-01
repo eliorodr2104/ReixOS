@@ -12,7 +12,6 @@ public struct ProcessServer: Service {
 
     private static let supervisedCapacity = 8
     private static let bootstrapPatience  : UInt32 = 200
-    private static let copyChunk          = 4096
 
     private struct SupervisedJob {
         let handle: UInt32
@@ -90,7 +89,7 @@ public struct ProcessServer: Service {
             return
         }
 
-        guard let files else {
+        guard let files, let bindings = launchBindings(for: profile) else {
             _ = reply(message: ProcessServerStatus.unavailable.response)
             return
         }
@@ -111,42 +110,35 @@ public struct ProcessServer: Service {
             return
         }
 
-        var source = FileELFSource(
-            files : files,
-            object: file.object,
-            size  : file.size
-        )
+        var source = FileELFSource(files: files, object: file.object)
+        var built  : (task: UInt32, bootstrap: UInt32)? = nil
 
-        guard case .success(let plan) = ELFPlanner.plan(from: &source) else {
-            _ = reply(message: ProcessServerStatus.malformedELF.response)
+        let loaded = ProgramLoad.load(&source) { plan, claimed in
+            var taskName = requested.bytes
+            let created = withUnsafeBytes(of: &taskName) { bytes in
+                taskCreate(
+                    name  : bytes.baseAddress!.assumingMemoryBound(to: UInt8.self),
+                    length: requested.length
+                )
+            }
+            guard created.succeeded else { return .taskFailure }
+
+            guard build(task: created.task, plan: plan, from: &claimed) else {
+                discardTask(created.task, bootstrap: created.bootstrap)
+                return .taskFailure
+            }
+
+            built = (created.task, created.bootstrap)
+            return .ok
+        }
+
+        guard let built else {
+            _ = reply(message: loaded.response)
             return
         }
 
-        guard let bindings = launchBindings(for: profile) else {
-            _ = reply(message: ProcessServerStatus.unavailable.response)
-            return
-        }
-
-        var taskName = requested.bytes
-        let created = withUnsafeBytes(of: &taskName) { bytes in
-            taskCreate(
-                name  : bytes.baseAddress!.assumingMemoryBound(to: UInt8.self),
-                length: requested.length
-            )
-        }
-        guard created.succeeded else {
-            _ = reply(message: ProcessServerStatus.taskFailure.response)
-            return
-        }
-
-        let task      = created.task
-        let bootstrap = created.bootstrap
-
-        guard build(task: task, from: file, plan: plan, files: files) else {
-            discardTask(task, bootstrap: bootstrap)
-            _ = reply(message: ProcessServerStatus.taskFailure.response)
-            return
-        }
+        let task      = built.task
+        let bootstrap = built.bootstrap
 
         let started = taskStart(task)
         guard started.result == .ok else {
@@ -191,10 +183,9 @@ public struct ProcessServer: Service {
     }
 
     private func build(
-        task     : UInt32,
-        from file: FSFile,
-        plan     : ELFLoadPlan,
-        files    : FileSystemClient
+        task       : UInt32,
+        plan       : ELFLoadPlan,
+        from source: inout FileELFSource
     ) -> Bool {
         for index in 0..<plan.regionCount {
             guard let region = plan.region(at: index),
@@ -211,41 +202,8 @@ public struct ProcessServer: Service {
             return false
         }
 
-        let copied = withUnsafeTemporaryAllocation(
-            of      : UInt8.self,
-            capacity: Self.copyChunk
-        ) { buffer -> Bool in
-            for index in 0..<plan.copyCount {
-                guard let copy = plan.copy(at: index) else { return false }
-
-                var offset: UInt64 = 0
-                while offset < copy.byteCount {
-                    let remaining = copy.byteCount - offset
-                    let wanted    = remaining < UInt64(buffer.count)
-                        ? remaining
-                        : UInt64(buffer.count)
-
-                    let read = files.read(
-                        file.object,
-                        at   : copy.fileOffset + offset,
-                        into : UnsafeMutableRawPointer(buffer.baseAddress!),
-                        count: wanted
-                    )
-                    guard read.status == .ok, read.bytes == wanted else {
-                        return false
-                    }
-
-                    guard taskWrite(
-                        task,
-                        at   : copy.virtualAddress + offset,
-                        bytes: UnsafeRawPointer(buffer.baseAddress!),
-                        count: Int(wanted)
-                    ) == .ok else { return false }
-
-                    offset += wanted
-                }
-            }
-            return true
+        let copied = ProgramLoad.copy(plan, from: &source) { address, bytes, count in
+            taskWrite(task, at: address, bytes: bytes, count: count) == .ok
         }
         guard copied else { return false }
 
@@ -475,10 +433,30 @@ public struct ProcessServer: Service {
 
 }
 
-private struct FileELFSource: ELFByteSource {
+/// The program file through ProcessServer's view of the program folder, which
+/// holds `FSRights.loader`: it may read a program and claim it, never write it.
+private struct FileELFSource: ProgramFile {
     let files : FileSystemClient
     let object: UInt32
-    let size  : UInt64
+    private(set) var size: UInt64 = 0
+
+    mutating func claim() -> ProcessServerStatus {
+        let claimed = ProcessServerStatus(claiming: files.lock(object))
+        guard claimed == .ok else { return claimed }
+
+        // Asked again under the claim: the size `open` saw is from before it.
+        guard let info = files.info(of: object) else {
+            files.unlock(object)
+            return .unavailable
+        }
+
+        size = info.size
+        return .ok
+    }
+
+    mutating func release() {
+        files.unlock(object)
+    }
 
     mutating func read(
         at offset       : UInt64,

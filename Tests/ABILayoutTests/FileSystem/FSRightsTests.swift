@@ -176,6 +176,23 @@ struct FSRightsTests {
     }
 
 
+    /// What ProcessServer's view of the program folder may do. It has to claim a
+    /// program so nobody changes it mid-load, and claiming used to cost `.write`,
+    /// which would have let the loader rewrite every program it runs.
+    @Test("a loader may keep a program still and may not change it")
+    func loaderClaimsWithoutWriting() {
+        let loader = FSRights.loader
+
+        for operation in [FileOperation.open, .info, .read, .lock, .unlock] {
+            #expect(loader.contains(FSRights.required(for: operation)), "\(operation)")
+        }
+
+        for operation in [FileOperation.create, .write, .replace, .compact, .remove, .relocate, .bind] {
+            #expect(!loader.contains(FSRights.required(for: operation)), "\(operation)")
+        }
+    }
+
+
     /// A claim refuses every other writer, the owner included. A read-only loan
     /// into somebody else's container that could claim could freeze its owner.
     @Test("a reader cannot claim, and a tenant still can")

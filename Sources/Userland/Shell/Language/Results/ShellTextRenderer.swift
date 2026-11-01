@@ -91,6 +91,11 @@ public enum ShellTextRenderer {
                               append(record.text, count: record.textCount, into: &bytes, count: &count),
                               append("\n", into: &bytes, count: &count)
                         else { return nil }
+                    case 2:
+                        guard append("could not start ", into: &bytes, count: &count),
+                              append(record.text, count: record.textCount, into: &bytes, count: &count),
+                              append(", it is being changed; try again\n", into: &bytes, count: &count)
+                        else { return nil }
                     default: return nil
                 }
 

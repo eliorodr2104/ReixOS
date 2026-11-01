@@ -413,7 +413,7 @@ public func main() {
     }
 
     // The executable namespace is rooted exactly at `system/programs`, and
-    // carries lookup and read on that directory's children.
+    // carries lookup, read and claim on that directory's children.
     let programs = machine.flatMap(programDirectory(in:))
     if programs == nil {
         print("[ INIT  ] no system/programs capability; ordinary programs stay stopped")
@@ -646,7 +646,7 @@ private func programDirectory(in machine: UInt32) -> UInt32? {
           directory.kind == .folder
     else { return nil }
 
-    return files.bind(directory.object, rights: .reader)
+    return files.bind(directory.object, rights: .loader)
 }
 
 

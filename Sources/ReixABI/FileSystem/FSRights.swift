@@ -104,6 +104,10 @@ public struct FSRights: OptionSet {
     /// handing pieces away, no room to move, no volume to speak for.
     public static let occupant: FSRights = [.lookup, .read, .write, .remove, .claim]
 
+    /// May read programs and keep each one still while it does, and nothing else:
+    /// what the process that loads them is given of the folder they sit in.
+    public static let loader: FSRights = [.lookup, .read, .claim]
+
 
     /// The right an operation needs, or none for the two that every holder may
     /// make.
