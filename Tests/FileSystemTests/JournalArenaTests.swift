@@ -128,8 +128,8 @@ struct JournalArenaTests {
     }
 
 
-    @Test("sixteen kilobytes cost five journal writes")
-    func sixteenKilobytesCostFive() {
+    @Test("sixteen kilobytes cost six journal writes")
+    func sixteenKilobytesCostSix() {
         withDisk { fs, disk in
             guard let file = make(&fs, "big.bin") else { return }
 
@@ -141,18 +141,18 @@ struct JournalArenaTests {
 
             #expect(fs.write(file, at: 0, from: bytes, count: 16384).status == .ok)
 
-            // Two payloads - the bitmap block and the table block - and three
-            // headers. It was seven, one payload per block of the file.
+            // Three payloads (bitmap, table and sum block) and three headers; it
+            // was seven, one payload per block of the file.
             #expect(
-                disk.journalWrites - journal <= 5,
+                disk.journalWrites - journal <= 6,
                 "\(disk.journalWrites - journal) journal writes"
             )
         }
     }
 
 
-    @Test("four appends of sixteen kilobytes cost twenty")
-    func fourAppendsCostTwenty() {
+    @Test("four appends of sixteen kilobytes cost twenty-four")
+    func fourAppendsCostTwentyFour() {
         withDisk { fs, disk in
             guard let file = make(&fs, "grow.bin") else { return }
 
@@ -168,10 +168,10 @@ struct JournalArenaTests {
                 ).status == .ok, "append \(step)")
             }
 
-            // Five each, and nothing shared between them: each append is its own
-            // transaction and its own set of headers.
+            // Six each, nothing shared: each append is its own transaction, on
+            // blocks the file did not have, so none names one first.
             #expect(
-                disk.journalWrites - journal <= 20,
+                disk.journalWrites - journal <= 24,
                 "\(disk.journalWrites - journal) journal writes"
             )
         }

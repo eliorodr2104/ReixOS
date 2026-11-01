@@ -75,6 +75,10 @@ struct FSTransaction {
     private var targets   = InlineArray<16, UInt32>(repeating: 0)
     private var checksums = InlineArray<16, UInt32>(repeating: 0)
 
+    /// The file data this transaction overwrites in place, once it has said so
+    /// on the disk. Carried by every header it writes. See `FSJournal.Intent`.
+    private(set) var intent = FSJournal.Intent()
+
     /// How many operations were refused because sixteen images were not enough.
     ///
     /// It must stay at zero for the operations this format has. A number here is
@@ -92,6 +96,7 @@ struct FSTransaction {
         self.generation    = generation
         self.recordCount   = 0
         self.stickyFailure = nil
+        self.intent        = FSJournal.Intent()
     }
 
 
@@ -215,6 +220,21 @@ struct FSTransaction {
     }
 
 
+    /// Records the blocks this transaction is about to overwrite in place.
+    mutating func intend(_ blocks: FSJournal.Intent) { intent = blocks }
+
+    /// The header that names `intent` before any of it is written: `prepared`,
+    /// and no images, because none has been written yet.
+    func declaration() -> FSJournal {
+        var journal = FSJournal()
+
+        journal.state      = .prepared
+        journal.generation = generation
+        journal.intent     = intent
+
+        return journal
+    }
+
     /// The header this transaction would write, in `state`.
     func header(_ state: FSJournal.State) -> FSJournal {
         var journal = FSJournal()
@@ -222,6 +242,7 @@ struct FSTransaction {
         journal.state       = state
         journal.generation  = generation
         journal.recordCount = recordCount
+        journal.intent      = intent
 
         for index in 0..<recordCount {
             journal.targets[index]   = targets[index]

@@ -10,7 +10,8 @@ import ReixABI
 /// What the journal is holding, as it says so on the disk.
 ///
 /// One block, at a fixed address, read once at mount and written three times per
-/// transaction: prepared, committed, and empty. It is the only thing on the disk
+/// transaction: prepared, committed, and empty. Four for a write that lands on
+/// blocks a file already has, which names them in a `prepared` header first. It is the only thing on the disk
 /// whose state has to be believed without anything else to check it against, so
 /// every field of it is covered by a checksum and each payload carries one of its
 /// own.
@@ -78,7 +79,71 @@ struct FSJournal {
         static let records     = 32
         static let recordWidth = 8
 
-        static var width: Int { records + FSJournal.capacity * recordWidth }
+        /// How many runs of file data the transaction overwrites in place, then
+        /// eight `{ start, count }` pairs. See `Intent`.
+        static let intentCount = records + FSJournal.capacity * recordWidth
+        static let intentRuns  = intentCount + 4
+
+        /// Inside the first sector, so a write the device tears cannot tear it.
+        static var width: Int { intentRuns + FSJournal.Intent.limit * 8 }
+    }
+
+
+    /// The blocks of file data a transaction overwrites in place, named on the
+    /// disk before the first of them is written.
+    ///
+    /// File data is not journalled, so an overwrite reaches its home block
+    /// before the commit that carries its new checksum, and a power cut in
+    /// between leaves new bytes under an old checksum. These are the only blocks
+    /// that can be in that state. A `prepared` header carrying them is settled
+    /// before it is cleared: each one's checksum is taken from what the medium
+    /// holds, because none of the bytes in it was ever promised.
+    ///
+    /// Runs, at most eight: one write touches one file, and a file has eight.
+    struct Intent {
+
+        static let limit = FSLayout.extentLimit
+
+        var runs  = InlineArray<8, FSExtent>(repeating: FSExtent())
+        var count = 0
+
+        var isEmpty: Bool { count == 0 }
+
+        /// Adds one block, onto the last run when it carries straight on from it.
+        mutating func add(_ block: UInt32) -> Bool {
+            if count > 0 {
+                let last = runs[count - 1]
+                if UInt64(last.start) + UInt64(last.count) == UInt64(block) {
+                    runs[count - 1].count = last.count + 1
+                    return true
+                }
+            }
+
+            guard count < Self.limit else { return false }
+
+            runs[count] = FSExtent(start: block, count: 1)
+            count += 1
+            return true
+        }
+
+        /// Whether every run is file data on this disk, and the whole of it
+        /// within `FSLayout.overwriteLimit`. A settle reads every block named.
+        func fits(_ plan: FSLayout.Plan) -> Bool {
+            var total = UInt64(0)
+
+            for index in 0..<count {
+                let run = runs[index]
+                let end = UInt64(run.start) + UInt64(run.count)
+
+                guard run.count > 0, run.start >= plan.dataStart,
+                      end <= UInt64(plan.totalBlocks)
+                else { return false }
+
+                total += UInt64(run.count)
+            }
+
+            return total <= FSLayout.overwriteLimit
+        }
     }
 
 
@@ -89,6 +154,8 @@ struct FSJournal {
     var targets  : InlineArray<16, UInt32>
     var checksums: InlineArray<16, UInt32>
 
+    var intent: Intent
+
 
     /// An empty journal, which is what `format` lays down and what every
     /// finished transaction leaves behind.
@@ -98,6 +165,7 @@ struct FSJournal {
         self.recordCount = 0
         self.targets     = InlineArray<16, UInt32>(repeating: 0)
         self.checksums   = InlineArray<16, UInt32>(repeating: 0)
+        self.intent      = Intent()
     }
 
 
@@ -125,6 +193,19 @@ struct FSJournal {
 
         self.targets   = targets
         self.checksums = checksums
+
+        var intent = Intent()
+        let named  = base.loadUnaligned(fromByteOffset: Header.intentCount, as: UInt32.self)
+        intent.count = Int(named) <= Intent.limit ? Int(named) : Intent.limit
+
+        for index in 0..<Intent.limit {
+            let at = Header.intentRuns + index * 8
+            intent.runs[index] = FSExtent(
+                start: base.loadUnaligned(fromByteOffset: at,     as: UInt32.self),
+                count: base.loadUnaligned(fromByteOffset: at + 4, as: UInt32.self)
+            )
+        }
+        self.intent = intent
     }
 
 
@@ -143,6 +224,14 @@ struct FSJournal {
             let at = Header.records + index * Header.recordWidth
             base.storeBytes(of: targets[index],   toByteOffset: at,     as: UInt32.self)
             base.storeBytes(of: checksums[index], toByteOffset: at + 4, as: UInt32.self)
+        }
+
+        base.storeBytes(of: UInt32(intent.count), toByteOffset: Header.intentCount, as: UInt32.self)
+
+        for index in 0..<Intent.limit {
+            let at = Header.intentRuns + index * 8
+            base.storeBytes(of: intent.runs[index].start, toByteOffset: at,     as: UInt32.self)
+            base.storeBytes(of: intent.runs[index].count, toByteOffset: at + 4, as: UInt32.self)
         }
 
         base.storeBytes(
@@ -168,7 +257,9 @@ struct FSJournal {
         _ = raw
 
         guard base.loadUnaligned(fromByteOffset: Header.recordCount, as: UInt32.self)
-                <= UInt32(capacity)
+                <= UInt32(capacity),
+              base.loadUnaligned(fromByteOffset: Header.intentCount, as: UInt32.self)
+                <= UInt32(Intent.limit)
         else { return false }
 
         let stored = base.loadUnaligned(fromByteOffset: Header.checksum, as: UInt32.self)
@@ -177,13 +268,16 @@ struct FSJournal {
     }
 
 
-    /// Whether every record names a block this journal may write over.
+    /// Whether every record names a block this journal may write over, and the
+    /// intent names only file data.
     ///
     /// The journal's own blocks and the superblocks are not among them: a record
     /// pointing at the header would have replay rewrite the thing that says what
     /// to replay, and one pointing at a superblock would put a metadata image
     /// where the layout lives.
     func targetsFit(_ plan: FSLayout.Plan) -> Bool {
+
+        guard intent.fits(plan) else { return false }
 
         for index in 0..<recordCount {
             let target = targets[index]

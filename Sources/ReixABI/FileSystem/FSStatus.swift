@@ -96,7 +96,9 @@ public enum FSStatus: UInt32 {
     ///
     /// Not `noSpace`: there is room on the disk. What there is not room for is the
     /// *change*, in a journal that holds sixteen block images - and a transaction
-    /// that can be truncated is not a transaction. Nothing this format does today
+    /// that can be truncated is not a transaction. Also a write that would
+    /// overwrite more of a file in place than one journal header promises to
+    /// settle: see `FSLayout.overwriteLimit`. Nothing this format does today
     /// gets near sixteen, so this is a refusal that says the design has met a
     /// case it was not sized for rather than one a client can provoke.
     case tooManyChanges
@@ -155,4 +157,13 @@ public enum FSStatus: UInt32 {
 
     /// A caller's destination cannot hold the complete typed result.
     case bufferTooSmall
+
+    /// A block of the file does not checksum to what was last written there,
+    /// so its bytes are refused rather than handed over.
+    ///
+    /// The file and not the volume: nothing else on the disk is built on a
+    /// file's bytes, so everything else goes on being served and a whole-block
+    /// write over the damage puts it right. A read stops short at the damaged
+    /// block, and a write that would have to keep part of it is refused.
+    case damaged
 }

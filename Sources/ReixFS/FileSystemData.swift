@@ -63,7 +63,9 @@ extension FileSystem {
             let chunk  = min(FSLayout.blockSize - inside, wanted - moved)
 
             guard let block = record.block(at: at) else { return (.notFound, moved) }
-            guard readBlock(block, into: dataBuffer) == .ok else { return (.deviceFailed, moved) }
+
+            let loaded = readDataBlock(block, into: dataBuffer)
+            guard loaded == .ok else { return (loaded, moved) }
 
             destination.advanced(by: Int(moved)).copyMemory(
                 from     : dataBuffer.advanced(by: Int(inside)),
@@ -91,7 +93,10 @@ extension FileSystem {
     /// lose everything.
     ///
     /// Completions may come back in any order, so what each slot was for is
-    /// remembered rather than inferred from when it was asked for.
+    /// remembered rather than inferred from when it was asked for, and that
+    /// includes the checksum its block must have. That is looked up before the
+    /// read is asked for, and a lookup that needs a read of its own waits for
+    /// the pipe to drain: one sum block covers four megabytes of file.
     private mutating func pipelined(
         _    record     : FSObject,
         at   offset     : UInt64,
@@ -105,11 +110,16 @@ extension FileSystem {
         var inside = InlineArray<4, UInt64>(repeating: 0)   // byte into the block
         var chunk  = InlineArray<4, UInt64>(repeating: 0)
         var out    = InlineArray<4, Bool>(repeating: false)
+        var sum    = InlineArray<4, UInt32>(repeating: 0)
 
         var asked   = UInt64(0)   // bytes handed to the device
         var moved   = UInt64(0)   // bytes copied out
         var flying  = 0
         var failure : FSStatus? = nil
+
+        // The first byte not delivered: later blocks may be in flight and good,
+        // but nothing past a damaged one is copied out.
+        var short = UInt64.max
 
         // Anything left over from a read that gave up before its requests came
         // back. It has to go *before* this one asks for anything, not after: a
@@ -135,6 +145,23 @@ extension FileSystem {
 
                 guard let block = record.block(at: at) else {
                     failure = .notFound
+                    short   = min(short, asked)
+                    break
+                }
+
+                // Never a read of the sum region with reads of the file in flight.
+                var expected: UInt32
+                if let held = heldDataSum(of: block) {
+                    expected = held
+                } else if flying == 0 {
+                    let looked = dataSum(of: block)
+                    guard looked.status == .ok else {
+                        failure = looked.status
+                        short   = min(short, asked)
+                        break
+                    }
+                    expected = looked.sum
+                } else {
                     break
                 }
 
@@ -146,12 +173,14 @@ extension FileSystem {
 
                 guard started == .ok else {
                     failure = .deviceFailed
+                    short   = min(short, asked)
                     break
                 }
 
                 where_[slot] = asked
                 inside[slot] = within
                 chunk[slot]  = piece
+                sum[slot]    = expected
                 out[slot]    = true
 
                 asked  += piece
@@ -162,6 +191,7 @@ extension FileSystem {
 
             guard let done = device.collect() else {
                 failure = failure ?? .deviceFailed
+                for slot in 0..<depth where out[slot] { short = min(short, where_[slot]) }
                 break
             }
 
@@ -170,8 +200,19 @@ extension FileSystem {
 
             guard done.status == .ok else {
                 failure = failure ?? .deviceFailed
+                short   = min(short, where_[done.slot])
                 continue
             }
+
+            guard FSChecksum.over(
+                device.buffer(of: done.slot), count: Int(FSLayout.blockSize)
+            ) == sum[done.slot] else {
+                failure = failure ?? .damaged
+                short   = min(short, where_[done.slot])
+                continue
+            }
+
+            guard where_[done.slot] < short else { continue }
 
             destination.advanced(by: Int(where_[done.slot])).copyMemory(
                 from     : device.buffer(of: done.slot).advanced(by: Int(inside[done.slot])),
@@ -181,7 +222,7 @@ extension FileSystem {
             moved += chunk[done.slot]
         }
 
-        if let failure, moved < wanted { return (failure, moved) }
+        if let failure { return (failure, short) }
 
         return (.ok, moved)
     }
@@ -221,6 +262,11 @@ extension FileSystem {
     /// well have been written, but the size that would have named them was not,
     /// and a caller told otherwise would carry on from an offset the file never
     /// reached.
+    ///
+    /// Every block written carries its checksum in the same transaction. A block
+    /// the file already has is named in the journal before it is overwritten, so
+    /// a write that does not commit leaves it holding old bytes or new, both
+    /// readable, and never a block whose checksum describes neither.
     public mutating func write(
         _    object   : UInt32,
         at   offset   : UInt64,
@@ -280,8 +326,36 @@ extension FileSystem {
         let end = offset &+ count
         guard end > offset else { return (.noSpace, 0) }
 
+        // The blocks this write lands on that the file already has, counted
+        // before anything is spent. See `FSLayout.overwriteLimit`.
+        let first   = offset / FSLayout.blockSize
+        let had     = UInt64(record.blocks)
+        let reached = min(FSLayout.divideUp(end, FSLayout.blockSize), had)
+        let inPlace = reached > first ? reached - first : 0
+
+        guard inPlace <= FSLayout.overwriteLimit else { return (.tooManyChanges, 0) }
+
         let status = grow(&record, to: end, of: object)
         guard status == .ok else { return (status, 0) }
+
+        // Those blocks, by address. The file's first blocks are its oldest, so
+        // growing it moved none of them.
+        var intent = FSJournal.Intent()
+        for index in 0..<inPlace {
+            guard let block = record.block(at: (first + index) * FSLayout.blockSize),
+                  intent.add(block)
+            else { return (.tooFragmented, 0) }
+        }
+
+        // A partial last block is read before the blocks are named, or damage
+        // found later would be settled over; the first is read in the loop.
+        let last = (end - 1) / FSLayout.blockSize
+        if end % FSLayout.blockSize != 0, last * FSLayout.blockSize < held, last > first {
+            guard let block = record.block(at: end - 1) else { return (.notFound, 0) }
+
+            let checked = readDataBlock(block, into: dataBuffer)
+            guard checked == .ok else { return (checked, 0) }
+        }
 
         var moved = UInt64(0)
 
@@ -308,7 +382,7 @@ extension FileSystem {
                     )
 
                 } else {
-                    let loaded = readBlock(block, into: dataBuffer)
+                    let loaded = readDataBlock(block, into: dataBuffer)
                     guard loaded == .ok else { return (loaded, moved) }
                 }
             }
@@ -317,6 +391,13 @@ extension FileSystem {
                 from     : source.advanced(by: Int(moved)),
                 byteCount: Int(chunk)
             )
+
+            // Named on the disk before the first of them is overwritten, which
+            // is this one: the blocks the file already has come first.
+            if moved == 0, !intent.isEmpty {
+                let named = declare(intent)
+                guard named == .ok else { return (named, moved) }
+            }
 
             let written = writeDataBlock(block, from: dataBuffer)
             guard written == .ok else { return (written, moved) }
@@ -573,7 +654,7 @@ extension FileSystem {
             let extent = record.runs[run]
 
             for block in extent.start..<(extent.start + extent.count) {
-                let loaded = readBlock(block, into: dataBuffer)
+                let loaded = readDataBlock(block, into: dataBuffer)
                 guard loaded == .ok else { return loaded }
 
                 let copied = writeDataBlock(fresh + written, from: dataBuffer)

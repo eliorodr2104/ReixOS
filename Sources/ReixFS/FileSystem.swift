@@ -154,6 +154,13 @@ public struct FileSystem<Device: BlockDevice> {
     /// mount skip the table: the seal hands these over and the reads check them.
     private let sums: UnsafeMutableRawPointer
 
+    /// Blocks a `prepared` header on the disk names as overwritten in place and
+    /// whose checksums have not been taken from the medium yet. See `settle`.
+    ///
+    /// Set when a write declares them and when a mount finds them, cleared once
+    /// a commit carries their checksums or a settle has made them true.
+    var unsettled = FSJournal.Intent()
+
     /// Whether `sums` describes the disk yet.
     ///
     /// Not on a dirty mount until its scan has read every one of those blocks:
@@ -599,6 +606,11 @@ public struct FileSystem<Device: BlockDevice> {
     /// promises is that the metadata is coherent, not that a power cut cannot
     /// land in the middle of a file: journalling file contents would double every
     /// write for a guarantee nobody asked for.
+    ///
+    /// Its checksum is metadata and is journalled, staged before the block is
+    /// written: a write whose checksum cannot be staged does not happen. The new
+    /// checksum reaches its home block only with the commit, so a block
+    /// overwritten in place must have been named first. See `declare`.
     mutating func writeDataBlock(
         _   index  : UInt32,
         from buffer: UnsafeRawPointer
@@ -606,7 +618,148 @@ public struct FileSystem<Device: BlockDevice> {
 
         guard index >= plan.dataStart else { return .deviceFailed }
 
+        let home   = sumBlock(of: index)
+        let loaded = readBlock(home, into: jrnl)
+        guard loaded == .ok else { return loaded }
+
+        jrnl.storeBytes(
+            of          : FSChecksum.over(buffer, count: Int(FSLayout.blockSize)),
+            toByteOffset: sumOffset(of: index),
+            as          : UInt32.self
+        )
+
+        let staged = stageStructuralBlock(home, from: jrnl)
+        guard staged == .ok else { return staged }
+
         return writeHomeBlock(index, from: buffer)
+    }
+
+
+    // MARK: - File data checksums
+
+    /// Which block of the sum region holds `block`'s checksum.
+    func sumBlock(of block: UInt32) -> UInt32 {
+        plan.sumStart + block / UInt32(FSLayout.sumsPerBlock)
+    }
+
+    /// Where in that block it sits.
+    func sumOffset(of block: UInt32) -> Int {
+        Int(block % UInt32(FSLayout.sumsPerBlock)) * 4
+    }
+
+    /// What file block `block` should checksum to, when the sum block holding
+    /// it is in the cache. Nil when finding out means a read.
+    func heldDataSum(of block: UInt32) -> UInt32? {
+        guard let slot = slot(holding: sumBlock(of: block)) else { return nil }
+
+        return page(slot).loadUnaligned(fromByteOffset: sumOffset(of: block), as: UInt32.self)
+    }
+
+    /// What file block `block` should checksum to, reading its sum block when
+    /// it is not in hand. The sum block is checked like any table block.
+    mutating func dataSum(of block: UInt32) -> (status: FSStatus, sum: UInt32) {
+        if let sum = heldDataSum(of: block) { return (.ok, sum) }
+
+        let loaded = readBlock(sumBlock(of: block), into: jrnl)
+        guard loaded == .ok else { return (loaded, 0) }
+
+        return (.ok, jrnl.loadUnaligned(fromByteOffset: sumOffset(of: block), as: UInt32.self))
+    }
+
+    /// One block of somebody's file, or `damaged` instead of bytes that are not
+    /// the ones last written there.
+    ///
+    /// Rot, a write the disk lost, a write that landed at the wrong address:
+    /// each leaves a block that does not checksum to what its last write said,
+    /// and each used to be handed to the reader as the file. Refused per
+    /// request and not by holding the volume: nothing else on the disk is built
+    /// on a file's bytes, and a whole-block write over it puts it right.
+    mutating func readDataBlock(
+        _    index : UInt32,
+        into buffer: UnsafeMutableRawPointer
+    ) -> FSStatus {
+
+        let expected = dataSum(of: index)
+        guard expected.status == .ok else { return expected.status }
+
+        let loaded = readBlock(index, into: buffer)
+        guard loaded == .ok else { return loaded }
+
+        return FSChecksum.over(buffer, count: Int(FSLayout.blockSize)) == expected.sum
+            ? .ok : .damaged
+    }
+
+
+    /// Names, on the disk, the blocks a write is about to overwrite in place,
+    /// and makes that durable before the first of them is written.
+    ///
+    /// One header and one barrier, paid only by a write that lands on blocks the
+    /// file already has. Until the commit, a power cut can leave any of those
+    /// holding new bytes under an old checksum, and this is how the mount after
+    /// it knows which. See `FSJournal.Intent`.
+    mutating func declare(_ intent: FSJournal.Intent) -> FSStatus {
+
+        transaction.intend(intent)
+
+        // Owed from here whether or not the header lands: a header the device
+        // refused may still be on the medium.
+        unsettled = intent
+        journal   = .prepared
+
+        guard writeJournalHeader(transaction.declaration()) == .ok, barrier() == .ok else {
+            return staging(refused: .deviceFailed)
+        }
+
+        return .ok
+    }
+
+
+    /// Takes the checksum of every block `unsettled` names from what the medium
+    /// holds, and makes it durable. What clearing a `prepared` header owes.
+    ///
+    /// Each named block holds the old bytes, the new ones, or a sector of each,
+    /// and none of them was promised, so whatever is there is what the file
+    /// holds: the guarantee the format had for those bytes before it had
+    /// checksums. Only the named entries change, so a power cut half way
+    /// through leaves a sum block whose other entries read the same either way,
+    /// and the next settle does it again.
+    private mutating func settle() -> FSStatus {
+
+        guard !unsettled.isEmpty else { return .ok }
+
+        var loaded = Self.noBlock
+
+        for run in 0..<unsettled.count {
+            let extent = unsettled.runs[run]
+
+            for block in extent.start..<(extent.start + extent.count) {
+                let home = sumBlock(of: block)
+
+                if home != loaded {
+                    if loaded != Self.noBlock {
+                        guard writeHomeBlock(loaded, from: meta) == .ok else { return explain(.deviceFailed) }
+                    }
+
+                    guard readBlock(home, into: meta) == .ok else { return explain(.deviceFailed) }
+                    loaded = home
+                }
+
+                guard readRawBlock(block, into: data) == .ok else { return .deviceFailed }
+
+                meta.storeBytes(
+                    of          : FSChecksum.over(data, count: Int(FSLayout.blockSize)),
+                    toByteOffset: sumOffset(of: block),
+                    as          : UInt32.self
+                )
+            }
+        }
+
+        guard writeHomeBlock(loaded, from: meta) == .ok, barrier() == .ok else {
+            return explain(.deviceFailed)
+        }
+
+        unsettled = FSJournal.Intent()
+        return .ok
     }
 
 
@@ -721,7 +874,9 @@ public struct FileSystem<Device: BlockDevice> {
 
         // Only once the device has taken it. A refused write left the old bytes,
         // and the old checksum is still the true one.
-        expect(FSChecksum.over(buffer, count: Int(FSLayout.blockSize)), of: index)
+        if sumSlot(of: index) != nil {
+            expect(FSChecksum.over(buffer, count: Int(FSLayout.blockSize)), of: index)
+        }
 
         keep(index, from: buffer)
 
@@ -1003,6 +1158,11 @@ public struct FileSystem<Device: BlockDevice> {
 
         transaction.end()
         dropCache()
+
+        // A write that named blocks it overwrites in place may have reached some
+        // of them. Settled now when the device allows it, and by `begin` if not.
+        guard !unsettled.isEmpty else { return }
+        if emptyJournal(checkpoint: checkpoint) != .ok { journal = .prepared }
     }
 
 
@@ -1019,6 +1179,8 @@ public struct FileSystem<Device: BlockDevice> {
     ///
     /// A failure after the committed header is not rolled back and must not be.
     /// The journal is left exactly as it is and the next mount finishes it.
+    /// Until then a block this transaction overwrote in place reads as
+    /// `damaged`: its new checksum is in the journal and not yet at home.
     mutating func commit() -> FSStatus {
 
         guard transaction.active else { return .ok }
@@ -1049,8 +1211,10 @@ public struct FileSystem<Device: BlockDevice> {
         else { return abandonPrepared() }
 
         // From here the transaction exists whatever happens next, and nothing
-        // short of a mount may clear it.
-        journal = .committed
+        // short of a mount may clear it. Its images carry the checksums of every
+        // block it overwrote, so nothing it named is owed a settle any more.
+        journal   = .committed
+        unsettled = FSJournal.Intent()
 
         guard applyJournal(header, live: true) == .ok, barrier() == .ok else {
             transaction.end()
@@ -1081,15 +1245,17 @@ public struct FileSystem<Device: BlockDevice> {
     /// that got here.
     private mutating func abandonPrepared() -> FSStatus {
 
+        // Ended first: a settle reads the sum region, and must read what the
+        // home blocks hold rather than what this transaction staged.
+        transaction.end()
+        dropCache()
+
         journal = .prepared
 
         // Tidied up if the device will take it, and left for `begin` to retry if
         // it will not: the failure that got here is what is reported, not this.
         let tidied = emptyJournal(checkpoint: checkpoint)
         if tidied != .ok { journal = .prepared }
-
-        transaction.end()
-        dropCache()
 
         return explain(.deviceFailed)
     }
@@ -1112,6 +1278,9 @@ public struct FileSystem<Device: BlockDevice> {
     /// outlived its mount going back over newer same-medium metadata. It does not
     /// make a claim about rollback of the complete storage medium.
     private mutating func emptyJournal(checkpoint: UInt64) -> FSStatus {
+
+        // What a `prepared` header named is put right before the header goes.
+        guard settle() == .ok else { return .deviceFailed }
 
         var header = FSJournal()
         header.generation = checkpoint
@@ -1234,8 +1403,10 @@ public struct FileSystem<Device: BlockDevice> {
             case .prepared:
                 // Written and never promised. Nothing on the disk depends on
                 // these images, so they go, and the checkpoint stays where the
-                // last finished transaction left it.
+                // last finished transaction left it. The file data it named as
+                // overwritten in place is settled first.
                 checkpoint = 0
+                unsettled  = header.intent
                 return emptyJournal(checkpoint: 0)
 
             case .committed:

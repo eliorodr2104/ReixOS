@@ -65,6 +65,11 @@ extension FileSystem {
         /// room against what is actually charged to it. Reads far more, finds
         /// far more, and is for a person who has reason to ask.
         case everything
+
+        /// That, and every block of every file against its checksum: a read of
+        /// all the data on the disk. What `fs.scrub` runs, and nothing else,
+        /// because its cost is the size of what is stored.
+        case data
     }
 
 
@@ -189,6 +194,15 @@ extension FileSystem {
         /// rather than safety.
         public var selfParented: UInt32 = 0
 
+        // MARK: - Data
+
+        /// Blocks of file data that do not checksum to what was last written
+        /// there. Counted by a `data` scan only.
+        ///
+        /// Reported and not held: nothing else on the disk is built on a file's
+        /// bytes, and a read of one of these is already refused as `damaged`.
+        public var damagedData: UInt32 = 0
+
         // MARK: - Room
 
         /// Containers whose `used` disagrees with the blocks actually charged
@@ -310,10 +324,14 @@ extension FileSystem {
 
         guard let census = scanBlocks(&findings) else { return (findings, nil) }
 
-        if depth == .everything {
+        if depth != .blocks {
             guard roomWalk(&findings, census: census, mending: false),
                   scanNames(&findings)
             else { return (findings, census) }
+        }
+
+        if depth == .data {
+            guard scanData(&findings) else { return (findings, census) }
         }
 
         settle(&findings)
@@ -397,6 +415,47 @@ extension FileSystem {
         containerCount = census.tooManyContainers ? FSLayout.maxContainers : census.containers
 
         return census
+    }
+
+
+    /// Every block of every file, read and checked against its checksum.
+    ///
+    /// One pass over the table, and one read per block of data: the whole of
+    /// what is stored. False when the device stopped answering, or the table or
+    /// a sum block did not check out, which holds the volume.
+    private mutating func scanData(_ findings: inout Findings) -> Bool {
+
+        let perTableBlock = Int(FSLayout.blockSize / FSLayout.objectSize)
+
+        for table in 0..<plan.tableBlocks {
+            guard readBlock(plan.tableStart + table, into: metaBuffer) == .ok else {
+                return false
+            }
+
+            for slot in 0..<perTableBlock {
+                let record = FSObject(
+                    reading: metaBuffer.advanced(by: slot * Int(FSLayout.objectSize))
+                )
+
+                guard record.standing == .live, record.kind == .file,
+                      record.fits(plan)
+                else { continue }
+
+                for run in 0..<Int(record.extents) {
+                    let extent = record.runs[run]
+
+                    for block in extent.start..<(extent.start + extent.count) {
+                        switch readDataBlock(block, into: dataBuffer) {
+                            case .ok     : continue
+                            case .damaged: found(&findings.damagedData)
+                            default      : return false
+                        }
+                    }
+                }
+            }
+        }
+
+        return true
     }
 
 

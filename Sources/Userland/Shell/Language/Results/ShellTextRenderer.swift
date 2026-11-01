@@ -540,6 +540,7 @@ public enum ShellTextRenderer {
             case .unsupportedCapacity?: "  this version cannot represent another container"
             case .bufferTooSmall?: "  the result did not fit in the buffer provided"
             case .pastTheEnd?: "  a file has no holes here, so a write starts at the end or inside"
+            case .damaged?: "  part of that file is damaged on the disk and was not read back"
             case nil: "  unknown file system status"
         }
     }

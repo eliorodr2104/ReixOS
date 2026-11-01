@@ -79,12 +79,15 @@ public enum FSLayout {
     /// the service level below.
     ///
     /// ```
-    /// geometry  blocks  bmap  table  clean reads  dirty reads  dirty model  mend reads  mend model
-    /// 16 MiB    4096    1     32     8            397          31ms         462         35ms
-    /// 256 MiB   65536   2     512    9            1838         127ms        2864        193ms
-    /// 1 GiB     262144  8     2048   17           6452         430ms        10556       702ms
-    /// 2 GiB     524288  16    4096   27           12604        843ms        20812       1395ms
+    /// geometry  blocks  bmap  table  sums  clean reads  dirty reads  dirty model  mend reads  mend model
+    /// 16 MiB    4096    1     32     4     8            401          35ms         466         35ms
+    /// 256 MiB   65536   2     512    64    9            1902         131ms        2928        201ms
+    /// 1 GiB     262144  8     2048   256   17           6708         459ms        10812       743ms
+    /// 2 GiB     524288  16    4096   512   27           13116        1004ms       21324       1675ms
     /// ```
+    ///
+    /// The file data checksums cost a recovery one read of the sum region, the
+    /// `sums` column, which it learns once; a clean mount gets them from the seal.
     ///
     /// **The service level.** A dirty mount runs `putRight` before it serves
     /// anything, so its cost is time a machine spends with no file system. One
@@ -147,6 +150,15 @@ public enum FSLayout {
     /// How many file data checksums one block of the sum region holds: four
     /// bytes each, one for every block of the disk, indexed by block number.
     public static let sumsPerBlock: UInt64 = blockSize / 4
+
+    /// The most blocks one write may overwrite in place.
+    ///
+    /// Each of them is named in the journal before it is written, and a mount
+    /// that finds the name reads every one of them back. So this is the
+    /// recovery bill of the worst write: a thousand and twenty-four reads, about
+    /// fifty milliseconds against the one-second line. A client of the file
+    /// system server cannot get near it, because its window is four pages.
+    public static let overwriteLimit: UInt64 = 1024
 
 
     /// Where each region starts, worked out from the size of the disk alone.

@@ -96,6 +96,14 @@ final class MemoryDisk: BlockDevice {
         refusals = count
     }
 
+    /// Refuses the `nth` request from now and no other: one write lost to a
+    /// device that answers again straight after.
+    func refuseOnly(_ nth: Int) {
+        lone = requests + nth
+    }
+
+    private var lone: Int? = nil
+
     private var refusals = 0
 
     init(sectors: UInt64) {
@@ -112,6 +120,11 @@ final class MemoryDisk: BlockDevice {
 
     private func refuses() -> Bool {
         requests += 1
+
+        if requests == lone {
+            lone = nil
+            return true
+        }
 
         if refusals > 0 {
             refusals -= 1
