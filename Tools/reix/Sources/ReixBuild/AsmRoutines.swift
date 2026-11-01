@@ -113,29 +113,61 @@ private func mmuHandlers() -> [AsmRoutine] {
             ret()
         },
 
-        fn("synchronize_instruction_cache") {
-            raw("    cbz x1, .L_code_cache_done")
-            mrs("x2", "ctr_el0")
-            raw("    ubfx x2, x2, #16, #4")
-            mov("x3", 4)
-            raw("    lsl x3, x3, x2")
+        // CTR_EL0, read once at boot: its line sizes and its IDC, DIC and
+        // L1Ip fields decide how every code publication is done.
+        fn("read_cache_type") { mrs("x0", "ctr_el0"); ret() },
+
+        // clean_dcache_pou(base, size, line): `dc cvau` per data line, and no
+        // barrier, so a batch waits once for every page it cleaned.
+        fn("clean_dcache_pou") {
+            raw("    cbz x1, .L_pou_clean_done")
             add("x1", "x0", "x1")
-            raw("    sub x2, x3, #1")
-            raw("    bic x0, x0, x2")
-            label(".L_code_cache_loop")
+            raw("    sub x3, x2, #1")
+            raw("    bic x0, x0, x3")
+            label(".L_pou_clean_loop")
             raw("    dc cvau, x0")
-            add("x0", "x0", "x3")
+            add("x0", "x0", "x2")
             raw("    cmp x0, x1")
-            raw("    b.lo .L_code_cache_loop")
+            raw("    b.lo .L_pou_clean_loop")
+            label(".L_pou_clean_done")
+            ret()
+        },
+
+        // invalidate_icache_lines(base, size, line): waits for the clean, then
+        // `ic ivau` per line. Only a PIPT cache sees the user alias in these.
+        fn("invalidate_icache_lines") {
             dsb("ish")
-            // The code's user VA may belong to an inactive root, and differs
-            // from the kernel alias just cleaned. Cover all instruction aliases.
+            raw("    cbz x1, .L_icache_lines_done")
+            add("x1", "x0", "x1")
+            raw("    sub x3, x2, #1")
+            raw("    bic x0, x0, x3")
+            label(".L_icache_lines_loop")
+            raw("    ic ivau, x0")
+            add("x0", "x0", "x2")
+            raw("    cmp x0, x1")
+            raw("    b.lo .L_icache_lines_loop")
+            label(".L_icache_lines_done")
+            ret()
+        },
+
+        // A batch's completion on any other cache: the user VA differs from the
+        // kernel alias just cleaned and its root may be inactive, so all go.
+        fn("invalidate_icache_all") {
+            dsb("ish")
             ic("ialluis")
             dsb("ish")
             isb()
-            label(".L_code_cache_done")
             ret()
         },
+
+        // A batch's completion when nothing is left to invalidate: the cleans
+        // or the `ic ivau` lines are waited for, then the stream resynchronized.
+        fn("synchronize_instruction_stream") {
+            dsb("ish")
+            isb()
+            ret()
+        },
+
         fn("flush_tlb") {
             dsb("ishst")
             tlbi("vmalle1is")

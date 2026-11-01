@@ -41,7 +41,7 @@ struct PageTableOperationTests {
     private static let asid     : ASID             = 0x2A7
     private static let readWrite: VirtualPageFlags = [.present, .userAccess, .pxn, .uxn]
     private static let readOnly : VirtualPageFlags = [.present, .userAccess, .readOnly, .pxn, .uxn]
-    private static let execute  : VirtualPageFlags = [.present, .userAccess, .pxn]
+    private static let execute  : VirtualPageFlags = [.present, .userAccess, .readOnly, .pxn]
 
     /// What every invalidation of `va` in this suite must carry.
     private static let operand = tlbiOperand(va, asid: asid)
@@ -78,7 +78,8 @@ struct PageTableOperationTests {
     }
 
 
-    /// One resident read-write page at `va`, every level above L3 already built.
+    /// One resident read-write page at `va`, every level above L3 already built,
+    /// with the Cortex-A53's cache type loaded as boot loads it.
     ///
     /// The levels matter: `mapTable` publishes each table it has to create, so a
     /// first install into an empty root emits barriers that belong to the walk
@@ -93,38 +94,40 @@ struct PageTableOperationTests {
         ) -> Void
     ) {
         withProcessManager(pages: 160) { ram, _, _ in
-            let root = ram.rootTablePhysical
+            withCacheType(cortexA53CacheType) {
+                let root = ram.rootTablePhysical
 
-            guard let frame = try? ram.ppm.pointee.alloc(4096) else {
-                Issue.record("the arena gave no frame")
-                return
+                guard let frame = try? ram.ppm.pointee.alloc(4096) else {
+                    Issue.record("the arena gave no frame")
+                    return
+                }
+
+                let installed = refusal {
+                    try ram.vmm.pointee.installUserPage(
+                        rootTable: root,
+                        asid     : Self.asid,
+                        virtual  : Self.va,
+                        physical : frame.address,
+                        flags    : Self.readWrite,
+                        type     : .normal
+                    )
+                }
+
+                guard installed == "none" else {
+                    Issue.record("the fixture install was refused: \(installed)")
+                    return
+                }
+
+                guard let slot = Self.slot(ram, root) else {
+                    Issue.record("no leaf table after the install")
+                    return
+                }
+
+                // The probe outlives nothing: the arena is freed when this returns.
+                defer { mmu_trace_reset(nil) }
+
+                body(ram, root, frame.address, slot)
             }
-
-            let installed = refusal {
-                try ram.vmm.pointee.installUserPage(
-                    rootTable: root,
-                    asid     : Self.asid,
-                    virtual  : Self.va,
-                    physical : frame.address,
-                    flags    : Self.readWrite,
-                    type     : .normal
-                )
-            }
-
-            guard installed == "none" else {
-                Issue.record("the fixture install was refused: \(installed)")
-                return
-            }
-
-            guard let slot = Self.slot(ram, root) else {
-                Issue.record("no leaf table after the install")
-                return
-            }
-
-            // The probe outlives nothing: the arena is freed when this returns.
-            defer { mmu_trace_reset(nil) }
-
-            body(ram, root, frame.address, slot)
         }
     }
 
@@ -164,6 +167,92 @@ struct PageTableOperationTests {
     }
 
 
+    @Test("install of code publishes it before the descriptor can fetch it")
+    func installPublishesCodeFirst() {
+        withPage { ram, root, frame, slot in
+            ram.vmm.pointee.removeUserPage(rootTable: root, virtual: Self.va)
+
+            mmu_trace_reset(slot)
+
+            let error = refusal {
+                try ram.vmm.pointee.installUserPage(
+                    rootTable: root,
+                    asid     : Self.asid,
+                    virtual  : Self.va,
+                    physical : frame,
+                    flags    : Self.execute,
+                    type     : .normal
+                )
+            }
+
+            #expect(error == "none")
+
+            // The page through the kernel alias, one completion of its own, and
+            // only then the descriptor: still invalid at both cache operations.
+            let calls = mmuCalls()
+            #expect(calls.map(\.op) == [.cleanPoU, .icacheAll, .barrier])
+            #expect(calls.first?.arg  == frame)
+            #expect(calls.first?.size == UserSpaceLayout.pageSize)
+            #expect(calls.first?.line == 64)
+            #expect(mmu_trace_descriptor(0) == 0)
+            #expect(mmu_trace_descriptor(1) == 0)
+            #expect(mmu_trace_descriptor(2) == slot.pointee)
+        }
+    }
+
+
+    @Test("a batched install of code stages it and leaves the completion to the batch")
+    func batchedInstallStagesOnly() {
+        withPage { ram, root, frame, slot in
+            ram.vmm.pointee.removeUserPage(rootTable: root, virtual: Self.va)
+
+            mmu_trace_reset(slot)
+
+            let error = refusal {
+                try ram.vmm.pointee.installUserPage(
+                    rootTable: root,
+                    asid     : Self.asid,
+                    virtual  : Self.va,
+                    physical : frame,
+                    flags    : Self.execute,
+                    type     : .normal,
+                    batched  : true
+                )
+            }
+
+            #expect(error == "none")
+            #expect(mmuOps() == [.cleanPoU, .barrier])
+            #expect(mmuCount(.icacheAll) == 0)
+            #expect(mmuCount(.stream)    == 0)
+        }
+    }
+
+
+    @Test("a batched install of data is an install like any other")
+    func batchedInstallOfDataPublishesNothing() {
+        withPage { ram, root, frame, slot in
+            ram.vmm.pointee.removeUserPage(rootTable: root, virtual: Self.va)
+
+            mmu_trace_reset(slot)
+
+            let error = refusal {
+                try ram.vmm.pointee.installUserPage(
+                    rootTable: root,
+                    asid     : Self.asid,
+                    virtual  : Self.va,
+                    physical : frame,
+                    flags    : Self.readWrite,
+                    type     : .normal,
+                    batched  : true
+                )
+            }
+
+            #expect(error == "none")
+            #expect(mmuOps() == [.barrier])
+        }
+    }
+
+
     @Test("install refuses a valid descriptor and leaves everything alone")
     func installRefusesAValidDescriptor() {
         withPage { ram, root, _, slot in
@@ -183,7 +272,7 @@ struct PageTableOperationTests {
                     asid     : Self.asid,
                     virtual  : Self.va,
                     physical : other.address,
-                    flags    : Self.readWrite,
+                    flags    : Self.execute,
                     type     : .normal
                 )
             }
@@ -191,7 +280,8 @@ struct PageTableOperationTests {
             #expect(error == "pageAlreadyMapped")
 
             // The refusal is decided before the walk creates anything, so the
-            // snapshot covers the page tables as well as the frame metadata.
+            // snapshot covers the page tables as well as the frame metadata, and
+            // no byte of the refused frame was published either.
             #expect(slot.pointee == descriptor)
             #expect(ram.pmmStateSnapshot() == snapshot)
             #expect(mmu_trace_length() == 0)
@@ -293,7 +383,7 @@ struct PageTableOperationTests {
                     rootTable: root,
                     asid     : Self.asid,
                     virtual  : Self.va,
-                    flags    : Self.readWrite,
+                    flags    : Self.execute,
                     type     : .device
                 )
             }
@@ -311,7 +401,7 @@ struct PageTableOperationTests {
                     rootTable: root,
                     asid     : Self.asid,
                     virtual  : Self.va,
-                    flags    : Self.readWrite,
+                    flags    : Self.execute,
                     type     : .normal
                 )
             }
@@ -322,10 +412,11 @@ struct PageTableOperationTests {
     }
 
 
-    @Test("protect that makes a page executable publishes the instruction stream")
+    @Test("protect that makes a page executable publishes the instruction stream first")
     func protectPublishesNewlyExecutableCode() {
         withPage { ram, root, frame, slot in
-            reset_instruction_cache_sync_record()
+            let writable = slot.pointee
+
             mmu_trace_reset(slot)
 
             let error = refusal {
@@ -342,11 +433,39 @@ struct PageTableOperationTests {
 
             // The bytes were written through the kernel's cached alias while the
             // page was writable and never executable, which is this path alone.
-            #expect(instruction_cache_sync_calls() == 1)
-            #expect(instruction_cache_synced_base() == frame)
-            #expect(instruction_cache_synced_size() == UserSpaceLayout.pageSize)
-            #expect(mmuOps() == [.barrier, .tlbLeaf, .tlbSync])
-            #expect(mmu_trace_arg(1) == Self.operand)
+            // Published whole while the descriptor still says writable.
+            let calls = mmuCalls()
+            #expect(calls.map(\.op) == [.cleanPoU, .icacheAll, .barrier, .tlbLeaf, .tlbSync])
+            guard calls.count == 5 else { return }
+
+            #expect(calls[0].arg  == frame)
+            #expect(calls[0].size == UserSpaceLayout.pageSize)
+            #expect(calls[0].descriptor == writable)
+            #expect(calls[1].descriptor == writable)
+            #expect(calls[3].arg == Self.operand)
+        }
+    }
+
+
+    @Test("a batched protect of code stages it and runs no completion of its own")
+    func batchedProtectOfCodeStagesOnly() {
+        withPage { ram, root, frame, slot in
+            mmu_trace_reset(slot)
+
+            let error = refusal {
+                try ram.vmm.pointee.protectUserPage(
+                    rootTable: root,
+                    asid     : Self.asid,
+                    virtual  : Self.va,
+                    flags    : Self.execute,
+                    type     : .normal,
+                    batched  : true
+                )
+            }
+
+            #expect(error == "none")
+            #expect(mmuOps() == [.cleanPoU, .barrier])
+            #expect(mmu_trace_arg(0) == frame)
         }
     }
 
@@ -392,13 +511,15 @@ struct PageTableOperationTests {
     }
 
 
-    @Test("replace of a page that may be executed ends with an instruction barrier")
+    @Test("replace of a page that may be executed publishes it and ends with an instruction barrier")
     func replaceOfExecutableCodeSynchronizesTheStream() {
-        withPage { ram, root, _, slot in
+        withPage { ram, root, frame, slot in
             guard let fresh = try? ram.ppm.pointee.alloc(4096) else {
                 Issue.record("the arena gave no second frame")
                 return
             }
+
+            let old = slot.pointee
 
             mmu_trace_reset(slot)
 
@@ -414,8 +535,16 @@ struct PageTableOperationTests {
             }
 
             #expect(error == "none")
-            #expect(mmuOps() == [.barrier, .tlbLeaf, .tlbSync, .barrier, .isb])
-            #expect(mmu_trace_arg(1) == Self.operand)
+            #expect(mmuOps() == [
+                .cleanPoU, .icacheAll, .barrier, .tlbLeaf, .tlbSync, .barrier, .isb
+            ])
+
+            // The new frame is published while the old translation still stands,
+            // and it is the new frame and not the old one.
+            #expect(mmu_trace_arg(0) == fresh.address)
+            #expect(mmu_trace_arg(0) != frame)
+            #expect(mmu_trace_descriptor(1) == old)
+            #expect(mmu_trace_arg(3) == Self.operand)
         }
     }
 
@@ -433,7 +562,7 @@ struct PageTableOperationTests {
                     asid     : Self.asid,
                     virtual  : Self.va,
                     physical : frame,
-                    flags    : Self.readOnly,
+                    flags    : Self.execute,
                     type     : .normal
                 )
             }
@@ -452,7 +581,7 @@ struct PageTableOperationTests {
                     asid     : Self.asid,
                     virtual  : Self.va,
                     physical : frame,
-                    flags    : Self.readWrite,
+                    flags    : Self.execute,
                     type     : .normal
                 )
             }

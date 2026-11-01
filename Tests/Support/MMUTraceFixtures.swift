@@ -19,29 +19,39 @@ public enum MMUOp: UInt32, Equatable {
     case tlbASID     = 7
     case tlbLeaf     = 8
     case tlbTable    = 9
+    case cleanPoU    = 10
+    case icacheLines = 11
+    case icacheAll   = 12
+    case stream      = 13
     case unknown     = 0
 }
 
 
-/// One recorded call: what it was, its argument, and the descriptor under
-/// test as it read at that call.
+/// One recorded call: what it was, its argument, the range it covered and the
+/// line it stepped by, and the descriptor under test as it read at that call.
 public struct MMUCall: Equatable, CustomStringConvertible {
     public let op        : MMUOp
     public let arg       : UInt64
+    public let size      : UInt64
+    public let line      : UInt64
     public let descriptor: UInt64
 
     public init(
         op        : MMUOp,
         arg       : UInt64,
+        size      : UInt64 = 0,
+        line      : UInt64 = 0,
         descriptor: UInt64 = 0
     ) {
         self.op         = op
         self.arg        = arg
+        self.size       = size
+        self.line       = line
         self.descriptor = descriptor
     }
 
     public var description: String {
-        "\(op)(0x\(String(arg, radix: 16)))"
+        "\(op)(0x\(String(arg, radix: 16)), size \(size), line \(line))"
     }
 }
 
@@ -55,6 +65,8 @@ public func mmuCalls() -> [MMUCall] {
         calls.append(MMUCall(
             op        : MMUOp(rawValue: mmu_trace_op(index)) ?? .unknown,
             arg       : mmu_trace_arg(index),
+            size      : mmu_trace_size(index),
+            line      : mmu_trace_line(index),
             descriptor: mmu_trace_descriptor(index)
         ))
         index += 1
@@ -76,4 +88,29 @@ public func mmuCount(_ op: MMUOp) -> Int { mmuOps().filter { $0 == op }.count }
 /// hardware, which is what the shim records: VA[55:12] and the tag in [63:48].
 public func tlbiOperand(_ virtual: VirtualAddress, asid: ASID) -> UInt64 {
     ((virtual >> 12) & ((1 << 44) - 1)) | (UInt64(asid) << 48)
+}
+
+
+/// CTR_EL0 of the machine `make run` boots, QEMU's Cortex-A53: 64-byte lines on
+/// both sides, a VIPT instruction cache, and neither IDC nor DIC.
+public let cortexA53CacheType: UInt64 = 0x8444_8004
+
+
+/// Runs `body` with `cacheType` loaded the way boot loads it, through the shim's
+/// CTR_EL0, and puts both back afterwards.
+public func withCacheType<Result>(
+    _ value: UInt64,
+    _ body : () throws -> Result
+) rethrows -> Result {
+    let saved = Arch.MMU.cacheType
+
+    host_set_cache_type(value)
+    Arch.MMU.loadCacheType()
+
+    defer {
+        Arch.MMU.cacheType = saved
+        host_set_cache_type(0)
+    }
+
+    return try body()
 }

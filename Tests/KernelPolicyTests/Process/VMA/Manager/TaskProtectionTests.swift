@@ -10,16 +10,17 @@ import KernelTestSupport
 import KernelHostShims
 
 /// The seal as one range operation: every descriptor of the region rewritten,
-/// then one wait for all of their invalidations, under the task's own tag.
+/// then one wait for all of their invalidations, under the task's own tag, and
+/// one publication of the code for the whole region.
 ///
 /// Per page, which is what this replaced, the costs were a `tlbi` across every
-/// ASID, a `dsb ish` and an `isb` for every page, and nothing about the result
-/// says which of the two a kernel did. The recorder does: what is asserted is
-/// the shape of the trace, its count of waits, and the operand every
-/// invalidation carried.
+/// ASID, a `dsb ish`, an `isb` and a whole-cache `ic ialluis` for every page of
+/// text, and nothing about the result says which of the two a kernel did. The
+/// recorder does: what is asserted is the shape of the trace, its count of
+/// waits and completions, and the operand every invalidation carried.
 ///
-/// `.serialized`, and the run needs `--no-parallel`: the recorder and
-/// `TaskRegistry` are globals.
+/// `.serialized`, and the run needs `--no-parallel`: the recorder, the loaded
+/// cache type and `TaskRegistry` are globals.
 extension KernelPolicyTestRoot {
 @Suite("Task protection", .serialized)
 struct TaskProtectionTests {
@@ -31,9 +32,9 @@ struct TaskProtectionTests {
     private static let data: VMAPermissions = [.read, .write, .user]
 
 
-    @Test("sealing text rewrites every page and waits once")
+    @Test("sealing text rewrites every page, waits once and publishes once")
     func sealIsOneBatch() {
-        withMappedTask(pages: 4) { _, vma, process in
+        withMappedTask(pages: 4) { ram, vma, process in
             let asid = process.pointee.addressSpace.asid
 
             let sealed = vma.pointee.protectTaskRegion(
@@ -43,16 +44,28 @@ struct TaskProtectionTests {
             )
             #expect(sealed)
 
-            // Every page rewritten, then the range invalidated by page under the
-            // task's tag with one wait.
-            #expect(mmuOps() == [
-                .barrier, .barrier, .barrier, .barrier,
-                .tlbLeaf, .tlbLeaf, .tlbLeaf, .tlbLeaf, .tlbSync
+            let calls = mmuCalls()
+
+            // Each page staged through the kernel alias and published, then the
+            // range invalidated by page with one wait, then one completion.
+            #expect(calls.map(\.op) == [
+                .cleanPoU, .barrier, .cleanPoU, .barrier,
+                .cleanPoU, .barrier, .cleanPoU, .barrier,
+                .tlbLeaf, .tlbLeaf, .tlbLeaf, .tlbLeaf, .tlbSync,
+                .icacheAll
             ])
-            #expect(mmuCalls().filter { $0.op == .tlbLeaf }.map(\.arg) == (0..<4).map {
+
+            #expect(calls.filter { $0.op == .tlbLeaf }.map(\.arg) == (0..<4).map {
                 tlbiOperand(Self.base + UInt64($0) * Self.page, asid: asid)
             })
-            #expect(instruction_cache_sync_calls() == 4)
+
+            #expect(calls.filter { $0.op == .cleanPoU }.map(\.arg) == (0..<4).map {
+                ram.vmm.pointee.physicalAddressOf(
+                    rootTable: process.pointee.addressSpace.rootTablePhysical,
+                    virtual  : Self.base + UInt64($0) * Self.page
+                ) ?? 0
+            })
+
             #expect(vma.pointee.vmaList.search(at: Self.base)?.pointee.permissions == Self.code)
         }
     }
@@ -70,12 +83,13 @@ struct TaskProtectionTests {
 
             let ops = mmuOps()
 
-            #expect(mmuCount(.barrier) == 40)
-            #expect(mmuCount(.tlbLeaf) == 0)
-            #expect(mmuCount(.tlbSync) == 0)
-            #expect(mmuCount(.tlbAll)  == 0)
-            #expect(ops.last == .tlbASID)
-            #expect(mmu_trace_arg(UInt64(ops.count - 1)) == UInt64(process.pointee.addressSpace.asid))
+            #expect(mmuCount(.cleanPoU) == 40)
+            #expect(mmuCount(.barrier)  == 40)
+            #expect(mmuCount(.tlbLeaf)  == 0)
+            #expect(mmuCount(.tlbSync)  == 0)
+            #expect(mmuCount(.tlbAll)   == 0)
+            #expect(Array(ops.suffix(2)) == [.tlbASID, .icacheAll])
+            #expect(mmu_trace_arg(UInt64(ops.count - 2)) == UInt64(process.pointee.addressSpace.asid))
         }
     }
 
@@ -93,7 +107,6 @@ struct TaskProtectionTests {
             #expect(sealed)
 
             #expect(mmuOps() == [.barrier, .barrier, .barrier, .tlbLeaf, .tlbLeaf, .tlbLeaf, .tlbSync])
-            #expect(instruction_cache_sync_calls() == 0)
             #expect(mmu_trace_arg(3) == tlbiOperand(Self.base, asid: asid))
         }
     }
@@ -147,10 +160,10 @@ struct TaskProtectionTests {
             )
             #expect(!sealed)
 
-            // Two pages rewritten, the same two restored, and the two invalidated
-            // with one wait.
+            // Two pages staged and rewritten, the same two restored, the two
+            // invalidated with one wait, and no completion: nothing stayed code.
             #expect(mmuOps() == [
-                .barrier, .barrier,
+                .cleanPoU, .barrier, .cleanPoU, .barrier,
                 .barrier, .barrier,
                 .tlbLeaf, .tlbLeaf, .tlbSync
             ])
@@ -202,11 +215,12 @@ struct TaskProtectionTests {
                 return
             }
 
-            reset_instruction_cache_sync_record()
-            mmu_trace_reset(nil)
-            defer { mmu_trace_reset(nil) }
+            withCacheType(cortexA53CacheType) {
+                mmu_trace_reset(nil)
+                defer { mmu_trace_reset(nil) }
 
-            body(ram, vma, task.process)
+                body(ram, vma, task.process)
+            }
         }
     }
 }

@@ -648,6 +648,124 @@ post_tlb_scope() {
     return 0
 }
 
+# post=icache-batch: code is published one batch at a time, read out of the
+# linked image. QEMU keeps no instruction cache, so a kernel that skipped this
+# entirely passes every row; what can be checked is that the per-range half
+# never invalidates the whole cache, that only the completion does, and that
+# CTR_EL0 is read once, at boot, and never per publication.
+post_icache_batch() {
+    ib_out=$2
+
+    if [ ! -f "$KERNEL_ELF" ]; then
+        printf 'no %s to read the sequences out of' "$KERNEL_ELF"
+        return 1
+    fi
+
+    "$OBJDUMP" -d "$KERNEL_ELF" > "$ib_out" 2>&1 || {
+        printf 'could not disassemble %s' "$KERNEL_ELF"
+        return 1
+    }
+
+    ib_where=$(holders_of "$ib_out" 'ic[ \t]+ialluis')
+    if [ "$ib_where" != '<invalidate_icache_all>:' ]; then
+        printf 'ic ialluis outside invalidate_icache_all: %s' "$ib_where"
+        return 1
+    fi
+
+    # D `dsb ish`, C the invalidation, I `isb`.
+    ib_all=$(pte_body "$ib_out" '<invalidate_icache_all>' | awk '
+        /dsb[ \t]+ish$/   { s = s "D"; next }
+        /ic[ \t]+ialluis/ { s = s "C"; next }
+        /[ \t]isb$/       { s = s "I"; next }
+        END { print s }
+    ')
+    if [ "$ib_all" != DCDI ]; then
+        printf 'invalidate_icache_all is not dsb ish; ic ialluis; dsb ish; isb: read "%s"' "$ib_all"
+        return 1
+    fi
+
+    # The per-range clean waits for nothing; the batch's completion does.
+    if ! pte_body "$ib_out" '<clean_dcache_pou>' | grep -qE 'dc[[:space:]]+cvau'; then
+        printf 'clean_dcache_pou does not clean to the point of unification'
+        return 1
+    fi
+
+    if pte_body "$ib_out" '<clean_dcache_pou>' | grep -qE 'dsb|isb'; then
+        printf 'clean_dcache_pou waits per range'
+        return 1
+    fi
+
+    ib_lines=$(pte_body "$ib_out" '<invalidate_icache_lines>' | awk '
+        /dsb[ \t]+ish$/ { s = s "D"; next }
+        /ic[ \t]+ivau/  { s = s "C"; next }
+        /[ \t]isb$/     { s = s "I"; next }
+        END { print s }
+    ')
+    if [ "$ib_lines" != DC ]; then
+        printf 'invalidate_icache_lines is not dsb ish then ic ivau alone: read "%s"' "$ib_lines"
+        return 1
+    fi
+
+    for ib_routine in clean_dcache_pou invalidate_icache_lines; do
+        ib_callers=$(callers_of "$ib_out" "<$ib_routine>")
+        case $ib_callers in
+            *stageInstructions*) ;;
+            *)
+                printf '%s is reached from outside stageInstructions: %s' "$ib_routine" "$ib_callers"
+                return 1
+                ;;
+        esac
+        if [ "$(printf '%s\n' "$ib_callers" | wc -l)" -ne 1 ]; then
+            printf '%s has callers besides stageInstructions: %s' "$ib_routine" "$ib_callers"
+            return 1
+        fi
+    done
+
+    for ib_routine in invalidate_icache_all synchronize_instruction_stream; do
+        ib_callers=$(callers_of "$ib_out" "<$ib_routine>")
+        case $ib_callers in
+            *completeInstructionPublication*) ;;
+            *)
+                printf '%s is reached from outside the completion: %s' "$ib_routine" "$ib_callers"
+                return 1
+                ;;
+        esac
+        if [ "$(printf '%s\n' "$ib_callers" | wc -l)" -ne 1 ]; then
+            printf '%s has callers besides the completion: %s' "$ib_routine" "$ib_callers"
+            return 1
+        fi
+    done
+
+    # CTR_EL0 is read by `read_cache_type` and by the DMA clean, which is not
+    # a publication; `read_cache_type` is reached only from boot.
+    ib_ctr=$(holders_of "$ib_out" 'ctr_el0' | tr '\n' ' ')
+    if [ "$ib_ctr" != '<clean_dcache_range>: <read_cache_type>: ' ]; then
+        printf 'CTR_EL0 is read outside read_cache_type: %s' "$ib_ctr"
+        return 1
+    fi
+
+    ib_callers=$(callers_of "$ib_out" '<read_cache_type>' | grep -v 'loadCacheType' || true)
+    case $ib_callers in
+        *VirtualMemoryManagerV6ppmPtr*) ;;
+        *)
+            printf 'read_cache_type is reached from outside boot: %s' "$ib_callers"
+            return 1
+            ;;
+    esac
+
+    if [ "$(printf '%s\n' "$ib_callers" | wc -l)" -ne 1 ]; then
+        printf 'read_cache_type has callers besides boot: %s' "$ib_callers"
+        return 1
+    fi
+
+    if [ -n "$(callers_of "$ib_out" 'loadCacheType' | grep -v 'VirtualMemoryManagerV6ppmPtr' || true)" ]; then
+        printf 'loadCacheType is called from outside boot'
+        return 1
+    fi
+
+    return 0
+}
+
 # post=queue-depth: how many requests one client ever had accepted and not yet
 # collected, read out of the block server's own log lines.
 #
@@ -849,6 +967,7 @@ run_post() {
             pte-bbm)      post_pte_bbm "$2" "$rp_out" || return 1 ;;
             pte-prune)    post_pte_prune "$2" "$rp_out" || return 1 ;;
             tlb-scope)    post_tlb_scope "$2" "$rp_out" || return 1 ;;
+            icache-batch) post_icache_batch "$2" "$rp_out" || return 1 ;;
             queue-depth)  post_queue_depth "$2" "$rp_out" || return 1 ;;
             shell-closed) post_shell_closed "$2" "$rp_out" || return 1 ;;
             terminal-baseline)  post_terminal_baseline "$2" "$rp_out" || return 1 ;;

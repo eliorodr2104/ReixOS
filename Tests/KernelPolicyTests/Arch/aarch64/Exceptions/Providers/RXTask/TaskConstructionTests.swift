@@ -149,24 +149,28 @@ struct TaskConstructionTests {
             #expect(wx.x0 == TaskResult.permissionConflict.rawValue)
 
             var sealText = Arch.TrapFrame()
-            reset_instruction_cache_sync_record()
             mmu_trace_reset(nil)
             defer { mmu_trace_reset(nil) }
             sealText.x0 = UInt64(taskHandle)
             sealText.x1 = text
             sealText.x2 = 1
             sealText.x3 = UInt64(TaskMemoryPermissions([.read, .execute]).rawValue)
-            TaskSealAndProtectSyscall.handle(frame: &sealText, context: context)
+            withCacheType(cortexA53CacheType) {
+                TaskSealAndProtectSyscall.handle(frame: &sealText, context: context)
+            }
             #expect(sealText.x0 == TaskResult.ok.rawValue)
-            #expect(instruction_cache_sync_calls() == 1)
-            #expect(instruction_cache_synced_size() == UserSpaceLayout.pageSize)
-            #expect(instruction_cache_synced_base() == ram.vmm.pointee.physicalAddressOf(
+
+            // The text page through the kernel alias, under the child's own tag,
+            // and one completion for the seal.
+            let sealed = mmuCalls()
+            #expect(sealed.map(\.op) == [.cleanPoU, .barrier, .tlbLeaf, .tlbSync, .icacheAll])
+            #expect(sealed.first?.size == UserSpaceLayout.pageSize)
+            #expect(sealed.first?.arg == ram.vmm.pointee.physicalAddressOf(
                 rootTable: child.pointee.addressSpace.rootTablePhysical, virtual: text
             ))
-
-            // Under the child's own tag, with one wait for the seal.
-            #expect(mmuOps() == [.barrier, .tlbLeaf, .tlbSync])
-            #expect(mmu_trace_arg(1) == tlbiOperand(text, asid: child.pointee.addressSpace.asid))
+            #expect(sealed.dropFirst(2).first?.arg == tlbiOperand(
+                text, asid: child.pointee.addressSpace.asid
+            ))
 
             var sealStack = Arch.TrapFrame()
             mmu_trace_reset(nil)
@@ -176,7 +180,6 @@ struct TaskConstructionTests {
             sealStack.x3 = UInt64(TaskMemoryPermissions([.read, .write]).rawValue)
             TaskSealAndProtectSyscall.handle(frame: &sealStack, context: context)
             #expect(sealStack.x0 == TaskResult.ok.rawValue)
-            #expect(instruction_cache_sync_calls() == 1)
             #expect(mmuOps() == [.barrier, .tlbLeaf, .tlbSync])
 
             var setContext = Arch.TrapFrame()

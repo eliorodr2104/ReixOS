@@ -70,18 +70,26 @@ void enable_mmu(uint64_t lowTable, uint64_t highTable) { (void)lowTable; (void)h
 
 static uint32_t mmu_trace_ops[MMU_TRACE_CAPACITY];
 static uint64_t mmu_trace_args[MMU_TRACE_CAPACITY];
+static uint64_t mmu_trace_sizes[MMU_TRACE_CAPACITY];
+static uint64_t mmu_trace_lines[MMU_TRACE_CAPACITY];
 static uint64_t mmu_trace_descriptors[MMU_TRACE_CAPACITY];
 static uint64_t mmu_trace_len;
 static const uint64_t *mmu_trace_probe;
 
-static void mmu_trace_record(uint32_t op, uint64_t arg) {
+static void mmu_trace_record_range(uint32_t op, uint64_t arg, uint64_t size, uint64_t line) {
     if (mmu_trace_len < MMU_TRACE_CAPACITY) {
         mmu_trace_ops[mmu_trace_len]         = op;
         mmu_trace_args[mmu_trace_len]        = arg;
+        mmu_trace_sizes[mmu_trace_len]       = size;
+        mmu_trace_lines[mmu_trace_len]       = line;
         mmu_trace_descriptors[mmu_trace_len] =
             mmu_trace_probe ? *(const volatile uint64_t *)mmu_trace_probe : 0;
     }
     mmu_trace_len += 1;
+}
+
+static void mmu_trace_record(uint32_t op, uint64_t arg) {
+    mmu_trace_record_range(op, arg, 0, 0);
 }
 
 // The operand a by-address invalidation hands the hardware: VA[55:12] in bits
@@ -109,6 +117,14 @@ uint64_t mmu_trace_descriptor(uint64_t index) {
     return index < MMU_TRACE_CAPACITY ? mmu_trace_descriptors[index] : 0;
 }
 
+uint64_t mmu_trace_size(uint64_t index) {
+    return index < MMU_TRACE_CAPACITY ? mmu_trace_sizes[index] : 0;
+}
+
+uint64_t mmu_trace_line(uint64_t index) {
+    return index < MMU_TRACE_CAPACITY ? mmu_trace_lines[index] : 0;
+}
+
 void flush_tlb(void) { mmu_trace_record(MMU_OP_TLB_ALL, 0); }
 void flush_tlb_sync(void) { mmu_trace_record(MMU_OP_TLB_SYNC, 0); }
 void flush_tlb_asid(uint16_t asid) { mmu_trace_record(MMU_OP_TLB_ASID, asid); }
@@ -118,6 +134,22 @@ void flush_tlb_leaf_nosync(uint64_t virtualAddress, uint16_t asid) {
 void flush_tlb_table_nosync(uint64_t virtualAddress, uint16_t asid) {
     mmu_trace_record(MMU_OP_TLB_TABLE, tlbi_operand(virtualAddress, asid));
 }
+
+// CTR_EL0 as a suite stages it. Zero until set, which the kernel decodes as the
+// policy that assumes the least.
+static uint64_t cache_type;
+
+void host_set_cache_type(uint64_t value) { cache_type = value; }
+uint64_t read_cache_type(void) { return cache_type; }
+
+void clean_dcache_pou(void *base, uint64_t size, uint64_t line) {
+    mmu_trace_record_range(MMU_OP_DCACHE_CLEAN_POU, (uint64_t)base, size, line);
+}
+void invalidate_icache_lines(void *base, uint64_t size, uint64_t line) {
+    mmu_trace_record_range(MMU_OP_ICACHE_LINES, (uint64_t)base, size, line);
+}
+void invalidate_icache_all(void) { mmu_trace_record(MMU_OP_ICACHE_ALL, 0); }
+void synchronize_instruction_stream(void) { mmu_trace_record(MMU_OP_INSTRUCTION_STREAM, 0); }
 uint64_t get_current_process(void) { return current_process; }
 void instruction_barrier(void) { mmu_trace_record(MMU_OP_INSTRUCTION_BARRIER, 0); }
 uint8_t is_mmu_enabled(void) { return 0; }
@@ -192,18 +224,6 @@ uint64_t read_virtual_counter_unordered(void) { return virtual_counter; }
 void set_current_process(uint64_t process) { current_process = process; }
 void switch_user_address_space(uint64_t rootTable, uint16_t asid) { (void)rootTable; (void)asid; }
 uint64_t asid_bits(void) { return 16; }
-static uint64_t instruction_cache_sync_count = 0;
-static uint64_t instruction_cache_sync_base = 0;
-static uint64_t instruction_cache_sync_size = 0;
-void synchronize_instruction_cache(void *base, uint64_t size) {
-    instruction_cache_sync_count += 1;
-    instruction_cache_sync_base = (uint64_t)base;
-    instruction_cache_sync_size = size;
-}
-uint64_t instruction_cache_sync_calls(void) { return instruction_cache_sync_count; }
-uint64_t instruction_cache_synced_base(void) { return instruction_cache_sync_base; }
-uint64_t instruction_cache_synced_size(void) { return instruction_cache_sync_size; }
-void reset_instruction_cache_sync_record(void) { instruction_cache_sync_count = 0; }
 void trigger_trap(void) {}
 void wait_for_interrupt(void) {}
 

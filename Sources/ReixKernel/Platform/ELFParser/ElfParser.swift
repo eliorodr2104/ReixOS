@@ -55,6 +55,17 @@ public struct ElfParser {
     ///    and the walk backs each remaining page with a zeroed frame.
     /// 4. Copy, for the bytes that did not arrive by being aliased.
     ///
+    /// ## Publishing the code
+    ///
+    /// One instruction-cache batch for the whole image. Every executable page
+    /// is staged as it is mapped and every byte the copy pass writes into an
+    /// executable segment is staged again after it lands, so the one
+    /// completion at the end covers what the process will fetch. Staging only
+    /// at the mapping, as each page used to be published, missed the copied
+    /// bytes of a text page the archive could not share. The batch may stand
+    /// open across the passes because nothing runs this address space before
+    /// `loadSegments` returns.
+    ///
     /// ## Unwinding
     ///
     /// Every page mapped here is inside a region registered *before* it, which
@@ -260,7 +271,8 @@ public struct ElfParser {
                         physical    : base + offset,
                         flags       : permissions.toPageFlags(),
                         type        : .normal,
-                        budget      : vmaManager.pointee.budget
+                        budget      : vmaManager.pointee.budget,
+                        batched     : true
                     )
                 } catch { throw .mappingFailed(error) }
 
@@ -347,8 +359,13 @@ public struct ElfParser {
             pageVA      += Self.pageSize
         }
 
+        var executable = false
+
         for index in 0..<segmentCount {
             let phdr = segments[index]
+            let code = (phdr.p_flags & Self.PF_X) != 0
+
+            executable = executable || code
 
             // Bytes the aliased pages already carry, skipped so the write below
             // cannot reach an initrd frame through `physToVirt`.
@@ -383,9 +400,20 @@ public struct ElfParser {
 
                 guard segmentRead == chunk else { throw .malformedLayout }
 
+                if code {
+                    Arch.MMU.stageInstructions(
+                        UnsafeMutableRawPointer(pageDst.advanced(by: Int(pageOff))),
+                        size: chunk
+                    )
+                }
+
                 va        += chunk
                 remaining -= chunk
             }
+        }
+
+        if executable {
+            Arch.MMU.completeInstructionPublication()
         }
 
         ImageSharing.report(
@@ -477,7 +505,8 @@ public struct ElfParser {
                 physical    : frame.address,
                 flags       : permissions.toPageFlags(),
                 type        : .normal,
-                budget      : budget
+                budget      : budget,
+                batched     : true
             )
         } catch {
             try? ppm.pointee.release(frame.address)

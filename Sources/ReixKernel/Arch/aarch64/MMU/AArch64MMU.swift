@@ -21,14 +21,6 @@ public struct AArch64MMU {
     @_silgen_name("asid_bits")
     public static func asidBits() -> UInt64
 
-    /// Publish freshly written code through the kernel's cached alias. The
-    /// target user root need not be active; invalidation covers every alias.
-    @_silgen_name("synchronize_instruction_cache")
-    public static func synchronizeInstructionCache(
-        _ base: UnsafeMutableRawPointer,
-        size: UInt64
-    )
-    
     /// Every translation, global ones included: `tlbi vmalle1is`. Only for when
     /// the kernel's own entries changed, which after boot is never; a user
     /// address space is retired with `flushTLB(asid:)`.
@@ -86,4 +78,90 @@ public struct AArch64MMU {
         asid       : ASID
     )
     
+}
+
+
+// MARK: - Publishing code
+
+extension AArch64MMU {
+
+    /// CTR_EL0 as `loadCacheType` read it at boot.
+    ///
+    /// Zero until then, which decodes as the policy that assumes the least:
+    /// clean every 4-byte line, then invalidate the whole instruction cache.
+    static var cacheType: UInt64 = 0
+
+    @_silgen_name("read_cache_type")
+    static func readCacheType() -> UInt64
+
+    /// Read CTR_EL0 once, before the first page of user code is published.
+    public static func loadCacheType() {
+        cacheType = readCacheType()
+    }
+
+    /// Not IDC: a store reaches the instruction side only through a clean to
+    /// the point of unification.
+    static var cleanNeeded: Bool { cacheType & (1 << 28) == 0 }
+
+    /// Not DIC: the instruction cache may hold a line the store made stale.
+    static var invalidationNeeded: Bool { cacheType & (1 << 29) == 0 }
+
+    /// L1Ip is PIPT, so `ic ivau` through the kernel alias reaches the very
+    /// lines a fetch through the user alias would hit. A VIPT cache may not.
+    static var instructionCacheIsPIPT: Bool { (cacheType >> 14) & 0b11 == 0b11 }
+
+    /// Bytes per line, from DminLine and IminLine, which count 4-byte words.
+    static var dataLine       : UInt64 { 4 << ((cacheType >> 16) & 0xF) }
+    static var instructionLine: UInt64 { 4 << (cacheType & 0xF) }
+
+    @_silgen_name("clean_dcache_pou")
+    static func cleanDataCacheToPoU(
+        _ base: UnsafeMutableRawPointer,
+        size  : UInt64,
+        line  : UInt64
+    )
+
+    @_silgen_name("invalidate_icache_lines")
+    static func invalidateInstructionLines(
+        _ base: UnsafeMutableRawPointer,
+        size  : UInt64,
+        line  : UInt64
+    )
+
+    @_silgen_name("invalidate_icache_all")
+    static func invalidateInstructionCache()
+
+    @_silgen_name("synchronize_instruction_stream")
+    static func synchronizeInstructionStream()
+
+    /// The per-range half of publishing code written through the kernel alias:
+    /// the clean to the point of unification and, on a PIPT cache, the
+    /// invalidation of the same lines.
+    ///
+    /// Nothing staged is fetchable yet. Every range belongs to a batch that
+    /// ends in exactly one `completeInstructionPublication()`, and its bytes
+    /// may not change in between. `@inline(never)` keeps the symbol the
+    /// `icache-batch` post-check reads.
+    @inline(never)
+    public static func stageInstructions(_ base: UnsafeMutableRawPointer, size: UInt64) {
+        if cleanNeeded {
+            cleanDataCacheToPoU(base, size: size, line: dataLine)
+        }
+
+        guard invalidationNeeded, instructionCacheIsPIPT else { return }
+
+        invalidateInstructionLines(base, size: size, line: instructionLine)
+    }
+
+    /// The once-per-batch half: one `ic ialluis` when the cache needs one and
+    /// cannot be reached by address, otherwise only the wait and the `isb`.
+    @inline(never)
+    public static func completeInstructionPublication() {
+        guard invalidationNeeded, !instructionCacheIsPIPT else {
+            synchronizeInstructionStream()
+            return
+        }
+
+        invalidateInstructionCache()
+    }
 }

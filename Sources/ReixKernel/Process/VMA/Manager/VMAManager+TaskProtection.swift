@@ -14,8 +14,11 @@ extension VMAManager {
     ///
     /// One batch for the whole range: every descriptor is rewritten with its
     /// own `dsb ishst`, then `PageRetirement.invalidate` retires the old entries
-    /// under this space's tag with a single `dsb ish` and `isb`. No page is left
-    /// permitted by a stale TLB entry once this returns.
+    /// under this space's tag with a single `dsb ish` and `isb`, and a range
+    /// that became executable is published with one completion rather than
+    /// one per page. No page is left permitted by a stale TLB entry once this
+    /// returns. Batching the publication is sound because the task is still
+    /// `.configuring`: nothing can fetch from it before `startTask`.
     ///
     /// `protectUserPage` refuses an absent descriptor, which this range cannot
     /// have: `taskMap` backs every page of it before the region can be protected.
@@ -68,6 +71,10 @@ extension VMAManager {
         }
 
         PageRetirement.invalidate(asid: context.asid, start: start, end: end)
+
+        if permissions.contains(.execute) {
+            Arch.MMU.completeInstructionPublication()
+        }
 
         region.pointee.permissions = permissions
         return true

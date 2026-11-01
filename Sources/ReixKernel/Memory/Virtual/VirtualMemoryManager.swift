@@ -300,6 +300,8 @@ public struct VirtualMemoryManager: Loggable {
         
         Arch.MMU.flushTLB()
 
+        Arch.MMU.loadCacheType()
+
         Self.boot("Virtual Memory Manager ready.")
     }
 
@@ -677,6 +679,10 @@ public struct VirtualMemoryManager: Loggable {
     ///
     /// `asid` is the root's own, and is used only if the walk has to unlink a
     /// table it had just made: see `unlinkTableAndFree`.
+    ///
+    /// - Parameter batched: `true` stages an executable page's bytes and leaves
+    ///   the completion to the caller's `completeInstructionPublication`. See
+    ///   `publishInstructionStream` for the rule a caller then has to keep.
     public func installUserPage(
         rootTable: PhysicalAddress,
         asid     : ASID,
@@ -684,7 +690,8 @@ public struct VirtualMemoryManager: Loggable {
         physical : PhysicalAddress,
         flags    : VirtualPageFlags,
         type     : MemoryType,
-        budget   : UnsafeMutablePointer<FrameBudget>? = nil
+        budget   : UnsafeMutablePointer<FrameBudget>? = nil,
+        batched  : Bool = false
     ) throws(PPMError) {
         let tablePointer: UnsafeMutablePointer<Arch.PageTableEntry> = physToVirt(rootTable)
 
@@ -697,7 +704,7 @@ public struct VirtualMemoryManager: Loggable {
 
         guard !slot.pointee.isPresent else { throw .pageAlreadyMapped }
 
-        publishInstructionStream(physical: physical, flags: flags)
+        publishInstructionStream(physical: physical, flags: flags, batched: batched)
 
         slot.pointee = Self.userDescriptor(
             from    : slot.pointee,
@@ -716,7 +723,8 @@ public struct VirtualMemoryManager: Loggable {
         physical    : PhysicalAddress,
         flags       : VirtualPageFlags,
         type        : MemoryType,
-        budget      : UnsafeMutablePointer<FrameBudget>? = nil
+        budget      : UnsafeMutablePointer<FrameBudget>? = nil,
+        batched     : Bool = false
     ) throws(PPMError) {
         try installUserPage(
             rootTable: addressSpace.rootTablePhysical,
@@ -725,7 +733,8 @@ public struct VirtualMemoryManager: Loggable {
             physical : physical,
             flags    : flags,
             type     : type,
-            budget   : budget
+            budget   : budget,
+            batched  : batched
         )
     }
 
@@ -740,18 +749,35 @@ public struct VirtualMemoryManager: Loggable {
     /// executable without its frame changing at all, so it is the one case where
     /// the code was written under a mapping that was never executable, and the
     /// one this omission broke.
+    ///
+    /// ## The batch
+    ///
+    /// Unbatched, the page is staged and completed here, before its descriptor
+    /// is written, which is the order this has always kept: the bytes reach the
+    /// instruction side before any translation can fetch them.
+    ///
+    /// Batched, the page is only staged, and its descriptor may stand before the
+    /// batch's one `completeInstructionPublication` has run. That is sound only
+    /// while no thread of the address space can run between the first staged
+    /// page and that completion, so the batch has to end before the space is
+    /// entered. The callers that batch are the ones where nobody can: a task
+    /// still `.configuring`, an image the loader is still building, a child the
+    /// clone has not handed to the scheduler. A live space keeps the unbatched
+    /// order, one page at a time.
     private func publishInstructionStream(
         physical: PhysicalAddress,
-        flags   : VirtualPageFlags
+        flags   : VirtualPageFlags,
+        batched : Bool
     ) {
         guard !flags.contains(.uxn) else { return }
 
         let bytes: UnsafeMutablePointer<UInt8> = physToVirt(physical)
 
-        Arch.MMU.synchronizeInstructionCache(
-            UnsafeMutableRawPointer(bytes),
-            size: Self.pageSize
-        )
+        Arch.MMU.stageInstructions(UnsafeMutableRawPointer(bytes), size: Self.pageSize)
+
+        guard !batched else { return }
+
+        Arch.MMU.completeInstructionPublication()
     }
     
     
@@ -778,8 +804,8 @@ public struct VirtualMemoryManager: Loggable {
     /// frame changing.
     ///
     /// - Parameter batched: `true` publishes the descriptor with `dsb ishst` and
-    ///   leaves the invalidation to the caller, which settles a whole range at
-    ///   once. `protectTaskRegion` does
+    ///   leaves both the invalidation and the instruction publication to the
+    ///   caller, which settles a whole range at once. `protectTaskRegion` does
     ///   it for a task nobody can run yet. `RegionClone` does it for the
     ///   parent's downgraded pages, and `cloneRegions` retires the parent's ASID
     ///   once at the end: correct on one core, where the parent cannot run in
@@ -806,7 +832,7 @@ public struct VirtualMemoryManager: Loggable {
               entry.shareability == attrs.share
         else { throw .pageAttributesImmutable }
 
-        publishInstructionStream(physical: entry.physicalAddress, flags: flags)
+        publishInstructionStream(physical: entry.physicalAddress, flags: flags, batched: batched)
 
         entry.flags = flags.union(Self.userLeafFlags)
 
@@ -860,7 +886,7 @@ public struct VirtualMemoryManager: Loggable {
         // decides whether the sequence below ends with an `isb`.
         let executable = !flags.contains(.uxn)
 
-        publishInstructionStream(physical: physical, flags: flags)
+        publishInstructionStream(physical: physical, flags: flags, batched: false)
 
         let entry = Self.userDescriptor(
             from    : leaf[virtual.l3],

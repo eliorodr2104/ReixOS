@@ -193,14 +193,16 @@ struct RegionClone: ResumableOperation {
     ///
     /// The child's side is an install: its address space is empty until this
     /// runs. The parent's downgrade is a protect, the same frame with the write
-    /// bit taken out, and it asks for `batched: true` because `cloneRegions`
-    /// ends in one `tlbi aside1is` for the parent's tag that covers the whole
-    /// walk. One invalidation of the parent beats a `tlbi vale1is` plus `dsb ish`
-    /// plus `isb` per downgraded page, and it is correct only because the parent
-    /// cannot run between the downgrade and that flush. T29 (concurrent VM) and
-    /// T35 have to revisit exactly this: on a second core the parent is running,
-    /// and the deferred flush would have to become per-page invalidation plus a
-    /// shootdown.
+    /// bit taken out, and both are `batched` because `cloneRegions` ends in one
+    /// `tlbi aside1is` for the parent's tag that covers the whole walk, and in
+    /// one completion of the child's code pages. One invalidation of the parent
+    /// beats a `tlbi vale1is` plus `dsb ish` plus `isb` per downgraded page, and
+    /// it is correct only because the parent cannot run between the downgrade
+    /// and that flush. T29 (concurrent VM) and T35 have to revisit exactly this:
+    /// on a second core the parent is running, and the deferred flush would have
+    /// to become per-page invalidation plus a shootdown. The child's publication
+    /// may wait for the same reason the child's TLB needs nothing: it has never
+    /// run.
     ///
     /// Every retain below is also a page charged to the child: a reference is a
     /// claim on the frame, and a clone of an address space the machine cannot
@@ -310,7 +312,8 @@ struct RegionClone: ResumableOperation {
                     physical : parentPhys,
                     flags    : pageFlags,
                     type     : vma.memoryType,
-                    budget   : context.budget
+                    budget   : context.budget,
+                    batched  : true
                 )
 
                 manager.pointee.noteMapped(1)

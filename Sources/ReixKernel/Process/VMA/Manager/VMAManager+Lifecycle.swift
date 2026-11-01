@@ -69,8 +69,14 @@ extension VMAManager {
     /// cannot run between the downgrade and the flush. See `RegionClone`. It is
     /// the parent's tag alone: the child's has never been in TTBR0, so it holds
     /// nothing to retire, and nobody else's entries changed.
+    ///
+    /// The child's code pages were staged as they were installed and are
+    /// published by the one completion here, before the child can be scheduled.
     public mutating func cloneRegions(from parent: VMAManager) throws(VMAError) {
-        defer { Arch.MMU.flushTLB(asid: parent.context.asid) }
+        defer {
+            Arch.MMU.flushTLB(asid: parent.context.asid)
+            Arch.MMU.completeInstructionPublication()
+        }
 
         _ = try Preemption.run(
             AddressSpaceClone.self,
