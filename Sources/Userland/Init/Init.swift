@@ -414,7 +414,8 @@ public func main() {
 
     // The executable namespace is rooted exactly at `system/programs`, and
     // carries lookup, read and claim on that directory's children.
-    let programs = machine.flatMap(programDirectory(in:))
+    let machineFiles = machine.flatMap(FileSystemClient.init(fileSystem:))
+    let programs     = machineFiles.flatMap(programDirectory(in:))
     if programs == nil {
         print("[ INIT  ] no system/programs capability; ordinary programs stay stopped")
     }
@@ -526,6 +527,15 @@ public func main() {
         return endpoint
     }
 
+    // Shell.elf held as a writer would hold it, in the mode that answers questions.
+    let heldShell = UserBootPresentation.showsServices
+        ? machineFiles.flatMap(shellProgram(in:))
+        : nil
+
+    if let machineFiles, let heldShell, let processServerEndpoint {
+        launchRefusedWhileClaimed(heldShell, files: machineFiles, through: processServerEndpoint)
+    }
+
     let shellJob = processServerEndpoint.flatMap { endpoint -> UInt32? in
         let name     : StaticString = "Shell.elf"
         let launched = launchProgram(
@@ -542,6 +552,10 @@ public func main() {
         UserBootPresentation.ready("[ INIT  ] Shell.elf reached Ready")
         UserBootPresentation.milestone(.session)
         return job
+    }
+
+    if let machineFiles, let heldShell, shellJob != nil {
+        loaderLetGo(of: heldShell, files: machineFiles)
     }
 
     if processServerEndpoint != nil, shellJob == nil {
@@ -622,9 +636,15 @@ private func superviseSession(
 /// Cut the executable namespace out of the machine root. Failure is a normal
 /// boot result for an unprovisioned disk: ProcessServer is not started and no
 /// legacy TAR fallback can silently restore ambient pathname execution.
-private func programDirectory(in machine: UInt32) -> UInt32? {
-    guard let files = FileSystemClient(fileSystem: machine) else { return nil }
+private func programDirectory(in files: FileSystemClient) -> UInt32? {
+    guard let directory = programFolder(files) else { return nil }
 
+    return files.bind(directory, rights: .loader)
+}
+
+
+/// `system/programs` as the machine's own container names it.
+private func programFolder(_ files: FileSystemClient) -> UInt32? {
     let systemName : StaticString = "system"
     let system     = files.open(
         systemName.utf8Start,
@@ -646,7 +666,71 @@ private func programDirectory(in machine: UInt32) -> UInt32? {
           directory.kind == .folder
     else { return nil }
 
-    return files.bind(directory.object, rights: .loader)
+    return directory.object
+}
+
+
+/// `Shell.elf` in the program folder, for the two checks that claim it.
+private func shellProgram(in files: FileSystemClient) -> UInt32? {
+    guard let folder = programFolder(files) else { return nil }
+
+    let name   : StaticString = "Shell.elf"
+    let opened = files.open(name.utf8Start, length: name.utf8CodeUnitCount, in: folder)
+
+    return opened.status == .ok ? opened.file?.object : nil
+}
+
+
+/// Claims `Shell.elf` the way a writer part way through replacing it would, and
+/// asks ProcessServer to start it.
+///
+/// A launch reads its file across many requests, so it claims the file first,
+/// and a claim somebody else holds is a file still moving. The answer has to be
+/// `busy` and not a task built from whatever was there at the time. Let go
+/// before the real launch, which is then the proof that a released file loads.
+private func launchRefusedWhileClaimed(
+    _       program: UInt32,
+            files  : FileSystemClient,
+    through server : UInt32
+) {
+    guard files.lock(program) == .ok else {
+        print("[ INIT  ] the program to hold could not be claimed")
+        return
+    }
+
+    let name     : StaticString = "Shell.elf"
+    let launched = launchProgram(
+        through: server,
+        name   : name.utf8Start,
+        length : name.utf8CodeUnitCount
+    )
+
+    files.unlock(program)
+
+    if let job = launched.job { _ = capDrop(job) }
+
+    guard launched.status == .busy else {
+        print("[ INIT  ] a program held by a writer was not refused as busy")
+        return
+    }
+
+    print("[ INIT  ] a program held by a writer was refused, busy")
+}
+
+
+/// Claims `Shell.elf` after it was launched, which only works if the loader let
+/// go of it once the image was copied.
+private func loaderLetGo(
+    of program: UInt32,
+       files  : FileSystemClient
+) {
+    guard files.lock(program) == .ok else {
+        print("[ INIT  ] a launched program is still held by its loader")
+        return
+    }
+
+    files.unlock(program)
+    print("[ INIT  ] a launched program was let go by its loader")
 }
 
 
