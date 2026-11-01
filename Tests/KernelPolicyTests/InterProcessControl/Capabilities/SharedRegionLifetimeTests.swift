@@ -493,6 +493,7 @@ struct SharedRegionLifetimeTests {
             let physical = region.pointee.physicalAddress(ofPage: 0)
 
             withCurrentProcess(sender) {
+                guard teardownWalkIsOwned(by: sender.pointee.identity) else { return }
                 _ = manager.pointee.killProcess(
                     sender,
                     reason : .exited(0),
@@ -530,6 +531,7 @@ struct SharedRegionLifetimeTests {
             // The only process that could ever collect it dies. The sender is
             // let go with `peerDied`, and its message with it.
             withCurrentProcess(receiver) {
+                guard teardownWalkIsOwned(by: receiver.pointee.identity) else { return }
                 _ = manager.pointee.killProcess(
                     receiver,
                     reason : .exited(0),

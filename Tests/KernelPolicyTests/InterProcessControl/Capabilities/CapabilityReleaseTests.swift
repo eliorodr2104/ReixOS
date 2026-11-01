@@ -152,6 +152,7 @@ struct CapabilityReleaseTests {
             if let control {
                 #expect(manager.pointee.abortTask(control, context: context) == .ok)
             } else {
+                guard teardownWalkIsOwned(by: victim.pointee.identity) else { return }
                 _ = manager.pointee.killProcess(victim, reason: .exited(0), context: context)
             }
 

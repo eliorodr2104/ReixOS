@@ -157,6 +157,7 @@ struct IdentityLivenessTests {
 
             // The whole death path, not a poked status: this is the route a
             // client's identity really leaves the world by.
+            guard teardownWalkIsOwned(by: child.pointee.identity) else { return }
             _ = manager.pointee.killProcess(child, reason: .exited(0), context: context)
 
             #expect(!manager.pointee.isAlive(identity: identity))

@@ -7,6 +7,21 @@
 import Testing
 @testable import Kernel
 
+/// Whether the owner walk a teardown makes names only slots `identity` owns.
+/// A walk that names another owner's slot would abort or kill that task, so a
+/// test asks first and reports the wrong answer by name instead of running it.
+public func teardownWalkIsOwned(by identity: Identity) -> Bool {
+    for index in 0..<TaskRegistry.capacity {
+        guard let control = TaskRegistry.control(at: index, ownedBy: identity) else { continue }
+        guard TaskRegistry.isOwned(control, by: identity) else {
+            Issue.record("the teardown walk names slot \(index), which identity \(identity) does not own")
+            return false
+        }
+    }
+    return true
+}
+
+
 public func withProcessManager(
     pages : Int,
     _ body: (HostRAM, UnsafeMutablePointer<KernelHeap>, UnsafeMutablePointer<ProcessManager>) -> Void

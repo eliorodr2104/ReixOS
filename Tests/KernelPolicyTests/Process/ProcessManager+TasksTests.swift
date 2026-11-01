@@ -187,7 +187,7 @@ struct ProcessManagerTasksTests {
             #expect(fixture.manager.pointee.startTask(running.control, context: fixture.context).result == .ok)
             #expect(budget.pointee.charged == charged + 2)
 
-            _ = fixture.manager.pointee.killProcess(fixture.owner, reason: .killed, context: fixture.context)
+            fixture.kill(fixture.owner, reason: .killed)
 
             // The owner's own address space went too, so nothing is left charged.
             #expect(budget.pointee.charged == 0)
@@ -212,7 +212,7 @@ struct ProcessManagerTasksTests {
             let afterCreate = fixture.heap.pointee.metricsLiveBytes
             #expect(afterCreate > live)
 
-            _ = fixture.manager.pointee.killProcess(task.process, reason: .killed, context: fixture.context)
+            fixture.kill(task.process, reason: .killed)
             #expect(fixture.budget.pointee.charged == charged)
             #expect(TaskRegistry.status(task.control).0 == .exited)
             #expect(TaskRegistry.configuring(task.control) == nil)
@@ -231,7 +231,7 @@ struct ProcessManagerTasksTests {
             Self.makeReady(task.control, fixture)
             #expect(fixture.manager.pointee.startTask(task.control, context: fixture.context).result == .ok)
 
-            _ = fixture.manager.pointee.killProcess(task.process, reason: .exited(5), context: fixture.context)
+            fixture.kill(task.process, reason: .exited(5))
             Self.reap(task.process, fixture)
 
             #expect(TaskRegistry.isLive(task.control))
@@ -254,7 +254,7 @@ struct ProcessManagerTasksTests {
             TaskRegistry.release(task.control)
             #expect(TaskRegistry.status(task.control).0 == .running)
 
-            _ = fixture.manager.pointee.killProcess(task.process, reason: .exited(0), context: fixture.context)
+            fixture.kill(task.process, reason: .exited(0))
             #expect(TaskRegistry.isLive(task.control))
             Self.reap(task.process, fixture)
             #expect(!TaskRegistry.isLive(task.control))
@@ -381,6 +381,12 @@ struct ProcessManagerTasksTests {
             manager.pointee.createSuspendedTask(ownedBy: owner)
         }
 
+        /// Kill `process`, once the owner walk its teardown makes is checked.
+        func kill(_ process: UnsafeMutablePointer<Process>, reason: ExitReason) {
+            guard teardownWalkIsOwned(by: process.pointee.identity) else { return }
+            _ = manager.pointee.killProcess(process, reason: reason, context: context)
+        }
+
         struct Snapshot {
             let pages     : UInt64
             let live      : UInt64
@@ -483,7 +489,7 @@ struct ProcessManagerTasksTests {
         kill     : Bool = false
     ) {
         if kill {
-            _ = fixture.manager.pointee.killProcess(process, reason: .killed, context: fixture.context)
+            fixture.kill(process, reason: .killed)
         }
         let reaped = fixture.scheduler.pointee.reapChild(process)
         #expect(reaped)

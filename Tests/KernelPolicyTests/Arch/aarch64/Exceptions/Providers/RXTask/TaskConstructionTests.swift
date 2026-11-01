@@ -219,6 +219,7 @@ struct TaskConstructionTests {
             TaskWriteSyscall.handle(frame: &lateWrite, context: context)
             #expect(lateWrite.x0 == TaskResult.invalidCapability.rawValue)
 
+            guard teardownWalkIsOwned(by: child.pointee.identity) else { return }
             var cancel = Arch.TrapFrame()
             cancel.x0 = UInt64(taskHandle)
             TaskTerminateSyscall.handle(frame: &cancel, context: context)

@@ -332,6 +332,7 @@ struct DeferredReplyTests {
                 #expect(awaitingReply(client))
             }
 
+            guard teardownWalkIsOwned(by: server.pointee.identity) else { return }
             _ = manager.pointee.killProcess(server, reason: .exited(0), context: context)
 
             for client in clients {
