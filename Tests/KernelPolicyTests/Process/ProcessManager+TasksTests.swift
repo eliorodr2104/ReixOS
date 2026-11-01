@@ -262,11 +262,10 @@ struct ProcessManagerTasksTests {
     }
 
 
-    @Test("a seal the construction disagrees with aborts the task and gives the construction back")
+    @Test("a seal the construction disagrees with tears the child down as an abort does")
     func sealDisagreementAborts() {
         withTasks { fixture in
-            let charged    = fixture.budget.pointee.charged
-            let references = fixture.budget.pointee.references
+            let snapshot = fixture.snapshot()
 
             guard let task = fixture.create() else { return }
             TaskRegistry.retain(task.control)
@@ -275,11 +274,13 @@ struct ProcessManagerTasksTests {
             // The VMA accepts the seal while the construction forgot the region,
             // the disagreement `sealTaskRegion` says cannot happen.
             TaskRegistry.configuring(task.control)?.construction.pointee.regionCount = 0
-            #expect(fixture.manager.pointee.sealTaskRegion(task.control, at: Self.text, pages: 1, permissions: [.read]) == .invalidState)
+            #expect(fixture.manager.pointee.sealTaskRegion(task.control, at: Self.text, pages: 1, permissions: [.read], context: fixture.context) == .invalidState)
 
             #expect(TaskRegistry.status(task.control).0 == .aborted)
-            #expect(fixture.budget.pointee.charged == charged)
-            #expect(fixture.budget.pointee.references == references)
+
+            // Frames, heap, budget and the child's record all went with it.
+            TaskRegistry.release(task.control)
+            fixture.expectUnchanged(since: snapshot)
         }
     }
 
@@ -311,7 +312,7 @@ struct ProcessManagerTasksTests {
                 let manager = fixture.manager
                 #expect(manager.pointee.mapTaskAnonymous(control, at: Self.text + 8 * Self.page, pages: 1) == .invalidState)
                 #expect(manager.pointee.writeTask(control, at: Self.text, from: source, count: 1) == .invalidRange)
-                #expect(manager.pointee.sealTaskRegion(control, at: Self.text, pages: 1, permissions: [.read]) == .invalidState)
+                #expect(manager.pointee.sealTaskRegion(control, at: Self.text, pages: 1, permissions: [.read], context: fixture.context) == .invalidState)
                 #expect(manager.pointee.setTaskContext(control, entry: Self.text, stack: UserSpaceLayout.stackTop, programBreak: Self.text + Self.page) == .invalidRange)
                 #expect(manager.pointee.startTask(control, context: fixture.context).result == .invalidState)
                 #expect(manager.pointee.abortTask(control, context: fixture.context) == .invalidState)
@@ -471,8 +472,8 @@ struct ProcessManagerTasksTests {
         let manager = fixture.manager
         #expect(manager.pointee.mapTaskAnonymous(control, at: text, pages: 1) == .ok)
         #expect(manager.pointee.mapTaskAnonymous(control, at: stack, pages: 1) == .ok)
-        #expect(manager.pointee.sealTaskRegion(control, at: text, pages: 1, permissions: [.read, .execute]) == .ok)
-        #expect(manager.pointee.sealTaskRegion(control, at: stack, pages: 1, permissions: [.read, .write]) == .ok)
+        #expect(manager.pointee.sealTaskRegion(control, at: text, pages: 1, permissions: [.read, .execute], context: fixture.context) == .ok)
+        #expect(manager.pointee.sealTaskRegion(control, at: stack, pages: 1, permissions: [.read, .write], context: fixture.context) == .ok)
         #expect(manager.pointee.setTaskContext(
             control,
             entry       : text,

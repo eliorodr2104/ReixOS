@@ -33,7 +33,8 @@ public struct TaskSealAndProtectSyscall: SyscallProvider {
             pages      : UInt32(frame.pointee.x2),
             permissions: TaskMemoryPermissions(
                 rawValue: UInt32(frame.pointee.x3)
-            )
+            ),
+            context    : context
         ).rawValue
     }
 }

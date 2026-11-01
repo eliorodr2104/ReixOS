@@ -175,7 +175,8 @@ extension ProcessManager {
         _ control  : TaskControl,
         at address : VirtualAddress,
         pages      : UInt32,
-        permissions: TaskMemoryPermissions
+        permissions: TaskMemoryPermissions,
+        context    : SyscallContext
     ) -> TaskResult {
         guard pages > 0, pages <= TaskABI.maximumPagesPerMapping,
               permissions.contains(.read),
@@ -203,8 +204,8 @@ extension ProcessManager {
             permissions: final
         ) else { return .invalidRange }
 
-        // The exact VMA was just accepted and task syscalls are serialized on
-        // this single-core kernel, so this update cannot race or disagree.
+        // The VMA and the construction should agree, but a disagreement is
+        // torn down like `abortTask` so the child never outlives its record.
         guard let construction = TaskRegistry.configuring(control)?.construction,
               construction.pointee.seal(
                 start      : range.start,
@@ -212,7 +213,7 @@ extension ProcessManager {
                 permissions: permissions
               )
         else {
-            releaseConstruction(TaskRegistry.markAborted(control))
+            abortTask(control, context: context)
             return .invalidState
         }
 
