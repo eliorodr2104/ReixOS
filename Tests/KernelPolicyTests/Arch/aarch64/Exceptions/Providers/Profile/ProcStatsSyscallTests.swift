@@ -80,7 +80,7 @@ struct ProcStatsSyscallTests {
                 withBuffer(fill: 0xC7) { buffer in
                     UserMemory.validationOverride = { address, size, permissions in
                         address == UInt64(UInt(bitPattern: buffer))
-                            && size == 160 && permissions == [.write, .user]
+                            && size == 164 && permissions == [.write, .user]
                     }
                     var frame = processFrame(
                         buffer: buffer,
@@ -103,7 +103,7 @@ struct ProcStatsSyscallTests {
                     #expect(stats.kernelHeapReservedBytes == 4096)
                     #expect(stats.physicalAllocatedPages + stats.physicalFreePages == stats.physicalTotalPages)
                     #expect(stats.pmuEventAvailability == 0 && stats.pmuEventCounters == 0)
-                    #expect(bytes(buffer, from: 160, count: 16) == Array(repeating: 0xC7, count: 16))
+                    #expect(bytes(buffer, from: 164, count: 16) == Array(repeating: 0xC7, count: 16))
                 }
             }
           }
@@ -125,6 +125,8 @@ struct ProcStatsSyscallTests {
             IrqOffStretch.fold(UInt64(UInt32.max) + 5, path: 49)
             IrqOffStretch.fold(10, path: 64)
             IrqOffStretch.fold(12_345, path: UInt16(SyscallNumber.profileControl.rawValue))
+            PreemptionSpans.merge(ProcessCreation.self, stretch: UInt64(UInt32.max) + 10, longestWindow: 0, cheapestWindow: 0, checkpoints: 2)
+            PreemptionSpans.merge(TraceConsoleDump.self, stretch: 456, longestWindow: 0, cheapestWindow: 0, checkpoints: 1)
             PreemptionSpans.merge(TaskMapAnonymous.self, stretch: 1_234, longestWindow: 0, cheapestWindow: 0, checkpoints: 3)
             PreemptionSpans.merge(AddressSpaceTeardown.self, stretch: 777, longestWindow: 0, cheapestWindow: 0, checkpoints: 1)
 
@@ -147,7 +149,9 @@ struct ProcStatsSyscallTests {
             #expect(stats.irqOffLongest         == UInt32.max)
             #expect(stats.irqOffLongestPath     == 49)
             #expect(stats.irqOffProfileLongest  == 12_345)
+            #expect(stats.irqOffTraceDumpLongest == 456)
             #expect(stats.irqOffTaskMapLongest  == 1_234)
+            #expect(stats.irqOffCreateLongest   == UInt32.max)
             #expect(stats.irqOffTeardownLongest == 777)
             #expect(stats.irqOffCloneLongest    == 0)
             #expect(stats.irqOffUnmapLongest    == 0)
@@ -309,8 +313,9 @@ struct ProcStatsSyscallTests {
         fill: UInt8,
         _ body: (UnsafeMutableRawPointer) -> Void
     ) {
-        let buffer = UnsafeMutableRawPointer.allocate(byteCount: 176, alignment: 8)
-        buffer.initializeMemory(as: UInt8.self, repeating: fill, count: 176)
+        let capacity = MemoryLayout<SystemStats>.stride + 16
+        let buffer = UnsafeMutableRawPointer.allocate(byteCount: capacity, alignment: 8)
+        buffer.initializeMemory(as: UInt8.self, repeating: fill, count: capacity)
         body(buffer)
         UserMemory.validationOverride = nil
         buffer.deallocate()

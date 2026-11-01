@@ -119,7 +119,8 @@ struct ProcStatsEnumerationTests {
 
     @Test("wire records retain their ABI limits")
     func abiLimits() {
-        #expect(MemoryLayout<SystemStats>.size == 160)
+        #expect(MemoryLayout<SystemStats>.size == 164)
+        #expect(MemoryLayout<SystemStats>.stride == 168)
         #expect(MemoryLayout<SystemStats>.alignment == 8)
         #expect(MemoryLayout<ProcessStats>.size == 62)
         #expect(MemoryLayout<ProcessStats>.stride == 64)

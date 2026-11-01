@@ -345,6 +345,22 @@ public enum TraceConsoleDump: PreemptionRegion {
 }
 
 
+/// Private process allocations and ELF pages, before a child can run.
+///
+/// Creation used to sum metadata, page tables, trap frame and image work under
+/// one mask. Each step now owns a complete allocation or page, and the caller
+/// keeps the budget and construction alive until publication or full rollback.
+/// Probing every step bounds overshoot to one allocation or page at 200 µs.
+public enum ProcessCreation: PreemptionRegion {
+
+    public static let slot     : Int              = 7
+    public static let name     : StaticString     = "[CREATE]"
+    public static let isEnabled: Bool             = true
+    public static let mode     : PreemptionMode   = .latencyOnly
+    public static let policy   : CheckpointPolicy = CheckpointPolicy(stepsPerProbe: 1, budget: 200)
+}
+
+
 /// When the driver stops to let interrupts in.
 ///
 /// ## The budget, and why it is time and not a step count

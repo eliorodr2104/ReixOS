@@ -135,6 +135,7 @@ LATENCY_FIELDS = (
     "irq_off_decommit_longest_counter", "irq_off_teardown_longest_counter",
     "irq_off_rollback_longest_counter", "irq_off_task_map_longest_counter",
     "irq_off_profile_longest_counter", "irq_off_trace_dump_longest_counter",
+    "irq_off_create_longest_counter",
 )
 
 

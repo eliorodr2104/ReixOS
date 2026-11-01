@@ -9,9 +9,9 @@
 /// Machine-wide metrics the kernel fills in for `procStats` sub-operation 0,
 /// and the record the profiler's export page republishes.
 ///
-/// 160 bytes, aligned members in declaration order, so a syscall or the SHM
-/// exporter writes it with one struct store and a userland reader loads it back
-/// the same way. `availability` says which groups below were measured at all;
+/// 164 bytes with a 168-byte stride, aligned members in declaration order,
+/// so a syscall or SHM exporter writes it with one struct store and a reader
+/// loads it back the same way. `availability` says which groups were measured;
 /// a group whose bit is clear reads zero and means "not measured", never zero.
 ///
 /// Units and accounting domains, per group:
@@ -77,6 +77,7 @@ public struct SystemStats {
     public var irqOffTaskMapLongest : UInt32 = 0 // 148
     public var irqOffProfileLongest : UInt32 = 0 // 152 profileControl path
     public var irqOffTraceDumpLongest: UInt32 = 0 // 156 preemption region
+    public var irqOffCreateLongest  : UInt32 = 0 // 160
 
     public init() {}
 }

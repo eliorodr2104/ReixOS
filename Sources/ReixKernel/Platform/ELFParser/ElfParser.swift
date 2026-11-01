@@ -261,24 +261,16 @@ public struct ElfParser {
                 backing    : .fileBacked
             )
 
-            var cursor = range.start
-            var offset = phdr.p_offset
-            while cursor < sharedEnd {
-                do {
-                    try vmm.pointee.installUserPage(
-                        addressSpace: addressSpace,
-                        virtual     : cursor,
-                        physical    : base + offset,
-                        flags       : permissions.toPageFlags(),
-                        type        : .normal,
-                        budget      : vmaManager.pointee.budget,
-                        batched     : true
-                    )
-                } catch { throw .mappingFailed(error) }
-
-                cursor += Self.pageSize
-                offset += Self.pageSize
-            }
+            _ = try Preemption.run(ProcessCreation.self, ELFPageFill(
+                addressSpace: addressSpace,
+                vmm         : vmm,
+                ppm         : ppm,
+                budget      : vmaManager.pointee.budget,
+                permissions : permissions,
+                cursor      : range.start,
+                end         : sharedEnd,
+                physical    : base + phdr.p_offset
+            ))
 
             sharedPages += shared
 
@@ -294,19 +286,16 @@ public struct ElfParser {
                 backing    : .anonymous
             )
 
-            while cursor < range.end {
-                try Self.materialize(
-                    page        : cursor,
-                    permissions : permissions,
-                    addressSpace: addressSpace,
-                    vmm         : vmm,
-                    ppm         : ppm,
-                    budget      : vmaManager.pointee.budget
-                )
-
-                copiedPages += 1
-                cursor      += Self.pageSize
-            }
+            _ = try Preemption.run(ProcessCreation.self, ELFPageFill(
+                addressSpace: addressSpace,
+                vmm         : vmm,
+                ppm         : ppm,
+                budget      : vmaManager.pointee.budget,
+                permissions : permissions,
+                cursor      : sharedEnd,
+                end         : range.end
+            ))
+            copiedPages += (range.end - sharedEnd) / Self.pageSize
         }
 
         pageVA = loadBase
@@ -346,14 +335,15 @@ public struct ElfParser {
                 backing    : .anonymous
             )
 
-            try Self.materialize(
-                page        : pageVA,
-                permissions : permissions,
+            _ = try Preemption.run(ProcessCreation.self, ELFPageFill(
                 addressSpace: addressSpace,
                 vmm         : vmm,
                 ppm         : ppm,
-                budget      : vmaManager.pointee.budget
-            )
+                budget      : vmaManager.pointee.budget,
+                permissions : permissions,
+                cursor      : pageVA,
+                end         : pageVA + Self.pageSize
+            ))
 
             copiedPages += 1
             pageVA      += Self.pageSize
@@ -378,38 +368,15 @@ public struct ElfParser {
                 to        : phdr.p_offset + aliased
             )
 
-            var remaining = phdr.p_filesz - aliased
-            var va        = phdr.p_vaddr  + aliased
-            while remaining > 0 {
-                let pageBase = va &  ~(Self.pageSize - 1)
-                let pageOff  = va &   (Self.pageSize - 1)
-                let chunk    = min(Self.pageSize - pageOff, remaining)
-
-                guard let phys = vmm.pointee.physicalAddressOf(
-                    rootTable: addressSpace.rootTablePhysical,
-                    virtual  : pageBase
-                ) else { throw .malformedLayout }
-
-                let pageDst: UnsafeMutablePointer<UInt8> = vmm.pointee.physToVirt(phys)
-
-                let segmentRead = try? fileSystem.pointee.read(
-                    handle: handle,
-                    buffer: UnsafeMutableRawPointer(pageDst.advanced(by: Int(pageOff))),
-                    count : chunk
-                )
-
-                guard segmentRead == chunk else { throw .malformedLayout }
-
-                if code {
-                    Arch.MMU.stageInstructions(
-                        UnsafeMutableRawPointer(pageDst.advanced(by: Int(pageOff))),
-                        size: chunk
-                    )
-                }
-
-                va        += chunk
-                remaining -= chunk
-            }
+            _ = try Preemption.run(ProcessCreation.self, ELFSegmentCopy(
+                fileSystem: fileSystem,
+                handle    : handle,
+                vmm       : vmm,
+                root      : addressSpace.rootTablePhysical,
+                code      : code,
+                cursor    : phdr.p_vaddr + aliased,
+                remaining : phdr.p_filesz - aliased
+            ))
         }
 
         if executable {
@@ -475,7 +442,7 @@ public struct ElfParser {
     /// Charged to the process being built, which is what bounds an image: a
     /// program with a large `.bss` is refused here rather than after it has
     /// taken every frame the machine had.
-    private static func materialize(
+    static func materialize(
         page        : VirtualAddress,
         permissions : VMAPermissions,
         addressSpace: borrowing AddressSpace,

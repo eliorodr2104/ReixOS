@@ -82,6 +82,7 @@ assert system['latency']['irq_off_longest_path'] == 17
 assert system['latency']['irq_off_task_map_longest_counter'] == 250
 assert system['latency']['irq_off_profile_longest_counter'] == 800
 assert system['latency']['irq_off_trace_dump_longest_counter'] == 220
+assert system['latency']['irq_off_create_longest_counter'] == 270
 assert document['editor_workloads']['paste-8192']['cycles']['value'] == 500
 assert document['editor_workloads']['paste-8192']['instructions']['status'] == 'unavailable'
 assert document['editor_workloads']['paste-8192']['duration_ticks']['value'] == 200

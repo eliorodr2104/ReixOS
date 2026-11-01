@@ -221,14 +221,14 @@ struct ABILayoutTests {
     }
 
 
-    @Test("the stats wire records stay byte exact at one hundred and sixty and sixty-two")
+    @Test("the stats wire records stay byte exact at one hundred and sixty-four and sixty-two")
     func statsLayout() {
         // Userland reads both straight out of an SHM window or a syscall buffer
         // with one struct load, so a drift here is a misread field and not an error.
         // The process record closes two bytes before its stride, which is the
         // export page's slot step; nothing is allowed to sit in the middle.
-        #expect(MemoryLayout<SystemStats>.size      == 160)
-        #expect(MemoryLayout<SystemStats>.stride    == 160)
+        #expect(MemoryLayout<SystemStats>.size      == 164)
+        #expect(MemoryLayout<SystemStats>.stride    == 168)
         #expect(MemoryLayout<SystemStats>.alignment == 8)
         #expect(MemoryLayout<ProcessStats>.size      == 62)
         #expect(MemoryLayout<ProcessStats>.stride    == 64)
@@ -268,6 +268,7 @@ struct ABILayoutTests {
             (\SystemStats.irqOffTaskMapLongest, 148),
             (\SystemStats.irqOffProfileLongest, 152),
             (\SystemStats.irqOffTraceDumpLongest, 156),
+            (\SystemStats.irqOffCreateLongest, 160),
         ]
         for (keyPath, offset) in systemOffsets {
             #expect(MemoryLayout<SystemStats>.offset(of: keyPath) == offset)
@@ -299,8 +300,8 @@ struct ABILayoutTests {
         // The export page derives its offsets from those sizes, and sixteen
         // slots plus the header have to fit in page 0.
         #expect(StatsExportPage.systemOffset == 8)
-        #expect(StatsExportPage.processCountOffset == 168)
-        #expect(StatsExportPage.processSlotsOffset == 176)
+        #expect(StatsExportPage.processCountOffset == 176)
+        #expect(StatsExportPage.processSlotsOffset == 184)
         #expect(StatsExportPage.processSlotStride == 64)
         let pageUsed = StatsExportPage.processSlotsOffset
             + StatsExportPage.processSlotLimit * StatsExportPage.processSlotStride

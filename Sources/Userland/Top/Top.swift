@@ -134,12 +134,13 @@ public func main() {
 
             // Worst cases since boot. PATH is the `IrqOffPath` of the longest masked stretch.
             if sys.availability & SystemMetricAvailability.latency != 0, microsPerTick > 0 {
-                print("[ TOP   ] WAKE_US   LAG_US  IRQOFF_US  PATH")
+                print("[ TOP   ] WAKE_US   LAG_US  IRQOFF_US  PATH  CREATE_US")
                 print("[ TOP   ]", terminator: " ")
                 printDecPadded(UInt64(sys.wakeToRunLongest) / microsPerTick, width: 7)
                 printDecPadded(UInt64(sys.deadlineLagLongest) / microsPerTick, width: 9)
                 printDecPadded(UInt64(sys.irqOffLongest) / microsPerTick, width: 11)
                 printDecPadded(UInt64(sys.irqOffLongestPath), width: 6)
+                printDecPadded(UInt64(sys.irqOffCreateLongest) / microsPerTick, width: 11)
                 print("")
             }
 

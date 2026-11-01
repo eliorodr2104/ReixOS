@@ -201,6 +201,7 @@ public struct ProcStatsSyscall: SyscallProvider {
         stats.irqOffTaskMapLongest  = longestStretch(of: TaskMapAnonymous.self)
         stats.irqOffProfileLongest  = IrqOffStretch.longest(onPath: UInt16(SyscallNumber.profileControl.rawValue))
         stats.irqOffTraceDumpLongest = longestStretch(of: TraceConsoleDump.self)
+        stats.irqOffCreateLongest   = longestStretch(of: ProcessCreation.self)
 
         return stats
     }
