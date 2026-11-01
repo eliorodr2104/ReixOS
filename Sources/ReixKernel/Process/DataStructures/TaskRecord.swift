@@ -7,28 +7,29 @@
 
 import ReixABI
 
+/// What the registry keeps of a task for its whole life: who owns it, the
+/// process while there is one, where it stands, and how many capabilities
+/// still name it.
+///
+/// Everything a task needs only while it is being built lives in the
+/// `TaskConstruction` its `configuring` state points at, so a task that has
+/// started or ended costs 32 bytes and not the region table it no longer reads.
+/// The slot and generation are the registry's and not the record's: the index
+/// is the slot, and `TaskRegistry.generations` outlives the record on purpose.
 struct TaskRecord {
-    let control             : TaskControl
-    let owner               : Identity
-    var process             : UnsafeMutablePointer<Process>?
-    var lifecycle           : TaskLifecycle
-    var regions             : InlineArray<32, TaskRegion?>
-    var regionCount         : UInt8
-    var contextSet          : Bool
-    var capabilityReferences: UInt16
+    let owner               : Identity                        // 4 Byte
+    var capabilityReferences: UInt16                          // 2 Byte
+    var process             : UnsafeMutablePointer<Process>?  // 8 Byte
+    var lifecycle           : TaskLifecycle                   // 9 Byte
 
     init(
-        control: TaskControl,
-        owner  : Identity,
-        process: UnsafeMutablePointer<Process>
+        owner       : Identity,
+        process     : UnsafeMutablePointer<Process>,
+        construction: UnsafeMutablePointer<TaskConstruction>
     ) {
-        self.control = control
-        self.owner = owner
-        self.process = process
-        self.lifecycle = .configuring
-        self.regions = InlineArray<32, TaskRegion?>(repeating: nil)
-        self.regionCount = 0
-        self.contextSet = false
+        self.owner                = owner
         self.capabilityReferences = 0
+        self.process              = process
+        self.lifecycle            = .configuring(construction)
     }
 }

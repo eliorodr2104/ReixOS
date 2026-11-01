@@ -22,8 +22,7 @@ enum TaskCapabilityAccess {
               let capability = current.pointee.metadata?.pointee.capsTable.resolve(handle),
               capability.rights.contains(right),
               case .task(let control) = capability.target,
-              TaskRegistry.isOwned(control, by: current.pointee.identity),
-              TaskRegistry.record(control) != nil
+              TaskRegistry.isOwned(control, by: current.pointee.identity)
         else { return nil }
 
         return (handle, capability, control)
@@ -38,7 +37,7 @@ enum TaskCapabilityAccess {
               let capability = current.pointee.metadata?.pointee.capsTable.resolve(handle),
               capability.rights.contains(right),
               case .job(let control) = capability.target,
-              TaskRegistry.record(control) != nil
+              TaskRegistry.isLive(control)
         else { return nil }
 
         return (handle, capability, control)
@@ -55,13 +54,12 @@ enum TaskCapabilityAccess {
 
         switch capability.target {
             case .task(let control):
-                guard TaskRegistry.isOwned(control, by: current.pointee.identity) else {
-                    return nil
-                }
-                return TaskRegistry.record(control) == nil ? nil : control
+                return TaskRegistry.isOwned(control, by: current.pointee.identity)
+                    ? control
+                    : nil
 
             case .job(let control):
-                return TaskRegistry.record(control) == nil ? nil : control
+                return TaskRegistry.isLive(control) ? control : nil
 
             default:
                 return nil

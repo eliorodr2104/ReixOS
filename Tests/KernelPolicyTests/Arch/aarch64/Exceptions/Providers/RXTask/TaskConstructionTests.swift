@@ -76,7 +76,7 @@ struct TaskConstructionTests {
 
             guard let taskCapability = parent.pointee.metadata.pointee.capsTable.resolve(taskHandle),
                   case .task(let control) = taskCapability.target,
-                  let child = TaskRegistry.record(control)?.process
+                  let child = TaskRegistry.configuring(control)?.process
             else {
                 Issue.record("taskCreate did not publish a task capability")
                 return
@@ -224,7 +224,7 @@ struct TaskConstructionTests {
             #expect(status.x1 == 0)
 
             #expect(context.ipc.pointee.releaseCapability(taskHandle, of: parent).isSuccess)
-            #expect(TaskRegistry.record(control) == nil)
+            #expect(!TaskRegistry.isLive(control))
         }
     }
 
@@ -324,8 +324,9 @@ struct TaskConstructionTests {
             UserMemory.validationOverride = nil
 
             #expect(ram.ppm.pointee.allocatedPages == pagesBefore)
-            let controls = TaskRegistry.controls(ownedBy: parent.pointee.identity)
-            for index in 0..<controls.count { #expect(controls[index] == nil) }
+            for index in 0..<TaskRegistry.capacity {
+                #expect(TaskRegistry.control(at: index, ownedBy: parent.pointee.identity) == nil)
+            }
             for index in 0..<Int(CapsTable.slotCount) {
                 #expect(
                     parent.pointee.metadata.pointee.capsTable.resolve(UInt32(index)) ==
@@ -352,7 +353,7 @@ struct TaskConstructionTests {
             guard namedTask != UInt32.max,
                   let namedCapability = parent.pointee.metadata.pointee.capsTable.resolve(namedTask),
                   case .task(let namedControl) = namedCapability.target,
-                  let namedChild = TaskRegistry.record(namedControl)?.process
+                  let namedChild = TaskRegistry.configuring(namedControl)?.process
             else {
                 Issue.record("exact-width task identity was refused")
                 return
@@ -377,7 +378,7 @@ struct TaskConstructionTests {
             guard taskHandle != UInt32.max,
                   let capability = parent.pointee.metadata.pointee.capsTable.resolve(taskHandle),
                   case .task(let control) = capability.target,
-                  let child = TaskRegistry.record(control)?.process
+                  let child = TaskRegistry.configuring(control)?.process
             else {
                 Issue.record("unnamed taskCreate compatibility path failed")
                 return
@@ -444,7 +445,7 @@ struct TaskConstructionTests {
 
             #expect(ipc.pointee.releaseCapability(copiedHandle, of: intruder).isSuccess)
             #expect(manager.pointee.abortTask(first.control, context: context) == .ok)
-            #expect(TaskRegistry.record(first.control) == nil)
+            #expect(!TaskRegistry.isLive(first.control))
 
             guard let second = manager.pointee.createSuspendedTask(ownedBy: owner) else {
                 Issue.record("registry did not reuse an available slot")

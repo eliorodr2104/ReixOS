@@ -568,10 +568,10 @@ public struct ProcessManager: RXAllocatable, Loggable {
             process.pointee.metadata?.pointee.exitReason = reason
 
             if let control = process.pointee.metadata?.pointee.taskControl {
-                TaskRegistry.markExited(
+                releaseConstruction(TaskRegistry.markExited(
                     control,
                     code: Self.exitStatus(of: process)
-                )
+                ))
             }
 
             Trace.emit(
