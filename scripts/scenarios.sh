@@ -898,6 +898,17 @@ post_terminal_baseline() {
     ptb_json="${ptb_out%.txt}.json"
     ptb_manifest="${ptb_out%-terminal-baseline.txt}-run-manifest.json"
 
+    # StorageCheck, terminal output and the direct trace dump drain separately.
+    # Only the two framing lines belong to the same ordered stream.
+    if ! grep -qF -- '[ CHECK ] storage stack whole, nothing leaked' "$ptb_log"; then
+        printf 'the mixed workload did not complete StorageCheck'
+        return 1
+    fi
+    if ! check_required "$ptb_log" '[TRACE] begin v=2|[TRACE] end' > "$ptb_out"; then
+        printf 'the terminal interaction trace is incomplete'
+        return 1
+    fi
+
     # Same split as post_trace_boot: build noise off the parsed stdout, the
     # decoder's own error kept in the file the message names.
     if ! "$PACKAGE_ROOT/reix" trace "$ptb_log" --interaction > "$ptb_out" 2>"$ptb_out.err"; then
@@ -971,13 +982,21 @@ post_profile_authority() {
         return 1
     fi
 
-    if ! grep -qF -- '[ TERMINAL BASELINE ] system status=measured' "$ppa_log"; then
+    if ! grep -qF -- '[ TERMINAL BASELINE ] system status=measured' "$ppa_log" \
+        || ! grep -qF -- 'name=Shell.elf mapped_pages=' "$ppa_log"; then
         printf 'Shell could not use its process-statistics authority'
         return 1
     fi
 
     if ! grep -Eq "^\[TRACE\] t=[0-9]+ ev=interactionMark pid=${ppa_shell_pid} " "$ppa_log"; then
         printf 'Shell emitted no authorized interaction mark'
+        return 1
+    fi
+
+    # Init's Ready report and Shell's terminal output drain independently.
+    # Completion is required without ordering either stream against the other.
+    if ! grep -qF -- '[ SHELL ] this shell is done' "$ppa_log"; then
+        printf 'the profiled shell did not finish'
         return 1
     fi
 

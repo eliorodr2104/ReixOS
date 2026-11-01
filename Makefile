@@ -285,6 +285,7 @@ host-test: prune-stale
 	$(SWIFT) run SbrkHeapHarness
 	SWIFT=$(SWIFT) sh scripts/test-trace-interaction.sh
 	sh scripts/test-scenario-artifact-isolation.sh
+	sh Tests/Scenarios/profile-authority.sh
 
 # Timing thresholds run only in an optimized, unsanitized host build. The same
 # tests still exercise their functional oracle in host-test and ASan runs.
