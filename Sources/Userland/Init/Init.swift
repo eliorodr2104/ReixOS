@@ -534,10 +534,12 @@ public func main() {
         ? machineFiles.flatMap(shellProgram(in:))
         : nil
 
+    #if REIX_BOOT_DIAGNOSTIC
     // A first ProcessServer that dies mid-load, then the one that serves the session.
     if let machineFiles, let heldShell, let doomed = startProcessServer() {
         loaderDeath(of: doomed, program: heldShell, files: machineFiles)
     }
+    #endif
 
     let processServerEndpoint = startProcessServer()?.endpoint
 
@@ -727,6 +729,7 @@ private func launchRefusedWhileClaimed(
 }
 
 
+#if REIX_BOOT_DIAGNOSTIC
 /// Has a ProcessServer die holding its claim on `Shell.elf`, then claims and
 /// writes that file from here.
 ///
@@ -770,6 +773,7 @@ private func loaderDeath(
 
     print("[ INIT  ] a program held by a loader that died was let go")
 }
+#endif
 
 
 /// Claims `Shell.elf` after it was launched, which only works if the loader let

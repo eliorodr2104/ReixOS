@@ -146,9 +146,11 @@ prune-stale:
 # bare `swift build` and the command plugin, which no longer exists.
 image:
 	@SWIFT=$(SWIFT) REIX_BUILD_PATH=$(BUILD_PATH) ./reix build
+	@BOOT_MODE=$(BOOT_MODE) OUT=$(OUT) sh scripts/check-loader-hook.sh
 
 release:
 	@SWIFT=$(SWIFT) REIX_BUILD_PATH=$(BUILD_PATH) ./reix build --release
+	@BOOT_MODE=$(BOOT_MODE) OUT=$(OUT) sh scripts/check-loader-hook.sh
 
 # Boot in QEMU (Ctrl-A X to quit). The disk marker, the refusal to boot twice
 # over one image and the terminal restore all live in the CLI now, signals
