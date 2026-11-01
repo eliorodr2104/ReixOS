@@ -467,22 +467,33 @@ struct ProcessTeardownTests {
     func parentWaitSurvivesOwnedDeaths() {
         withDeath(parked: true, pages: 256) { death in
             var controls: [TaskControl] = []
+            var claims: [PID] = []
+            var creator = death.child
+            _ = KernelDeadlineQueue.shared.cancel(creator)
             for _ in 0..<4 {
-                Arch.CPU.setCurrentProcess(VirtualAddress(UInt(bitPattern: death.child)))
-                guard let task = death.manager.pointee.createSuspendedTask(ownedBy: death.child) else {
+                Arch.CPU.setCurrentProcess(VirtualAddress(UInt(bitPattern: creator)))
+                guard let task = death.manager.pointee.createSuspendedTask(ownedBy: creator) else {
                     Issue.record("could not create owned task"); return
                 }
                 TaskRegistry.retain(task.control)
                 death.manager.pointee.releaseConstruction(TaskRegistry.markRunning(task.control))
-                task.process.pointee.status = .blockedOnReply(death.child)
-                task.process.pointee.nextWaiter = death.child.pointee.replyTo
-                death.child.pointee.replyTo = task.process
-                death.child.pointee.family.pushChild(task.process)
-                task.process.pointee.family.parent = death.child
+                creator.pointee.family.pushChild(task.process)
+                task.process.pointee.family.parent = creator
+                creator.pointee.metadata.pointee.waitingChildPid = task.process.pointee.pid
+                claims.append(creator.pointee.pid)
+                try? death.context.scheduler.pointee.block(creator.pointee.pid)
+                creator = task.process
                 controls.append(task.control)
             }
             Arch.CPU.setCurrentProcess(0)
             DeathWindows.inspect = {
+                for pid in claims {
+                    guard let owner = ProcessStatsIndex.successor(after: pid - 1),
+                          owner.pointee.pid == pid,
+                          let childPid = owner.pointee.metadata?.pointee.waitingChildPid
+                    else { continue }
+                    #expect(owner.pointee.family.findChild(id: childPid) != nil)
+                }
                 if death.parent.pointee.family.findChild(id: death.pid) != nil {
                     #expect(death.parent.pointee.metadata.pointee.waitingChildPid == death.pid)
                     if case .waiting = death.parent.pointee.status {} else {
