@@ -34,7 +34,7 @@ The process traversal uses `UInt64.max` for both exhaustion and failure. System 
 | --- | --- | --- | --- |
 | 0 | `physicalTotalPages`, `physicalAllocatedPages`, `physicalFreePages` | `UInt64` | Physical frames, machine-wide. |
 | 24 | `physicalQuarantinedPages`, `physicalQuarantinedRegions` | `UInt32` | DMA buffers nobody holds, kept out of the page manager until their device is declared reset. Counted as allocated. |
-| 32 | `physicalRefusedPages` | `UInt32` | Frames whose reclaim the buddy refused; held until the books make sense. Counted as allocated. |
+| 32 | `physicalRefusedPages` | `UInt32` | Frames of quarantined DMA blocks whose reclaim the page manager refused; held until its books make sense. Counted as allocated. |
 | 36 | `physicalDoubleFrees` | `UInt32` | DMA blocks found already free at reclaim. |
 | 40 | `kernelHeapLive*`, `kernelHeapReserved*` (bytes and high-water) | `UInt64` | Kernel heap: rounded live capacity and physical backing. |
 | 72 | `timerFrequency` | `UInt64` | Generic-timer Hz; the unit of every latency field. |

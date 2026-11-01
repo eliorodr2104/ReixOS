@@ -8,11 +8,15 @@ Persistent storage has three layers: BlockServer operates the device, FileSystem
 
 Init derives diagnostic and warden views before giving the disk endpoint to FileSystemServer. The filesystem receives send authority without the ability to pass or derive the disk authority further. Init retains the warden view for volume-owner death handling.
 
-FileSystemServer maintains client/object sessions and intersects requested filesystem operations with the granted `FSRights`. Binding a narrower object or container creates a service capability rooted in that scope. The shell receives a filesystem view without unmount authority.
+FileSystemServer maintains client/object sessions and intersects requested filesystem operations with the granted `FSRights`, nine rights in all (see [the rights matrix](../ABI/Services.md#fsrights-and-the-badge)). Binding a narrower object or container creates a service capability rooted in that scope. The shell receives a filesystem view without unmount authority.
+
+A client with the `claim` right can `lock` a file, and the server then refuses every other client's change to it with `busy` until `unlock`. Claims are refusals and never waits, and a claim held by a client that has died is swept before the server refuses. `claim` is a right of its own, not part of `write`, so a process can be given the ability to keep a file still while it reads it without the ability to rewrite it. ProcessServer's view of the program folder is the `loader` preset, `lookup`, `read` and `claim`, and [loads a program under such a claim](ProcessLaunch.md#loading-a-program-under-a-claim).
 
 ## Driver and queue
 
 `VirtioBlock` currently uses a queue depth of 4 and 512-byte sectors. BlockClient allocates a shared window with one page per queue slot. Submission identifies a slot and sector range; collection identifies the completed slot and status. A client must wait for completion before treating the bytes in that slot as ready or reusing it.
+
+At start the driver allocates its DMA buffer, resets the device and waits for the reset to take, then calls `dmaReclaim` on its own window, which gives back the buffers a dead predecessor left quarantined. Its own buffer is still held, so it is not among them. See [DMA quarantine](../Kernel/Memory.md#dma-quarantine).
 
 IRQ delivery wakes the driver through the kernel's interrupt mechanism. Device completion, interrupt acknowledgement and IPC reply are separate steps. The driver tracks late/outstanding work and device-failure state.
 

@@ -57,7 +57,7 @@ text {font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;fill:#242522}
 <rect x="326" y="597" width="242" height="124" fill="#242522" stroke="#50514B" rx="12"/>
 <text x="343" y="626" class="heading" style="fill:#EDEDE5">Syscalls</text>
 <text x="343" y="653" class="body" style="fill:#BFC1B7">SVC · trap frame</text>
-<text x="343" y="676" class="body" style="fill:#BFC1B7">57 operations</text>
+<text x="343" y="676" class="body" style="fill:#BFC1B7">58 operations</text>
 <rect x="582" y="597" width="242" height="124" fill="#242522" stroke="#50514B" rx="12"/>
 <text x="599" y="626" class="heading" style="fill:#EDEDE5">Processes</text>
 <text x="599" y="653" class="body" style="fill:#BFC1B7">CPU context · address space</text>

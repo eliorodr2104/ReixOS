@@ -8,7 +8,7 @@ Service protocols define what a receiver does with a message. Their operation la
 
 | Contract | Carries | Responsibility |
 | --- | --- | --- |
-| [ProcessServer](../../Sources/ReixABI/ProcessServer) | Launch name, status, semantic environment bindings | Application construction and bootstrap handshake. |
+| [ProcessServer](../../Sources/ReixABI/ProcessServer) | Launch name, status, semantic environment bindings | Application construction and bootstrap handshake. Statuses include `busy` for a program file somebody else holds. |
 | [Block](../../Sources/ReixABI/Block) | Sector ranges, queue slots, geometry, durability and completion | Raw block-device service. |
 | [FileSystem](../../Sources/ReixABI/FileSystem) | Object IDs, names, rights, offsets, metadata and statuses | Capability-scoped persistent storage. |
 | [NameServer](../../Sources/ReixABI/NameServer) | Registration and lookup messages | Resolve explicitly published service endpoints. |
@@ -34,6 +34,33 @@ Bindings name roles such as console, programs directory or input consumer. Their
 The block endpoint distinguishes disk, read-only diagnostic and warden badges. Mount ownership governs raw access. FileSystemServer receives the writable disk endpoint and exposes narrower object/container capabilities to its clients.
 
 Filesystem operations carry `FSRights` in their service authority model, distinct from the kernel's `CapRights`. A send-capable endpoint is necessary to reach the server, but the server still checks the requested filesystem operation against its session/object rights.
+
+### `FSRights` and the badge
+
+`FSRights` is a nine-bit set. A capability is minted from another one and takes the intersection of the rights, so authority only narrows downhill. `FSRights.required(for:)` holds the whole matrix; `attach` and `status` need no right.
+
+| Right | Bit | Operations |
+| --- | --- | --- |
+| `lookup` | 0 | `open`, `list`, `up`, `path`, `info`. |
+| `read` | 1 | `read`. |
+| `write` | 2 | `create`, `write`, `replace`, `compact`; with `quota`, `createContainer`. |
+| `remove` | 3 | `remove`, `relocate`. |
+| `delegate` | 4 | `bind`. |
+| `quota` | 5 | `grantRoom`; with `write`, `createContainer`. |
+| `admin` | 6 | `nameMachine`, `scrub`. |
+| `unmount` | 7 | `unmount`. |
+| `claim` | 8 | `lock`, `unlock`. |
+
+`claim` is separate from `write` so that a reader of a file can keep it still without being able to rewrite it. A claim makes the server refuse every other client's change to that file, with `busy` and never a wait; a claim whose holder has died is swept before the refusal is given. The presets are:
+
+| Preset | Rights |
+| --- | --- |
+| `everything` | All nine. The machine's own container. |
+| `reader` | `lookup`, `read`. It has no `claim`: a read-only loan into someone else's container must not be able to freeze the file it was lent. |
+| `occupant` | `lookup`, `read`, `write`, `remove`, `claim`. A container of its own, with nothing to hand away or administer; `claim` is there because `FileSystemClient.replaceAll` claims the file around its writes. |
+| `loader` | `lookup`, `read`, `claim`. What ProcessServer holds on the program folder: it can read a program and hold it still, never write it. |
+
+The session badge is 64 bits: the rights in the top nine, the object slot plus one in the low bits, and the object's generation between them, capped at 32 bits. The generation is checked on every request, so a capability cannot name a different file that reused its slot. `FSStatus.busy` is also what a refused change to a claimed file answers.
 
 ## Evolving a contract
 

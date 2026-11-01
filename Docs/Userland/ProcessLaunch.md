@@ -16,11 +16,13 @@ sequenceDiagram
     participant K as Kernel
     participant A as New application
     C->>P: launch(name)
-    P->>P: Validate name, profile and job capacity
-    P->>F: Open and read ELF
-    P->>P: Validate load plan and required bindings
+    P->>P: Validate name, profile, job capacity and required bindings
+    P->>F: Open ELF
+    P->>F: Claim file, then read ELF
+    P->>P: Validate load plan
     P->>K: taskCreate
     P->>K: Map / copy / seal / set context
+    P->>F: Release claim
     P->>K: taskStart
     K->>A: Enter EL0 bootstrap
     P->>A: Begin, Binding + grant, Commit
@@ -28,15 +30,29 @@ sequenceDiagram
     P-->>C: Success + attenuated job capability
 ```
 
-`taskStart` precedes the environment handshake: the child must execute its bootstrap receiver. Success is returned to the launch client only after `Ready`. A malformed ELF or unavailable required binding is rejected before task creation/start; a later handshake failure cancels and cleans up the started job.
+`taskStart` precedes the environment handshake: the child must execute its bootstrap receiver. Success is returned to the launch client only after `Ready`. A malformed ELF, a program file somebody else is changing or an unavailable required binding is rejected before task creation/start; a later handshake failure cancels and cleans up the started job.
+
+## Loading a program under a claim
+
+The load plan comes from the ELF headers and the bytes from the segments, many reads apart. So ProcessServer claims the program file before it reads the first header byte and lets it go once the task has been built and the last segment byte copied into it, always before `taskStart`, on every way out: a malformed image, a task that cannot be made or filled, a refusal, and success. It asks the file's size again under the claim, since the size `open` returned is from before it. The sequence is `ProgramLoad.load` in ProcessServerCore, over a `ProgramFile` that supplies `claim()` and `release()`.
+
+| Situation | Launch status |
+| --- | --- |
+| Another client holds a claim on the file, such as a writer part way through replacing it | `busy`, answered at once. A claim is never waited for, because one ProcessServer loop sleeping on a writer would stall every other launch. |
+| The file was removed between `open` and the claim | `notFound`. |
+| The file system cannot be asked, or its view cannot claim | `unavailable`. |
+| The holder of a claim has died | Nothing: the file system sweeps dead holders before it refuses. A ProcessServer that dies mid-load is swept the same way. |
+
+ProcessServer's view of the program folder holds `FSRights.loader`: `lookup`, `read` and `claim`. It can read a program and hold it still, and cannot write one. While the claim is held, a remove or rename of the file by another client is refused as busy. The binding check runs before the claim, so a refusal that does not depend on the file holds nothing. On `busy` the shell prints that the program is being changed and to try again.
 
 ## Policy and mechanism
 
 | Component | Owns |
 | --- | --- |
 | `ELFPlanner` | Segment validation, bounded copy/region plan and initial entry/program-break calculation. |
+| `ProgramLoad` | Claim, plan, build and release around one program file. |
 | `ProgramProfile` | Supported executable names and the environment bindings/rights they may receive. |
-| `ProcessServer` | Filesystem lookup, construction sequence, bootstrap transaction and job supervision. |
+| `ProcessServer` | Filesystem lookup, the claim on the program file, construction sequence, bootstrap transaction and job supervision. |
 | `Environment` | Child-side binding validation, staged environment and readiness acknowledgement. |
 | Kernel task API | Address-range/protection checks, initial context and state transitions. |
 
