@@ -649,6 +649,7 @@ struct SealTests {
                     disk.poke(UInt8(ascii: "a"), at: at + 8)
                     disk.stampEntry(at: at)
                 }
+                fs.believeMedium()
 
                 #expect(fs.unmount() == .ok)
                 #expect(fs.namedSeal == 0)

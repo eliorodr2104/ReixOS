@@ -518,9 +518,10 @@ struct BenchTests {
             return
         }
 
-        // Ten names: one pass and at most two reads. The wire cost is one
+        // Ten names: one pass and at most three reads, the folder block, the
+        // sum block that checks it and the table block. The wire cost is one
         // request, which `calls` above asserts.
-        #expect(ten.traffic.reads <= 2)
+        #expect(ten.traffic.reads <= 3)
 
         // The same sixty-four kilobytes, written in the window the client has
         // rather than a block at a time, costs at most sixty per cent of the

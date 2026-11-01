@@ -342,8 +342,10 @@ final class MemoryDisk: BlockDevice {
     }
 
 
-    /// Rewrites the check of the directory entry at `offset`, so a poked entry
-    /// reads as one a careful writer made: damage only a scrub can see.
+    /// Rewrites the check of the directory entry at `offset`, and its block's
+    /// checksum, so a poked entry reads as one a careful writer made: damage
+    /// only a scrub can see. The sum block moved too, so the test says
+    /// `believeMedium()` before the file system reads again.
     func stampEntry(at offset: Int) {
         let check = FSEntry.check(of: UnsafeRawPointer(bytes.advanced(by: offset)))
 
@@ -351,6 +353,21 @@ final class MemoryDisk: BlockDevice {
             poke(UInt8(truncatingIfNeeded: check >> UInt32(8 * index)),
                  at: offset + FSEntry.checkOffset + index)
         }
+
+        stampBlock(at: offset)
+    }
+
+
+    /// Rewrites the sum region's checksum of the block holding `offset` to
+    /// what that block now holds, behind the file system's back.
+    func stampBlock(at offset: Int) {
+        guard let plan = FSLayout.Plan(sectorCount: sectorCount, sectorSize: sectorSize) else { return }
+
+        let size  = Int(FSLayout.blockSize)
+        let block = offset / size
+        let sum   = FSChecksum.over(UnsafeRawPointer(bytes.advanced(by: block * size)), count: size)
+
+        poke(sum, at: Int(plan.sumStart) * size + block * 4)
     }
 
 

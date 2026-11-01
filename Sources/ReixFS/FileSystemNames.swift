@@ -103,7 +103,7 @@ extension FileSystem {
             let extent = record.runs[run]
 
             for block in extent.start..<(extent.start + extent.count) {
-                let loaded = readBlock(block, into: dataBuffer)
+                let loaded = readFolderBlock(block, into: dataBuffer)
                 guard loaded == .ok else { return loaded }
 
                 for slot in 0..<perBlock {
@@ -199,7 +199,7 @@ extension FileSystem {
                     continue
                 }
 
-                let loaded = readBlock(block, into: dataBuffer)
+                let loaded = readFolderBlock(block, into: dataBuffer)
                 guard loaded == .ok else {
                     // Whatever was found before this stays found. A partial
                     // answer with a failure on it is more use than throwing away
@@ -312,7 +312,7 @@ extension FileSystem {
             let extent = record.runs[run]
 
             for block in extent.start..<(extent.start + extent.count) {
-                let loaded = readBlock(block, into: dataBuffer)
+                let loaded = readFolderBlock(block, into: dataBuffer)
                 guard loaded == .ok else { return loaded }
 
                 for slot in 0..<perBlock {
@@ -331,7 +331,7 @@ extension FileSystem {
                     }
 
                     entry.write(to: dataBuffer.advanced(by: at))
-                    return stageStructuralBlock(block, from: dataBuffer)
+                    return stageDataBlock(block, from: dataBuffer)
                 }
             }
         }
@@ -354,7 +354,7 @@ extension FileSystem {
         dataBuffer.initializeMemory(as: UInt8.self, repeating: 0, count: Int(FSLayout.blockSize))
         entry.write(to: dataBuffer)
 
-        let staged = stageStructuralBlock(fresh, from: dataBuffer)
+        let staged = stageDataBlock(fresh, from: dataBuffer)
         guard staged == .ok else { return staged }
 
         record.size     = UInt64(record.blocks) * FSLayout.blockSize
@@ -381,12 +381,12 @@ extension FileSystem {
 
         guard let target else { return .notFound }
 
-        let loaded = readBlock(target.block, into: dataBuffer)
+        let loaded = readFolderBlock(target.block, into: dataBuffer)
         guard loaded == .ok else { return loaded }
 
         FSEntry().write(to: dataBuffer.advanced(by: target.slot * Int(FSLayout.entrySize)))
 
-        return stageStructuralBlock(target.block, from: dataBuffer)
+        return stageDataBlock(target.block, from: dataBuffer)
     }
 
 

@@ -650,7 +650,7 @@ extension FileSystem {
         for run in 0..<Int(record.extents) {
             let extent = record.runs[run]
             if blockOffset < extent.count {
-                guard readBlock(extent.start + blockOffset, into: dataBuffer) == .ok else {
+                guard readFolderBlock(extent.start + blockOffset, into: dataBuffer) == .ok else {
                     return nil
                 }
                 return FSEntry(
@@ -680,7 +680,7 @@ extension FileSystem {
             let extent = record.runs[run]
 
             for block in extent.start..<(extent.start + extent.count) {
-                guard readBlock(block, into: tallyBuffer) == .ok else { return false }
+                guard readFolderBlock(block, into: tallyBuffer) == .ok else { return false }
 
                 for slot in 0..<Int(Self.entriesPerBlock) {
                     guard ordinal < UInt32.max else {
@@ -778,7 +778,7 @@ extension FileSystem {
                     let extent = record.runs[run]
 
                     for block in extent.start..<(extent.start + extent.count) {
-                        guard readBlock(block, into: tallyBuffer) == .ok else { return false }
+                        guard readFolderBlock(block, into: tallyBuffer) == .ok else { return false }
 
                         for slot in 0..<Int(Self.entriesPerBlock) {
                             let entry = FSEntry(

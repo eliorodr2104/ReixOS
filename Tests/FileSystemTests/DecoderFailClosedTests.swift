@@ -858,8 +858,11 @@ struct DecoderFailClosedTests {
                   let block = folderAt(&fs, FSLayout.rootObject)
             else { return }
 
+            // Written by a careful hand, so the block's own checksum agrees and
+            // only the entry's can tell.
             disk.poke(UInt8(200), at: block + 4)
-            fs.dropCache()
+            disk.stampBlock(at: block)
+            fs.believeMedium()
 
             let findings = fs.scan(.everything)
 

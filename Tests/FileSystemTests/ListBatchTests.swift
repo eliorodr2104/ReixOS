@@ -98,7 +98,7 @@ struct ListBatchTests {
 
     // MARK: - The cost
 
-    @Test("ten names cost one pass and two reads")
+    @Test("ten names cost one pass and three reads")
     func tenNamesInOnePass() {
         withFileSystem { fs, disk in
             guard fill(&fs, 10) else { return }
@@ -117,11 +117,11 @@ struct ListBatchTests {
             #expect(batch.count == 10)
             #expect(batch.eof)
 
-            // One directory block and one table block, and the table block is
-            // read once for all ten records because it is one of the file
+            // One directory block, the sum block that checks it, and one table
+            // block, read once for all ten records because it is one of the file
             // system's own and the cache holds it. Asking one name at a time was
             // twelve reads for the same ten names.
-            #expect(disk.reads - before <= 2, "ten names cost \(disk.reads - before) reads")
+            #expect(disk.reads - before <= 3, "ten names cost \(disk.reads - before) reads")
         }
     }
 

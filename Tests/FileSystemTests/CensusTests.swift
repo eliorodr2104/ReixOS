@@ -253,6 +253,7 @@ struct CensusTests {
                 disk.poke(first, at: at)
                 disk.stampEntry(at: at)
             }
+            fs.believeMedium()
 
             let findings = fs.scan(.everything)
             #expect(findings.complete)

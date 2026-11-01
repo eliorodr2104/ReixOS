@@ -636,8 +636,8 @@ public struct FileSystem<Device: BlockDevice> {
 
 
     /// A block in the data region that goes through the journal with its
-    /// checksum: the partly filled last block of a file an append rewrites, so
-    /// it is old or new after a power cut, never torn.
+    /// checksum: a directory block, or the partly filled last block of a file an
+    /// append rewrites. Both are old or new after a power cut, never torn.
     mutating func stageDataBlock(
         _   index  : UInt32,
         from buffer: UnsafeRawPointer
@@ -724,6 +724,22 @@ public struct FileSystem<Device: BlockDevice> {
 
         return FSChecksum.over(buffer, count: Int(FSLayout.blockSize)) == expected.sum
             ? .ok : .damaged
+    }
+
+
+    /// One block of a folder, checked against its checksum in the sum region
+    /// like a file's, and refused like a table block when it is not the one
+    /// last written there: a folder is structure, so the volume is held.
+    mutating func readFolderBlock(
+        _    index : UInt32,
+        into buffer: UnsafeMutableRawPointer
+    ) -> FSStatus {
+
+        let loaded = readDataBlock(index, into: buffer)
+        guard loaded == .damaged else { return loaded }
+
+        quarantine()
+        return .quarantined
     }
 
 

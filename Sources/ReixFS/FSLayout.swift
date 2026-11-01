@@ -80,14 +80,16 @@ public enum FSLayout {
     ///
     /// ```
     /// geometry  blocks  bmap  table  sums  clean reads  dirty reads  dirty model  mend reads  mend model
-    /// 16 MiB    4096    1     32     4     8            401          35ms         466         35ms
-    /// 256 MiB   65536   2     512    64    9            1902         131ms        2928        201ms
-    /// 1 GiB     262144  8     2048   256   17           6708         459ms        10812       743ms
-    /// 2 GiB     524288  16    4096   512   27           13116        1004ms       21324       1675ms
+    /// 16 MiB    4096    1     32     4     8            402          35ms         467         35ms
+    /// 256 MiB   65536   2     512    64    9            1903         131ms        2929        201ms
+    /// 1 GiB     262144  8     2048   256   17           6709         459ms        10813       743ms
+    /// 2 GiB     524288  16    4096   512   27           13117        1004ms       21325       1675ms
     /// ```
     ///
     /// The file data checksums cost a recovery one read of the sum region, the
     /// `sums` column, which it learns once; a clean mount gets them from the seal.
+    /// Folder blocks are checked against the same region, which costs the
+    /// measured recovery one read more.
     ///
     /// **The service level.** A dirty mount runs `putRight` before it serves
     /// anything, so its cost is time a machine spends with no file system. One
