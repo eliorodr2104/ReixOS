@@ -267,7 +267,8 @@ extension FileSystem {
     /// the file already has is named in the journal, with its new checksum,
     /// before it is overwritten, so a write that does not commit leaves it
     /// holding old bytes or new, and a block that is neither reads as damaged
-    /// rather than being believed.
+    /// rather than being believed. The partly filled last block an append
+    /// starts in goes through the journal instead, so it is never neither.
     public mutating func write(
         _    object   : UInt32,
         at   offset   : UInt64,
@@ -327,12 +328,16 @@ extension FileSystem {
         let end = offset &+ count
         guard end > offset else { return (.noSpace, 0) }
 
-        // The blocks this write lands on that the file already has, counted
-        // before anything is spent. See `FSLayout.overwriteLimit`.
-        let first   = offset / FSLayout.blockSize
+        // A write starting inside the last, partly filled block rewrites it through
+        // the journal, so a log's last block is old or new, never torn.
+        let first = offset / FSLayout.blockSize
+        let tail  = held % FSLayout.blockSize != 0 && first == held / FSLayout.blockSize
+
+        // The other blocks this write lands on that the file already has,
+        // counted before anything is spent. See `FSLayout.overwriteLimit`.
         let had     = UInt64(record.blocks)
         let reached = min(FSLayout.divideUp(end, FSLayout.blockSize), had)
-        let inPlace = reached > first ? reached - first : 0
+        let inPlace = !tail && reached > first ? reached - first : 0
 
         guard inPlace <= FSLayout.overwriteLimit else { return (.tooManyChanges, 0) }
 
@@ -394,7 +399,9 @@ extension FileSystem {
                 guard named == .ok else { return (named, moved) }
             }
 
-            let written = writeDataBlock(block, from: dataBuffer)
+            let written = moved == 0 && tail
+                ? stageDataBlock(block, from: dataBuffer)
+                : writeDataBlock(block, from: dataBuffer)
             guard written == .ok else { return (written, moved) }
 
             moved += chunk

@@ -21,13 +21,14 @@ import ReixABI
 /// fact - the journal is empty *because* everything up to there has been applied.
 /// See `stamp`.
 ///
-/// A **redo** journal, and metadata only. What goes in it is the after-image of
-/// whole structural blocks: a bitmap block, an object table block, a directory
-/// block. Whole images rather than deltas is what makes replay idempotent, which
-/// is what makes a crash during replay survivable - replaying twice is replaying
-/// once. File contents are not in here and are not meant to be: what a
-/// transaction promises is that the metadata is coherent, not that a power cut
-/// cannot land in the middle of somebody's bytes.
+/// A **redo** journal, of metadata. What goes in it is the after-image of whole
+/// structural blocks: a bitmap block, an object table block, a sum block, a
+/// directory block. Whole images rather than deltas is what makes replay
+/// idempotent, which is what makes a crash during replay survivable - replaying
+/// twice is replaying once. File contents are not in here, with one exception:
+/// the partly filled last block an append rewrites goes through as an image, so
+/// a log never loses its last block to a power cut. Everything else a write
+/// lands on is named first. See `Intent`.
 ///
 /// The payload blocks are written **once each, at the commit**. Staging keeps the
 /// image in an arena in memory and overwrites it in place, so a transaction that

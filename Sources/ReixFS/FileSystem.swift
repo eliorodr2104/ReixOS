@@ -628,6 +628,34 @@ public struct FileSystem<Device: BlockDevice> {
         from buffer: UnsafeRawPointer
     ) -> FSStatus {
 
+        let summed = stageSum(of: index, for: buffer)
+        guard summed == .ok else { return summed }
+
+        return writeHomeBlock(index, from: buffer)
+    }
+
+
+    /// A block in the data region that goes through the journal with its
+    /// checksum: the partly filled last block of a file an append rewrites, so
+    /// it is old or new after a power cut, never torn.
+    mutating func stageDataBlock(
+        _   index  : UInt32,
+        from buffer: UnsafeRawPointer
+    ) -> FSStatus {
+
+        let summed = stageSum(of: index, for: buffer)
+        guard summed == .ok else { return summed }
+
+        return stageStructuralBlock(index, from: buffer)
+    }
+
+
+    /// Stages `buffer`'s checksum as what data block `index` holds.
+    private mutating func stageSum(
+        of  index : UInt32,
+        for buffer: UnsafeRawPointer
+    ) -> FSStatus {
+
         guard index >= plan.dataStart else { return .deviceFailed }
 
         let home   = sumBlock(of: index)
@@ -640,10 +668,7 @@ public struct FileSystem<Device: BlockDevice> {
             as          : UInt32.self
         )
 
-        let staged = stageStructuralBlock(home, from: jrnl)
-        guard staged == .ok else { return staged }
-
-        return writeHomeBlock(index, from: buffer)
+        return stageStructuralBlock(home, from: jrnl)
     }
 
 

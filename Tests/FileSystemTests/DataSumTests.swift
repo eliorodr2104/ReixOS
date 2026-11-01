@@ -621,6 +621,71 @@ struct DataSumTests {
     }
 
 
+    @Test("an append into the last block names nothing, and leaves it old or new at every refusal")
+    func tailGoesThroughTheJournal() {
+        let old = pattern(37, Self.block + 300)
+        let new = pattern(38, 900)
+
+        var requests = 0
+        withFileSystem { fs, disk in
+            guard let file = makeFile(&fs, "log.bin", old) else { return }
+            let tail = physical(&fs, file, 1)
+
+            let before = disk.reads + disk.writes + disk.flushes
+            #expect(writeBytes(&fs, file, at: UInt64(old.count), new).status == .ok)
+            requests = disk.reads + disk.writes + disk.flushes - before
+
+            // Rewritten where it was, and never named.
+            #expect(physical(&fs, file, 1) == tail)
+            #expect(fs.object(file)?.extents == 1)
+            #expect(readBack(&fs, file, count: old.count + new.count).data == old + new)
+        }
+
+        var refused = 0
+
+        for stop in 1...requests {
+            withFileSystem { fs, disk in
+                guard let file = makeFile(&fs, "log.bin", old) else { return }
+
+                disk.refuseOnly(stop)
+                let done = writeBytes(&fs, file, at: UInt64(old.count), new)
+                if done.status != .ok { refused += 1 }
+
+                #expect(fs.unsettled.isEmpty, "stop \(stop)")
+
+                // A promise the device refused to finish is the next mount's.
+                if fs.journalState != .committed {
+                    oldOrNew(&fs, file, old, old + new, "stop \(stop), live")
+                }
+
+                remount(disk) { again, found in
+                    guard var again else { Issue.record("stop \(stop): \(found)"); return }
+                    oldOrNew(&again, file, old, old + new, "stop \(stop), remounted")
+                }
+            }
+        }
+
+        #expect(refused > 0)
+    }
+
+
+    /// The whole file reads, is one of the two, and nothing on the volume is
+    /// damaged.
+    private func oldOrNew(
+        _ fs  : inout FileSystem<MemoryDisk>,
+        _ file: UInt32,
+        _ old : [UInt8],
+        _ new : [UInt8],
+        _ what: String
+    ) {
+        let size = Int(fs.object(file)?.size ?? 0)
+        let back = readBack(&fs, file, count: size)
+        #expect(back.status == .ok, "\(what): \(back.status)")
+        #expect(back.data == old || back.data == new, "\(what)")
+        #expect(fs.scan(.data).damagedData == 0, "\(what)")
+    }
+
+
     // MARK: - The format
 
     @Test("the sum region sits between the table and the data, one checksum per block")
@@ -696,10 +761,10 @@ struct DataSumTests {
         ]
 
         // Writes, barriers, reads per row, from a committed file and a cold cache. The
-        // checksums ride in the declaration's header, so no row costs more than before.
+        // tail's image replaces the declaration (was 9, 5, 3 and 12, 5, 4).
         let expected: [String: (Int, Int, Int)] = [
-            "append into the tail"   : (9, 5, 3),
-            "append across the tail" : (12, 5, 4),
+            "append into the tail"   : (9, 4, 3),
+            "append across the tail" : (12, 4, 4),
             "append onto a new block": (10, 4, 3),
             "append whole blocks"    : (11, 4, 3),
             "overwrite, partial ends": (11, 5, 6),
@@ -1103,6 +1168,28 @@ struct DataSumCrashTests {
 
         sweep("overwrite whole", old: old, new: new) { fs, file in
             write(&fs, file, at: Self.block, over)
+        }
+    }
+
+
+    @Test("an append onto a block the file has, with another block of it rotted")
+    func appendInPlaceBesideRot() {
+        let old   = pattern(13, Self.block + 50)
+        let extra = pattern(14, 100)
+
+        sweep("append in place, rot", old: old, new: old + extra, rot: 0) { fs, file in
+            write(&fs, file, at: old.count, extra)
+        }
+    }
+
+
+    @Test("an append across the last block, with another block of it rotted")
+    func appendAcrossBesideRot() {
+        let old   = pattern(15, Self.block + 50)
+        let extra = pattern(16, 5000)
+
+        sweep("append across, rot", old: old, new: old + extra, rot: 0) { fs, file in
+            write(&fs, file, at: old.count, extra)
         }
     }
 
