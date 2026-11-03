@@ -37,6 +37,8 @@ public func kernelMemcpy(
     return dst
 }
 
+/// Zero fills of four cache blocks or more use `dc zva` once the MMU is on,
+/// everything else uses `RawBytes.fill`.
 public func kernelMemset(
     _ s: UnsafeMutableRawPointer?,
     _ c: Int32,
@@ -44,7 +46,11 @@ public func kernelMemset(
 ) -> UnsafeMutableRawPointer? {
     guard let s else { return s }
 
-    RawBytes.fill(s, with: UInt8(truncatingIfNeeded: c), count: Int(bitPattern: n))
+    let byte  = UInt8(truncatingIfNeeded: c)
+    let count = Int(bitPattern: n)
+    if byte == 0, Arch.MMU.zeroCacheBlocks(s, count: count) { return s }
+
+    RawBytes.fill(s, with: byte, count: count)
     return s
 }
 

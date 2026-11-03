@@ -15,10 +15,12 @@
 #   2. nothing they reach calls through a register;
 #   3. RawBytes.fill and RawBytes.copy, where an ELF still has them, move q
 #      registers (and copy d registers for the 8-byte skew);
-#   4. no ELF holds `dc zva` or reads DCZID_EL0.
+#   4. `dc zva` lives only in the kernel's `zero_blocks`, reached only from the
+#      memset path, and DCZID_EL0 is read only by `read_dczid`, reached only
+#      from boot. No program holds either.
 #
 # Usage:
-#     check-vector-primitives.py OBJDUMP ELF...
+#     check-vector-primitives.py OBJDUMP KERNEL_ELF [ELF...]
 #
 # Prints what it read per ELF on stdout. Exits 1 with a one-line reason on the
 # last line when a rule is broken, 2 when an ELF cannot be read.
@@ -90,7 +92,7 @@ def body(functions, needle):
     return None, ""
 
 
-def check(objdump, elf):
+def check(objdump, elf, kernel):
     functions = disassemble(objdump, elf)
     roots = [root for root in ROOTS if root in functions]
 
@@ -124,28 +126,52 @@ def check(objdump, elf):
                 return f"{name} has no {shape}"
         print(f"  {name}: ldp/stp of q and d")
 
-    for name, instructions in functions.items():
-        for mnemonic, operands in instructions:
-            if mnemonic == "dc" and operands.lower().startswith("zva"):
-                return f"dc zva in {name}"
-            if mnemonic == "mrs" and "dczid_el0" in operands.lower():
-                return f"DCZID_EL0 read in {name}"
+    zva   = holders(functions, lambda m, o: m == "dc" and o.lower().startswith("zva"))
+    dczid = holders(functions, lambda m, o: m == "mrs" and "dczid_el0" in o.lower())
+    if not kernel:
+        if zva or dczid:
+            return f"a program holds dc zva or reads DCZID_EL0: {sorted(zva | dczid)}"
+        return None
+
+    if zva != {"zero_blocks"}:
+        return f"dc zva outside zero_blocks: {sorted(zva)}"
+    if dczid != {"read_dczid"}:
+        return f"DCZID_EL0 read outside read_dczid: {sorted(dczid)}"
+
+    # The compiler may inline zeroCacheBlocks into the memset body, and
+    # loadCacheType into boot, the way post_icache_batch allows for CTR_EL0.
+    for routine, allowed in (("zero_blocks", ("zeroCacheBlocks", "kernelMemset")),
+                             ("read_dczid", ("loadCacheType", "VirtualMemoryManagerV6ppmPtr"))):
+        found = callers(functions, routine)
+        stray = [name for name in found if not any(a in name for a in allowed)]
+        if not found or stray:
+            return f"{routine} is reached from outside {' or '.join(allowed)}: {sorted(found)}"
+        print(f"  {routine}: called only from {sorted(found)}")
 
     return None
 
 
+def holders(functions, matches):
+    return {name for name, instructions in functions.items()
+            if any(matches(m, o) for m, o in instructions)}
+
+
+def callers(functions, routine):
+    return {name for name in functions if name != routine and routine in callees(functions, name)}
+
+
 def main():
     if len(sys.argv) < 3:
-        print("usage: check-vector-primitives.py OBJDUMP ELF...")
+        print("usage: check-vector-primitives.py OBJDUMP KERNEL_ELF [ELF...]")
         sys.exit(2)
 
     objdump, seen = sys.argv[1], set()
-    for elf in sys.argv[2:]:
+    for index, elf in enumerate(sys.argv[2:]):
         if os.path.realpath(elf) in seen:
             continue
         seen.add(os.path.realpath(elf))
         print(elf)
-        failure = check(objdump, elf)
+        failure = check(objdump, elf, kernel=index == 0)
         if failure:
             print(f"{elf}: {failure}")
             sys.exit(1)

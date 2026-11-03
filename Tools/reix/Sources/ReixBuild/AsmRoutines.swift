@@ -120,6 +120,23 @@ private func mmuHandlers() -> [AsmRoutine] {
         // MIDR_EL1 is read alongside CTR_EL0 at boot, to select CPU workarounds.
         fn("read_main_id") { mrs("x0", "midr_el1"); ret() },
 
+        // DCZID_EL0, read once at boot after the MMU is on: whether `dc zva`
+        // is permitted, and how many bytes one zeroes.
+        fn("read_dczid") { mrs("x0", "dczid_el0"); ret() },
+
+        // zero_blocks(base, count, block): `dc zva` per block from an aligned
+        // base. No barrier: it orders as a store, and page tables add their own.
+        fn("zero_blocks") {
+            raw("    cbz x1, .L_zva_done")
+            label(".L_zva_loop")
+            raw("    dc zva, x0")
+            add("x0", "x0", "x2")
+            raw("    subs x1, x1, #1")
+            raw("    b.ne .L_zva_loop")
+            label(".L_zva_done")
+            ret()
+        },
+
         // clean_dcache_pou(base, size, line): `dc cvau` per data line, and no
         // barrier, so a batch waits once for every page it cleaned.
         fn("clean_dcache_pou") {

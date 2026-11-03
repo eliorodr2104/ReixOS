@@ -24,6 +24,7 @@ public enum MMUOp: UInt32, Equatable, Sendable {
     case icacheAll   = 12
     case stream      = 13
     case cleanPoC    = 14
+    case zeroBlocks  = 15
     case unknown     = 0
 }
 
