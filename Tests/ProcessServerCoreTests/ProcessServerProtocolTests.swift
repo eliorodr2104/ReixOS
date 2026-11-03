@@ -9,6 +9,12 @@ import ProcessServerCore
 
 @Suite("ProcessServer wire protocol")
 struct ProcessServerProtocolTests {
+    @Test func statusRawValuesAreAppendOnly() {
+        #expect(ProcessServerStatus.ok.rawValue == 0)
+        #expect(ProcessServerStatus.busy.rawValue == 8)
+        #expect(ProcessServerStatus.timedOut.rawValue == 9)
+    }
+
 
     @Test("launch basenames round trip without carrying a pathname")
     func launchNameRoundTrip() {
