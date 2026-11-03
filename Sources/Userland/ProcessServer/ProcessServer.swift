@@ -16,6 +16,10 @@ public struct ProcessServer: Service {
     private static let idleTicks               : UInt32 = 10
     private static let pollTicks               : UInt32 = 1
 
+    #if REIX_BOOT_DIAGNOSTIC
+    private static let lateBudgetMilliseconds: UInt64 = 300
+    #endif
+
     public let serviceEndpoint: UInt32
     private var host          : SystemLaunchHost
     private var launches      : LaunchSupervisor<SystemLaunchHost>
@@ -90,17 +94,32 @@ public struct ProcessServer: Service {
         launches.reclaim(now: readVirtualCounter(), host: &host)
         launches.sweepJobs(host: &host)
         var requested = ProcessLaunchRequest.name(from: request.message)
+        var rehearsal: LaunchRehearsal = .none
+        var budget = Self.launchBudgetMilliseconds
         #if REIX_BOOT_DIAGNOSTIC
         let dies = requested.map { Self.matches($0, "Shell.die") } ?? false
         if dies { requested = Self.programName("Shell.elf") }
+        else if let name = requested {
+            if Self.matches(name, "Top.late") {
+                requested = Self.programName("Top.elf")
+                rehearsal = .withholdCommit
+                budget = Self.lateBudgetMilliseconds
+            } else if Self.matches(name, "Top.mute") {
+                requested = Self.programName("Top.elf")
+                rehearsal = .withholdCommit
+            } else if Self.matches(name, "Top.trap") {
+                requested = Self.programName("Top.elf")
+                rehearsal = .trapAtEntry
+            }
+        }
         #endif
         let refusal = launches.accept(
             name        : requested,
             carriesGrant: request.grantedCap != nil,
             requester   : request.identity,
             now         : readVirtualCounter(),
-            budget      : Self.launchBudgetMilliseconds,
-            rehearsal   : .none,
+            budget      : budget,
+            rehearsal   : rehearsal,
             host        : &host
         )
         if let refusal {
