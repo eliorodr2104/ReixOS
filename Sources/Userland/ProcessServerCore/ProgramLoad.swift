@@ -22,62 +22,19 @@ import ReixABI
 /// So the caller is told, and whoever asked for the program decides when to ask
 /// again.
 public enum ProgramLoad {
-
-    /// Bytes moved per read and per write into the task: one page.
     static let chunk = 4096
 
-    /// Claims `file`, plans it, and hands the plan to `build`, letting go of the
-    /// claim whatever `build` answers.
-    ///
-    /// `build` makes the task and copies the image into it, through `copy`
-    /// below, from the same claimed file it is handed.
-    public static func load<File: ProgramFile>(
-        _ file: inout File,
-        build : (ELFLoadPlan, inout File) -> ProcessServerStatus
-    ) -> ProcessServerStatus {
-
+    /// Claims `file` and plans it. Thrown: the claim's refusal, or `.malformedELF`
+    /// after letting go. Returned: a plan, with the claim held by the caller.
+    public static func begin<File: ProgramFile>(
+        _ file: inout File
+    ) throws(ProcessServerStatus) -> ELFLoadPlan {
         let claimed = file.claim()
-        guard claimed == .ok else { return claimed }
-
-        defer { file.release() }
-
+        guard claimed == .ok else { throw claimed }
         guard case .success(let plan) = ELFPlanner.plan(from: &file) else {
-            return .malformedELF
+            file.release()
+            throw .malformedELF
         }
-
-        return build(plan, &file)
-    }
-
-
-    /// Copies every byte of `plan` that comes from the file, a page at a time,
-    /// handing each page to `write` at the address it belongs at.
-    ///
-    /// `false` at the first read or write that fails, with whatever was copied
-    /// before it left where it landed: the task is discarded, not repaired.
-    public static func copy<Source: ELFByteSource>(
-        _ plan    : ELFLoadPlan,
-        from file : inout Source,
-        into write: (_ address: UInt64, _ bytes: UnsafeRawPointer, _ count: Int) -> Bool
-    ) -> Bool {
-
-        withUnsafeTemporaryAllocation(byteCount: chunk, alignment: 16) { buffer in
-            guard let page = buffer.baseAddress else { return false }
-
-            for index in 0..<plan.copyCount {
-                guard let copy = plan.copy(at: index) else { return false }
-
-                var offset: UInt64 = 0
-                while offset < copy.byteCount {
-                    let wanted = Int(min(copy.byteCount - offset, UInt64(chunk)))
-
-                    guard file.read(at: copy.fileOffset + offset, into: page, count: wanted),
-                          write(copy.virtualAddress + offset, UnsafeRawPointer(page), wanted)
-                    else { return false }
-
-                    offset += UInt64(wanted)
-                }
-            }
-            return true
-        }
+        return plan
     }
 }

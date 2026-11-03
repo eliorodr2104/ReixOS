@@ -7,459 +7,158 @@ import Testing
 import ReixABI
 @testable import ProcessServerCore
 
-/// A load against a file somebody else wants to change.
-///
-/// Every case needs two holders of one file, a loader and a writer, so the file
-/// sits on a pretend shelf with the claim table the file system server keeps
-/// (`FSLeases`) and the server's rule around it: a refusal is asked twice, with
-/// the dead holders swept in between.
 @Suite("ProcessServer program loading")
 struct ProgramLoadTests {
-
-    @Test("a write while a program loads is refused and the image is the version planned")
-    func writesDuringLoadAreRefused() {
-        let shelf    = ProgramShelf(patternedImage())
-        let original = shelf.bytes
-        var refusals: [FSStatus] = []
-
-        // At every read, from the first header byte, and at every page copied
-        // into the task, up to the last: a writer tries to change the program.
-        shelf.onRead = { shelf, _ in
-            refusals.append(shelf.write(0xEE, at: 24, by: ProgramShelf.writer))
-            refusals.append(shelf.write(0xEE, at: 0x1000, by: ProgramShelf.writer))
-        }
-
-        var file  = ShelfProgram(shelf)
-        var image = TaskImage()
-
-        let status = ProgramLoad.load(&file) { plan, claimed in
-            image.copy(plan, from: &claimed) {
-                refusals.append(shelf.write(0xEE, at: 0x3000, by: ProgramShelf.writer))
-            }
-        }
-
-        #expect(status == .ok)
-        #expect(!refusals.isEmpty)
-        #expect(refusals.allSatisfy { $0 == .busy })
-        #expect(shelf.bytes == original)
-
-        var planned = MemoryProgram(original)
-        guard case .success(let plan) = ELFPlanner.plan(from: &planned) else {
-            Issue.record("the fixture does not plan")
-            return
-        }
-        #expect((plan.copy(at: 2)?.byteCount ?? 0) > UInt64(2 * ProgramLoad.chunk))
-        #expect(image.matches(plan, in: original))
-        #expect(shelf.write(0xEE, at: 0x1000, by: ProgramShelf.writer) == .ok)
-    }
-
-
-    @Test("a remove while a program loads is refused")
-    func removeDuringLoadIsRefused() {
-        let shelf   = ProgramShelf(patternedImage())
-        var removed : FSStatus?
-
-        shelf.onRead = { shelf, index in
-            if index == 3 { removed = shelf.remove(by: ProgramShelf.writer) }
-        }
-
-        var file  = ShelfProgram(shelf)
-        var image = TaskImage()
-
-        let status = ProgramLoad.load(&file) { plan, claimed in
-            image.copy(plan, from: &claimed)
-        }
-
-        #expect(status == .ok)
-        #expect(removed == .busy)
-        #expect(shelf.generation != nil)
-    }
-
-
-    @Test("a file removed before the claim reaches nothing and is not read")
-    func removedBeforeClaimIsNotFound() {
+    @Test func removedBeforeClaimIsNotFound() {
         let shelf = ProgramShelf(patternedImage())
         #expect(shelf.remove(by: ProgramShelf.writer) == .ok)
-
-        var file  = ShelfProgram(shelf)
-        var built = false
-
-        let status = ProgramLoad.load(&file) { _, _ in
-            built = true
-            return .ok
-        }
-
-        #expect(status == .notFound)
-        #expect(!built)
+        var file = ShelfProgram(shelf)
+        #expect(throws: ProcessServerStatus.notFound) { try ProgramLoad.begin(&file) }
         #expect(shelf.reads == 0)
         #expect(shelf.releases == 0)
     }
 
-
-    @Test("a program a writer holds is refused busy and not read")
-    func claimedByWriterIsBusy() {
+    @Test func claimedByWriterIsBusy() {
         let shelf = ProgramShelf(patternedImage())
         #expect(shelf.lock(by: ProgramShelf.writer) == .ok)
-
-        var file  = ShelfProgram(shelf)
-        var built = false
-
-        let status = ProgramLoad.load(&file) { _, _ in
-            built = true
-            return .ok
-        }
-
-        #expect(status == .busy)
-        #expect(!built)
+        var file = ShelfProgram(shelf)
+        #expect(throws: ProcessServerStatus.busy) { try ProgramLoad.begin(&file) }
         #expect(shelf.reads == 0)
-
-        // Nothing let go on a claim this load never held: the writer keeps it.
         #expect(shelf.releases == 0)
         #expect(shelf.lock(by: ProgramShelf.loader) == .busy)
         #expect(shelf.write(0xEE, at: 0x1000, by: ProgramShelf.writer) == .ok)
     }
 
-
-    @Test("a busy claim is asked once and not waited out")
-    func busyIsNotRetried() {
+    @Test func busyIsNotRetried() {
         let shelf = ProgramShelf(patternedImage())
         #expect(shelf.lock(by: ProgramShelf.writer) == .ok)
-
         var file = ShelfProgram(shelf)
-        let status = ProgramLoad.load(&file) { _, _ in .ok }
-
-        #expect(status == .busy)
+        #expect(throws: ProcessServerStatus.busy) { try ProgramLoad.begin(&file) }
         #expect(shelf.claims == 1)
     }
 
-
-    // MARK: - Let go on every way out
-
-    @Test("a malformed image lets go of its claim")
-    func malformedLetsGo() {
+    @Test func malformedLetsGo() {
         var bytes = patternedImage()
-        bytes[1]  = 0
-
+        bytes[1] = 0
         let shelf = ProgramShelf(bytes)
-        var file  = ShelfProgram(shelf)
-        var built = false
-
-        let status = ProgramLoad.load(&file) { _, _ in
-            built = true
-            return .ok
-        }
-
-        #expect(status == .malformedELF)
-        #expect(!built)
+        var file = ShelfProgram(shelf)
+        #expect(throws: ProcessServerStatus.malformedELF) { try ProgramLoad.begin(&file) }
         #expect(shelf.releasedForTheWriter())
     }
 
-
-    @Test("a task that cannot be made lets go of the claim")
-    func taskFailureLetsGo() {
-        let shelf  = ProgramShelf(patternedImage())
-        var file   = ShelfProgram(shelf)
-        let status = ProgramLoad.load(&file) { _, _ in .taskFailure }
-
-        #expect(status == .taskFailure)
-        #expect(shelf.releasedForTheWriter())
-    }
-
-
-    @Test("a task write that fails part way lets go of the claim")
-    func copyWriteFailureLetsGo() {
-        let shelf = ProgramShelf(patternedImage())
-        var file  = ShelfProgram(shelf)
-        var pages = 0
-
-        let status = ProgramLoad.load(&file) { plan, claimed in
-            let copied = ProgramLoad.copy(plan, from: &claimed) { _, _, _ in
-                pages += 1
-                return pages < 2
-            }
-            return copied ? .ok : .taskFailure
-        }
-
-        #expect(status == .taskFailure)
-        #expect(pages == 2)
-        #expect(shelf.releasedForTheWriter())
-    }
-
-
-    @Test("a file read that fails part way lets go of the claim")
-    func copyReadFailureLetsGo() {
-        let shelf = ProgramShelf(patternedImage())
-        var file  = ShelfProgram(shelf)
-        var image = TaskImage()
-
-        let status = ProgramLoad.load(&file) { plan, claimed in
-            shelf.failReads = true
-            return image.copy(plan, from: &claimed)
-        }
-
-        #expect(status == .taskFailure)
-        #expect(shelf.releasedForTheWriter())
-    }
-
-
-    @Test("a refusal by ProcessServer under the claim lets go of it")
-    func refusalLetsGo() {
-        let shelf  = ProgramShelf(patternedImage())
-        var file   = ShelfProgram(shelf)
-        let status = ProgramLoad.load(&file) { _, _ in .unavailable }
-
-        #expect(status == .unavailable)
-        #expect(shelf.releasedForTheWriter())
-    }
-
-
-    @Test("a program that loads lets go of the claim")
-    func successLetsGo() {
-        let shelf = ProgramShelf(patternedImage())
-        var file  = ShelfProgram(shelf)
-        var image = TaskImage()
-
-        let status = ProgramLoad.load(&file) { plan, claimed in
-            image.copy(plan, from: &claimed)
-        }
-
-        #expect(status == .ok)
-        #expect(shelf.releasedForTheWriter())
-    }
-
-
-    /// The loader's claim is held by its identity, and a dead identity's claims
-    /// go in the sweep a refusal triggers, which is the server's own rule.
-    @Test("a loader that dies holding the claim does not hold it for ever")
-    func deadLoaderIsSwept() {
+    @Test func deadLoaderIsSwept() throws {
         let shelf = ProgramShelf(patternedImage())
         var before: FSStatus?
-        var after : FSStatus?
-
+        var after: FSStatus?
         shelf.onRead = { shelf, index in
             guard index == 3 else { return }
             before = shelf.write(0xEE, at: 0x1000, by: ProgramShelf.writer)
             shelf.dead.insert(ProgramShelf.loader)
             after = shelf.write(0xEE, at: 0x1000, by: ProgramShelf.writer)
         }
-
         var file = ShelfProgram(shelf)
-        _ = ProgramLoad.load(&file) { plan, claimed in
-            var image = TaskImage()
-            return image.copy(plan, from: &claimed)
-        }
-
+        let plan = try ProgramLoad.begin(&file)
+        var image = TaskImage()
+        #expect(image.copy(plan, from: &file) == .ok)
+        file.release()
         #expect(before == .busy)
         #expect(after == .ok)
     }
 
-
-    @Test("the file system's answer to a claim becomes the launch's")
-    func claimAnswers() {
+    @Test func claimAnswers() {
         #expect(ProcessServerStatus(claiming: .ok) == .ok)
         #expect(ProcessServerStatus(claiming: .busy) == .busy)
         #expect(ProcessServerStatus(claiming: .notFound) == .notFound)
-
-        // A view without the right, or a server that cannot be reached, is a
-        // file system this launch cannot use, never a program that is not there.
         #expect(ProcessServerStatus(claiming: .readOnly) == .unavailable)
         #expect(ProcessServerStatus(claiming: .unreachable) == .unavailable)
     }
-}
 
-
-// MARK: - The shelf
-
-/// One program file, its incarnation, and the claims on it.
-private final class ProgramShelf {
-    static let object: UInt32 = 12
-    static let loader: UInt32 = 1
-    static let writer: UInt32 = 2
-
-    var bytes     : [UInt8]
-    var generation: UInt32? = 7
-    var leases    = FSLeases()
-    var dead      : Set<UInt32> = []
-    var failReads = false
-
-    var claims   = 0
-    var releases = 0
-    var reads    = 0
-
-    /// Called before each of the loader's reads, with how many came before it.
-    var onRead: ((ProgramShelf, Int) -> Void)?
-
-    init(_ bytes: [UInt8]) {
-        self.bytes = bytes
-    }
-
-    /// The server's `lock`: nothing for a file that is gone, and a refusal only
-    /// after the dead holders are swept.
-    func lock(by holder: UInt32) -> FSStatus {
-        guard let generation else { return .notFound }
-
-        if leases.claim(Self.object, generation: generation, for: holder) { return .ok }
-        sweep()
-        return leases.claim(Self.object, generation: generation, for: holder) ? .ok : .busy
-    }
-
-    func unlock(by holder: UInt32) {
-        leases.release(Self.object, from: holder)
-    }
-
-    func write(_ value: UInt8, at offset: Int, by holder: UInt32) -> FSStatus {
-        guard generation != nil else { return .notFound }
-        guard mayChange(by: holder) else { return .busy }
-
-        bytes[offset] = value
-        return .ok
-    }
-
-    func remove(by holder: UInt32) -> FSStatus {
-        guard generation != nil else { return .notFound }
-        guard mayChange(by: holder) else { return .busy }
-
-        generation = nil
-        return .ok
-    }
-
-    /// Let go exactly once, and the writer can change the file again.
-    func releasedForTheWriter() -> Bool {
-        releases == 1 && write(0xEE, at: 0x1000, by: Self.writer) == .ok
-    }
-
-    private func mayChange(by holder: UInt32) -> Bool {
-        if leases.mayChange(Self.object, generation: generation, by: holder) { return true }
-        sweep()
-        return leases.mayChange(Self.object, generation: generation, by: holder)
-    }
-
-    private func sweep() {
-        for holder in dead { leases.forget(everythingHeldBy: holder) }
-    }
-}
-
-
-/// The loader's view of the shelf.
-private struct ShelfProgram: ProgramFile {
-    let shelf: ProgramShelf
-    private(set) var size: UInt64 = 0
-
-    init(_ shelf: ProgramShelf) {
-        self.shelf = shelf
-    }
-
-    mutating func claim() -> ProcessServerStatus {
-        shelf.claims += 1
-
-        let claimed = ProcessServerStatus(claiming: shelf.lock(by: ProgramShelf.loader))
-        guard claimed == .ok else { return claimed }
-
-        size = UInt64(shelf.bytes.count)
-        return .ok
-    }
-
-    mutating func release() {
-        shelf.releases += 1
-        shelf.unlock(by: ProgramShelf.loader)
-    }
-
-    mutating func read(
-        at offset       : UInt64,
-        into destination: UnsafeMutableRawPointer,
-        count           : Int
-    ) -> Bool {
-        shelf.onRead?(shelf, shelf.reads)
-        shelf.reads += 1
-
-        guard !shelf.failReads,
-              shelf.generation != nil,
-              count >= 0,
-              offset <= UInt64(shelf.bytes.count),
-              count <= shelf.bytes.count - Int(offset)
-        else { return false }
-
-        shelf.bytes.withUnsafeBytes { raw in
-            destination.copyMemory(from: raw.baseAddress! + Int(offset), byteCount: count)
-        }
-        return true
-    }
-}
-
-
-/// The bytes of a planned image as it would sit in a task, by address.
-private struct TaskImage {
-    var bytes: [UInt64: UInt8] = [:]
-
-    /// Copies `plan` in, running `eachPage` after every page lands.
-    mutating func copy(
-        _ plan     : ELFLoadPlan,
-        from file  : inout ShelfProgram,
-        eachPage   : () -> Void = {}
-    ) -> ProcessServerStatus {
-        let copied = ProgramLoad.copy(plan, from: &file) { address, page, count in
-            for index in 0..<count {
-                bytes[address + UInt64(index)] = page.load(fromByteOffset: index, as: UInt8.self)
+    @Test func copyMovesOnePagePerStep() throws {
+        let shelf = ProgramShelf(patternedImage())
+        var file = ShelfProgram(shelf)
+        let plan = try ProgramLoad.begin(&file)
+        var copy = ProgramCopy()
+        var steps = 0
+        var expected = 0
+        for i in 0..<plan.copyCount { expected += Int((plan.copy(at: i)!.byteCount + 4095) / 4096) }
+        while !copy.isDone(plan) && steps < 1000 {
+            let reads = shelf.reads
+            var writes = 0
+            let moved = copy.step(plan, from: &file) { _, _, count in
+                #expect(count > 0 && count <= 4096)
+                writes += 1
+                return true
             }
-            eachPage()
-            return true
+            #expect(moved)
+            #expect(shelf.reads == reads + 1)
+            #expect(writes == 1)
+            steps += 1
         }
-        return copied ? .ok : .taskFailure
+        #expect(copy.isDone(plan))
+        #expect(steps == expected)
+        let reads = shelf.reads
+        #expect(copy.step(plan, from: &file) { _, _, _ in Issue.record("wrote after done"); return true })
+        #expect(shelf.reads == reads)
+        file.release()
     }
 
-    /// Whether every byte `plan` copies holds what `file` had at its offset.
-    func matches(_ plan: ELFLoadPlan, in file: [UInt8]) -> Bool {
-        var total = 0
-        for index in 0..<plan.copyCount {
-            guard let copy = plan.copy(at: index) else { return false }
-            for byte in 0..<Int(copy.byteCount) {
-                let at = copy.virtualAddress + UInt64(byte)
-                guard bytes[at] == file[Int(copy.fileOffset) + byte] else { return false }
-                total += 1
-            }
+    @Test(arguments: [0, 1, 4096, 4097])
+    func copyBoundaries(_ count: Int) {
+        var copies = InlineArray<16, ELFCopy?>(repeating: nil)
+        copies[0] = ELFCopy(fileOffset: 0, virtualAddress: 0x10000, byteCount: 0)
+        copies[1] = ELFCopy(fileOffset: 0, virtualAddress: 0x20000, byteCount: UInt64(count))
+        let regions = InlineArray<31, ELFLoadRegion?>(repeating: nil)
+        let plan = ELFLoadPlan(entry: 0, programBreak: 0, imagePages: 0,
+            regions: regions, regionCount: 0, copies: copies, copyCount: 2)
+        let empty = ELFLoadPlan(entry: 0, programBreak: 0, imagePages: 0,
+            regions: regions, regionCount: 0, copies: copies, copyCount: 0)
+        var source = MemoryProgram([UInt8](repeating: 7, count: 8192))
+        var copy = ProgramCopy()
+        #expect(copy.isDone(empty))
+        let index = copy.index, offset = copy.offset
+        #expect(copy.isDone(plan) == (count == 0))
+        #expect(copy.index == index && copy.offset == offset)
+        var steps = 0
+        while !copy.isDone(plan) && steps < 1000 {
+            #expect(copy.step(plan, from: &source) { _, _, bytes in bytes > 0 && bytes <= 4096 })
+            steps += 1
         }
-        return total > 0 && total == bytes.count
-    }
-}
-
-
-/// A planner source over plain bytes, for the plan a test compares against.
-private struct MemoryProgram: ELFByteSource {
-    let bytes: [UInt8]
-    var size : UInt64 { UInt64(bytes.count) }
-
-    init(_ bytes: [UInt8]) {
-        self.bytes = bytes
+        #expect(copy.isDone(plan))
+        #expect(steps == (count + 4095) / 4096)
     }
 
-    mutating func read(
-        at offset       : UInt64,
-        into destination: UnsafeMutableRawPointer,
-        count           : Int
-    ) -> Bool {
-        guard offset <= UInt64(bytes.count), count <= bytes.count - Int(offset) else { return false }
-
-        bytes.withUnsafeBytes { raw in
-            destination.copyMemory(from: raw.baseAddress! + Int(offset), byteCount: count)
-        }
-        return true
-    }
-}
-
-
-/// The planner's valid image with its data segment grown past two pages and
-/// every segment byte set, so each page of a copy lands somewhere it can be told
-/// from an untouched byte, from its neighbour, and from a writer's 0xEE.
-private func patternedImage() -> [UInt8] {
-    let data  = 0x2100
-    var bytes = validImage()
-    bytes += [UInt8](repeating: 0, count: 0x3000 + data - bytes.count)
-
-    // The third program header's file and memory sizes.
-    for (offset, value) in [(64 + 2 * 56 + 32, data), (64 + 2 * 56 + 40, data)] {
-        for index in 0..<8 { bytes[offset + index] = UInt8(truncatingIfNeeded: value >> (index * 8)) }
+    @Test func copyReadFailureStops() throws {
+        let shelf = ProgramShelf(patternedImage())
+        var file = ShelfProgram(shelf)
+        let plan = try ProgramLoad.begin(&file)
+        shelf.failReads = true
+        var copy = ProgramCopy()
+        #expect(!copy.step(plan, from: &file) { _, _, _ in Issue.record("wrote a failed read"); return true })
+        #expect(copy.index == 0 && copy.offset == 0)
+        file.release()
     }
 
-    for offset in 0x1000..<bytes.count { bytes[offset] = UInt8(truncatingIfNeeded: offset % 251) }
-    return bytes
+    @Test func copyWriteFailureStops() throws {
+        let shelf = ProgramShelf(patternedImage())
+        var file = ShelfProgram(shelf)
+        let plan = try ProgramLoad.begin(&file)
+        var copy = ProgramCopy()
+        #expect(copy.step(plan, from: &file) { _, _, _ in true })
+        let index = copy.index, offset = copy.offset
+        #expect(!copy.step(plan, from: &file) { _, _, _ in false })
+        #expect(copy.index == index && copy.offset == offset)
+        file.release()
+    }
+
+    @Test func copiedImageMatchesPlan() throws {
+        let shelf = ProgramShelf(patternedImage())
+        let original = shelf.bytes
+        var file = ShelfProgram(shelf)
+        let plan = try ProgramLoad.begin(&file)
+        var image = TaskImage()
+        #expect(image.copy(plan, from: &file) == .ok)
+        #expect(image.matches(plan, in: original))
+        file.release()
+        #expect(shelf.releasedForTheWriter())
+    }
 }
