@@ -5,54 +5,52 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 28/06/2026.
 //
 
+import ReixABI
+
+// Only a program image exports these: a host build of RawBytes at -Onone calls
+// memcpy itself, so the host harnesses keep the platform's.
+#if hasFeature(Embedded)
 @_cdecl("memcpy")
-@_optimize(none)
 public func memcpy(
     _ dst: UnsafeMutableRawPointer?,
     _ src: UnsafeRawPointer?,
     _ n  : UInt
 ) -> UnsafeMutableRawPointer? {
-    guard let d = dst?.assumingMemoryBound(to: UInt8.self),
-          let s = src?.assumingMemoryBound(to: UInt8.self) else { return dst }
+    guard let dst, let src else { return dst }
 
-    var i: Int = 0
-    while i < n { d[i] = s[i]; i &+= 1 }
+    RawBytes.copy(to: dst, from: src, count: Int(bitPattern: n))
     return dst
 }
 
 @_cdecl("memset")
-@_optimize(none)
 public func memset(
     _ s: UnsafeMutableRawPointer?,
     _ c: Int32,
     _ n: UInt
 ) -> UnsafeMutableRawPointer? {
-    guard let p = s?.assumingMemoryBound(to: UInt8.self) else { return s }
+    guard let s else { return s }
 
-    let byte = UInt8(truncatingIfNeeded: c)
-    var i: Int = 0
-    while i < n { p[i] = byte; i &+= 1 }
+    RawBytes.fill(s, with: UInt8(truncatingIfNeeded: c), count: Int(bitPattern: n))
     return s
 }
 
+/// Forward whenever the destination does not start inside the source.
 @_cdecl("memmove")
-@_optimize(none)
 public func memmove(
     _ dst: UnsafeMutableRawPointer?,
     _ src: UnsafeRawPointer?,
     _ n  : UInt
 ) -> UnsafeMutableRawPointer? {
-    guard let d = dst?.assumingMemoryBound(to: UInt8.self),
-          let s = src?.assumingMemoryBound(to: UInt8.self) else { return dst }
+    guard let dst, let src else { return dst }
 
-    if UInt(bitPattern: d) < UInt(bitPattern: s) {
-        var i: Int = 0
-        while i < n { d[i] = s[i]; i &+= 1 }
-    
-    } else if UInt(bitPattern: d) > UInt(bitPattern: s) {
-        var i: Int = Int(n)
-        while i > 0 { i &-= 1; d[i] = s[i] }
+    let distance = UInt(bitPattern: dst) &- UInt(bitPattern: src)
+    guard distance != 0 else { return dst }
+
+    if distance >= n {
+        RawBytes.copy(to: dst, from: src, count: Int(bitPattern: n))
+    } else {
+        RawBytes.copyBackward(to: dst, from: src, count: Int(bitPattern: n))
     }
-    
     return dst
 }
+#endif
