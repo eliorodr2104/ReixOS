@@ -409,6 +409,7 @@ def main() -> int:
     environment.update(
         SWIFT=swift,
         FREESTANDING="1",
+        BOOT_MODE="diagnostic",
         CLANG_MODULE_CACHE_PATH=str(evidence / "module-cache-clang"),
         SWIFTPM_MODULECACHE_OVERRIDE=str(evidence / "module-cache-swift"),
     )
@@ -420,8 +421,12 @@ def main() -> int:
     if any(mode != "benchmark" for mode in selected_modes):
         run_logged(
             [
+                # Swift Build cannot build this triple from macOS; the Makefile `app`
+                # target says why and when `native` can go.
                 swift,
                 "build",
+                "--build-system",
+                "native",
                 "--disable-sandbox",
                 "--triple",
                 TRIPLE,
@@ -436,8 +441,12 @@ def main() -> int:
     if "benchmark" in selected_modes:
         run_logged(
             [
+                # Swift Build cannot build this triple from macOS; the Makefile `app`
+                # target says why and when `native` can go.
                 swift,
                 "build",
+                "--build-system",
+                "native",
                 "--disable-sandbox",
                 "--triple",
                 TRIPLE,
