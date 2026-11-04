@@ -910,6 +910,25 @@ post_vector_primitives() {
     return 0
 }
 
+# post=aggregate-copies: no syscall, IPC or exception path copies a capability
+# table, trap frame or address-space manager to read it; the script says how.
+post_aggregate_copies() {
+    pac_out=$2
+
+    if [ ! -f "$KERNEL_ELF" ]; then
+        printf 'no %s to read the aggregate copies out of' "$KERNEL_ELF"
+        return 1
+    fi
+
+    if ! python3 scripts/check-aggregate-copies.py "$OBJDUMP" "$KERNEL_ELF" \
+            > "$pac_out" 2>&1; then
+        printf 'aggregate copies: %s' "$(tail -n 1 "$pac_out")"
+        return 1
+    fi
+
+    return 0
+}
+
 # post=terminal-baseline: decode the final interaction trace and bind it to the
 # baseline lines Shell wrote before dumping. The report is host-only; clearing
 # FREESTANDING keeps it out of the bare-metal package graph.
@@ -1047,6 +1066,7 @@ run_post() {
             tlb-scope)    post_tlb_scope "$2" "$rp_out" || return 1 ;;
             icache-batch) post_icache_batch "$2" "$rp_out" || return 1 ;;
             vector-primitives) post_vector_primitives "$2" "$rp_out" || return 1 ;;
+            aggregate-copies) post_aggregate_copies "$2" "$rp_out" || return 1 ;;
             queue-depth)  post_queue_depth "$2" "$rp_out" || return 1 ;;
             shell-closed) post_shell_closed "$2" "$rp_out" || return 1 ;;
             terminal-baseline)  post_terminal_baseline "$2" "$rp_out" || return 1 ;;
