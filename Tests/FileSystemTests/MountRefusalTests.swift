@@ -23,6 +23,12 @@ func isDurabilityUnknown(_ found: FSMount) -> Bool {
 
 func isUnrecognised(_ found: FSMount) -> Bool { if case .unrecognised = found { return true }; return false }
 
+private func fnv(_ bytes: [UInt8]) -> UInt32 {
+    var sum: UInt32 = 0x811C_9DC5
+    for byte in bytes { sum = (sum ^ UInt32(byte)) &* 0x0100_0193 }
+    return sum
+}
+
 
 /// What mounting does to a disk it does not recognise, which used to be:
 /// erase it.
@@ -315,6 +321,94 @@ struct MountRefusalTests {
         #expect(disk.writes == 0)
         #expect(disk.block(FSLayout.superblockA) == old)
         #expect(disk.block(FSLayout.superblockB) == old)
+    }
+
+
+    // MARK: - An earlier build's disk
+
+    @Test("a disk whole only under FNV-1a is refused as unrecognised, untouched")
+    func fnvDiskIsUnrecognised() {
+        withFormatted { disk, scratch in
+            for copy in [FSLayout.superblockA, FSLayout.superblockB] {
+                let bytes = disk.block(copy)
+                disk.poke(
+                    fnv(Array(bytes[..<FSSuperblockField.checksum]) + [0, 0, 0, 0]),
+                    at: Int(copy) * Int(FSLayout.blockSize) + FSSuperblockField.checksum
+                )
+            }
+            let a       = disk.block(FSLayout.superblockA)
+            let b       = disk.block(FSLayout.superblockB)
+            let before  = disk.writes
+            let attempt = FileSystem.mount(disk, scratch: scratch)
+
+            #expect(attempt.disk == nil)
+            #expect(isUnrecognised(attempt.found))
+            #expect(disk.writes == before)
+            #expect(disk.block(FSLayout.superblockA) == a)
+            #expect(disk.block(FSLayout.superblockB) == b)
+        }
+    }
+
+    @Test("an FNV-1a superblock beside a blank copy is unrecognised, untouched")
+    func fnvBesideBlankIsUnrecognised() {
+        withFormatted { disk, scratch in
+            let bytes = disk.block(FSLayout.superblockA)
+            disk.poke(fnv(Array(bytes[..<FSSuperblockField.checksum]) + [0, 0, 0, 0]), at: FSSuperblockField.checksum)
+            disk.put([UInt8](repeating: 0, count: Int(FSLayout.blockSize)), block: FSLayout.superblockB)
+            let a       = disk.block(FSLayout.superblockA)
+            let b       = disk.block(FSLayout.superblockB)
+            let before  = disk.writes
+            let attempt = FileSystem.mount(disk, scratch: scratch)
+
+            #expect(attempt.disk == nil)
+            #expect(isUnrecognised(attempt.found))
+            #expect(disk.writes == before)
+            #expect(disk.block(FSLayout.superblockA) == a)
+            #expect(disk.block(FSLayout.superblockB) == b)
+        }
+    }
+
+    @Test("a superblock whole under neither checksum is corrupt, untouched")
+    func neitherChecksumIsCorrupt() {
+        withFormatted { disk, scratch in
+            for copy in [FSLayout.superblockA, FSLayout.superblockB] {
+                let bytes = disk.block(copy)
+                let wrong = fnv(Array(bytes[..<FSSuperblockField.checksum]) + [0, 0, 0, 0]) ^ 1
+                let crc = bytes.withUnsafeBytes {
+                    FSChecksum.over($0.baseAddress!, count: FSSuperblockField.width, zeroing: FSSuperblockField.checksum)
+                }
+                #expect(wrong != crc)
+                disk.poke(wrong, at: Int(copy) * Int(FSLayout.blockSize) + FSSuperblockField.checksum)
+            }
+            let a       = disk.block(FSLayout.superblockA)
+            let b       = disk.block(FSLayout.superblockB)
+            let before  = disk.writes
+            let attempt = FileSystem.mount(disk, scratch: scratch)
+
+            #expect(attempt.disk == nil)
+            #expect(isCorrupt(attempt.found))
+            #expect(disk.writes == before)
+            #expect(disk.block(FSLayout.superblockA) == a)
+            #expect(disk.block(FSLayout.superblockB) == b)
+        }
+    }
+
+    @Test("every superblock bit outside the layout bytes is corrupt when flipped")
+    func bitFlipsAreCorrupt() {
+        withFormatted { disk, _ in
+            guard let plan = FSLayout.Plan(sectorCount: disk.sectorCount, sectorSize: disk.sectorSize)
+            else { Issue.record("fixture plan"); return }
+            var bytes = disk.block(FSLayout.superblockA)
+            for byte in 0..<FSSuperblockField.width where byte != 6 && byte != 7 {
+                for bit in 0..<8 {
+                    bytes[byte] ^= UInt8(1) << bit
+                    bytes.withUnsafeBytes {
+                        #expect(FSSuperblock.verdict(of: $0.baseAddress!, against: plan) == .corrupt)
+                    }
+                    bytes[byte] ^= UInt8(1) << bit
+                }
+            }
+        }
     }
 
 

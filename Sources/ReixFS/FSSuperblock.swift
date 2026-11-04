@@ -196,7 +196,9 @@ struct FSSuperblock {
         /// Every byte of the block is zero.
         case blank
 
-        /// This system's name, in a layout this build does not read.
+        /// This system's name, in a layout this build does not read: other bytes
+        /// after `REIXFS`, or a superblock whole only under an earlier build's
+        /// checksum.
         case unrecognised
 
         /// Anything else: not this format, torn, or describing another disk.
@@ -231,7 +233,10 @@ struct FSSuperblock {
 
         let stored = base.loadUnaligned(fromByteOffset: FSSuperblockField.checksum, as: UInt32.self)
         guard stored == FSChecksum.over(base, count: FSSuperblockField.width, zeroing: FSSuperblockField.checksum)
-        else { return .corrupt }
+        else {
+            // Whole under the checksum earlier builds wrote: their disk, not damage.
+            return stored == earlierChecksum(of: base) ? .unrecognised : .corrupt
+        }
 
         // This disk's size with its regions elsewhere is another layout, not
         // damage; anything else that does not describe this disk is damage.
@@ -242,6 +247,24 @@ struct FSSuperblock {
         }
 
         return .whole
+    }
+
+
+    /// What every build before CRC32C checksummed a superblock with: FNV-1a over
+    /// the same bytes, the checksum field read as zero.
+    ///
+    /// Asked only after this build's checksum has failed, and only to say what
+    /// was found. A superblock that adds up under it is an earlier build's whole
+    /// one, which is `unrecognised` and not damage; nothing else of that disk
+    /// is read.
+    private static func earlierChecksum(of base: UnsafeRawPointer) -> UInt32 {
+        var sum: UInt32 = 0x811C_9DC5
+        for index in 0..<FSSuperblockField.width {
+            let byte = index >= FSSuperblockField.checksum
+                ? UInt8(0) : base.loadUnaligned(fromByteOffset: index, as: UInt8.self)
+            sum = (sum ^ UInt32(byte)) &* 0x0100_0193
+        }
+        return sum
     }
 
 
