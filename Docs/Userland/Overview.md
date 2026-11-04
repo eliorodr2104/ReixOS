@@ -10,14 +10,14 @@ The SDK is not a separately scheduled server. `ReixABI` supplies shared contract
 
 | Module | Depends on | Purpose |
 | --- | --- | --- |
-| `ReixABI` | No project module | Shared numbers, layouts and protocol values. |
+| `ReixABI` | No project module | Shared numbers, layouts, protocol values and portable `RawBytes` memory primitives. |
 | `Reix` | `ReixABI` | Syscalls, memory/runtime support, IPC, clients and service boot helpers. |
 | `ReixFS` | `ReixABI` | Filesystem algorithm over a generic `BlockDevice`. |
-| `ProcessServerCore` | `ReixABI` | Bounded ELF planning and supported program profiles. |
+| `ProcessServerCore` | `ReixABI` | Bounded ELF planning/copying, program profiles and resumable launch supervision. |
 | `ShellLanguage` | `ReixABI` | Parsing, values, semantic analysis, completion and editing logic. |
 | Userland programs | `Reix`, plus their domain modules | Service loops and applications. |
 
-The freestanding build enables Embedded Swift and supplies assembly/runtime boundaries through the build plugin. See [Package.swift](../../Package.swift) for actual target dependencies.
+The freestanding build enables Embedded Swift and supplies assembly/runtime boundaries through the `reix` CLI in `Tools/reix`. See [Package.swift](../../Package.swift) for actual target dependencies.
 
 ## SDK blocks
 
@@ -30,6 +30,8 @@ The freestanding build enables Embedded Swift and supplies assembly/runtime boun
 | [Terminal surfaces](../../Sources/Reix/TextSurface), [input](../../Sources/Reix/Input), [serial](../../Sources/Reix/Serial) | Shared rings and client state | Producer/consumer roles, notification and presentation ownership. |
 | [Profiling](../../Sources/Reix/Profile) and [time](../../Sources/Reix/Time) | Authority-scoped observation and clock wrappers | Units, authority and operation-specific results. |
 | Runtime, formatting and memory helpers | Freestanding support functions | Local implementation support, not additional kernel services. |
+
+The SDK's `memcpy`, `memset` and `memmove` use `ReixABI.RawBytes`, shared with the kernel. Its portable Swift SIMD paths keep accesses naturally aligned, including before the MMU is enabled. Only the kernel adds a `dc zva` zero-fill path; userland uses the shared fill. See [memory primitives](../Kernel/Memory.md#memory-primitives).
 
 ## Resource-bearing values
 

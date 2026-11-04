@@ -44,13 +44,17 @@ Timed receive uses `x1` as its input timeout; the delivered tag replaces it on o
 | `send` | `handle: UInt32`, `message: Message`, optional grant and `CapRights` | `IPCStatus` | Sends or waits for a receiver. |
 | `receive` | `handle: UInt32` | `ReceivedMessage` | Message plus delivery status, sender, badge and optional grant. |
 | `receive` with timeout | `handle: UInt32`, `timeout: UInt32` ticks | `ReceivedMessage?` | The wrapper returns a value only for `.ok`; other outcomes become `nil`. |
+| `tryReceive` | `handle: UInt32` | `ReceivedMessage?` | Returns `nil` only for `wouldBlock`; otherwise preserves the actual status, using `invalidMessage` for an unknown raw value. |
+| `reply` | `message: Message`, optional grant/rights, `to: UInt32 = 0` | `IPCStatus` | Answers the named request identity; zero selects the current caller. |
 | `call` | `handle: UInt32`, `message: Message` | `Result<ReceivedMessage, IPCStatus>` | Waits for a reply; delivered outcomes are successful values. |
 | `ReceivedMessage.takeGrant()` | None | `UInt32?` | Returns and clears the wrapper's grant field. It does not drop the capability. |
 | `capDrop` | Handle `UInt32` | `Bool` | Releases the process's capability reference. |
 
 `ReceivedMessage` stores `message`, `status`, `identity: UInt32`, `session: UInt64` and `grantedCap: UInt32?`. Consumers that take a grant become responsible for its subsequent use or release. Copying this value is not an automatic kernel reference-count operation.
 
-Some convenience wrappers discard raw status distinctions: the current `replyRecv` and `tryReceive` implementations do not preserve every error in the returned wrapper. Their source is authoritative when a caller needs exact outcomes.
+`tryReceive` returning a value does not by itself mean delivery: inspect its status or `arrived` before reading a message or taking a grant. `replyRecv` still discards the raw syscall status in its returned wrapper.
+
+A server holding several requests must retain each `ReceivedMessage.identity` and pass it to `reply(to:)`. A named identity without a waiting call returns `noReply`; it is never redirected to a different caller. ProcessServer uses this for its interleaved launches.
 
 ## Shared memory and interrupt notifications
 

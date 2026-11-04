@@ -16,6 +16,16 @@ flowchart LR
     BUDDY --> RAM[RAM frames]
 ```
 
+## Memory primitives
+
+[`RawBytes`](../../Sources/ReixABI/RawBytes.swift) supplies `fill`, forward `copy` and overlapping `copyBackward` in portable Swift. Kernel and userland `memcpy`, `memset` and `memmove` share it. All accesses are naturally aligned: 16-byte SIMD lanes when both copy addresses agree modulo 16, 8-byte lanes when they agree modulo 8, and pairs of byte accesses otherwise. Short and ragged ends remain in bounds. This alignment is required while boot still treats RAM as Device memory with the MMU disabled.
+
+Kernel exceptions save the full FP/SIMD state before entering Swift, so vector memory operations use the existing context contract. Trap-frame copies use the same forward-copy primitive. `scripts/test-fpsimd-context.py` checks the context oracle, negative controls and emergency stack path in an isolated QEMU build.
+
+Only kernel zero fills add an architectural fast path. `AArch64MMU.loadCacheType` reads `DCZID_EL0` once at boot with the cache policy. Zeroing four cache blocks or more can use `dc zva` over complete blocks, with `RawBytes.fill` on the edges, when the reported block is 16–2048 bytes and DZP permits it. Every call also checks that the MMU is enabled; otherwise it falls back to the shared fill. Userland has no `dc zva` or DCZID read.
+
+The `vector-primitives` post-check reads the kernel and every linked program ELF: no recursive memory primitive or indirect call beneath it, vector paths present, and architectural zeroing confined to the kernel's `zero_blocks` and boot-only `read_dczid`. The primitives keep the image's size optimization; they do not request `@_optimize(speed)`.
+
 ## Physical frames
 
 `PhysicalPageManager<BuddyAllocator>` manages RAM frames. It reserves boot-owned ranges, maintains one `FrameInfo` record per 4 KiB frame and delegates free-block allocation to the buddy allocator.
@@ -181,13 +191,15 @@ Code written through the kernel's cached alias must reach the instruction side b
 | `stageInstructions`, per range | For each executable page installed or made executable, and for every byte the ELF loader copies into an executable segment | `dc civac` on Cortex-A53 r0p0 through r0p2, `dc cvau` on other cores, unless `IDC` says no clean is needed; on a PIPT instruction cache without `DIC`, also `ic ivau` per line after a `dsb ish`. |
 | `completeInstructionPublication`, per batch | Once | One `ic ialluis` between two `dsb ish` and before an `isb` when the cache needs invalidation and cannot be reached by address; only the `dsb ish` and `isb` otherwise. |
 
-[AArch64MMU.loadCacheType](../../Sources/ReixKernel/Arch/aarch64/MMU/AArch64MMU.swift#L105) matches the CPU model and variant/revision in MIDR for A53 errata 819472, 826319, 827319 and 824069. Its separate clean-and-invalidate routine leaves the wait to the existing invalidation or batch completion; no barrier moves and no code is patched at runtime.
+[AArch64MMU.loadCacheType](../../Sources/ReixKernel/Arch/aarch64/MMU/AArch64MMU.swift) matches the CPU model and variant/revision in MIDR for A53 errata 819472, 826319, 827319 and 824069. Its separate clean-and-invalidate routine leaves the wait to the existing invalidation or batch completion; no barrier moves and no code is patched at runtime.
 
 A clone sharing unchanged executable frames reuses their completed publication on VIPT and PIPT caches, both for the child install and the parent's write-permission downgrade. AIVIVT, the reserved cache encoding and a cache type not yet loaded take the conservative publication path. Fresh, copied and newly executable pages still publish, including a later executable COW fault. Clone completes only a batch that staged instructions, also on failure, and always invalidates the parent's ASID.
 
 A live address space publishes one page at a time, before the descriptor is written. A batch may leave a descriptor standing before its completion has run, so batching is allowed only while no thread of the space can run: the seal of a task still `.configuring`, the kernel's ELF loader before the process exists, and the clone before the child is scheduled.
 
 The linked image is checked after the build by the `pte-bbm`, `pte-prune`, `tlb-scope` and `icache-batch` post-checks in `scripts/scenarios.sh`: no by-address invalidation across every ASID, `tlbi vmalle1is` only in `flush_tlb` called by the VMM initializer, `ic ialluis` only in the completion routine, and `CTR_EL0` and `MIDR_EL1` read only through the boot path. The checks confine `dc cvau` to the ordinary publication clean and `dc civac` to the early-A53 workaround and DMA clean, preserve the DMA `dsb sy`, and reject `dc cvac` or `dc cvap` sites. QEMU ignores the ASID of a by-address invalidation and keeps no instruction cache, so a boot cannot show a wrong tag or a missing publication. The host tests record each maintenance operation with its operand and assert the sequence. `scripts/test-tlb-maintenance.py` boots mutant images in QEMU to show that a missing leaf invalidation or a missing clone invalidation is observable as a stale access.
+
+The `aggregate-copies` post-check also reads the kernel's syscall, IPC, exception and related lookup paths. It rejects constant `memcpy`/`memmove` copies of 256 bytes or more and eight or more q-register stores, follows outlined helpers and requires every checked symbol pattern to match. Accessors, initializers and the intentional capability-table clone are exempt. Addressable `mutating` readers and trap-frame pointers avoid whole-aggregate temporaries; see [IPC](IPC.md). Context switching still copies saved trap frames; this check does not remove that work.
 
 ### Main interfaces
 

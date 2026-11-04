@@ -8,7 +8,7 @@ Service protocols define what a receiver does with a message. Their operation la
 
 | Contract | Carries | Responsibility |
 | --- | --- | --- |
-| [ProcessServer](../../Sources/ReixABI/ProcessServer) | Launch name, status, semantic environment bindings | Application construction and bootstrap handshake. Statuses include `busy` for a program file somebody else holds. |
+| [ProcessServer](../../Sources/ReixABI/ProcessServer) | Launch name, status, semantic environment bindings | Application construction and bootstrap handshake. Statuses include `busy` for a claimed program file or duplicate pending requester, and `timedOut` for an expired launch. |
 | [Block](../../Sources/ReixABI/Block) | Sector ranges, queue slots, geometry, durability and completion | Raw block-device service. |
 | [FileSystem](../../Sources/ReixABI/FileSystem) | Object IDs, names, rights, offsets, metadata and statuses | Capability-scoped persistent storage. |
 | [NameServer](../../Sources/ReixABI/NameServer) | Registration and lookup messages | Resolve explicitly published service endpoints. |
@@ -22,6 +22,23 @@ Service protocols define what a receiver does with a message. Their operation la
 ## Application bootstrap
 
 `ProcessLaunchRequest` carries at most **12 name bytes**. Its launch operation is `0x720`; the payload uses one word for length and three words for the bytes. The current launcher also checks `ProgramProfile`; a syntactically valid name is not permission to launch any arbitrary file.
+
+`ProcessServerStatus` is returned in word 0 of a one-word launch response:
+
+| Value | Status | Meaning |
+| --- | --- | --- |
+| 0 | `ok` | The child reached `Ready`; the response grants an attenuated job capability. |
+| 1 | `badRequest` | Invalid name/profile, sender or unexpected grant. |
+| 2 | `notFound` | The program file cannot be opened or no longer exists. |
+| 3 | `malformedELF` | The claimed program has no valid supported ELF plan. |
+| 4 | `capacity` | Four launches are already pending, or eight pending/supervised jobs are reserved. |
+| 5 | `taskFailure` | Task construction or copying failed. |
+| 6 | `bootstrapFailure` | The environment exchange failed, including a child dying during bootstrap. |
+| 7 | `unavailable` | Required bindings, filesystem access or a usable deadline are unavailable. |
+| 8 | `busy` | The program file is claimed by another client, or this sender identity already has a pending launch. |
+| 9 | `timedOut` | The absolute launch deadline expired; cleanup has run and any still-stopping job remains supervised. |
+
+The production launch budget is five seconds from acceptance, including the loader queue; it is never reset by progress. Up to four launches interleave through deferred replies addressed to the original caller's identity. See [launch supervision](../Userland/ProcessLaunch.md#resumable-launch-and-cleanup) for cleanup and the synchronous-filesystem limitation.
 
 The environment transaction starts at label `0x730`, uses version **1**, and allows up to **16 bindings**. It sends `begin`, ordered `binding` messages with grants, acknowledgements, then `commit`. The child sends `ready` when its initialization reaches the readiness point. A nonce binds the exchange; indexes bind acknowledgements to individual steps.
 

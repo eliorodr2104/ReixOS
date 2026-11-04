@@ -18,6 +18,8 @@ A capability combines a target, a rights mask and a badge. Each process has its 
 
 Rights are interpreted together with the target. Some bit positions have target-specific meanings, such as device read/write versus profiler permissions; a numeric bit is not a universal operation.
 
+`CapsTable.resolve` and `findFirst` are `mutating` readers so Swift can address the table's `InlineArray` in place. They return a copied capability or handle without changing table contents; the annotation avoids copying the entire table to read a slot. It adds no synchronization. The `aggregate-copies` image check guards this and other hot lookup paths.
+
 ### Derivation and transfer
 
 `CapsTable.mint` requires a source with `.derive`, badge zero and a nonzero requested session. It intersects requested rights with the source rights and removes `.derive` from the result. A derived endpoint view therefore cannot invent new authority or derive another badge through this path.
@@ -31,10 +33,10 @@ Rights are interpreted together with the target. Some bit positions have target-
 | Function | Parameters | Returns | Meaning |
 | --- | --- | --- | --- |
 | [<code>CapsTable.install(_:)</code>](../../Sources/ReixKernel/InterProcessControl/Capabilities/CapsTable.swift#L35) | <code>_ cap: Capability</code> | <code>UInt32?</code> | Returns the installed handle, or `nil` if no slot is available. |
-| [<code>CapsTable.resolve(_:)</code>](../../Sources/ReixKernel/InterProcessControl/Capabilities/CapsTable.swift#L113) | <code>_ handle: UInt32</code> | <code>Capability?</code> | Returns the capability in that slot, or `nil` for an absent/out-of-range handle. |
-| [<code>CapsTable.mint(from:session:rights:)</code>](../../Sources/ReixKernel/InterProcessControl/Capabilities/CapsTable.swift#L135) | <code>from handle: UInt32, session : Badge, rights : CapRights</code> | <code>UInt32?</code> | Returns an attenuated, badged handle, or `nil` when derivation or allocation fails. |
-| [<code>RendezvousIPC.transferCapability(from:handler:to:rights:)</code>](../../Sources/ReixKernel/InterProcessControl/RendezvousIPC.swift#L810) | <code>from senderProcess : UnsafeMutablePointer&lt;Process&gt;, handler : UInt32, to receiverProcess: UnsafeMutablePointer&lt;Process&gt;, rights : CapRights</code> | <code>Result&lt;UInt32, IPCError&gt;</code> | Installs an allowed share in the receiver and returns its local handle, or an IPC error. |
-| [<code>RendezvousIPC.releaseCapability(_:of:)</code>](../../Sources/ReixKernel/InterProcessControl/RendezvousIPC.swift#L1525) | <code>_ handle : UInt32, of process: UnsafeMutablePointer&lt;Process&gt;</code> | <code>Result&lt;Void, IPCError&gt;</code> | Removes a capability and releases the target reference through the matching ownership path. |
+| [<code>CapsTable.resolve(_:)</code>](../../Sources/ReixKernel/InterProcessControl/Capabilities/CapsTable.swift#L120) | <code>_ handle: UInt32</code> | <code>Capability?</code> | Returns the capability in that slot, or `nil` for an absent/out-of-range handle. |
+| [<code>CapsTable.mint(from:session:rights:)</code>](../../Sources/ReixKernel/InterProcessControl/Capabilities/CapsTable.swift#L143) | <code>from handle: UInt32, session : Badge, rights : CapRights</code> | <code>UInt32?</code> | Returns an attenuated, badged handle, or `nil` when derivation or allocation fails. |
+| [<code>RendezvousIPC.transferCapability(from:handler:to:rights:)</code>](../../Sources/ReixKernel/InterProcessControl/RendezvousIPC.swift#L811) | <code>from senderProcess : UnsafeMutablePointer&lt;Process&gt;, handler : UInt32, to receiverProcess: UnsafeMutablePointer&lt;Process&gt;, rights : CapRights</code> | <code>Result&lt;UInt32, IPCError&gt;</code> | Installs an allowed share in the receiver and returns its local handle, or an IPC error. |
+| [<code>RendezvousIPC.releaseCapability(_:of:)</code>](../../Sources/ReixKernel/InterProcessControl/RendezvousIPC.swift#L1526) | <code>_ handle : UInt32, of process: UnsafeMutablePointer&lt;Process&gt;</code> | <code>Result&lt;Void, IPCError&gt;</code> | Removes a capability and releases the target reference through the matching ownership path. |
 
 ## Message delivery and waiting
 
@@ -50,6 +52,8 @@ Rights are interpreted together with the target. Some bit positions have target-
 | `call` | Send a request and wait for its reply. |
 | `reply` | Complete a caller waiting on the server. |
 | `replyRecv` | Reply and enter the next receive through one kernel operation. |
+
+Send, call and reply pass the live trap frame by pointer through `IPCInterface`, `RendezvousIPC` and `Message.init(from:)`. Reading the message registers therefore does not copy the full 816-byte context. The pending message retains the fields it needs after the syscall; it does not retain the frame pointer.
 
 An endpoint stores its matching/wait state. A blocked sender's `Process.pending` stores the pending message; a call establishes reply relationships between process records. The implementation also supports deferred replies, with a current limit of **8** per server.
 
@@ -70,8 +74,8 @@ See [IPC ABI](../ABI/IPC.md) for register encoding and [IPC SDK](../ABI/IPC.md) 
 
 | Function | Parameters | Returns | Meaning |
 | --- | --- | --- | --- |
-| [<code>RendezvousIPC.send(capability:frame:blocking:)</code>](../../Sources/ReixKernel/InterProcessControl/RendezvousIPC.swift#L37) | <code>capability: Capability, frame : AArch64.TrapFrame, blocking : Bool = true</code> | <code>Result&lt;CommunicationMessageResult, IPCError&gt;</code> | Returns a communication outcome or IPC error; a blocking outcome leaves the sender waiting. |
+| [<code>RendezvousIPC.send(capability:frame:blocking:)</code>](../../Sources/ReixKernel/InterProcessControl/RendezvousIPC.swift#L37) | <code>capability: Capability, frame : UnsafeMutablePointer&lt;AArch64.TrapFrame&gt;, blocking : Bool = true</code> | <code>Result&lt;CommunicationMessageResult, IPCError&gt;</code> | Returns a communication outcome or IPC error; a blocking outcome leaves the sender waiting. |
 | [<code>RendezvousIPC.receive(capability:frame:blocking:timeoutTicks:)</code>](../../Sources/ReixKernel/InterProcessControl/RendezvousIPC.swift#L193) | <code>capability : Capability, frame : UnsafeMutablePointer&lt;AArch64.TrapFrame&gt;, blocking : Bool = true, timeoutTicks: UInt64? = nil</code> | <code>Result&lt;CommunicationMessageResult, IPCError&gt;</code> | Receives or waits according to the supplied policy and optional deadline. |
-| [<code>RendezvousIPC.call(capability:frame:)</code>](../../Sources/ReixKernel/InterProcessControl/RendezvousIPC.swift#L316) | <code>capability: Capability, frame : AArch64.TrapFrame</code> | <code>Result&lt;CommunicationMessageResult, IPCError&gt;</code> | Starts a request/reply exchange and tracks the waiting caller. |
-| [<code>RendezvousIPC.reply(frame:target:)</code>](../../Sources/ReixKernel/InterProcessControl/RendezvousIPC.swift#L414) | <code>frame : AArch64.TrapFrame, target: UnsafeMutablePointer&lt;Process&gt;? = nil</code> | <code>Result&lt;CommunicationMessageResult, IPCError&gt;</code> | Replies to the selected or current caller and reports the communication outcome. |
-| [<code>RendezvousIPC.spawnEndpoint(for:rights:owner:)</code>](../../Sources/ReixKernel/InterProcessControl/RendezvousIPC.swift#L514) | <code>for process: UnsafeMutablePointer&lt;Process&gt;, rights : CapRights = [.send, .receive, .grant, .derive], owner : PID? = nil</code> | <code>Result&lt;UInt32, IPCError&gt;</code> | Creates an endpoint and returns its process-local capability handle. |
+| [<code>RendezvousIPC.call(capability:frame:)</code>](../../Sources/ReixKernel/InterProcessControl/RendezvousIPC.swift#L316) | <code>capability: Capability, frame : UnsafeMutablePointer&lt;AArch64.TrapFrame&gt;</code> | <code>Result&lt;CommunicationMessageResult, IPCError&gt;</code> | Starts a request/reply exchange and tracks the waiting caller. |
+| [<code>RendezvousIPC.reply(frame:target:)</code>](../../Sources/ReixKernel/InterProcessControl/RendezvousIPC.swift#L414) | <code>frame : UnsafeMutablePointer&lt;AArch64.TrapFrame&gt;, target: UnsafeMutablePointer&lt;Process&gt;? = nil</code> | <code>Result&lt;CommunicationMessageResult, IPCError&gt;</code> | Replies to the selected or current caller and reports the communication outcome. |
+| [<code>RendezvousIPC.spawnEndpoint(for:rights:owner:)</code>](../../Sources/ReixKernel/InterProcessControl/RendezvousIPC.swift#L515) | <code>for process: UnsafeMutablePointer&lt;Process&gt;, rights : CapRights = [.send, .receive, .grant, .derive], owner : PID? = nil</code> | <code>Result&lt;UInt32, IPCError&gt;</code> | Creates an endpoint and returns its process-local capability handle. |

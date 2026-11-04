@@ -126,11 +126,12 @@ The same language is also used for build tooling, handler generation and much of
 - AArch64 bootstrap from EL2 to EL1, device tree parsing, GICv2, virtual timer and exception handling.
 - Physical and virtual memory management, ASIDs, VMAs, lazy mapping, page faults, single-core copy-on-write and page-table reclaim, with break-before-make ordering on every page table update.
 - Per-process frame budgets that cover mappings, page tables, shared memory and DMA, narrowed at spawn and refused before anything is allocated.
+- Shared, naturally aligned Swift SIMD memory primitives in kernel and userland, with architectural zero filling confined to the kernel.
 - Preemptive round-robin scheduling, sleep, termination, faults, zombies and process reaping.
 - Rendezvous IPC, calls and replies, attenuable capabilities, badges, shared memory and interrupts delivered to userland.
 - Separate userland services for serial transport, console output, input, terminal presentation, names, the bus, disk and filesystem.
-- A userland virtio-blk driver and RxFS with containers, transactions, journaling, checksums, scrubbing and recovery.
-- A `ProcessServer` that loads supported ELF files from disk, constructs suspended tasks, supplies their environment and returns an attenuated job capability.
+- A userland virtio-blk driver and RxFS with containers, transactions, journaling, CRC32C checksums, scrubbing and recovery.
+- A `ProcessServer` that interleaves up to four disk-backed launches under absolute deadlines, constructs suspended tasks, supplies their environment and returns an attenuated job capability after readiness.
 - A typed shell with modules, multiline editing, semantic completion and structured output.
 - Profiling with per-process statistics, a trace ring, sampling, a live `Top` reading them through shared memory, and export to Perfetto.
 - Host tests and a QEMU matrix covering boot, low-memory configurations, storage, the terminal and systems without a PMU.

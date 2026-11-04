@@ -2,7 +2,7 @@
 
 [Documentation home](../README.md) · [Storage services](../Userland/Storage.md) · [RAM layout](Memory.md)
 
-The persistent volume uses **RxFS**, identified by the magic `REIXFS` followed by two zero bytes. The magic carries no version number and there is no migration. Another recognised layout is refused as `unrecognised`; an incompatible superblock checksum or journal protocol is `corrupt`. Neither refusal formats the disk. Existing images need `make clean-image`. The kernel's embedded tar initrd has a separate format and lifetime.
+The persistent volume uses **RxFS**, identified by the magic `REIXFS` followed by two zero bytes. The magic carries no version number and there is no migration. Another recognised layout, including a superblock valid under the former FNV-1a checksum, is refused as `unrecognised`; other invalid superblock checksums or journal protocols are `corrupt`. Neither refusal formats the disk. Existing images need `make clean-image`. The kernel's embedded tar initrd has a separate format and lifetime.
 
 The virtio-block backend exposes 512-byte sectors. RxFS groups eight sectors into a **4096-byte block**. The filesystem plan requires the backend's sector size to divide its block size exactly.
 
@@ -66,6 +66,10 @@ Object extent slots start at byte 64. The encoders specify byte offsets; Swift i
 The superblocks alternate publication with generations and checksums. A transaction changing the sum region stages the non-live copy, one generation higher, with the new root and no seal. That copy becomes live when applied. Losing the newest copy immediately after such a change can leave a valid older copy whose root disagrees with the medium; mount refuses that disagreement.
 
 ## Integrity checks and the seal
+
+All checksum fields use **CRC32C (Castagnoli)**, replacing FNV-1a at the same 32-bit fields and byte offsets. `FSChecksum` reads a record's own checksum field as zero and can continue a checksum across pieces. Freestanding programs use the generated `reix_crc32c` assembly routine (`crc32cx` over eight-byte chunks); host tests and disk provisioning use the equivalent slicing-by-eight Swift implementation. The current Cortex-A53 platform requires the CRC instructions without a runtime feature probe.
+
+A superblock that fails CRC32C but validates under FNV-1a is an older format, not evidence of damage: mount returns `unrecognised` and leaves the disk untouched. Only its superblocks are inspected; the old volume is neither migrated nor mounted. Recreate disposable development images with `make clean-image`.
 
 The sum region records the checksum of every table, folder and file block at that block's index. Table and folder images stage their checksums in the same transaction. File writes stage checksums before writing data to its home. The filesystem also keeps the expected checksum of every bitmap, table and sum block in scratch memory, checking reads against it and updating it only for accepted writes.
 

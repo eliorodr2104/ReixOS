@@ -17,7 +17,7 @@
 | [VirtioBus](../../Sources/Userland/VirtioBus) | Walks authorized virtio-MMIO transports and starts the block driver. | Bus authority; derived device and IRQ capabilities. |
 | [BlockServer](../../Sources/Userland/BlockServer) | Runs the virtio-block driver and serves queued sector I/O. | Device/IRQ/DMA authority, four request slots, volume owner. |
 | [FileSystemServer](../../Sources/Userland/FileSystemServer) | Mounts RxFS and serves object/container operations. | Disk endpoint, filesystem state, client sessions and scoped rights. |
-| [ProcessServer](../../Sources/Userland/ProcessServer) | Loads supported applications from the programs directory and supervises jobs. | Programs directory, task creation, selected environment grants and job table. |
+| [ProcessServer](../../Sources/Userland/ProcessServer) | Loads supported applications from the programs directory and supervises jobs. | Programs directory, task creation, selected environment grants, four pending launches and eight total launch/job reservations. |
 
 ## Terminal flow
 
@@ -56,6 +56,8 @@ Init gives FileSystemServer the disk endpoint and passes scoped filesystem capab
 | [Top](../../Sources/Userland/Top) | Consumes process/system statistics and trace export for display. |
 | [StorageCheck](../../Sources/Userland/StorageCheck) | Dedicated storage exercise/diagnostic program. |
 | [ReixFS](../../Sources/ReixFS) | On-disk filesystem implementation used by FileSystemServer. |
-| [ProcessServerCore](../../Sources/Userland/ProcessServerCore) | ELF validation/load planning and program profiles. |
+| [ProcessServerCore](../../Sources/Userland/ProcessServerCore) | ELF validation, page-sized copying, program profiles and the generic launch supervisor. |
+
+ProcessServer advances launch records under a single five-second deadline, keeps the file claim through the last copy and answers the original caller only after readiness. It sweeps abandoned launches and exited jobs even without a new request; the kernel remains responsible for process teardown. [Launch supervision](ProcessLaunch.md#resumable-launch-and-cleanup) describes the limits and cleanup policy.
 
 The Shell's internal parser/editor helpers are linked as a block: their existence does not add another kernel component. See [Process launch](ProcessLaunch.md) and [Storage](Storage.md) for the cross-component contracts.
