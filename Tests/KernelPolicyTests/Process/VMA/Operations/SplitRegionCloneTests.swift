@@ -132,13 +132,13 @@ struct SplitRegionCloneTests {
             else { Issue.record("the parent has no resident edge pages"); return }
 
             if cloneFirst {
-                #expect(throws: Never.self) { try childVMA.pointee.cloneRegions(from: parentVMA.pointee) }
+                #expect(throws: Never.self) { try childVMA.pointee.cloneRegions(from: parentVMA) }
             }
             #expect((try? parentVMA.pointee.munmapRegion(
                 addr: Self.base + 2 * Self.page, size: Self.page
             )) == .completed)
             if !cloneFirst {
-                #expect(throws: Never.self) { try childVMA.pointee.cloneRegions(from: parentVMA.pointee) }
+                #expect(throws: Never.self) { try childVMA.pointee.cloneRegions(from: parentVMA) }
             } else {
                 #expect((try? childVMA.pointee.munmapRegion(
                     addr: Self.base + 2 * Self.page, size: Self.page

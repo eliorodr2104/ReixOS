@@ -153,7 +153,10 @@ extension VMAManager {
     /// refusal there could leave the first edge split before reaching the second.
     /// The brk heap has the same whole-or-nothing rule because the manager caches
     /// its single node, even though its backing is anonymous.
-    private func unmappableRegions(
+    ///
+    /// `mutating` for the reason `CapsTable.resolve` is: a non-mutating reader
+    /// got a 296-byte copy of the manager.
+    private mutating func unmappableRegions(
         over range: (start: VirtualAddress, end: VirtualAddress)
     ) throws(VMAError) -> UnsafeMutablePointer<VirtualMemoryArea> {
 

@@ -35,7 +35,7 @@ public struct CallSyscall: SyscallProvider {
         
         let resultSendMessage = context.ipc.pointee.call(
             capability: capability,
-            frame     : frame.pointee
+            frame     : frame
         )
         
         switch resultSendMessage {

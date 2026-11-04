@@ -315,7 +315,7 @@ struct SharedRegionLifetimeTests {
 
             #expect(region.pointee.references == 2)
 
-            do { try childVMA.pointee.cloneRegions(from: parentVMA.pointee) }
+            do { try childVMA.pointee.cloneRegions(from: parentVMA) }
             catch { Issue.record("clone failed: \(error)"); return }
 
             // A holder like any other. Without it the parent's exit would free
@@ -352,9 +352,10 @@ struct SharedRegionLifetimeTests {
         var parked = false
 
         withCurrentProcess(sender) {
+            var trap = frame(granting: granting, rights)
             if case .success(.blocked) = ipc.pointee.send(
                 capability: send,
-                frame     : frame(granting: granting, rights)
+                frame     : &trap
             ) { parked = true }
         }
 

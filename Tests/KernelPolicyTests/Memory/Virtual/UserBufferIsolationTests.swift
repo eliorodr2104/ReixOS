@@ -73,7 +73,7 @@ struct UserBufferIsolationTests {
             ) else { Issue.record("missing parent page"); return }
             let bytes: UnsafeMutablePointer<UInt8> = ram.vmm.pointee.physToVirt(original)
             bytes[0] = 0x5A
-            do { try childVMA.pointee.cloneRegions(from: parentVMA.pointee) }
+            do { try childVMA.pointee.cloneRegions(from: parentVMA) }
             catch { Issue.record("clone failed: \(error)"); return }
             #expect(!childVMA.pointee.isPageMapped(at: address, writable: true))
             Arch.CPU.setCurrentProcess(UInt64(UInt(bitPattern: child)))
@@ -118,7 +118,7 @@ struct UserBufferIsolationTests {
 
             var failed = false
             do {
-                try childVMA.pointee.cloneRegions(from: parentVMA.pointee)
+                try childVMA.pointee.cloneRegions(from: parentVMA)
             } catch {
                 failed = true
             }
@@ -159,7 +159,7 @@ struct UserBufferIsolationTests {
             ) else { Issue.record("missing parent page"); return }
 
             do {
-                try childVMA.pointee.cloneRegions(from: parentVMA.pointee)
+                try childVMA.pointee.cloneRegions(from: parentVMA)
             } catch {
                 Issue.record("clone failed: \(error)")
                 return

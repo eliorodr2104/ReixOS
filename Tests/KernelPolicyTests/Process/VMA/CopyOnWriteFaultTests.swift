@@ -88,7 +88,7 @@ struct CopyOnWriteFaultTests {
         bytes.initialize(repeating: pattern, count: Int(UserSpaceLayout.pageSize))
 
         if clone {
-            do { try childVMA.pointee.cloneRegions(from: parentVMA.pointee) }
+            do { try childVMA.pointee.cloneRegions(from: parentVMA) }
             catch {
                 Issue.record("clone failed: \(error)")
                 return nil
@@ -675,7 +675,7 @@ struct CopyOnWriteFaultTests {
                 return
             }
 
-            do { try grandVMA.pointee.cloneRegions(from: fixture.childVMA.pointee) }
+            do { try grandVMA.pointee.cloneRegions(from: fixture.childVMA) }
             catch {
                 Issue.record("the second clone failed: \(error)")
                 return

@@ -46,7 +46,10 @@ public struct VirtioBusInfo {
 
 
     /// The `index`th transport, counting from the lowest window.
-    public func transport(at index: UInt32) -> VirtioTransport? {
+    ///
+    /// `mutating` so the 512-byte slot table is read in place, which is what
+    /// `PlatformInfo.virtioBus` already promises.
+    public mutating func transport(at index: UInt32) -> VirtioTransport? {
         guard index < count else { return nil }
 
         return slots[Int(index)]

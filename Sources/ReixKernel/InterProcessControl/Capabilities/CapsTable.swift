@@ -110,14 +110,22 @@ public struct CapsTable {
         return cap
     }
     
-    public func resolve(_ handle: UInt32) -> Capability? {
+    /// The capability at `handle`, or nil for an empty slot or a handle past the table.
+    ///
+    /// `mutating` despite mutating nothing, like `TarFileSystem.residentBase`:
+    /// reading `caps[i]` goes through `InlineArray`'s read accessor, and without an
+    /// addressable `self` the compiler copies the whole table first. Every syscall
+    /// that names a handle paid 776 bytes, often twice, to read 24. The
+    /// `aggregate-copies` post-check fails an image where that comes back.
+    public mutating func resolve(_ handle: UInt32) -> Capability? {
         guard handle < caps.count else { return nil }
 
         return caps[Int(handle)]
     }
     
     
-    public func findFirst(for right: CapRights) -> UInt32? {
+    /// The lowest slot holding a capability with `right`. `mutating` for the reason `resolve` is.
+    public mutating func findFirst(for right: CapRights) -> UInt32? {
 
         var result: UInt32? = nil
         for i in 0..<caps.count {

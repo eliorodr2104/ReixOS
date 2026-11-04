@@ -229,7 +229,7 @@ extension KernelPolicyTestRoot.DeviceTreeCorpusTests {
     func virtioTransportsAreExact() {
         guard let info = walk(FixtureCorpus.DeviceTree.virt128M) else { return }
 
-        let bus = info.virtioBus
+        var bus = info.virtioBus
 
         #expect(bus.count    == VirtBus.count)
         #expect(bus.rejected == 0)
@@ -255,7 +255,7 @@ extension KernelPolicyTestRoot.DeviceTreeCorpusTests {
     func virtioTransportsAreSortedAndDisjoint() {
         guard let info = walk(FixtureCorpus.DeviceTree.virt128M) else { return }
 
-        let bus = info.virtioBus
+        var bus = info.virtioBus
 
         for index in 1..<bus.count {
             guard let previous = bus.transport(at: index - 1),
@@ -274,8 +274,8 @@ extension KernelPolicyTestRoot.DeviceTreeCorpusTests {
 
     @Test("the 4M capture describes the same bus as the 128M one")
     func virtioBusIsTheSameOnBothCaptures() {
-        guard let big   = walk(FixtureCorpus.DeviceTree.virt128M),
-              let small = walk(FixtureCorpus.DeviceTree.virt4M) else { return }
+        guard var big   = walk(FixtureCorpus.DeviceTree.virt128M),
+              var small = walk(FixtureCorpus.DeviceTree.virt4M) else { return }
 
         #expect(big.virtioBus.count == small.virtioBus.count)
 

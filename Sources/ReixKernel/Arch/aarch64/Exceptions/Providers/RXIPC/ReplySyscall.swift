@@ -50,7 +50,7 @@ public struct ReplySyscall: SyscallProvider {
         }
 
         let resultSendMessage = context.ipc.pointee.reply(
-            frame : frame.pointee,
+            frame : frame,
             target: target
         )
         

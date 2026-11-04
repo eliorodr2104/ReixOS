@@ -114,9 +114,12 @@ struct DeadPeerSendTests {
         var outcome: Result<CommunicationMessageResult, IPCError>!
 
         withCurrentProcess(process) {
-            outcome = calling
-                ? ipc.pointee.call(capability: send, frame: Arch.TrapFrame())
-                : ipc.pointee.send(capability: send, frame: Arch.TrapFrame())
+            var trap = Arch.TrapFrame()
+            if calling {
+                outcome = ipc.pointee.call(capability: send, frame: &trap)
+            } else {
+                outcome = ipc.pointee.send(capability: send, frame: &trap)
+            }
         }
 
         return outcome

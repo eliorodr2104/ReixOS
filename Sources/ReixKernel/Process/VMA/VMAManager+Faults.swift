@@ -211,7 +211,10 @@ extension VMAManager {
     /// That difference is the whole reason this is `replaceUserPage` and not an
     /// install: the descriptor is valid and its output address changes under
     /// it, which is the case the architecture requires break-before-make for.
-    private func copyPage(
+    ///
+    /// `mutating` for the reason `CapsTable.resolve` is: a non-mutating reader
+    /// got a 296-byte copy of the manager.
+    private mutating func copyPage(
         from source : PhysicalAddress,
         onto aligned: VirtualAddress,
         flags       : VirtualPageFlags,

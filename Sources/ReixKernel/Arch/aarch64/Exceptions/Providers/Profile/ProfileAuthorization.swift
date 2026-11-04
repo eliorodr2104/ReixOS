@@ -17,8 +17,10 @@ public enum ProfileAuthorization {
     /// scheme rests on: the category bits share raw values with `read` and
     /// `write`, so an ordinary shared region handle would otherwise read as
     /// profiling authority.
+    ///
+    /// `inout` so the table is read where it lives; see `CapsTable.resolve`.
     static func allows(
-        _ caps  : CapsTable,
+        _ caps  : inout CapsTable,
         handle  : UInt32,
         category: CapRights
     ) -> Bool {
@@ -32,7 +34,7 @@ public enum ProfileAuthorization {
         guard let current = Arch.CPU.getCurrentProcess() else { return false }
 
         return allows(
-            current.pointee.metadata.pointee.capsTable,
+            &current.pointee.metadata.pointee.capsTable,
             handle  : handle,
             category: category
         )

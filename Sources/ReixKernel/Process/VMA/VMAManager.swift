@@ -127,7 +127,10 @@ public struct VMAManager: RXAllocatable {
     /// that grant `permissions`. Used by the syscall validation layer
     /// (`UserMemory.validateRegion`) to refuse buffers that fall on unmapped
     /// pages or violate access rights.
-    public func contains(
+    ///
+    /// `mutating` for the reason `CapsTable.resolve` is: a non-mutating reader
+    /// got a 296-byte copy of the manager.
+    public mutating func contains(
         start      : VirtualAddress,
         end        : VirtualAddress,
         permissions: VMAPermissions
@@ -279,7 +282,10 @@ public struct VMAManager: RXAllocatable {
     /// A `.growDown` region gains a page only because a fault demanded one, and
     /// nothing moves its start back up, so its extent is both the deepest the
     /// stack has ever been and what it has resident.
-    func memoryMetrics() -> VMAMemoryMetrics {
+    ///
+    /// `mutating` for the reason `CapsTable.resolve` is: a non-mutating reader
+    /// got a 296-byte copy of the manager.
+    mutating func memoryMetrics() -> VMAMemoryMetrics {
         var virtualExtent: UInt64 = 0
         var stack: UnsafeMutablePointer<VirtualMemoryArea>? = nil
         var current = vmaList.head

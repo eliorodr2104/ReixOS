@@ -187,7 +187,7 @@ public struct InputServer: Service {
         replyStatus(.focus, router.focusTarget(session))
     }
 
-    private func status(_ session: Int, _ access: ReixInputAccess, _ request: ReceivedMessage) {
+    private mutating func status(_ session: Int, _ access: ReixInputAccess, _ request: ReceivedMessage) {
         let result: ReixInputServerStatus
         switch access.role {
             case .source:

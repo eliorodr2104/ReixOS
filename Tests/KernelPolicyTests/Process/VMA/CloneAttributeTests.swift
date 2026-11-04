@@ -126,7 +126,7 @@ struct CloneAttributeTests {
                 at  : address
             ) else { Issue.record("the parent has no descriptor to clone"); return }
 
-            do { try childVMA.pointee.cloneRegions(from: parentVMA.pointee) }
+            do { try childVMA.pointee.cloneRegions(from: parentVMA) }
             catch { Issue.record("clone failed: \(error)"); return }
 
             // The node too, not only the descriptor: a split or a fault of the
@@ -225,7 +225,7 @@ struct CloneAttributeTests {
 
             #expect(!VirtualPageFlags(rawValue: before.flags).contains(.readOnly))
 
-            do { try childVMA.pointee.cloneRegions(from: parentVMA.pointee) }
+            do { try childVMA.pointee.cloneRegions(from: parentVMA) }
             catch { Issue.record("clone failed: \(error)"); return }
 
             guard let childSide = descriptor(

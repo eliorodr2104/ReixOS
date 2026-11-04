@@ -36,7 +36,7 @@ public struct RendezvousIPC: IPCInterface, Loggable {
     
     public mutating func send(
         capability: Capability,
-        frame     : AArch64.TrapFrame,
+        frame     : UnsafeMutablePointer<AArch64.TrapFrame>,
         blocking  : Bool = true
         
     ) -> Result<CommunicationMessageResult, IPCError> {
@@ -53,7 +53,7 @@ public struct RendezvousIPC: IPCInterface, Loggable {
 
         // Fields of one packed word, not whole-register reads: a syscall that
         // takes a handle in a register of its own uses `SyscallABI.handle`.
-        let grantWord   = frame.x6
+        let grantWord   = frame.pointee.x6
         let grantHandle = UInt32(truncatingIfNeeded: grantWord)
         let grantRights = CapRights(rawValue: UInt16(truncatingIfNeeded: grantWord >> 32))
 
@@ -315,7 +315,7 @@ public struct RendezvousIPC: IPCInterface, Loggable {
 
     public mutating func call(
         capability: Capability,
-        frame     : AArch64.TrapFrame
+        frame     : UnsafeMutablePointer<AArch64.TrapFrame>
     ) -> Result<CommunicationMessageResult, IPCError> {
         
         guard capability.rights.contains(.send) else {
@@ -412,10 +412,10 @@ public struct RendezvousIPC: IPCInterface, Loggable {
     /// identity, which it already has: every request arrives carrying it, and
     /// every server that keeps per-client state is already keyed on it.
     public mutating func reply(
-        frame : AArch64.TrapFrame,
+        frame : UnsafeMutablePointer<AArch64.TrapFrame>,
         target: UnsafeMutablePointer<Process>? = nil
     ) -> Result<CommunicationMessageResult, IPCError> {
-        let grantWord = frame.x6
+        let grantWord = frame.pointee.x6
         
         return replyInternal(
             frame      : frame,
@@ -431,8 +431,9 @@ public struct RendezvousIPC: IPCInterface, Loggable {
     ) -> Result<CommunicationMessageResult, IPCError> {
         guard capability.rights.contains(.receive) else { return .failure(.notEnoughRights) }
 
+        // The reply reads `frame` before `receive` writes the next message into it.
         _ = replyInternal(
-            frame      : frame.pointee,
+            frame      : frame,
             grantHandle: UInt32.max,
             grantRights: []
         )
@@ -443,7 +444,7 @@ public struct RendezvousIPC: IPCInterface, Loggable {
     
     @inline(__always)
     private mutating func replyInternal(
-        frame      : AArch64.TrapFrame,
+        frame      : UnsafeMutablePointer<AArch64.TrapFrame>,
         grantHandle: UInt32,
         grantRights: CapRights,
         target     : UnsafeMutablePointer<Process>? = nil

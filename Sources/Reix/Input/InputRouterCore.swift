@@ -305,15 +305,24 @@ public struct InputRouterCore {
         }
     }
 
-    public func sourceIdentity(_ session: Int) -> UInt32 {
+    ///
+    /// `mutating` so `sessions` is read in place: a non-mutating reader copied
+    /// the router on every request.
+    public mutating func sourceIdentity(_ session: Int) -> UInt32 {
         validSession(session) ? sessions[session].source.identity : 0
     }
 
-    public func pendingSourceIdentity(_ session: Int) -> UInt32 {
+    ///
+    /// `mutating` so `sessions` is read in place: a non-mutating reader copied
+    /// the router on every request.
+    public mutating func pendingSourceIdentity(_ session: Int) -> UInt32 {
         validSession(session) ? sessions[session].pendingSource.identity : 0
     }
 
-    public func consumerIdentity(_ session: Int) -> UInt32 {
+    ///
+    /// `mutating` so `sessions` is read in place: a non-mutating reader copied
+    /// the router on every request.
+    public mutating func consumerIdentity(_ session: Int) -> UInt32 {
         validSession(session) ? sessions[session].consumer.identity : 0
     }
 
@@ -356,7 +365,10 @@ public struct InputRouterCore {
         )
     }
 
-    private func pendingKind(_ session: Int) -> InputRouteKind? {
+    ///
+    /// `mutating` so `sessions` is read in place: a non-mutating reader copied
+    /// the router on every request.
+    private mutating func pendingKind(_ session: Int) -> InputRouteKind? {
         if sessions[session].pendingLost {
             return .focusLost
         }

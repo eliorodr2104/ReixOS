@@ -179,7 +179,7 @@ struct ProfileCapabilityFlowTests {
             firstDelivery.x6 = UInt64(launcherMarkerHandle) |
                 (UInt64(CapRights([.profileMark, .profileConsole]).rawValue) << 32)
             Arch.CPU.setCurrentProcess(VirtualAddress(UInt(bitPattern: launcher)))
-            let first = ipc.pointee.send(capability: sendLauncher, frame: firstDelivery)
+            let first = ipc.pointee.send(capability: sendLauncher, frame: &firstDelivery)
             guard case .success(.sended(let firstRejected)) = first,
                   let workloadMarkerHandle = IPCDelivery.grant(of: workloadFrame.pointee.x7),
                   let workloadMarker = workload.pointee.metadata.pointee.capsTable.resolve(
@@ -218,7 +218,7 @@ struct ProfileCapabilityFlowTests {
             secondDelivery.x6 = UInt64(workloadMarkerHandle) |
                 (UInt64(CapRights.profileMark.rawValue) << 32)
             Arch.CPU.setCurrentProcess(VirtualAddress(UInt(bitPattern: workload)))
-            let second = ipc.pointee.send(capability: sendWorkload, frame: secondDelivery)
+            let second = ipc.pointee.send(capability: sendWorkload, frame: &secondDelivery)
             guard case .success(.sended(let secondRejected)) = second else {
                 Issue.record("the message carrying the refused grant was not delivered")
                 return
