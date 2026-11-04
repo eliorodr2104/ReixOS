@@ -547,6 +547,10 @@ public func main() {
         launchRefusedWhileClaimed(heldShell, files: machineFiles, through: processServerEndpoint)
     }
 
+    #if REIX_BOOT_DIAGNOSTIC
+    if let processServerEndpoint { launchLifecycle(through: processServerEndpoint) }
+    #endif
+
     let shellJob = processServerEndpoint.flatMap { endpoint -> UInt32? in
         let name     : StaticString = "Shell.elf"
         let launched = launchProgram(
@@ -730,6 +734,40 @@ private func launchRefusedWhileClaimed(
 
 
 #if REIX_BOOT_DIAGNOSTIC
+/// Rehearses a launch that stalls, one whose program crashes, and one whose
+/// requester dies. The server has to reclaim all three without being asked.
+private func launchLifecycle(through server: UInt32) {
+    let frequency = readCounterFrequency()
+    let began     = readVirtualCounter()
+    let late      = launch("Top.late", through: server)
+    if let job = late.job { _ = capDrop(job) }
+    let elapsed = frequency >= 1000 ? (readVirtualCounter() &- began) / (frequency / 1000) : 0
+    guard late.status == .timedOut, late.job == nil, elapsed >= 300 else {
+        print("[ INIT  ] a launch past its deadline was not refused as timed out"); return
+    }
+    print("[ INIT  ] a launch past its deadline was refused, timed out")
+
+    let requester = split()
+    if requester == 0 { _ = launch("Top.mute", through: server); exit(code: 0) }
+    guard requester != UInt64.max else {
+        print("[ INIT  ] the requester to orphan a launch could not be made"); return
+    }
+
+    // Long enough for the other request to be held first.
+    sleep(for: .milliseconds(100))
+    let crashed = launch("Top.trap", through: server)
+    if let job = crashed.job { _ = capDrop(job) }
+    _ = terminate(pid: requester)
+    guard crashed.status == .bootstrapFailure else {
+        print("[ INIT  ] a program that died while launching was not refused"); return
+    }
+    print("[ INIT  ] a program that died while launching was refused")
+}
+
+private func launch(_ name: StaticString, through server: UInt32) -> ProcessLaunchResult {
+    launchProgram(through: server, name: name.utf8Start, length: name.utf8CodeUnitCount)
+}
+
 /// Has a ProcessServer die holding its claim on `Shell.elf`, then claims and
 /// writes that file from here.
 ///

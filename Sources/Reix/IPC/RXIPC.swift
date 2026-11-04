@@ -296,7 +296,8 @@ public func tryReceive(handle: UInt32) -> ReceivedMessage? {
     return ReceivedMessage(
         message      : Message(tag: raw.tag.packed, words: w),
         sessionWord  : raw.sessionWord,
-        principalWord: raw.principalWord
+        principalWord: raw.principalWord,
+        status       : IPCStatus(rawValue: resultAsm) ?? .invalidMessage
     )
     
 }

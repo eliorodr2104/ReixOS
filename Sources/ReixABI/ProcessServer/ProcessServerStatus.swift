@@ -3,7 +3,7 @@
 //  ReixOS
 //
 
-public enum ProcessServerStatus: UInt32 {
+public enum ProcessServerStatus: UInt32, Error {
     case ok = 0
     case badRequest
     case notFound
@@ -13,9 +13,14 @@ public enum ProcessServerStatus: UInt32 {
     case bootstrapFailure
     case unavailable
 
-    /// Somebody else holds a claim on the program file, a writer part way
-    /// through changing it. Refused rather than loaded, and worth asking again.
+    /// Refused for now and worth asking again: somebody else holds a claim on the
+    /// program file, or this requester already has a launch in flight.
     case busy
+
+    /// The launch was not finished by the deadline it was given when accepted.
+    /// Everything it held has been given back, or, for a job still stopping, is
+    /// supervised until it exits, before this answer is sent.
+    case timedOut
 
     public var response: Message {
         var words = InlineArray<4, UInt32>(repeating: 0)

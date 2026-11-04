@@ -3,7 +3,7 @@
 # check-loader-hook.sh
 # ReixOS
 #
-# The loader-death request belongs only to the diagnostic image. Inspect both
+# The diagnostic launch names belong only to the diagnostic image. Inspect both
 # the linked ELF and the stripped copy that is packed into the initrd.
 # Usage: BOOT_MODE=standard OUT=.reix sh scripts/check-loader-hook.sh
 
@@ -23,17 +23,19 @@ for app in ProcessServer Init; do
             echo "SETUP: missing ELF ($path)" >&2
             exit 3
         fi
-        if LC_ALL=C grep -aqF 'Shell.die' "$path"; then
-            echo "FAIL: loader-death name Shell.die in $path ($BOOT_MODE)" >&2
-            exit 1
-        else
-            result=$?
-            if [ "$result" -ne 1 ]; then
-                echo "SETUP: could not inspect $path" >&2
-                exit 3
+        for name in Shell.die Top.late Top.mute Top.trap; do
+            if LC_ALL=C grep -aqF "$name" "$path"; then
+                echo "FAIL: diagnostic launch name $name in $path ($BOOT_MODE)" >&2
+                exit 1
+            else
+                result=$?
+                if [ "$result" -ne 1 ]; then
+                    echo "SETUP: could not inspect $path" >&2
+                    exit 3
+                fi
             fi
-        fi
+        done
     done
 done
 
-echo "PASS: loader-death name absent from $BOOT_MODE ProcessServer and Init ELFs"
+echo "PASS: diagnostic launch names absent from $BOOT_MODE ProcessServer and Init ELFs"
