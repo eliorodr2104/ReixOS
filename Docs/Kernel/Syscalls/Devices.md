@@ -24,4 +24,4 @@ All raw argument/result registers are `UInt64`; narrower payload types are noted
 
 ## Userland API
 
-The [device/IRQ SDK functions](../../../Sources/Reix/IPC/RXIPC.swift) include `irqWait`, `irqAck`, `irqBind`, `mapDevice` and bus derivation. `irqBind` returns `Bool`; wait and acknowledgement expose raw `UInt64` results. A valid device address does not imply authority to derive an IRQ or allocate DMA memory.
+The [device/IRQ SDK functions](../../../Sources/SDK/IPC/RXIPC.swift) include `irqWait`, `irqAck`, `irqBind`, `mapDevice` and bus derivation. `irqBind` returns `Bool`; wait and acknowledgement expose raw `UInt64` results. A valid device address does not imply authority to derive an IRQ or allocate DMA memory.

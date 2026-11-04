@@ -279,6 +279,7 @@ host-test: prune-stale
 	@mkdir -p $(OUT)
 	$(SWIFT) test --no-parallel --xunit-output $(OUT)/test-results.xml
 	$(SWIFT) test --package-path Tools/reix
+	python3 Tests/Infrastructure/Tooling/VectorPrimitiveGateTests.py
 	$(SWIFT) run TerminalRingHarness
 	$(SWIFT) run InputRouterHarness
 	$(SWIFT) run SerialRingHarness

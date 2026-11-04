@@ -15,9 +15,11 @@ The SDK is not a separately scheduled server. `ReixABI` supplies shared contract
 | `Text` | No project module | Unicode tables and text/editor layout. |
 | `MemoryPrimitives` | No project module | Portable, aligned `RawBytes` memory operations. |
 | `VirtioBlockCore` | `ReixABI` | Pure block-driver queue, capacity and completion rules. |
-| `Reix` | `ReixABI`, `Heap`, `Text`, `MemoryPrimitives` | Syscalls, memory/runtime support, IPC, clients and service boot helpers. |
+| `Reix` | `ReixABI`, `Heap`, `MemoryPrimitives` | Syscalls, memory/runtime support, IPC, clients and service boot helpers. |
 | `ReixFS` | `ReixABI` | Filesystem algorithm over a generic `BlockDevice`. |
 | `ProcessServerCore` | `ReixABI` | Bounded ELF planning/copying, program profiles and resumable launch supervision. |
+| `SerialServerCore` / `InputServerCore` | `Reix`, `ReixABI` | Serial/input rings, sessions and server policy. |
+| `TerminalCore` | `Reix`, `ReixABI`, `Text` | Semantic screen model, VT renderer/decoder and terminal session. |
 | `ShellLanguage` | `ReixABI` | Parsing, values, semantic analysis, completion and editing logic. |
 | Userland programs | `Reix`, plus their domain modules | Service loops and applications. |
 
@@ -27,12 +29,12 @@ The freestanding build enables Embedded Swift and supplies assembly/runtime boun
 
 | Block | API / state | What callers need to understand |
 | --- | --- | --- |
-| [Task wrappers](../../Sources/Reix/RXTask.swift) | `SpawnResult`, `TaskCreation`, `TaskStatus` | Bootstrap spawn differs from controlled application launch. |
-| [Memory](../../Sources/Reix/Memory) and [heap](../../Sources/Reix/Heap) | `SharedMemory`, `DmaBuffer`, allocation backend | A local address, capability ownership and physical backing are different resources. |
-| [IPC](../../Sources/Reix/IPC) | `ReceivedMessage`, pipes, calls/replies | Blocking behavior, delivery status and grant lifetime. |
-| [Service clients](../../Sources/Reix/Services) | Block, filesystem, process, name and console clients | Each server owns its operation protocol. |
-| [Terminal surfaces](../../Sources/Reix/TextSurface), [input](../../Sources/Reix/Input), [serial](../../Sources/Reix/Serial) | Shared rings and client state | Producer/consumer roles, notification and presentation ownership. |
-| [Profiling](../../Sources/Reix/Profile) and [time](../../Sources/Reix/Time) | Authority-scoped observation and clock wrappers | Units, authority and operation-specific results. |
+| [Task wrappers](../../Sources/SDK/Syscalls/RXTask.swift) | `SpawnResult`, `TaskCreation`, `TaskStatus` | Bootstrap spawn differs from controlled application launch. |
+| [Memory](../../Sources/SDK/Memory) and [heap](../../Sources/SDK/Heap) | `SharedMemory`, `DmaBuffer`, allocation backend | A local address, capability ownership and physical backing are different resources. |
+| [IPC](../../Sources/SDK/IPC) | `ReceivedMessage`, pipes, calls/replies | Blocking behavior, delivery status and grant lifetime. |
+| [Service clients](../../Sources/SDK/Clients) | Block, filesystem, process, name and console clients | Each server owns its operation protocol. |
+| [Terminal surfaces](../../Sources/Userland/OS/Terminal/TerminalCore), [input](../../Sources/Userland/System/InputServerCore), [serial](../../Sources/Userland/System/SerialServerCore) | Shared rings and client state | Producer/consumer roles, notification and presentation ownership. |
+| [Profiling](../../Sources/SDK/Profile) and [time](../../Sources/SDK/Time) | Authority-scoped observation and clock wrappers | Units, authority and operation-specific results. |
 | Runtime, formatting and memory helpers | Freestanding support functions | Local implementation support, not additional kernel services. |
 
 The SDK's `memcpy`, `memset` and `memmove` use `MemoryPrimitives.RawBytes`, shared with the kernel. Its portable Swift SIMD paths keep accesses naturally aligned, including before the MMU is enabled. Only the kernel adds a `dc zva` zero-fill path; userland uses the shared fill. See [memory primitives](../Kernel/Memory.md#memory-primitives).

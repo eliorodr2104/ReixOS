@@ -56,4 +56,4 @@ The latency fields are described in [Scheduling](../Scheduling.md#latency-measur
 
 ## Userland API
 
-[Time](../../../Sources/Reix/Time), [profiler support](../../../Sources/Reix/Profile) and [PMU access](../../../Sources/Reix/PMU.swift) provide the userland wrappers. Operation-specific layouts and masks live in [ReixABI](../../../Sources/ABI).
+[Time](../../../Sources/SDK/Time), [profiler support](../../../Sources/SDK/Profile) and [PMU access](../../../Sources/SDK/Profile/PMU.swift) provide the userland wrappers. Operation-specific layouts and masks live in [ReixABI](../../../Sources/ABI).

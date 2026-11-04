@@ -64,4 +64,4 @@ Interrupt notifications are recognized by the `InterruptNotification` contract, 
 
 ## Source entry points
 
-[Message](../../Sources/ABI/IPC/Message.swift), [tag packing](../../Sources/ABI/IPC/MessageTag.swift), [delivery metadata](../../Sources/ABI/IPC/IPCDelivery.swift), [status](../../Sources/ABI/IPC/IPCStatus.swift), [SDK wrappers](../../Sources/Reix/IPC/RXIPC.swift), [received-message ownership](../../Sources/Reix/IPC/ReceivedMessage.swift), [trap-frame conversion](../../Sources/ReixKernel/InterProcessControl/Endpoints/Message+Frame.swift).
+[Message](../../Sources/ABI/IPC/Message.swift), [tag packing](../../Sources/ABI/IPC/MessageTag.swift), [delivery metadata](../../Sources/ABI/IPC/IPCDelivery.swift), [status](../../Sources/ABI/IPC/IPCStatus.swift), [SDK wrappers](../../Sources/SDK/IPC/RXIPC.swift), [received-message ownership](../../Sources/SDK/IPC/ReceivedMessage.swift), [trap-frame conversion](../../Sources/ReixKernel/InterProcessControl/Endpoints/Message+Frame.swift).

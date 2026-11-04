@@ -5,6 +5,7 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 27/08/2026.
 //
 
+import Reix
 import ReixABI
 
 /// The consumer-owned InputServer page. It never sees a serial byte.

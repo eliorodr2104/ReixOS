@@ -3,6 +3,7 @@
 //  ReixOS
 //
 
+import Reix
 import ReixABI
 
 /// The fixed pending transmit state shared by SerialServer and the host harness.

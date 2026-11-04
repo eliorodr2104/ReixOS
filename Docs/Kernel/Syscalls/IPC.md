@@ -28,4 +28,4 @@ All raw argument/result registers are `UInt64`; narrower payload types are noted
 
 ## Userland API
 
-The [IPC SDK](../../../Sources/Reix/IPC/RXIPC.swift) returns `IPCStatus`, `ReceivedMessage` or `Result<ReceivedMessage, IPCStatus>` depending on the operation. The optional timed-receive wrapper collapses non-`.ok` outcomes to `nil`; use the source contract when an exact failure distinction matters.
+The [IPC SDK](../../../Sources/SDK/IPC/RXIPC.swift) returns `IPCStatus`, `ReceivedMessage` or `Result<ReceivedMessage, IPCStatus>` depending on the operation. The optional timed-receive wrapper collapses non-`.ok` outcomes to `nil`; use the source contract when an exact failure distinction matters.

@@ -10,6 +10,7 @@
 //  `putchar` collide with the kernel's inside one test bundle.
 //
 
+@testable import TerminalCore
 import Foundation
 import Reix
 import ReixABI

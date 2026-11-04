@@ -504,7 +504,7 @@ public func generatedKernelAsm() -> [(name: String, source: String)] {
 
 // MARK: - Userland
 
-/// Trivial wrappers linked into every userland ELF (alongside Native/reix).
+/// Trivial wrappers linked into every userland ELF (alongside Sources/SDK/C).
 private func reixRoutines() -> [AsmRoutine] {
     [
         // Inner-shareable memory barrier: orders the SPSC ring's data vs index

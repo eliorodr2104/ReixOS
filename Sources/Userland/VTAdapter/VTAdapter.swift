@@ -5,6 +5,9 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 28/08/2026.
 //
 
+import TerminalCore
+import InputServerCore
+import SerialServerCore
 import Reix
 import ReixABI
 

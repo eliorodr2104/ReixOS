@@ -3,6 +3,7 @@
 //  ReixOS
 //
 
+import Reix
 import ReixABI
 
 /// A client-owned receive page registered with SerialServer.

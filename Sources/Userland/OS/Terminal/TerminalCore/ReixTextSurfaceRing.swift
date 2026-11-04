@@ -3,6 +3,7 @@
 //  ReixOS
 //
 
+import Reix
 import Text
 import ReixABI
 

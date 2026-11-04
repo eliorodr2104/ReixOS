@@ -44,4 +44,4 @@ A block the page manager refuses is not freed, not refunded and not forgotten. T
 
 ## Userland API
 
-The [memory SDK](../../../Sources/Reix/Memory/RXMemory.swift) exposes address/status returns directly and wraps two-register allocations in `SharedMemory` and `DmaBuffer`. `dmaReclaim(device:)` returns the raw frame count or `UInt64.max`. `sbrk` is a checked SDK operation built on `brk`, not another syscall.
+The [memory SDK](../../../Sources/SDK/Memory/RXMemory.swift) exposes address/status returns directly and wraps two-register allocations in `SharedMemory` and `DmaBuffer`. `dmaReclaim(device:)` returns the raw frame count or `UInt64.max`. `sbrk` is a checked SDK operation built on `brk`, not another syscall.

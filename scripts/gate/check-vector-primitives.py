@@ -37,6 +37,23 @@ BRANCH = re.compile(r"^(?:b|bl|b\.\w+|cbn?z|tbn?z)$")
 TARGET = re.compile(r"<([^>+]+)(?:\+0x[0-9a-f]+)?>")
 
 
+def function_bounds(objdump, elf):
+    """Positive ELF function extents; zero-sized assembly symbols keep the fallback."""
+    result = subprocess.run([objdump, "-t", elf], capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"could not read symbols from {elf}: {result.stderr.strip()}")
+        sys.exit(2)
+    bounds = {}
+    for line in result.stdout.splitlines():
+        fields = line.split()
+        if len(fields) < 6 or fields[2] != "F":
+            continue
+        start, size = int(fields[0], 16), int(fields[4], 16)
+        if size:
+            bounds[fields[-1]] = (start, start + size)
+    return bounds
+
+
 def disassemble(objdump, elf):
     """Function name to its list of (mnemonic, operands)."""
     result = subprocess.run(
@@ -47,6 +64,7 @@ def disassemble(objdump, elf):
         print(f"could not disassemble {elf}: {result.stderr.strip()}")
         sys.exit(2)
 
+    bounds = function_bounds(objdump, elf)
     functions, current = {}, None
     for line in result.stdout.splitlines():
         header = HEADER.match(line)
@@ -55,6 +73,15 @@ def disassemble(objdump, elf):
             functions.setdefault(current, [])
             continue
         if current is None or ":" not in line:
+            continue
+        try:
+            address = int(line.split(":", 1)[0].strip(), 16)
+        except ValueError:
+            continue
+        extent = bounds.get(current)
+        if extent and not extent[0] <= address < extent[1]:
+            # objdump can print an unnamed thunk between this function's end
+            # and the next named symbol. It is not part of this function.
             continue
         fields = line.split(":", 1)[1].split(None, 1)
         if fields:

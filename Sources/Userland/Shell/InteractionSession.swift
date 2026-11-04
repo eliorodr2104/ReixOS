@@ -5,6 +5,8 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 27/08/2026.
 //
 
+import TerminalCore
+import InputServerCore
 import Reix
 import ReixABI
 import ShellLanguage

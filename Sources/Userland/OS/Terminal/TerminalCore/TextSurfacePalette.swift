@@ -5,6 +5,7 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 29/08/2026.
 //
 
+import Reix
 import ReixABI
 
 /// How many colours the terminal on the other end is worth talking to in.

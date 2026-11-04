@@ -5,6 +5,7 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 27/08/2026.
 //
 
+import Reix
 import ReixABI
 
 /// The capability-backed resources belonging to one router endpoint.

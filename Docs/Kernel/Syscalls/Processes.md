@@ -35,4 +35,4 @@ All raw argument/result registers are `UInt64`; narrower payload types are noted
 
 ## Userland API
 
-The [task SDK](../../../Sources/Reix/RXTask.swift) translates these operations into `SpawnResult`, `TaskCreation`, `TaskResult`, `TaskStartResult` and `TaskStatus`. The wrappers `jobCancel` and `jobStatus` use the raw `taskTerminate` and `taskStatus` numbers. `waitForJob` is an SDK polling loop, not another syscall. `sleep(for:)` converts milliseconds/seconds into ticks, rounding milliseconds upward.
+The [task SDK](../../../Sources/SDK/Syscalls/RXTask.swift) translates these operations into `SpawnResult`, `TaskCreation`, `TaskResult`, `TaskStartResult` and `TaskStatus`. The wrappers `jobCancel` and `jobStatus` use the raw `taskTerminate` and `taskStatus` numbers. `waitForJob` is an SDK polling loop, not another syscall. `sleep(for:)` converts milliseconds/seconds into ticks, rounding milliseconds upward.

@@ -3,6 +3,7 @@
 //  ReixOS
 //
 
+import SerialServerCore
 import Reix
 import ReixABI
 

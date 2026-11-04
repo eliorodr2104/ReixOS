@@ -85,7 +85,16 @@ let kernelNativeExclude: [String] = [
 ]
 
 let appDependencies: [String: [Target.Dependency]] = [
-    "BlockServer": ["VirtioBlockCore"],
+    "BlockServer": ["Reix", "ReixABI", "VirtioBlockCore"],
+    "ConsoleServer": ["Reix", "SerialServerCore"],
+    "Init": ["Reix"],
+    "InputServer": ["InputServerCore", "Reix", "ReixABI"],
+    "NameServer": ["Reix"],
+    "SerialServer": ["Reix", "ReixABI", "SerialServerCore"],
+    "StorageCheck": ["Reix", "ReixABI"],
+    "Top": ["Reix"],
+    "VTAdapter": ["InputServerCore", "Reix", "ReixABI", "SerialServerCore", "TerminalCore"],
+    "VirtioBus": ["Reix", "ReixABI"],
 ]
 
 func app(
@@ -101,6 +110,9 @@ let package = Package(
     // ignores it. macOS 26 makes InlineArray & co. available for indexing.
     platforms: [.macOS("26.0")],
     products: [
+        .library(name: "SerialServerCore", type: .static, targets: ["SerialServerCore"]),
+        .library(name: "InputServerCore", type: .static, targets: ["InputServerCore"]),
+        .library(name: "TerminalCore", type: .static, targets: ["TerminalCore"]),
         .library(name: "Heap", type: .static, targets: ["Heap"]),
         .library(name: "Text", type: .static, targets: ["Text"]),
         .library(name: "MemoryPrimitives", type: .static, targets: ["MemoryPrimitives"]),
@@ -126,6 +138,10 @@ let package = Package(
         .library(name: "ProcessServer", type: .static, targets: ["ProcessServer"]),
     ],
     targets: [
+        .target(name: "SerialServerCore", dependencies: ["Reix", "ReixABI"], path: "Sources/Userland/System/SerialServerCore", swiftSettings: terminalProfile),
+        .target(name: "InputServerCore", dependencies: ["Reix", "ReixABI"], path: "Sources/Userland/System/InputServerCore", swiftSettings: terminalProfile),
+        .target(name: "TerminalCore", dependencies: ["Reix", "ReixABI", "Text"], path: "Sources/Userland/OS/Terminal/TerminalCore", swiftSettings: terminalProfile),
+
         .target(name: "Heap", dependencies: [], path: "Sources/Libraries/Heap", swiftSettings: bareMetal),
         .target(name: "Text", dependencies: [], path: "Sources/Libraries/Text", swiftSettings: bareMetal),
         .target(name: "MemoryPrimitives", dependencies: [], path: "Sources/Libraries/Memory", swiftSettings: bareMetal),
@@ -135,7 +151,7 @@ let package = Package(
         .target(name: "ReixABI", path: "Sources/ABI", swiftSettings: bareMetal),
 
         // Userland SDK: syscall wrappers + service clients. Re-exports ReixABI.
-        .target(name: "Reix", dependencies: ["ReixABI", "Heap", "MemoryPrimitives", "Text"], path: "Sources/Reix", swiftSettings: terminalProfile),
+        .target(name: "Reix", dependencies: ["ReixABI", "Heap", "MemoryPrimitives"], path: "Sources/SDK", exclude: ["C/UserRuntimeABI.c", "C/AsmSyscall.S"], swiftSettings: terminalProfile),
 
         // Pure, bounded ELF policy. It knows no filesystem, syscall, process,
         // or kernel type; ProcessServer supplies bytes and applies the plan.
@@ -173,7 +189,7 @@ let package = Package(
         app("StorageCheck", bareMetal),
         .target(
             name         : "ProcessServer",
-            dependencies : ["Reix", "ProcessServerCore"],
+            dependencies : ["Reix", "ProcessServerCore", "ReixABI"],
             path         : "Sources/Userland/ProcessServer",
             swiftSettings: terminalProfile
         ),
@@ -206,7 +222,7 @@ let package = Package(
         ),
         .target(
             name         : "Shell",
-            dependencies : ["Reix", "ShellLanguage", "Text"],
+            dependencies : ["Reix", "ShellLanguage", "Text", "InputServerCore", "ReixABI", "TerminalCore"],
             path         : "Sources/Userland/Shell",
             exclude      : ["Language"],
             swiftSettings: terminalProfile
@@ -246,17 +262,17 @@ let package = Package(
         ),
         .executableTarget(
             name: "TerminalRingHarness",
-            dependencies: ["Reix", "ReixABI", "KernelHostShims", "TerminalTestSupport"],
+            dependencies: ["Reix", "ReixABI", "KernelHostShims", "TerminalTestSupport", "TerminalCore"],
             path: "Tests/TerminalRingHarness"
         ),
         .executableTarget(
             name: "InputRouterHarness",
-            dependencies: ["Reix", "ReixABI", "KernelHostShims"],
+            dependencies: ["Reix", "ReixABI", "KernelHostShims", "InputServerCore"],
             path: "Tests/InputRouterHarness"
         ),
         .executableTarget(
             name: "SerialRingHarness",
-            dependencies: ["Reix", "ReixABI", "KernelHostShims"],
+            dependencies: ["Reix", "ReixABI", "KernelHostShims", "SerialServerCore"],
             path: "Tests/SerialRingHarness"
         ),
         // The shell's catalog and grammar, over the modules the shell is built
@@ -264,13 +280,13 @@ let package = Package(
         // `putchar` collide with the kernel's inside one test bundle.
         .executableTarget(
             name: "ShellCatalogHarness",
-            dependencies: ["Shell", "ShellLanguage", "ReixABI", "KernelHostShims"],
+            dependencies: ["Shell", "ShellLanguage", "ReixABI", "KernelHostShims", "Reix", "TerminalCore"],
             path: "Tests/ShellCatalogHarness"
         ),
 
         .executableTarget(
             name: "VTDecoderHarness",
-            dependencies: ["Reix", "ReixABI", "ShellLanguage", "KernelHostShims"],
+            dependencies: ["Reix", "ReixABI", "ShellLanguage", "KernelHostShims", "TerminalCore"],
             path: "Tests/VTDecoderHarness"
         ),
 
@@ -308,7 +324,7 @@ let package = Package(
         // pure logic: a line in, a parsed command or a placed error out.
         .testTarget(
             name        : "ShellTests",
-            dependencies: ["ShellLanguage", "Text"],
+            dependencies: ["ShellLanguage", "Text", "ReixABI"],
             path        : "Tests/ShellTests",
             resources   : [.copy("Fixtures")]
         ),

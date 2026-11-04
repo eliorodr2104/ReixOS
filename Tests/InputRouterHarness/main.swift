@@ -5,6 +5,7 @@
 //  Input router host regression harness.
 //
 
+@testable import InputServerCore
 import KernelHostShims
 @testable import Reix
 import ReixABI

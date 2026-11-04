@@ -60,4 +60,4 @@ The [disk format page](../Architecture/Storage.md) explains the byte/block layou
 
 ## Source entry points
 
-[BlockServer / driver](../../Sources/Userland/BlockServer), [BlockClient](../../Sources/Reix/Services/BlockServer/BlockClient.swift), [FileSystemServer](../../Sources/Userland/FileSystemServer), [FileSystemClient](../../Sources/Reix/Services/FileSystemServer/FileSystemClient.swift), [ReixFS](../../Sources/Libraries/FS).
+[BlockServer / driver](../../Sources/Userland/BlockServer), [BlockClient](../../Sources/SDK/Clients/Block/BlockClient.swift), [FileSystemServer](../../Sources/Userland/FileSystemServer), [FileSystemClient](../../Sources/SDK/Clients/FileSystem/FileSystemClient.swift), [ReixFS](../../Sources/Libraries/FS).

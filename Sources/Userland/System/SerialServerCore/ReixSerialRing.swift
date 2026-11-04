@@ -3,6 +3,7 @@
 //  ReixOS
 //
 
+import Reix
 import ReixABI
 
 public enum ReixSerialRingPop {

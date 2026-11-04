@@ -3,6 +3,7 @@
 //  ReixOS
 //
 
+@testable import SerialServerCore
 import Reix
 import ReixABI
 

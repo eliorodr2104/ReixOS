@@ -5,6 +5,7 @@
 //  Created by Eliomar on 29/06/2026.
 //
 
+import SerialServerCore
 import Reix
 
 public struct ConsoleServer: Service {

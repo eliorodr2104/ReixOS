@@ -5,6 +5,7 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 28/08/2026.
 //
 
+import Reix
 import ReixABI
 
 /// A bounded VT byte decoder that preserves unconsumed input when its queue is full.
