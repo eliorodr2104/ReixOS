@@ -60,7 +60,7 @@ struct RegionCloneTests {
             else { Issue.record("the pair lost a VMA manager"); return }
 
             #expect(throws: Never.self) {
-                try childVMA.pointee.cloneRegions(from: parentVMA.pointee)
+                try childVMA.pointee.cloneRegions(from: parentVMA)
             }
 
             let calls = mmuCalls()
@@ -113,7 +113,7 @@ struct RegionCloneTests {
             else { Issue.record("the pair lost a VMA manager"); return }
 
             #expect(throws: VMAError.self) {
-                try childVMA.pointee.cloneRegions(from: parentVMA.pointee)
+                try childVMA.pointee.cloneRegions(from: parentVMA)
             }
 
             #expect(mmuOps().last == .tlbASID)
@@ -132,7 +132,7 @@ struct RegionCloneTests {
 
             #expect(throws: Never.self) {
                 try child.pointee.addressSpace.vmaManager!.pointee.cloneRegions(
-                    from: parent.pointee.addressSpace.vmaManager!.pointee
+                    from: parent.pointee.addressSpace.vmaManager!
                 )
             }
             #expect(mmuCount(.tlbASID) == 1)
@@ -151,7 +151,7 @@ struct RegionCloneTests {
 
             #expect(throws: Never.self) {
                 try child.pointee.addressSpace.vmaManager!.pointee.cloneRegions(
-                    from: parent.pointee.addressSpace.vmaManager!.pointee
+                    from: parent.pointee.addressSpace.vmaManager!
                 )
             }
             #expect(mmuCalls().filter { $0.op == .cleanPoU }.map(\.arg) == code)
@@ -173,7 +173,7 @@ struct RegionCloneTests {
 
             #expect(throws: VMAError.self) {
                 try child.pointee.addressSpace.vmaManager!.pointee.cloneRegions(
-                    from: parent.pointee.addressSpace.vmaManager!.pointee
+                    from: parent.pointee.addressSpace.vmaManager!
                 )
             }
             #expect(mmuCalls().filter { $0.op == .cleanPoU }.map(\.arg)
@@ -197,7 +197,7 @@ struct RegionCloneTests {
             defer { mmu_trace_reset(nil) }
 
             #expect(throws: Never.self) {
-                try childVMA.pointee.cloneRegions(from: parent.pointee.addressSpace.vmaManager!.pointee)
+                try childVMA.pointee.cloneRegions(from: parent.pointee.addressSpace.vmaManager!)
             }
             #expect(mmuCount(.cleanPoU) == 0)
             #expect(mmuCount(.icacheAll) == 0)

@@ -53,7 +53,7 @@ public struct SplitProcessSyscall: SyscallProvider {
         childVMM.pointee.setInitialBreak(parentVMM.pointee.currentBreak)
 
         do {
-            try childVMM.pointee.cloneRegions(from: parentVMM.pointee)
+            try childVMM.pointee.cloneRegions(from: parentVMM)
 
         } catch {
             discard(childProcess, context: context)

@@ -315,7 +315,7 @@ struct SharedRegionLifetimeTests {
 
             #expect(region.pointee.references == 2)
 
-            do { try childVMA.pointee.cloneRegions(from: parentVMA.pointee) }
+            do { try childVMA.pointee.cloneRegions(from: parentVMA) }
             catch { Issue.record("clone failed: \(error)"); return }
 
             // A holder like any other. Without it the parent's exit would free

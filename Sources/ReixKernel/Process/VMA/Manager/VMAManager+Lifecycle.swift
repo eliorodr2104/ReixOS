@@ -75,11 +75,14 @@ extension VMAManager {
     /// executable parent mappings therefore carry their publication with them.
     /// Any code that still needed staging is completed once here, including on
     /// a throwing exit, before the child can be scheduled or destroyed.
-    public mutating func cloneRegions(from parent: VMAManager) throws(VMAError) {
+    ///
+    /// `parent` by address: by value it was a 296-byte copy of the parent's
+    /// manager.
+    public mutating func cloneRegions(from parent: UnsafePointer<VMAManager>) throws(VMAError) {
         var instructionPublicationPending = false
 
         defer {
-            Arch.MMU.flushTLB(asid: parent.context.asid)
+            Arch.MMU.flushTLB(asid: parent.pointee.context.asid)
             if instructionPublicationPending {
                 Arch.MMU.completeInstructionPublication()
             }
@@ -92,11 +95,11 @@ extension VMAManager {
                 RegionClone(
                     manager                      : managerPointer(),
                     context                      : context,
-                    parentRoot                   : parent.context.rootTablePhysical,
-                    parentASID                   : parent.context.asid,
-                    parentBrk                    : parent.brkVMA,
+                    parentRoot                   : parent.pointee.context.rootTablePhysical,
+                    parentASID                   : parent.pointee.context.asid,
+                    parentBrk                    : parent.pointee.brkVMA,
                     instructionPublicationPending: pending,
-                    from                         : parent.vmaList.head
+                    from                         : parent.pointee.vmaList.head
                 )
             )
         }

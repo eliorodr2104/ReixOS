@@ -149,7 +149,7 @@ struct BusDeriveTests {
 
     @Test("each transport keeps the line its own node declared")
     func lineBelongsToTheTransport() {
-        let info = Self.busInfo()
+        var info = Self.busInfo()
 
         #expect(info.count == UInt32(Self.windows.count))
 
@@ -170,11 +170,12 @@ struct BusDeriveTests {
 
     @Test("a transport the bus does not have is nothing")
     func indexIsBoundedInTheList() {
-        let info = Self.busInfo()
+        var info = Self.busInfo()
 
         #expect(info.transport(at: UInt32(Self.windows.count)) == nil)
         #expect(info.transport(at: UInt32.max) == nil)
-        #expect(VirtioBusInfo().transport(at: 0) == nil)
+        var empty = VirtioBusInfo()
+        #expect(empty.transport(at: 0) == nil)
     }
 
 

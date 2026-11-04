@@ -98,7 +98,10 @@ extension VMAManager {
     /// the syscall's report honest: a partial decommit would return success while
     /// leaving pages resident, and the caller has no way to learn which. Retiring
     /// such a region is unmap-only work `munmap` does, not this.
-    private func ownedRegions(
+    ///
+    /// `mutating` for the reason `CapsTable.resolve` is: a non-mutating reader
+    /// got a 296-byte copy of the manager.
+    private mutating func ownedRegions(
         over range: (start: VirtualAddress, end: VirtualAddress)
     ) throws(VMAError) -> UnsafeMutablePointer<VirtualMemoryArea> {
 
