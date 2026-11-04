@@ -219,7 +219,7 @@ struct InterruptBindTests {
 
             let tag = MessageTag(packed: driver.pointee.context!.pointee.x1)
             #expect(InterruptNotification.names(tag))
-            #expect(InterruptNotification.lines(of: Message(from: driver.pointee.context!.pointee)) == 1)
+            #expect(InterruptNotification.lines(of: Message(from: driver.pointee.context!)) == 1)
             #expect(set.pointee.pending == 0)
         }
     }
@@ -370,7 +370,8 @@ struct InterruptBindTests {
 
             // Nobody is receiving, so the client parks waiting to be heard.
             withCurrentProcess(client) {
-                _ = ipc.pointee.send(capability: speak, frame: Arch.TrapFrame())
+                var trap = Arch.TrapFrame()
+                _ = ipc.pointee.send(capability: speak, frame: &trap)
             }
 
             #expect(endpoint.pointee.state == .sendBlocked)

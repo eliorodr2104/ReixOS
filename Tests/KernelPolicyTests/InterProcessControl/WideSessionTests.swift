@@ -120,7 +120,8 @@ struct WideSessionTests {
                 server.pointee.context = withUnsafeMutablePointer(to: &waiting) { $0 }
 
                 withCurrentProcess(client) {
-                    _ = ipc.pointee.send(capability: send, frame: frame(word: 7))
+                    var trap = frame(word: 7)
+                    _ = ipc.pointee.send(capability: send, frame: &trap)
                 }
 
                 #expect(server.pointee.context?.pointee.x6 == session)
@@ -146,7 +147,8 @@ struct WideSessionTests {
                 // Nobody waiting, so the message is parked on the endpoint and
                 // the session goes with it into `PendingMessage`.
                 withCurrentProcess(client) {
-                    _ = ipc.pointee.send(capability: send, frame: frame(word: 9))
+                    var trap = frame(word: 9)
+                    _ = ipc.pointee.send(capability: send, frame: &trap)
                 }
 
                 var taken = Arch.TrapFrame()
@@ -181,7 +183,8 @@ struct WideSessionTests {
                 server.pointee.context = withUnsafeMutablePointer(to: &waiting) { $0 }
 
                 withCurrentProcess(client) {
-                    _ = ipc.pointee.call(capability: send, frame: frame(word: 11))
+                    var trap = frame(word: 11)
+                    _ = ipc.pointee.call(capability: send, frame: &trap)
                 }
 
                 #expect(server.pointee.context?.pointee.x6 == session)
@@ -205,7 +208,8 @@ struct WideSessionTests {
             let send    = give(ipc, client, on: endpoint, [.send], session: 1 << 40)
 
             withCurrentProcess(client) {
-                _ = ipc.pointee.call(capability: send, frame: frame(word: 13))
+                var trap = frame(word: 13)
+                _ = ipc.pointee.call(capability: send, frame: &trap)
             }
 
             var taken = Arch.TrapFrame()
@@ -218,7 +222,8 @@ struct WideSessionTests {
             #expect(taken.x6 == 1 << 40)
 
             withCurrentProcess(server) {
-                _ = ipc.pointee.reply(frame: frame(word: 21))
+                var trap = frame(word: 21)
+                _ = ipc.pointee.reply(frame: &trap)
             }
 
             // No session: the caller knows which question it asked, so a reply
@@ -270,7 +275,7 @@ struct WideSessionTests {
                     | (UInt64(CapRights([.send]).rawValue) << 32)
 
                 withCurrentProcess(client) {
-                    _ = ipc.pointee.send(capability: badged, frame: carrying)
+                    _ = ipc.pointee.send(capability: badged, frame: &carrying)
                 }
 
                 #expect(server.pointee.context?.pointee.x6 == session)

@@ -352,9 +352,10 @@ struct SharedRegionLifetimeTests {
         var parked = false
 
         withCurrentProcess(sender) {
+            var trap = frame(granting: granting, rights)
             if case .success(.blocked) = ipc.pointee.send(
                 capability: send,
-                frame     : frame(granting: granting, rights)
+                frame     : &trap
             ) { parked = true }
         }
 

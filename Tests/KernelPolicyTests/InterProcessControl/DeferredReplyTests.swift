@@ -134,7 +134,8 @@ struct DeferredReplyTests {
         word      : UInt32
     ) {
         withCurrentProcess(client) {
-            _ = ipc.pointee.call(capability: send, frame: frame(word: word))
+            var trap = frame(word: word)
+            _ = ipc.pointee.call(capability: send, frame: &trap)
         }
 
         withCurrentProcess(server) {
