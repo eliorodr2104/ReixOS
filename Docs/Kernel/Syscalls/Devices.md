@@ -12,15 +12,15 @@ All raw argument/result registers are `UInt64`; narrower payload types are noted
 
 | Number | Syscall / implementation | Input | Result |
 | --- | --- | --- | --- |
-| 29 | [`deviceCap`](../../../Sources/ReixKernel/Arch/aarch64/Exceptions/Providers/RXIPC/DeviceCapSyscall.swift) | None | `x0`: bootstrap device handle; `UInt32.max` when absent. |
-| 30 | [`mapDevice`](../../../Sources/ReixKernel/Arch/aarch64/Exceptions/Providers/RXIPC/MapDeviceSyscall.swift) | `x0`: device handle | `x0`: mapped virtual address; 0 on failure. |
-| 35 | [`irqWait`](../../../Sources/ReixKernel/Arch/aarch64/Exceptions/Providers/RXIO/IrqWaitSyscall.swift) | `x0`: interrupt handle; `x1`: timeout ticks, 0 for unbounded wait | `x0`: pending-bit mask; 0 on timeout; `UInt64.max` on failure. |
-| 36 | [`irqAck`](../../../Sources/ReixKernel/Arch/aarch64/Exceptions/Providers/RXIO/IrqAckSyscall.swift) | `x0`: interrupt handle; `x1`: serviced-bit mask | `x0`: 0 on acknowledgement; `UInt64.max` on failure. |
-| 45 | [`irqBind`](../../../Sources/ReixKernel/Arch/aarch64/Exceptions/Providers/RXIO/IrqBindSyscall.swift) | `x0`: interrupt handle; `x1`: endpoint handle | `x0`: 0 on binding; `UInt64.max` on failure. |
-| 39 | [`deviceRead`](../../../Sources/ReixKernel/Arch/aarch64/Exceptions/Providers/RXIPC/DeviceAccessSyscall.swift) | `x0`: device handle; `x1`: byte offset | `x0`: zero-extended 32-bit MMIO value; `UInt64.max` on failure. |
-| 40 | [`deviceWrite`](../../../Sources/ReixKernel/Arch/aarch64/Exceptions/Providers/RXIPC/DeviceAccessSyscall.swift) | `x0`: device handle; `x1`: byte offset; `x2`: 32-bit value | `x0`: 0 on write; `UInt64.max` on failure. |
-| 41 | [`busDeriveDevice`](../../../Sources/ReixKernel/Arch/aarch64/Exceptions/Providers/RXIPC/BusDeriveDeviceSyscall.swift) | `x0`: bus handle; `x1`: transport index (`UInt32`) | `x0`: device-window handle; `UInt32.max` on failure. |
-| 42 | [`busDeriveInterrupt`](../../../Sources/ReixKernel/Arch/aarch64/Exceptions/Providers/RXIPC/BusDeriveInterruptSyscall.swift) | `x0`: bus handle; `x1`: transport index (`UInt32`) | `x0`: interrupt-set handle; `UInt32.max` on failure. |
+| 29 | [`deviceCap`](../../../Sources/Kernel/Syscalls/Devices/DeviceCapSyscall.swift) | None | `x0`: bootstrap device handle; `UInt32.max` when absent. |
+| 30 | [`mapDevice`](../../../Sources/Kernel/Syscalls/Devices/MapDeviceSyscall.swift) | `x0`: device handle | `x0`: mapped virtual address; 0 on failure. |
+| 35 | [`irqWait`](../../../Sources/Kernel/Syscalls/Interrupts/IrqWaitSyscall.swift) | `x0`: interrupt handle; `x1`: timeout ticks, 0 for unbounded wait | `x0`: pending-bit mask; 0 on timeout; `UInt64.max` on failure. |
+| 36 | [`irqAck`](../../../Sources/Kernel/Syscalls/Interrupts/IrqAckSyscall.swift) | `x0`: interrupt handle; `x1`: serviced-bit mask | `x0`: 0 on acknowledgement; `UInt64.max` on failure. |
+| 45 | [`irqBind`](../../../Sources/Kernel/Syscalls/Interrupts/IrqBindSyscall.swift) | `x0`: interrupt handle; `x1`: endpoint handle | `x0`: 0 on binding; `UInt64.max` on failure. |
+| 39 | [`deviceRead`](../../../Sources/Kernel/Syscalls/Devices/DeviceAccessSyscall.swift) | `x0`: device handle; `x1`: byte offset | `x0`: zero-extended 32-bit MMIO value; `UInt64.max` on failure. |
+| 40 | [`deviceWrite`](../../../Sources/Kernel/Syscalls/Devices/DeviceAccessSyscall.swift) | `x0`: device handle; `x1`: byte offset; `x2`: 32-bit value | `x0`: 0 on write; `UInt64.max` on failure. |
+| 41 | [`busDeriveDevice`](../../../Sources/Kernel/Syscalls/Devices/BusDeriveDeviceSyscall.swift) | `x0`: bus handle; `x1`: transport index (`UInt32`) | `x0`: device-window handle; `UInt32.max` on failure. |
+| 42 | [`busDeriveInterrupt`](../../../Sources/Kernel/Syscalls/Devices/BusDeriveInterruptSyscall.swift) | `x0`: bus handle; `x1`: transport index (`UInt32`) | `x0`: interrupt-set handle; `UInt32.max` on failure. |
 
 ## Userland API
 

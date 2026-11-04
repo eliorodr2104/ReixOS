@@ -293,7 +293,7 @@ struct ProfileCapabilityFlowTests {
         #expect(source.contains("precondition(count < grants.count)"))
         let syscall = try String(
             contentsOf: root.appending(
-                path: "Sources/ReixKernel/Arch/aarch64/Exceptions/Providers/RXTask/SpawnProcessSyscall.swift"
+                path: "Sources/Kernel/Syscalls/Tasks/SpawnProcessSyscall.swift"
             ),
             encoding: .utf8
         )

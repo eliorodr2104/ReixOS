@@ -459,7 +459,7 @@ def main() -> int:
         )
     context_saving = (
         workspace
-        / "Sources/ReixKernel/Arch/aarch64/Exceptions/Handlers/ContextSaving.S"
+        / "Sources/Kernel/Arch/AArch64/Exceptions/ContextSaving.S"
     )
     original_context_saving = context_saving.read_text()
     nested_probe = workspace / "Tests/GuestProbes/FPContextNested.S"

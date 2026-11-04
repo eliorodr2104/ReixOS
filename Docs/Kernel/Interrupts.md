@@ -31,4 +31,4 @@ A device capability, an interrupt capability and a DMA capability grant differen
 
 | Function | Parameters | Returns | Meaning |
 | --- | --- | --- | --- |
-| [<code>InterruptDispatcher.dispatch(ack:frame:)</code>](../../Sources/ReixKernel/Drivers/InterruptController/InterruptDispatcher.swift#L26) | <code>ack : UInt32, frame: UnsafeMutablePointer&lt;Arch.TrapFrame&gt;</code> | <code>Void</code> | Routes the acknowledged IRQ and ends it at the GIC. |
+| [<code>InterruptDispatcher.dispatch(ack:frame:)</code>](../../Sources/Kernel/Drivers/Interrupts/InterruptDispatcher.swift#L26) | <code>ack : UInt32, frame: UnsafeMutablePointer&lt;Arch.TrapFrame&gt;</code> | <code>Void</code> | Routes the acknowledged IRQ and ends it at the GIC. |

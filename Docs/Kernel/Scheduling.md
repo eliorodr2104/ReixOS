@@ -39,11 +39,11 @@ The current scheduler is a single global instance. Separate native threads, mult
 
 | Function | Parameters | Returns | Meaning |
 | --- | --- | --- | --- |
-| [<code>RoundRobin.addTask(_:)</code>](../../Sources/ReixKernel/Scheduler/RoundRobin.swift#L74) | <code>_ process: UnsafeMutablePointer&lt;Process&gt;</code> | <code>Void; throws(SchedulerError)</code> | Adds a newly created process to the runnable queue; rejects an invalid starting state. |
-| [<code>RoundRobin.selectNextTask()</code>](../../Sources/ReixKernel/Scheduler/RoundRobin.swift#L135) | <code>None</code> | <code>UnsafeMutablePointer&lt;Process&gt;?</code> | Returns the next process to run, or `nil` when no process is runnable. |
-| [<code>RoundRobin.onTick()</code>](../../Sources/ReixKernel/Scheduler/RoundRobin.swift#L312) | <code>None</code> | <code>Bool</code> | Spends one tick of the running process's quantum; returns `true` when it is gone, and on every tick while idle. |
-| [<code>KernelDeadlineQueue.arm(_:kind:deadline:)</code>](../../Sources/ReixKernel/Scheduler/KernelDeadlineQueue.swift#L31) | <code>_ process : UnsafeMutablePointer&lt;Process&gt;, kind : KernelDeadlineKind, deadline: UInt64</code> | <code>Bool</code> | Arms the process deadline; reports whether insertion succeeded. |
-| [<code>KernelDeadlineQueue.poll(now:budget:_:)</code>](../../Sources/ReixKernel/Scheduler/KernelDeadlineQueue.swift#L73) | <code>now : UInt64, budget: Int, _ body : (UnsafeMutablePointer&lt;Process&gt;, KernelDeadlineKind, UInt64) -&gt; Void</code> | <code>Int</code> | Processes up to the supplied number of due entries and returns the count. The body also receives the expired deadline, for measuring lag. |
+| [<code>RoundRobin.addTask(_:)</code>](../../Sources/Kernel/Scheduler/RoundRobin.swift#L74) | <code>_ process: UnsafeMutablePointer&lt;Process&gt;</code> | <code>Void; throws(SchedulerError)</code> | Adds a newly created process to the runnable queue; rejects an invalid starting state. |
+| [<code>RoundRobin.selectNextTask()</code>](../../Sources/Kernel/Scheduler/RoundRobin.swift#L135) | <code>None</code> | <code>UnsafeMutablePointer&lt;Process&gt;?</code> | Returns the next process to run, or `nil` when no process is runnable. |
+| [<code>RoundRobin.onTick()</code>](../../Sources/Kernel/Scheduler/RoundRobin.swift#L312) | <code>None</code> | <code>Bool</code> | Spends one tick of the running process's quantum; returns `true` when it is gone, and on every tick while idle. |
+| [<code>KernelDeadlineQueue.arm(_:kind:deadline:)</code>](../../Sources/Kernel/Scheduler/KernelDeadlineQueue.swift#L31) | <code>_ process : UnsafeMutablePointer&lt;Process&gt;, kind : KernelDeadlineKind, deadline: UInt64</code> | <code>Bool</code> | Arms the process deadline; reports whether insertion succeeded. |
+| [<code>KernelDeadlineQueue.poll(now:budget:_:)</code>](../../Sources/Kernel/Scheduler/KernelDeadlineQueue.swift#L73) | <code>now : UInt64, budget: Int, _ body : (UnsafeMutablePointer&lt;Process&gt;, KernelDeadlineKind, UInt64) -&gt; Void</code> | <code>Int</code> | Processes up to the supplied number of due entries and returns the count. The body also receives the expired deadline, for measuring lag. |
 
 ## Keeping long operations interruptible
 
@@ -75,7 +75,7 @@ The budget counts from when the exception masked interrupts, not from when the r
 | 6 | `TraceConsoleDump` | `[TRCE]` | `latencyOnly` | One complete trace line, one fixed stack-watermark span or at most 32 UART bytes per step. |
 | 7 | `ProcessCreation` | `[CREATE]` | `latencyOnly` | Private process preparation, one allocation stage or ELF page per step. |
 
-[ProcessTeardown](../../Sources/ReixKernel/Process/ProcessTeardown.swift#L32) drives a whole death as one operation. Before its first window, `beginDeath` publishes death, clears the CPU pointer if this is the running process, and removes live queue and deadline membership. The prologue walks outgoing replies, owned tasks, children and incoming reply waiters one item per step. Owned tasks use an iterative continuation chain through pending owners' unused queue links, so deeper ownership adds neither nested drivers nor kernel stack. Address-space retirement, heap frees, capability release and the corpse remain stages of that same run; see [Processes](Processes.md#creation-and-termination).
+[ProcessTeardown](../../Sources/Kernel/Process/ProcessTeardown.swift#L32) drives a whole death as one operation. Before its first window, `beginDeath` publishes death, clears the CPU pointer if this is the running process, and removes live queue and deadline membership. The prologue walks outgoing replies, owned tasks, children and incoming reply waiters one item per step. Owned tasks use an iterative continuation chain through pending owners' unused queue links, so deeper ownership adds neither nested drivers nor kernel stack. Address-space retirement, heap frees, capability release and the corpse remain stages of that same run; see [Processes](Processes.md#creation-and-termination).
 
 Only the outer active driver owns interrupt windows. The driver avoids opening one while `LogRing` is recording. `PreemptionSpans` aggregates checkpoint and stretch measurements for diagnostics.
 
@@ -101,4 +101,4 @@ The figures are kept in static variables, which is correct on one core. With SMP
 
 | Function | Parameters | Returns | Meaning |
 | --- | --- | --- | --- |
-| [<code>Preemption.run(_:_:)</code>](../../Sources/ReixKernel/Preemption/Preemption.swift#L143) | <code>_ region : Region.Type, _ operation: consuming Operation</code> | <code>PreemptionOutcome&lt;Operation&gt;; throws(Operation.Failure)</code> | Runs steps to completion or returns the unfinished operation; propagates its typed failure. |
+| [<code>Preemption.run(_:_:)</code>](../../Sources/Kernel/Scheduler/Preemption/Preemption.swift#L143) | <code>_ region : Region.Type, _ operation: consuming Operation</code> | <code>PreemptionOutcome&lt;Operation&gt;; throws(Operation.Failure)</code> | Runs steps to completion or returns the unfinished operation; propagates its typed failure. |

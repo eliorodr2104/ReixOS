@@ -257,7 +257,7 @@ def main() -> int:
         "CLANG_MODULE_CACHE_PATH": str(evidence / "module-cache-clang"),
         "SWIFTPM_MODULECACHE_OVERRIDE": str(evidence / "module-cache-swift"),
     }
-    stubs = workspace / "Sources/ReixKernel/Core/Stubs.swift"
+    stubs = workspace / "Sources/Kernel/Foundation/Stubs.swift"
     original_stubs = stubs.read_text()
     results: list[dict[str, object]] = []
 
@@ -386,8 +386,8 @@ def main() -> int:
     results.append(reason)
 
     identity_paths = [
-        "Sources/ReixKernel/Core/Stubs.swift",
-        "Sources/ReixKernel/Diagnostics/KernelRuntimeDiagnostic.swift",
+        "Sources/Kernel/Foundation/Stubs.swift",
+        "Sources/Kernel/Diagnostics/KernelRuntimeDiagnostic.swift",
         "Native/Kernel/KernelRuntimeABI.c",
         "Tests/GuestProbes/KernelRuntimeProbe.c",
         "scripts/test/test-kernel-runtime.py",

@@ -88,7 +88,7 @@ extension Dashboard {
     /// The version, read out of the kernel source as text. The CLI is a host
     /// binary and `ReixKernel` is bare metal, so importing it is not an option.
     private static func version(at root: URL) -> String {
-        let file = root.appending(path: "Sources/ReixKernel/Core/GlobalTypes.swift")
+        let file = root.appending(path: "Sources/Kernel/Foundation/GlobalTypes.swift")
         guard let text = try? String(contentsOf: file, encoding: .utf8) else { return "?" }
 
         func number(_ name: String) -> String {

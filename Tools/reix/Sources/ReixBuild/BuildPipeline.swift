@@ -97,9 +97,9 @@ public struct BuildPipeline: Sendable {
 
     static let kernelNative = [
         "Native/Kernel/KernelRuntimeABI.c",
-        "Sources/ReixKernel/Arch/aarch64/Boot/boot.S",
-        "Sources/ReixKernel/Arch/aarch64/ContextSwitch/ContextSwitch.S",
-        "Sources/ReixKernel/Arch/aarch64/Exceptions/Handlers/ContextSaving.S",
+        "Sources/Kernel/Arch/AArch64/Boot/boot.S",
+        "Sources/Kernel/Arch/AArch64/ContextSwitch/ContextSwitch.S",
+        "Sources/Kernel/Arch/AArch64/Exceptions/ContextSaving.S",
     ]
 
     static let reixNative = [
@@ -232,7 +232,7 @@ public struct BuildPipeline: Sendable {
             try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
 
             let cFlags = ["-target", Self.triple, "-ffreestanding", "-O2", "-nostdlib",
-                          "-fno-stack-protector", "-ISources/ReixKernel/Platform/DeviceTree", "-g"]
+                          "-fno-stack-protector", "-ISources/Kernel/Platform/DeviceTree", "-g"]
 
             func compileSource(_ src: String) throws {
                 let isAsm = src.hasSuffix(".S")
@@ -453,7 +453,7 @@ public struct BuildPipeline: Sendable {
         for source in Self.reixNative {
             let nativeFlags = source.hasSuffix(".c")
                 ? ["-target", Self.triple, "-ffreestanding", "-O2", "-nostdlib",
-                   "-fno-stack-protector", "-ISources/ReixKernel/Platform/DeviceTree", "-g"]
+                   "-fno-stack-protector", "-ISources/Kernel/Platform/DeviceTree", "-g"]
                 : ["-target", Self.triple]
             try run(toolchain.clang, nativeFlags + [
                 "-c", root.appending(path: source).path,

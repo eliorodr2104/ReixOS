@@ -43,12 +43,12 @@ CHILD_FAULT = re.compile(r"\[SEGFAULT\] pid=2 far=0x[0-9a-fA-F]+ .*access=read")
 MUTATIONS = {
     "candidate": None,
     "unmap-without-invalidation": (
-        "Sources/ReixKernel/Process/VMA/Operations/PageRetirement.swift",
+        "Sources/Kernel/Memory/Virtual/Regions/PageRetirement.swift",
         "                Arch.MMU.flushTLBLeafNoSync(virtuals[index], asid: context.asid)\n",
         "",
     ),
     "clone-without-invalidation": (
-        "Sources/ReixKernel/Process/VMA/Manager/VMAManager+Lifecycle.swift",
+        "Sources/Kernel/Memory/Virtual/Regions/VMAManager+Lifecycle.swift",
         "            Arch.MMU.flushTLB(asid: parent.context.asid)\n",
         "",
     ),

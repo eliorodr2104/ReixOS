@@ -27,4 +27,4 @@ The map groups the current kernel and userland responsibilities and shows where 
 
 The shared definitions in `ReixABI` describe these boundaries. Their location in a shared module does not move userland policy into the kernel.
 
-Sources: [kernel composition](../../Sources/ReixKernel/Core/Kernel.swift), [exception path](../../Sources/ReixKernel/Arch/aarch64/Exceptions/Handlers/ExceptionHandler.swift), [Init](../../Sources/Userland/System/Init/Init.swift), [build targets](../../Package.swift).
+Sources: [kernel composition](../../Sources/Kernel/Boot/Kernel.swift), [exception path](../../Sources/Kernel/Arch/AArch64/Exceptions/ExceptionHandler.swift), [Init](../../Sources/Userland/System/Init/Init.swift), [build targets](../../Package.swift).

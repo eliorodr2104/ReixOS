@@ -42,7 +42,7 @@ The kernel still contains this path. Ordinary applications also have a separate 
 
 ## Source entry points
 
-- [Kernel composition](../../Sources/ReixKernel/Core/Kernel.swift) and [entry symbol](../../Sources/ReixKernel/Core/KernelEntry.swift).
-- [Platform discovery](../../Sources/ReixKernel/Platform/QemuVirt/QemuVirtPlatform.swift) and [platform data](../../Sources/ReixKernel/Platform/DeviceTree/Components/PlatformInfo.swift).
-- [Tar filesystem](../../Sources/ReixKernel/FileSystem/Tar/TarFileSystem.swift) and [process loader](../../Sources/ReixKernel/Process/ProcessManager.swift).
+- [Kernel composition](../../Sources/Kernel/Boot/Kernel.swift) and [entry symbol](../../Sources/Kernel/Boot/KernelEntry.swift).
+- [Platform discovery](../../Sources/Kernel/Platform/QemuVirt/QemuVirtPlatform.swift) and [platform data](../../Sources/Kernel/Platform/DeviceTree/PlatformInfo.swift).
+- [Tar filesystem](../../Sources/Kernel/Boot/Initrd/TarFileSystem.swift) and [process loader](../../Sources/Kernel/Process/ProcessManager.swift).
 - [Linker layout](../../Build/linker.ld) and [userland bootstrap](../../Sources/Userland/System/Init/Init.swift).

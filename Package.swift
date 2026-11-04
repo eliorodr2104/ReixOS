@@ -75,13 +75,13 @@ if isFreestanding && isRuntimeStackDiagnostic {
     kernelSettings.append(.define("REIX_RUNTIME_STACK_DIAGNOSTIC"))
 }
 
-/// Non-Swift files that live under `Sources/ReixKernel` but are not part of the
+/// Non-Swift files that live under `Sources/Kernel` but are not part of the
 /// kernel's Swift module: the `reix` CLI compiles them with clang. SPM forbids
 /// mixing Swift and C/asm in one target, so they are excluded here.
 let kernelNativeExclude: [String] = [
-    "Arch/aarch64/Boot/boot.S",
-    "Arch/aarch64/ContextSwitch/ContextSwitch.S",
-    "Arch/aarch64/Exceptions/Handlers/ContextSaving.S",
+    "Arch/AArch64/Boot/boot.S",
+    "Arch/AArch64/ContextSwitch/ContextSwitch.S",
+    "Arch/AArch64/Exceptions/ContextSaving.S",
 ]
 
 let appDependencies: [String: [Target.Dependency]] = [
@@ -178,7 +178,7 @@ let package = Package(
         .target(
             name         : "Kernel",
             dependencies : ["ReixABI", "Heap", "MemoryPrimitives"],
-            path         : "Sources/ReixKernel",
+            path         : "Sources/Kernel",
             exclude      : kernelNativeExclude,
             swiftSettings: kernelSettings
         ),

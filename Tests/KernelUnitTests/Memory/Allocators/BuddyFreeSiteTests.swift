@@ -15,7 +15,7 @@ import Foundation
 @Suite("Buddy free call site")
 struct BuddyFreeSiteTests {
 
-    private static let manager = "Sources/ReixKernel/Memory/Physical/PhysicalPageManager.swift"
+    private static let manager = "Sources/Kernel/Memory/Physical/PhysicalPageManager.swift"
 
 
     /// The package root: the nearest ancestor of this file holding `Package.swift`.

@@ -87,4 +87,4 @@ The conventional image/heap/mmap/stack windows are much smaller than the full al
 
 ## Source entry points
 
-[Linker script](../../Build/linker.ld), [physical manager](../../Sources/ReixKernel/Memory/Physical/PhysicalPageManager.swift), [frame metadata](../../Sources/ReixKernel/Memory/Physical/FrameInfo.swift), [VMM](../../Sources/ReixKernel/Memory/Virtual/VirtualMemoryManager.swift), [TaskABI](../../Sources/ABI/Task/TaskABI.swift), [user layout](../../Sources/ReixKernel/Process/UserSpaceLayout.swift).
+[Linker script](../../Build/linker.ld), [physical manager](../../Sources/Kernel/Memory/Physical/PhysicalPageManager.swift), [frame metadata](../../Sources/Kernel/Memory/Physical/FrameInfo.swift), [VMM](../../Sources/Kernel/Memory/Virtual/VirtualMemoryManager.swift), [TaskABI](../../Sources/ABI/Task/TaskABI.swift), [user layout](../../Sources/Kernel/Process/UserSpaceLayout.swift).

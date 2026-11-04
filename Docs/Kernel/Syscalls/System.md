@@ -10,12 +10,12 @@ All raw argument/result registers are `UInt64`; narrower payload types are noted
 
 | Number | Syscall / implementation | Input | Result |
 | --- | --- | --- | --- |
-| 2 | [`putchar`](../../../Sources/ReixKernel/Arch/aarch64/Exceptions/Providers/RXIO/PutcharSyscall.swift) | `x0`: byte value, truncated to `UInt8` | No result value promised; emits a kernel-console byte. |
-| 33 | [`profileControl`](../../../Sources/ReixKernel/Arch/aarch64/Exceptions/Providers/Profile/ProfileControlSyscall.swift) | `x0`: `ProfileOperation`; `x1`: operation argument; `x2`: authority handle | `x0`: operation-specific result. Most controls use 0/1 success/failure; the PMU probe returns a capability mask. |
-| 34 | [`procStats`](../../../Sources/ReixKernel/Arch/aarch64/Exceptions/Providers/Profile/ProcStatsSyscall.swift) | `x0`: `StatsSubOperation`; `x1`: traversal cursor; `x2`: output buffer; `x3`: authority handle | `x0`: 0 for a system snapshot; PID of the next process for a process snapshot. `UInt64.max` means failure or end of traversal. |
-| 43 | [`clockNow`](../../../Sources/ReixKernel/Arch/aarch64/Exceptions/Providers/RXTime/ClockNowSyscall.swift) | None | `x0`: wall time in nanoseconds; 0 when the clock has not been set. |
-| 44 | [`clockSet`](../../../Sources/ReixKernel/Arch/aarch64/Exceptions/Providers/RXTime/ClockSetSyscall.swift) | `x0`: wall-time nanoseconds; `x1`: clock-authority handle | `x0`: 0 on success; `UInt64.max` on failure. |
-| 46 | [`powerOff`](../../../Sources/ReixKernel/Arch/aarch64/Exceptions/Providers/RXTime/PowerOffSyscall.swift) | `x0`: power-authority handle | Does not return on successful power-off; `UInt64.max` if denied or unsupported. |
+| 2 | [`putchar`](../../../Sources/Kernel/Syscalls/Devices/PutcharSyscall.swift) | `x0`: byte value, truncated to `UInt8` | No result value promised; emits a kernel-console byte. |
+| 33 | [`profileControl`](../../../Sources/Kernel/Syscalls/Profile/ProfileControlSyscall.swift) | `x0`: `ProfileOperation`; `x1`: operation argument; `x2`: authority handle | `x0`: operation-specific result. Most controls use 0/1 success/failure; the PMU probe returns a capability mask. |
+| 34 | [`procStats`](../../../Sources/Kernel/Syscalls/Profile/ProcStatsSyscall.swift) | `x0`: `StatsSubOperation`; `x1`: traversal cursor; `x2`: output buffer; `x3`: authority handle | `x0`: 0 for a system snapshot; PID of the next process for a process snapshot. `UInt64.max` means failure or end of traversal. |
+| 43 | [`clockNow`](../../../Sources/Kernel/Syscalls/Time/ClockNowSyscall.swift) | None | `x0`: wall time in nanoseconds; 0 when the clock has not been set. |
+| 44 | [`clockSet`](../../../Sources/Kernel/Syscalls/Time/ClockSetSyscall.swift) | `x0`: wall-time nanoseconds; `x1`: clock-authority handle | `x0`: 0 on success; `UInt64.max` on failure. |
+| 46 | [`powerOff`](../../../Sources/Kernel/Syscalls/Time/PowerOffSyscall.swift) | `x0`: power-authority handle | Does not return on successful power-off; `UInt64.max` if denied or unsupported. |
 
 ## Statistics sub-operations
 

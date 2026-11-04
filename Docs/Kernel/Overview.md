@@ -52,10 +52,10 @@ A timer IRQ may request a switch while the kernel is executing. The handler chan
 
 | Boundary | Source |
 | --- | --- |
-| Initial CPU and stack setup | [boot.S](../../Sources/ReixKernel/Arch/aarch64/Boot/boot.S) |
-| Exception vectors and register preservation | [ContextSaving.S](../../Sources/ReixKernel/Arch/aarch64/Exceptions/Handlers/ContextSaving.S) |
-| Initial/context transition | [ContextSwitch.S](../../Sources/ReixKernel/Arch/aarch64/ContextSwitch/ContextSwitch.S) |
-| Swift exception dispatch and switching | [ExceptionHandler.swift](../../Sources/ReixKernel/Arch/aarch64/Exceptions/Handlers/ExceptionHandler.swift) |
+| Initial CPU and stack setup | [boot.S](../../Sources/Kernel/Arch/AArch64/Boot/boot.S) |
+| Exception vectors and register preservation | [ContextSaving.S](../../Sources/Kernel/Arch/AArch64/Exceptions/ContextSaving.S) |
+| Initial/context transition | [ContextSwitch.S](../../Sources/Kernel/Arch/AArch64/ContextSwitch/ContextSwitch.S) |
+| Swift exception dispatch and switching | [ExceptionHandler.swift](../../Sources/Kernel/Arch/AArch64/Exceptions/ExceptionHandler.swift) |
 | Generated assembly and user syscall shims | [AsmRoutines.swift](../../Tools/reix/Sources/ReixBuild/AsmRoutines.swift) |
 
 The present boot path reserves one 24 KiB kernel stack and one 16 KiB emergency exception stack. The global scheduler/managers do not establish an implemented SMP design; see the [memory map](../Architecture/Memory.md).
@@ -64,7 +64,7 @@ The present boot path reserves one 24 KiB kernel stack and one 16 KiB emergency 
 
 Logs use `LogRing` and `SerialTransmitQueue`; fatal exceptions enter the panic reporter. `FrameWalker` and `StackUsage` inspect stack state. Trace categories, sampling and `TraceExport` provide observations under profiler capability checks. FP/SIMD and runtime probes are conditional builds.
 
-[Diagnostics sources](../../Sources/ReixKernel/Diagnostics), [architecture primitives](../../Sources/ReixKernel/Arch), [intrusive collections](../../Sources/ReixKernel/RXCore) and [linker/memory helpers](../../Sources/ReixKernel/Support) are linked directly where their declarations already explain their purpose.
+[Diagnostics sources](../../Sources/Kernel), [architecture primitives](../../Sources/Kernel/Arch), [intrusive collections](../../Sources/Kernel/Foundation) and [linker/memory helpers](../../Sources/Kernel/Foundation) are linked directly where their declarations already explain their purpose.
 
 ## Current boundaries
 

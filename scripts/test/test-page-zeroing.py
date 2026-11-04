@@ -288,7 +288,7 @@ def main() -> int:
     manifest_path = evidence / "initial-manifest.json"
     manifest_path.write_text(json.dumps(initial_manifest, indent=2) + "\n")
 
-    process_manager = workspace / "Sources/ReixKernel/Process/ProcessManager.swift"
+    process_manager = workspace / "Sources/Kernel/Process/ProcessManager.swift"
     original = process_manager.read_text()
     environment = {
         **os.environ,
@@ -338,7 +338,7 @@ def main() -> int:
         print(json.dumps(result))
 
     identity_paths = [
-        "Sources/ReixKernel/Process/ProcessManager.swift",
+        "Sources/Kernel/Process/ProcessManager.swift",
         "Tests/GuestProbes/PageZeroingUser.S",
         "scripts/test/test-page-zeroing.py",
     ]

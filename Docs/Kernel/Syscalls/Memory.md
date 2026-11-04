@@ -12,16 +12,16 @@ All raw argument/result registers are `UInt64`; narrower payload types are noted
 
 | Number | Syscall / implementation | Input | Result |
 | --- | --- | --- | --- |
-| 11 | [`brk`](../../../Sources/ReixKernel/Arch/aarch64/Exceptions/Providers/RXMemory/BrkSyscall.swift) | `x0`: requested break; 0 queries it | `x0`: resulting/current break; `UInt64.max` on failure. |
-| 12 | [`mmap`](../../../Sources/ReixKernel/Arch/aarch64/Exceptions/Providers/RXMemory/MmapSyscall.swift) | `x0`: requested bytes | `x0`: mapped virtual address; 0 on failure. |
-| 13 | [`munmap`](../../../Sources/ReixKernel/Arch/aarch64/Exceptions/Providers/RXMemory/MunmapSyscall.swift) | `x0`: virtual address; `x1`: bytes | `x0`: 0 on success; `UInt64.max` on failure. |
-| 14 | [`decommit`](../../../Sources/ReixKernel/Arch/aarch64/Exceptions/Providers/RXMemory/DecommitSyscall.swift) | `x0`: virtual address; `x1`: bytes | `x0`: 0 on success; `UInt64.max` on failure. |
-| 26 | [`shmCreate`](../../../Sources/ReixKernel/Arch/aarch64/Exceptions/Providers/RXMemory/ShmCreate.swift) | `x0`: page count, 1 to 256 | `x0`: shared-region handle; `x1`: caller mapping. Failure: `UInt64.max`, 0. Exactly that many frames are charged and held, possibly from several non-adjacent blocks. |
-| 27 | [`shmMap`](../../../Sources/ReixKernel/Arch/aarch64/Exceptions/Providers/RXMemory/ShmMap.swift) | `x0`: shared-region handle; `x1`: writable flag, 0 or 1 | `x0`: virtual address; 0 on failure. Writable access requires write rights. |
-| 28 | [`shmPages`](../../../Sources/ReixKernel/Arch/aarch64/Exceptions/Providers/RXMemory/ShmPages.swift) | `x0`: shared-region handle | `x0`: page count; 0 for an invalid or unsuitable capability. |
-| 37 | [`dmaAlloc`](../../../Sources/ReixKernel/Arch/aarch64/Exceptions/Providers/RXMemory/DmaAlloc.swift) | `x0`: page count, 1 to 256; `x1`: handle of a device window carrying `.dma` | `x0`: DMA-region handle; `x1`: virtual mapping. Failure: `UInt64.max`, 0. One contiguous block, rounded up to a power of two, bound to that window; the whole block is charged. |
-| 38 | [`dmaPhysical`](../../../Sources/ReixKernel/Arch/aarch64/Exceptions/Providers/RXMemory/DmaPhysical.swift) | `x0`: DMA-region handle | `x0`: physical base address; `UInt64.max` on failure. Marks the buffer as visible to a device, which changes what happens when its last holder lets go. |
-| 57 | [`dmaReclaim`](../../../Sources/ReixKernel/Arch/aarch64/Exceptions/Providers/RXMemory/DmaReclaim.swift) | `x0`: handle of a device window carrying `.dma` | `x0`: frames given back to the page manager, zero included; `UInt64.max` when the handle is not such a window. |
+| 11 | [`brk`](../../../Sources/Kernel/Syscalls/Memory/BrkSyscall.swift) | `x0`: requested break; 0 queries it | `x0`: resulting/current break; `UInt64.max` on failure. |
+| 12 | [`mmap`](../../../Sources/Kernel/Syscalls/Memory/MmapSyscall.swift) | `x0`: requested bytes | `x0`: mapped virtual address; 0 on failure. |
+| 13 | [`munmap`](../../../Sources/Kernel/Syscalls/Memory/MunmapSyscall.swift) | `x0`: virtual address; `x1`: bytes | `x0`: 0 on success; `UInt64.max` on failure. |
+| 14 | [`decommit`](../../../Sources/Kernel/Syscalls/Memory/DecommitSyscall.swift) | `x0`: virtual address; `x1`: bytes | `x0`: 0 on success; `UInt64.max` on failure. |
+| 26 | [`shmCreate`](../../../Sources/Kernel/Syscalls/Memory/ShmCreate.swift) | `x0`: page count, 1 to 256 | `x0`: shared-region handle; `x1`: caller mapping. Failure: `UInt64.max`, 0. Exactly that many frames are charged and held, possibly from several non-adjacent blocks. |
+| 27 | [`shmMap`](../../../Sources/Kernel/Syscalls/Memory/ShmMap.swift) | `x0`: shared-region handle; `x1`: writable flag, 0 or 1 | `x0`: virtual address; 0 on failure. Writable access requires write rights. |
+| 28 | [`shmPages`](../../../Sources/Kernel/Syscalls/Memory/ShmPages.swift) | `x0`: shared-region handle | `x0`: page count; 0 for an invalid or unsuitable capability. |
+| 37 | [`dmaAlloc`](../../../Sources/Kernel/Syscalls/Memory/DmaAlloc.swift) | `x0`: page count, 1 to 256; `x1`: handle of a device window carrying `.dma` | `x0`: DMA-region handle; `x1`: virtual mapping. Failure: `UInt64.max`, 0. One contiguous block, rounded up to a power of two, bound to that window; the whole block is charged. |
+| 38 | [`dmaPhysical`](../../../Sources/Kernel/Syscalls/Memory/DmaPhysical.swift) | `x0`: DMA-region handle | `x0`: physical base address; `UInt64.max` on failure. Marks the buffer as visible to a device, which changes what happens when its last holder lets go. |
+| 57 | [`dmaReclaim`](../../../Sources/Kernel/Syscalls/Memory/DmaReclaim.swift) | `x0`: handle of a device window carrying `.dma` | `x0`: frames given back to the page manager, zero included; `UInt64.max` when the handle is not such a window. |
 
 ## DMA buffers and the quarantine
 

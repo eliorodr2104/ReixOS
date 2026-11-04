@@ -43,34 +43,34 @@ struct FrameBudgetSiteTests {
     private static let sites: [String: (count: Int, accounting: Accounting)] = [
         // The allocator funnel every other site below reaches. Its own call is
         // into the buddy, and the reserve is enforced right above it.
-        "Sources/ReixKernel/Memory/Physical/PhysicalPageManager.swift": (1, .kernel),
+        "Sources/Kernel/Memory/Physical/PhysicalPageManager.swift": (1, .kernel),
 
         // Kernel heap: one backing page per new slab, plus the slab core's own
         // hand-out, which takes no frame.
-        "Sources/ReixKernel/Memory/Heap/BucketsHeap.swift": (2, .kernel),
-        "Sources/ReixKernel/Memory/Heap/PPMBackend.swift" : (1, .kernel),
+        "Sources/Kernel/Memory/Heap/BucketsHeap.swift": (2, .kernel),
+        "Sources/Kernel/Memory/Heap/PPMBackend.swift" : (1, .kernel),
 
         // The first heap page, before there is a process to charge it to.
-        "Sources/ReixKernel/Core/Kernel.swift": (1, .kernel),
+        "Sources/Kernel/Boot/Kernel.swift": (1, .kernel),
 
         // Two boot roots and the ASID bitmap are the machine's; the root table
         // and every level `mapTable` creates are the address space's.
-        "Sources/ReixKernel/Memory/Virtual/VirtualMemoryManager.swift": (5, .process),
+        "Sources/Kernel/Memory/Virtual/VirtualMemoryManager.swift": (5, .process),
 
         // Demand-zero pages and copy-on-write copies.
-        "Sources/ReixKernel/Process/VMA/VMAManager+Faults.swift": (2, .process),
+        "Sources/Kernel/Memory/Virtual/Regions/VMAManager+Faults.swift": (2, .process),
 
         // The first stack page, the task map, the ELF load frames.
-        "Sources/ReixKernel/Process/ProcessManager.swift"                 : (1, .process),
-        "Sources/ReixKernel/Process/VMA/Operations/TaskMapFill.swift"     : (1, .process),
-        "Sources/ReixKernel/Platform/ELFParser/ElfParser.swift"           : (1, .process),
+        "Sources/Kernel/Process/ProcessManager.swift"                 : (1, .process),
+        "Sources/Kernel/Memory/Virtual/Regions/TaskMapFill.swift"     : (1, .process),
+        "Sources/Kernel/Process/Loader/ElfParser.swift"           : (1, .process),
 
         // Regions, charged to the process that created them for as long as it
         // holds them: `shmCreate` charges before `allocateFrames` takes the
         // blocks, and a DMA buffer is the one block `dmaAlloc` takes itself.
         // A region's extent spill is kernel heap, not a frame: see `spill`.
-        "Sources/ReixKernel/InterProcessControl/Capabilities/SharedRegion.swift"       : (1, .process),
-        "Sources/ReixKernel/Arch/aarch64/Exceptions/Providers/RXMemory/DmaAlloc.swift" : (1, .process),
+        "Sources/Kernel/Capabilities/SharedRegion.swift"       : (1, .process),
+        "Sources/Kernel/Syscalls/Memory/DmaAlloc.swift" : (1, .process),
     ]
 
 
@@ -88,7 +88,7 @@ struct FrameBudgetSiteTests {
     @Test("every allocation site in the kernel is one the budget knows about")
     func noSiteEscapesTheBudget() throws {
         let root   = Self.packageRoot
-        let kernel = root.appendingPathComponent("Sources/ReixKernel")
+        let kernel = root.appendingPathComponent("Sources/Kernel")
 
         guard let walk = FileManager.default.enumerator(
             at                     : kernel,
