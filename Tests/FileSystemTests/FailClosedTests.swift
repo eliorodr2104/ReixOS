@@ -591,7 +591,7 @@ struct FailClosedTests {
             .deletingLastPathComponent()    // FileSystemTests
             .deletingLastPathComponent()    // Tests
             .deletingLastPathComponent()    // the package
-            .appendingPathComponent("Sources/ReixFS")
+            .appendingPathComponent("Sources/Libraries/FS")
 
         let banned = [
             "store(", "setRange(", "setUsed(", "releaseRun(", "releaseObject(",

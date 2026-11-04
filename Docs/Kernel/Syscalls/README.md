@@ -4,7 +4,7 @@
 
 A syscall enters EL1 through AArch64 `svc`. The caller places the operation number in `x8`; arguments occupy `x0…x6` according to the operation. Results normally use `x0`, with additional registers for messages and multi-value returns.
 
-The **58 current syscall numbers** are declared in [SyscallNumber.swift](../../../Sources/ReixABI/SyscallNumber.swift). Their raw values are implicit and follow declaration order. Kernel and userland must agree on that order; these docs do not promise compatibility after renumbering.
+The **58 current syscall numbers** are declared in [SyscallNumber.swift](../../../Sources/ABI/Syscalls/SyscallNumber.swift). Their raw values are implicit and follow declaration order. Kernel and userland must agree on that order; these docs do not promise compatibility after renumbering.
 
 ## By operation
 

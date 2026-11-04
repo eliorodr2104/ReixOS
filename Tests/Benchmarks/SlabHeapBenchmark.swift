@@ -2,6 +2,7 @@
 // Every workload drains the heap back to zero reserved pages before it returns,
 // so every sample starts from the same state and times the same work.
 
+@testable import Heap
 import Dispatch
 import Foundation
 import Testing

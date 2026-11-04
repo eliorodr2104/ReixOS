@@ -20,7 +20,7 @@ flowchart LR
     SUM --> DATA["Data area<br/>Files and directory entries"]
 ```
 
-Arrows show increasing block order. Region sizes are not drawn to scale. [FSLayout](../../Sources/ReixFS/FSLayout.swift#L16) calculates them from volume geometry; mount checks the stored layout against that plan.
+Arrows show increasing block order. Region sizes are not drawn to scale. [FSLayout](../../Sources/Libraries/FS/FSLayout.swift#L16) calculates them from volume geometry; mount checks the stored layout against that plan.
 
 | Region | Calculation |
 | --- | --- |
@@ -61,7 +61,7 @@ These are the measurements documented in `FSLayout`; [ScaleTests.mountMatrix](..
 | Directory entry | 64 bytes: object ID at byte 0, name length at byte 4, a 24-bit check at bytes 5–7, up to 56 name bytes starting at byte 8. A free entry is all zero; an invalid encoding is impossible, not free. |
 | Machine name | Up to 24 bytes in the superblock. |
 
-Object extent slots start at byte 64. The encoders specify byte offsets; Swift in-memory layout is not an implicit disk serializer. [FSSuperblockField](../../Sources/ReixFS/FSSuperblockField.swift#L13) defines the superblock offsets.
+Object extent slots start at byte 64. The encoders specify byte offsets; Swift in-memory layout is not an implicit disk serializer. [FSSuperblockField](../../Sources/Libraries/FS/FSSuperblockField.swift#L13) defines the superblock offsets.
 
 The superblocks alternate publication with generations and checksums. A transaction changing the sum region stages the non-live copy, one generation higher, with the new root and no seal. That copy becomes live when applied. Losing the newest copy immediately after such a change can leave a valid older copy whose root disagrees with the medium; mount refuses that disagreement.
 
@@ -73,7 +73,7 @@ A superblock that fails CRC32C but validates under FNV-1a is an older format, no
 
 The sum region records the checksum of every table, folder and file block at that block's index. Table and folder images stage their checksums in the same transaction. File writes stage checksums before writing data to its home. The filesystem also keeps the expected checksum of every bitmap, table and sum block in scratch memory, checking reads against it and updating it only for accepted writes.
 
-[FileSystem.sumRoot](../../Sources/ReixFS/FileSystem.swift#L782) checksums the checksum of **every** sum block, in block order, including unused pages. The superblock carries that root. Every transaction staging a sum block also stages the superblock image carrying the resulting root, last, in the same redo transaction. The root is an integrity account on this medium, not authentication or protection against rolling back the whole disk.
+[FileSystem.sumRoot](../../Sources/Libraries/FS/FileSystem.swift#L782) checksums the checksum of **every** sum block, in block order, including unused pages. The superblock carries that root. Every transaction staging a sum block also stages the superblock image carrying the resulting root, last, in the same redo transaction. The root is an integrity account on this medium, not authentication or protection against rolling back the whole disk.
 
 A clean `unmount` checks the block map, rooms and names before sealing. It does not scan file bytes. The seal holds bitmap checksums and used counts, table and sum-block checksums, and the container quota index. It is durable before the clean mark names its checksum; a mounted mark names no seal. A check that cannot seal leaves a clean mark without a seal, requiring a full metadata scan on the next mount.
 
@@ -113,12 +113,12 @@ A write starting inside the file's partly filled last block journals that block'
 
 ## Consented re-anchor
 
-Mount never re-anchors a refused root. [FileSystem.reanchorOffered](../../Sources/ReixFS/FileSystem.swift#L450) is a separate read-only eligibility check. It accepts only a root disagreement whose complete data scan finds nothing else: table and folder blocks match the medium's sums, map, names and rooms agree with the table, and all file blocks match. Other refusal kinds, a committed journal, any outstanding overwritten-data intent, exhausted stamps, incomplete scans and additional findings are ineligible. A clean seal's bitmap refusal remains a refusal.
+Mount never re-anchors a refused root. [FileSystem.reanchorOffered](../../Sources/Libraries/FS/FileSystem.swift#L450) is a separate read-only eligibility check. It accepts only a root disagreement whose complete data scan finds nothing else: table and folder blocks match the medium's sums, map, names and rooms agree with the table, and all file blocks match. Other refusal kinds, a committed journal, any outstanding overwritten-data intent, exhausted stamps, incomplete scans and additional findings are ineligible. A clean seal's bitmap refusal remains a refusal.
 
-After the parent consents, [FileSystem.reanchor](../../Sources/ReixFS/FileSystem.swift#L464) repeats the check against the medium. It stages both superblocks with the accepted root, mounted state and no seal in one redo transaction. It preserves the journal step because no new mount generation was published. A prepared header without overwritten data may be discarded only after consent; a committed repair is replayable by mount.
+After the parent consents, [FileSystem.reanchor](../../Sources/Libraries/FS/FileSystem.swift#L464) repeats the check against the medium. It stages both superblocks with the accepted root, mounted state and no seal in one redo transaction. It preserves the journal step because no new mount generation was published. A prepared header without overwritten data may be discarded only after consent; a committed repair is replayable by mount.
 
 Re-anchoring deliberately trusts the medium's sum region. A stale table together with its matching stale sums can pass this scan; the check cannot distinguish that pair from current metadata. [Init's consent path](../Userland/Storage.md#mount-refusal-and-consent) states this trust decision before authorizing it.
 
 ## Source entry points
 
-[Geometry](../../Sources/ReixFS/FSLayout.swift), [superblock offsets](../../Sources/ReixFS/FSSuperblockField.swift), [seal format](../../Sources/ReixFS/FSSeal.swift), [sealing and believing it](../../Sources/ReixFS/FileSystemSeal.swift), [object encoding](../../Sources/ReixFS/FSRecords.swift), [directory encoding](../../Sources/ReixFS/FSEntry.swift), [journal](../../Sources/ReixFS/FSJournal.swift), [transaction state](../../Sources/ReixFS/FSTransaction.swift), [commit/recovery](../../Sources/ReixFS/FileSystem.swift), [scans and repair](../../Sources/ReixFS/FileSystemRepair.swift).
+[Geometry](../../Sources/Libraries/FS/FSLayout.swift), [superblock offsets](../../Sources/Libraries/FS/FSSuperblockField.swift), [seal format](../../Sources/Libraries/FS/FSSeal.swift), [sealing and believing it](../../Sources/Libraries/FS/FileSystemSeal.swift), [object encoding](../../Sources/Libraries/FS/FSRecords.swift), [directory encoding](../../Sources/Libraries/FS/FSEntry.swift), [journal](../../Sources/Libraries/FS/FSJournal.swift), [transaction state](../../Sources/Libraries/FS/FSTransaction.swift), [commit/recovery](../../Sources/Libraries/FS/FileSystem.swift), [scans and repair](../../Sources/Libraries/FS/FileSystemRepair.swift).

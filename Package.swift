@@ -84,11 +84,15 @@ let kernelNativeExclude: [String] = [
     "Arch/aarch64/Exceptions/Handlers/ContextSaving.S",
 ]
 
+let appDependencies: [String: [Target.Dependency]] = [
+    "BlockServer": ["VirtioBlockCore"],
+]
+
 func app(
     _ name    : String,
     _ settings: [SwiftSetting]
 ) -> Target {
-    .target(name: name, dependencies: ["Reix"], path: "Sources/Userland/\(name)", swiftSettings: settings)
+    .target(name: name, dependencies: ["Reix"] + appDependencies[name, default: []], path: "Sources/Userland/\(name)", swiftSettings: settings)
 }
 
 let package = Package(
@@ -97,6 +101,10 @@ let package = Package(
     // ignores it. macOS 26 makes InlineArray & co. available for indexing.
     platforms: [.macOS("26.0")],
     products: [
+        .library(name: "Heap", type: .static, targets: ["Heap"]),
+        .library(name: "Text", type: .static, targets: ["Text"]),
+        .library(name: "MemoryPrimitives", type: .static, targets: ["MemoryPrimitives"]),
+        .library(name: "VirtioBlockCore", type: .static, targets: ["VirtioBlockCore"]),
         .library(name: "ReixABI", type: .static, targets: ["ReixABI"]),
         .library(name: "Reix",    type: .static, targets: ["Reix"]),
         .library(name: "Kernel",  type: .static, targets: ["Kernel"]),
@@ -118,11 +126,16 @@ let package = Package(
         .library(name: "ProcessServer", type: .static, targets: ["ProcessServer"]),
     ],
     targets: [
+        .target(name: "Heap", dependencies: [], path: "Sources/Libraries/Heap", swiftSettings: bareMetal),
+        .target(name: "Text", dependencies: [], path: "Sources/Libraries/Text", swiftSettings: bareMetal),
+        .target(name: "MemoryPrimitives", dependencies: [], path: "Sources/Libraries/Memory", swiftSettings: bareMetal),
+        .target(name: "VirtioBlockCore", dependencies: ["ReixABI"], path: "Sources/Userland/Drivers/VirtioBlockCore", swiftSettings: bareMetal),
+
         // Shared ABI: IPC types + syscall numbers. No dependencies.
-        .target(name: "ReixABI", path: "Sources/ReixABI", swiftSettings: bareMetal),
+        .target(name: "ReixABI", path: "Sources/ABI", swiftSettings: bareMetal),
 
         // Userland SDK: syscall wrappers + service clients. Re-exports ReixABI.
-        .target(name: "Reix", dependencies: ["ReixABI"], path: "Sources/Reix", swiftSettings: terminalProfile),
+        .target(name: "Reix", dependencies: ["ReixABI", "Heap", "MemoryPrimitives", "Text"], path: "Sources/Reix", swiftSettings: terminalProfile),
 
         // Pure, bounded ELF policy. It knows no filesystem, syscall, process,
         // or kernel type; ProcessServer supplies bytes and applies the plan.
@@ -136,7 +149,7 @@ let package = Package(
         // Kernel: everything else. Imports the header-only CElf module via -I.
         .target(
             name         : "Kernel",
-            dependencies : ["ReixABI"],
+            dependencies : ["ReixABI", "Heap", "MemoryPrimitives"],
             path         : "Sources/ReixKernel",
             exclude      : kernelNativeExclude,
             swiftSettings: kernelSettings
@@ -177,7 +190,7 @@ let package = Package(
         // public Reix protocols only.
         .target(
             name         : "ShellLanguage",
-            dependencies : ["ReixABI"],
+            dependencies : ["ReixABI", "Text"],
             path         : "Sources/Userland/Shell/Language",
             swiftSettings: bareMetal
         ),
@@ -188,12 +201,12 @@ let package = Package(
         .target(
             name         : "ReixFS",
             dependencies : ["ReixABI"],
-            path         : "Sources/ReixFS",
+            path         : "Sources/Libraries/FS",
             swiftSettings: bareMetal
         ),
         .target(
             name         : "Shell",
-            dependencies : ["Reix", "ShellLanguage"],
+            dependencies : ["Reix", "ShellLanguage", "Text"],
             path         : "Sources/Userland/Shell",
             exclude      : ["Language"],
             swiftSettings: terminalProfile
@@ -295,7 +308,7 @@ let package = Package(
         // pure logic: a line in, a parsed command or a placed error out.
         .testTarget(
             name        : "ShellTests",
-            dependencies: ["ShellLanguage"],
+            dependencies: ["ShellLanguage", "Text"],
             path        : "Tests/ShellTests",
             resources   : [.copy("Fixtures")]
         ),
@@ -336,7 +349,7 @@ let package = Package(
         // formats and the per-frame records depend on. No behaviour is exercised.
         .testTarget(
             name        : "ABILayoutTests",
-            dependencies: ["Kernel", "ReixABI", "KernelHostShims", "KernelTestSupport"],
+            dependencies: ["Kernel", "ReixABI", "KernelHostShims", "KernelTestSupport", "MemoryPrimitives", "VirtioBlockCore"],
             path        : "Tests/ABILayoutTests"
         ),
 
@@ -344,7 +357,7 @@ let package = Package(
         // page manager, VMA list and page retirement, over host-owned arenas.
         .testTarget(
             name        : "KernelUnitTests",
-            dependencies: ["Kernel", "ReixABI", "KernelHostShims", "KernelTestSupport"],
+            dependencies: ["Kernel", "ReixABI", "KernelHostShims", "KernelTestSupport", "Heap", "MemoryPrimitives"],
             path        : "Tests/KernelUnitTests"
         ),
     ]),

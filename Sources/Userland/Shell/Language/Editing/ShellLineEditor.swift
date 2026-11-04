@@ -5,6 +5,7 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 26/08/2026.
 //
 
+import Text
 import ReixABI
 #if !hasFeature(Embedded)
 import Darwin

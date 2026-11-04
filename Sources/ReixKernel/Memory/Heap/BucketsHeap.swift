@@ -3,6 +3,7 @@
 //  ReixOS
 //
 
+import Heap
 import ReixABI
 
 

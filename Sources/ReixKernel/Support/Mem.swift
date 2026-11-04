@@ -5,6 +5,7 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 28/06/2026.
 //
 
+import MemoryPrimitives
 import ReixABI
 
 #if hasFeature(Embedded)

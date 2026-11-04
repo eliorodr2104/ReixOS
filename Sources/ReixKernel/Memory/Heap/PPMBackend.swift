@@ -5,6 +5,7 @@
 //  Created by Eliomar on 21/06/2026.
 //
 
+import Heap
 import ReixABI
 
 struct PPMBackend: SlabBackend {

@@ -28,7 +28,7 @@ The process traversal uses `UInt64.max` for both exhaustion and failure. System 
 
 ### `SystemStats`
 
-164 bytes, stride 168, alignment 8; members aligned in declaration order. [SystemStats](../../../Sources/ReixABI/ProcessStats/SystemStats.swift#L42) defines the record and [ABILayoutTests.statsLayout](../../../Tests/ABILayoutTests/ABILayoutTests.swift#L225) checks its size, stride and every field offset. A group whose `availability` bit is clear reads zero and means "not measured".
+164 bytes, stride 168, alignment 8; members aligned in declaration order. [SystemStats](../../../Sources/ABI/Stats/SystemStats.swift#L42) defines the record and [ABILayoutTests.statsLayout](../../../Tests/ABILayoutTests/ABILayoutTests.swift#L225) checks its size, stride and every field offset. A group whose `availability` bit is clear reads zero and means "not measured".
 
 | Offset | Fields | Type | Group / meaning |
 | --- | --- | --- | --- |
@@ -50,10 +50,10 @@ The process traversal uses `UInt64.max` for both exhaustion and failure. System 
 | 156 | `irqOffTraceDumpLongest` | `UInt32` | Longest stretch inside `TraceConsoleDump`. |
 | 160 | `irqOffCreateLongest` | `UInt32` | Longest stretch inside `ProcessCreation`. |
 
-[StatsExportPage](../../../Sources/ReixABI/ProcessStats/SystemStats.swift#L125) derives the shared-page offsets from the stride: `SystemStats` starts at byte 8, process count at 176 and process slots at 184. Readers validate both the seqlock and the attachment generation. Event consumers acknowledge a cursor and generation together, so a reader resumed after replacement cannot acknowledge the new attachment, even when its physical page is reused.
+[StatsExportPage](../../../Sources/ABI/Stats/SystemStats.swift#L125) derives the shared-page offsets from the stride: `SystemStats` starts at byte 8, process count at 176 and process slots at 184. Readers validate both the seqlock and the attachment generation. Event consumers acknowledge a cursor and generation together, so a reader resumed after replacement cannot acknowledge the new attachment, even when its physical page is reused.
 
 The latency fields are described in [Scheduling](../Scheduling.md#latency-measurement).
 
 ## Userland API
 
-[Time](../../../Sources/Reix/Time), [profiler support](../../../Sources/Reix/Profile) and [PMU access](../../../Sources/Reix/PMU.swift) provide the userland wrappers. Operation-specific layouts and masks live in [ReixABI](../../../Sources/ReixABI).
+[Time](../../../Sources/Reix/Time), [profiler support](../../../Sources/Reix/Profile) and [PMU access](../../../Sources/Reix/PMU.swift) provide the userland wrappers. Operation-specific layouts and masks live in [ReixABI](../../../Sources/ABI).

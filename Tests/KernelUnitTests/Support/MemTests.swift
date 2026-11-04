@@ -3,6 +3,7 @@
 //  ReixOS
 //
 
+@testable import MemoryPrimitives
 import Testing
 @testable import Kernel
 @testable import ReixABI

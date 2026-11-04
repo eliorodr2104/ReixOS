@@ -8,16 +8,16 @@ Service protocols define what a receiver does with a message. Their operation la
 
 | Contract | Carries | Responsibility |
 | --- | --- | --- |
-| [ProcessServer](../../Sources/ReixABI/ProcessServer) | Launch name, status, semantic environment bindings | Application construction and bootstrap handshake. Statuses include `busy` for a claimed program file or duplicate pending requester, and `timedOut` for an expired launch. |
-| [Block](../../Sources/ReixABI/Block) | Sector ranges, queue slots, geometry, durability and completion | Raw block-device service. |
-| [FileSystem](../../Sources/ReixABI/FileSystem) | Object IDs, names, rights, offsets, metadata and statuses | Capability-scoped persistent storage. |
-| [NameServer](../../Sources/ReixABI/NameServer) | Registration and lookup messages | Resolve explicitly published service endpoints. |
-| [Serial](../../Sources/ReixABI/Serial) | Shared serial-ring state and operations | UART byte transport. |
-| [Input](../../Sources/ReixABI/Input) | Input events, sessions and focus operations | Route input to the authorized consumer. |
-| [TextSurface](../../Sources/ReixABI/TextSurface) | Semantic text operations, rings and text-width support | Terminal presentation shared by producers and adapter. |
-| [Shell](../../Sources/ReixABI/Shell) | Typed values, output records, completion/panel contracts | Shell/application interaction. |
-| [Session](../../Sources/ReixABI/Session) | Session-control operations | Coordination outside the one-time bootstrap channel. |
-| [IPC pipe and attachments](../../Sources/ReixABI/IPC) | Pipe protocol and shared attachment policy | Transfer larger data under an agreed shared-memory contract. |
+| [ProcessServer](../../Sources/ABI/ProcessServer) | Launch name, status, semantic environment bindings | Application construction and bootstrap handshake. Statuses include `busy` for a claimed program file or duplicate pending requester, and `timedOut` for an expired launch. |
+| [Block](../../Sources/ABI/Block) | Sector ranges, queue slots, geometry, durability and completion | Raw block-device service. |
+| [FileSystem](../../Sources/ABI/FileSystem) | Object IDs, names, rights, offsets, metadata and statuses | Capability-scoped persistent storage. |
+| [NameServer](../../Sources/ABI/NameServer) | Registration and lookup messages | Resolve explicitly published service endpoints. |
+| [Serial](../../Sources/ABI/Serial) | Shared serial-ring state and operations | UART byte transport. |
+| [Input](../../Sources/ABI/Input) | Input events, sessions and focus operations | Route input to the authorized consumer. |
+| [TextSurface](../../Sources/ABI/TextSurface) | Semantic text operations, rings and text-width support | Terminal presentation shared by producers and adapter. |
+| [Shell](../../Sources/ABI/Shell) | Typed values, output records, completion/panel contracts | Shell/application interaction. |
+| [Session](../../Sources/ABI/Session) | Session-control operations | Coordination outside the one-time bootstrap channel. |
+| [IPC pipe and attachments](../../Sources/ABI/IPC) | Pipe protocol and shared attachment policy | Transfer larger data under an agreed shared-memory contract. |
 
 ## Application bootstrap
 

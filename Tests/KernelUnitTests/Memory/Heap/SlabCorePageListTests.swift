@@ -3,6 +3,7 @@
 //  ReixOS
 //
 
+@testable import Heap
 import Testing
 @testable import Kernel
 import ReixABI

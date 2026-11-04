@@ -480,7 +480,7 @@ extension TraceDecoder {
 
 extension TraceDecoder {
 
-    /// Mirrors `Sources/ReixABI/SyscallNumber.swift` case-by-case (raw value
+    /// Mirrors `Sources/ABI/Syscalls/SyscallNumber.swift` case-by-case (raw value
     /// = declaration index). Keep this in sync by hand when that enum changes.
     ///
     /// It drifted once, silently: five syscalls added after `profileControl`

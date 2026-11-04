@@ -17,6 +17,8 @@
 /// queue, so what has to be checked instead is that a completion names a chain
 /// this driver could have built - and that check is arithmetic, which is why it
 /// lives here, where it can be tested without a device.
+import ReixABI
+
 public enum VirtioQueueMap {
 
     /// Descriptors per request: header, data, status.

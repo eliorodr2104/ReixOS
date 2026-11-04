@@ -5,6 +5,7 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 22/08/2026.
 //
 
+import VirtioBlockCore
 import Reix
 import ReixABI
 

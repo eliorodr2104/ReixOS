@@ -2,7 +2,7 @@
 
 [Documentation home](../README.md) · [Syscalls](../Kernel/Syscalls/README.md)
 
-`ReixABI` is compiled into the kernel and userland targets that need shared contracts. It defines syscall numbers, IPC encoding, rights, status values and service protocols. It also contains reusable support code; being in this module does not automatically make a Swift type a wire format.
+`ReixABI` is compiled into the kernel and userland targets that need shared contracts. It defines syscall numbers, IPC encoding, rights, status values and service protocols. Reusable algorithms live in separate library modules; native Swift types still require an explicit encoder or layout contract before they can be treated as a wire format.
 
 ## Three boundaries
 
@@ -37,10 +37,10 @@ Explicit register packing and byte-offset encoders define the corresponding tran
 
 Changes to syscall ordering, status values, message labels or shared layouts require matching producer and consumer changes. There is no blanket stable-ABI promise here. Individual protocols define versions where implemented, such as environment transaction version 1. RxFS has no version number: its magic names the format. Another recognised layout or a superblock valid only under the former FNV-1a checksum is refused as `unrecognised`, without modifying the disk. The current format uses CRC32C; existing development images must be recreated.
 
-`RawBytes` supplies naturally aligned portable Swift SIMD memory primitives to both kernel and userland; it is support code, not a wire layout. `SlabCore`/`SlabBackend` are shared allocator support. Unicode/text helpers and shell values similarly support consumers without becoming kernel mechanisms.
+`RawBytes` lives in `MemoryPrimitives`, `SlabCore`/`SlabBackend` in `Heap`, and Unicode/text layout in `Text`. Driver-specific virtio bookkeeping lives in `VirtioBlockCore`. These implementations are separate from the ABI contracts. Shell protocol values remain here where they define transport encoding.
 
 ## Source entry points
 
-- [Syscall numbers](../../Sources/ReixABI/SyscallNumber.swift), [capabilities](../../Sources/ReixABI/Capabilities), [task contracts](../../Sources/ReixABI/Task).
-- [IPC contracts](../../Sources/ReixABI/IPC), [statistics](../../Sources/ReixABI/ProcessStats), [profiler](../../Sources/ReixABI/Profiler), [time](../../Sources/ReixABI/Time).
-- [ABI layout tests](../../Tests/ABILayoutTests), [shared module](../../Sources/ReixABI).
+- [Syscall numbers](../../Sources/ABI/Syscalls/SyscallNumber.swift), [capabilities](../../Sources/ABI/Capabilities), [task contracts](../../Sources/ABI/Task).
+- [IPC contracts](../../Sources/ABI/IPC), [statistics](../../Sources/ABI/ProcessStats), [profiler](../../Sources/ABI/Profiler), [time](../../Sources/ABI/Time).
+- [ABI layout tests](../../Tests/ABILayoutTests), [shared module](../../Sources/ABI).

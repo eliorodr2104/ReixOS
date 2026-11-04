@@ -282,7 +282,7 @@ struct TerminalStructuredProtocolTests {
         let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let textSurface = try String(
             contentsOf: root.appending(
-                path: "Sources/ReixABI/TextSurface/ReixTextSurfaceTransport.swift"
+                path: "Sources/ABI/TextSurface/ReixTextSurfaceTransport.swift"
             ),
             encoding: .utf8
         )

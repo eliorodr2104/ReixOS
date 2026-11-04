@@ -5,6 +5,7 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 27/08/2026.
 //
 
+import Text
 import ReixABI
 
 /// The shell owns one TextSurface region and rings the presentation doorbell.

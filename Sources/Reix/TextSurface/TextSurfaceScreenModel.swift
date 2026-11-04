@@ -5,6 +5,7 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 28/08/2026.
 //
 
+import Text
 import ReixABI
 
 /// What the terminal is showing: a transcript that flows, and the editor block

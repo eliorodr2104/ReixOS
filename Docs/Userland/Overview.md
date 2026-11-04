@@ -10,8 +10,12 @@ The SDK is not a separately scheduled server. `ReixABI` supplies shared contract
 
 | Module | Depends on | Purpose |
 | --- | --- | --- |
-| `ReixABI` | No project module | Shared numbers, layouts, protocol values and portable `RawBytes` memory primitives. |
-| `Reix` | `ReixABI` | Syscalls, memory/runtime support, IPC, clients and service boot helpers. |
+| `ReixABI` | No project module | Shared numbers, layouts and protocol values. |
+| `Heap` | No project module | Shared slab allocator and backend contract. |
+| `Text` | No project module | Unicode tables and text/editor layout. |
+| `MemoryPrimitives` | No project module | Portable, aligned `RawBytes` memory operations. |
+| `VirtioBlockCore` | `ReixABI` | Pure block-driver queue, capacity and completion rules. |
+| `Reix` | `ReixABI`, `Heap`, `Text`, `MemoryPrimitives` | Syscalls, memory/runtime support, IPC, clients and service boot helpers. |
 | `ReixFS` | `ReixABI` | Filesystem algorithm over a generic `BlockDevice`. |
 | `ProcessServerCore` | `ReixABI` | Bounded ELF planning/copying, program profiles and resumable launch supervision. |
 | `ShellLanguage` | `ReixABI` | Parsing, values, semantic analysis, completion and editing logic. |
@@ -31,7 +35,7 @@ The freestanding build enables Embedded Swift and supplies assembly/runtime boun
 | [Profiling](../../Sources/Reix/Profile) and [time](../../Sources/Reix/Time) | Authority-scoped observation and clock wrappers | Units, authority and operation-specific results. |
 | Runtime, formatting and memory helpers | Freestanding support functions | Local implementation support, not additional kernel services. |
 
-The SDK's `memcpy`, `memset` and `memmove` use `ReixABI.RawBytes`, shared with the kernel. Its portable Swift SIMD paths keep accesses naturally aligned, including before the MMU is enabled. Only the kernel adds a `dc zva` zero-fill path; userland uses the shared fill. See [memory primitives](../Kernel/Memory.md#memory-primitives).
+The SDK's `memcpy`, `memset` and `memmove` use `MemoryPrimitives.RawBytes`, shared with the kernel. Its portable Swift SIMD paths keep accesses naturally aligned, including before the MMU is enabled. Only the kernel adds a `dc zva` zero-fill path; userland uses the shared fill. See [memory primitives](../Kernel/Memory.md#memory-primitives).
 
 ## Resource-bearing values
 

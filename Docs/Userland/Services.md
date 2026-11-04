@@ -55,7 +55,7 @@ Init gives FileSystemServer the disk endpoint and passes scoped filesystem capab
 | [ShellLanguage](../../Sources/Userland/Shell/Language) | Shared parsing, typed values, analysis, catalog, completion and editing logic. |
 | [Top](../../Sources/Userland/Top) | Consumes process/system statistics and trace export for display. |
 | [StorageCheck](../../Sources/Userland/StorageCheck) | Dedicated storage exercise/diagnostic program. |
-| [ReixFS](../../Sources/ReixFS) | On-disk filesystem implementation used by FileSystemServer. |
+| [ReixFS](../../Sources/Libraries/FS) | On-disk filesystem implementation used by FileSystemServer. |
 | [ProcessServerCore](../../Sources/Userland/ProcessServerCore) | ELF validation, page-sized copying, program profiles and the generic launch supervisor. |
 
 ProcessServer advances launch records under a single five-second deadline, keeps the file claim through the last copy and answers the original caller only after readiness. It sweeps abandoned launches and exited jobs even without a new request; the kernel remains responsible for process teardown. [Launch supervision](ProcessLaunch.md#resumable-launch-and-cleanup) describes the limits and cleanup policy.

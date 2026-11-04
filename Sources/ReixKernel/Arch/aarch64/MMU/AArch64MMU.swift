@@ -5,6 +5,7 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 30/04/2026.
 //
 
+import MemoryPrimitives
 import ReixABI
 
 public struct AArch64MMU {

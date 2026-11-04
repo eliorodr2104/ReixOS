@@ -5,6 +5,7 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 28/06/2026.
 //
 
+import MemoryPrimitives
 import ReixABI
 
 // Only a program image exports these: a host build of RawBytes at -Onone calls

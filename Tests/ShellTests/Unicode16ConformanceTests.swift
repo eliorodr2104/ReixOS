@@ -3,6 +3,7 @@
 //  ReixOS
 //
 
+@testable import Text
 import Foundation
 import Testing
 import ReixABI

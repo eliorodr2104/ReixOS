@@ -42,7 +42,7 @@ IRQ delivery wakes the driver through the kernel's interrupt mechanism. Device c
 
 Structural updates use a journal with room for 16 block images. Table, folder and file blocks carry checksums in the sum region, anchored by a root in the superblock. Changes to that region and root share a transaction. Existing file blocks overwritten in place are declared with their new checksums before writing, and interrupted declarations settle in their own transaction. A write starting in the partly filled last block journals the tail's image instead. A clean shutdown checks metadata and seals it, so the next sealed mount reads a few blocks instead of the whole table.
 
-A file-data checksum failure returns `FSStatus.damaged`, with read progress stopping at the damaged block. It does not quarantine the volume. Writes retaining any damaged bytes are refused; a whole-block write can repair them. Table, folder or sum-region contradictions instead hold the volume. See [FSStatus](../../Sources/ReixABI/FileSystem/FSStatus.swift#L9).
+A file-data checksum failure returns `FSStatus.damaged`, with read progress stopping at the damaged block. It does not quarantine the volume. Writes retaining any damaged bytes are refused; a whole-block write can repair them. Table, folder or sum-region contradictions instead hold the volume. See [FSStatus](../../Sources/ABI/FileSystem/FSStatus.swift#L9).
 
 ## Mount refusal and consent
 
@@ -54,10 +54,10 @@ Init handles that question in `awaitContainer`. It prints that re-anchoring trus
 
 `fs.scrub` requests `scan(.data)`: metadata, the whole sum region against its known root, and every file block against its checksum. It reports `damaged-blocks:` from `Findings.damagedData`; a safe-to-serve result can still count damaged file blocks. A stopped walk is incomplete and cannot authorize repair. Ordinary mount checks metadata without reading every file's bytes.
 
-[ShellFindingsFrame](../../Sources/ReixABI/Shell/ShellFindingsFrame.swift#L8) carries 21 ordered fields. `scrubDepth` is 0 for blocks, 1 for all metadata and 2 for data as well; the final field is `damagedBlocks` (`ShellField` 23). The other fields retain completion, quota/name checks, map discrepancies, room discrepancies, repair state and `safeToServe`.
+[ShellFindingsFrame](../../Sources/ABI/Shell/ShellFindingsFrame.swift#L8) carries 21 ordered fields. `scrubDepth` is 0 for blocks, 1 for all metadata and 2 for data as well; the final field is `damagedBlocks` (`ShellField` 23). The other fields retain completion, quota/name checks, map discrepancies, room discrepancies, repair state and `safeToServe`.
 
 The [disk format page](../Architecture/Storage.md) explains the byte/block layout and commit ordering. The scratch requirement is checked by [CensusTests.scratchIsEnough](../../Tests/FileSystemTests/CensusTests.swift#L270).
 
 ## Source entry points
 
-[BlockServer / driver](../../Sources/Userland/BlockServer), [BlockClient](../../Sources/Reix/Services/BlockServer/BlockClient.swift), [FileSystemServer](../../Sources/Userland/FileSystemServer), [FileSystemClient](../../Sources/Reix/Services/FileSystemServer/FileSystemClient.swift), [ReixFS](../../Sources/ReixFS).
+[BlockServer / driver](../../Sources/Userland/BlockServer), [BlockClient](../../Sources/Reix/Services/BlockServer/BlockClient.swift), [FileSystemServer](../../Sources/Userland/FileSystemServer), [FileSystemClient](../../Sources/Reix/Services/FileSystemServer/FileSystemClient.swift), [ReixFS](../../Sources/Libraries/FS).

@@ -18,7 +18,7 @@ flowchart LR
 
 ## Memory primitives
 
-[`RawBytes`](../../Sources/ReixABI/RawBytes.swift) supplies `fill`, forward `copy` and overlapping `copyBackward` in portable Swift. Kernel and userland `memcpy`, `memset` and `memmove` share it. All accesses are naturally aligned: 16-byte SIMD lanes when both copy addresses agree modulo 16, 8-byte lanes when they agree modulo 8, and pairs of byte accesses otherwise. Short and ragged ends remain in bounds. This alignment is required while boot still treats RAM as Device memory with the MMU disabled.
+[`RawBytes`](../../Sources/Libraries/Memory/RawBytes.swift) supplies `fill`, forward `copy` and overlapping `copyBackward` in portable Swift. Kernel and userland `memcpy`, `memset` and `memmove` share it. All accesses are naturally aligned: 16-byte SIMD lanes when both copy addresses agree modulo 16, 8-byte lanes when they agree modulo 8, and pairs of byte accesses otherwise. Short and ragged ends remain in bounds. This alignment is required while boot still treats RAM as Device memory with the MMU disabled.
 
 Kernel exceptions save the full FP/SIMD state before entering Swift, so vector memory operations use the existing context contract. Trap-frame copies use the same forward-copy primitive. `scripts/test/test-fpsimd-context.py` checks the context oracle, negative controls and emergency stack path in an isolated QEMU build.
 

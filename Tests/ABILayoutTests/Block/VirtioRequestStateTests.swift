@@ -5,6 +5,7 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 24/08/2026.
 //
 
+@testable import VirtioBlockCore
 import Testing
 import ReixABI
 

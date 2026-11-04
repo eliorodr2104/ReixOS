@@ -17,6 +17,8 @@
 ///
 /// `InlineArray` throughout. A driver allocates nothing, and the interrupt path
 /// least of all.
+import ReixABI
+
 public struct VirtioRequestState {
 
     /// Requests out at once, matching the queue the driver builds.

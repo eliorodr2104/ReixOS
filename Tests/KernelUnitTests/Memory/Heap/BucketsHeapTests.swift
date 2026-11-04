@@ -5,6 +5,7 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 05/08/2026.
 
 
+@testable import Heap
 import Testing
 @testable import Kernel
 import ReixABI

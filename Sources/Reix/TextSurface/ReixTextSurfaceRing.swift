@@ -3,6 +3,7 @@
 //  ReixOS
 //
 
+import Text
 import ReixABI
 
 public enum ReixTextSurfacePopResult: Equatable {

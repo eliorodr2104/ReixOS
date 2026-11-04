@@ -5,6 +5,7 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 23/04/2026.
 //
 
+import MemoryPrimitives
 import ReixABI
 
 /// Represents the CPU execution context saved during an exception or interrupt.

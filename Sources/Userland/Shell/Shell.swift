@@ -5,6 +5,7 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 22/08/2026.
 //
 
+import Text
 import Reix
 import ReixABI
 import ShellLanguage

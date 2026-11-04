@@ -17,6 +17,8 @@
 /// leaves available, and the rule is arithmetic over a sequence of readings,
 /// which is why it lives here rather than inside the driver: a device that
 /// answers differently every time can be handed to this on a host.
+import ReixABI
+
 public enum VirtioCapacity {
 
     /// How many times to ask before giving up.

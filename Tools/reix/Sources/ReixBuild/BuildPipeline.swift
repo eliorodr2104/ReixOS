@@ -302,6 +302,10 @@ public struct BuildPipeline: Sendable {
                     "--start-group",
                     buildDir.appending(path: "libReix.a").path,
                     buildDir.appending(path: "libReixABI.a").path,
+                    buildDir.appending(path: "libHeap.a").path,
+                    buildDir.appending(path: "libText.a").path,
+                    buildDir.appending(path: "libMemoryPrimitives.a").path,
+                    buildDir.appending(path: "libVirtioBlockCore.a").path,
                     buildDir.appending(path: "libShellLanguage.a").path,
                     buildDir.appending(path: "libProcessServerCore.a").path,
                     "--end-group",
@@ -360,6 +364,8 @@ public struct BuildPipeline: Sendable {
                 "--start-group",
                 buildDir.appending(path: "libKernel.a").path,
                 buildDir.appending(path: "libReixABI.a").path,
+                buildDir.appending(path: "libHeap.a").path,
+                buildDir.appending(path: "libMemoryPrimitives.a").path,
                 "--end-group",
             ], tail: tail(sink, .image))
 
@@ -423,7 +429,7 @@ public struct BuildPipeline: Sendable {
         try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: stripped, withIntermediateDirectories: true)
 
-        var libraries = ["lib\(app)", "libReix", "libReixABI"]
+        var libraries = ["lib\(app)", "libReix", "libReixABI", "libHeap", "libText", "libMemoryPrimitives", "libVirtioBlockCore"]
         if app == "Shell"         { libraries.append("libShellLanguage") }
         if app == "ProcessServer" { libraries.append("libProcessServerCore") }
 
@@ -490,7 +496,7 @@ public struct BuildPipeline: Sendable {
     /// The `.a` files the links consume. The compile phase produces them, so a
     /// gap here means the module graph moved under the build, not a stale tree.
     func requireLibraries() throws {
-        let names = ["libKernel", "libReixABI", "libReix", "libShellLanguage", "libProcessServerCore"]
+        let names = ["libKernel", "libReixABI", "libReix", "libShellLanguage", "libProcessServerCore", "libHeap", "libText", "libMemoryPrimitives", "libVirtioBlockCore"]
             + Self.apps.map { "lib\($0)" }
 
         let missing = names

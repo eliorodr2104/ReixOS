@@ -5,6 +5,7 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 28/08/2026.
 //
 
+import Text
 import ReixABI
 
 /// Deterministic local conversion from semantic screen frames to bounded VT output.
