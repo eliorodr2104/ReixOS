@@ -5,6 +5,7 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 23/04/2026.
 //
 
+import ReixABI
 
 /// Represents the CPU execution context saved during an exception or interrupt.
 ///
@@ -81,14 +82,12 @@ public struct AArch64TrapFrame: RXAllocatable {
     public var fpcr: UInt64
     public var fpsr: UInt64
 
-    /// Copies one complete saved context without lowering the aggregate
-    /// assignment to the kernel's byte-at-a-time `memmove` implementation.
+    /// Copies one complete saved context with the shared `RawBytes.copy`.
     ///
     /// Trap frames are either separate allocations (process context versus
     /// exception stack) or the exact same frame. Partially overlapping frames
-    /// are not a valid input. Keeping this operation here ties its fixed-width
-    /// word loop to the layout it copies and gives every scheduler path the
-    /// same bounded implementation.
+    /// are not a valid input. Keeping this operation here gives every scheduler
+    /// path the same bounded implementation.
     @inline(never)
     public static func copy(
         from source     : UnsafePointer<Self>,
@@ -96,18 +95,11 @@ public struct AArch64TrapFrame: RXAllocatable {
     ) {
         guard source != UnsafePointer(destination) else { return }
 
-        let wordCount = MemoryLayout<Self>.size / MemoryLayout<UInt64>.size
-
-        source.withMemoryRebound(to: UInt64.self, capacity: wordCount) { sourceWords in
-            destination.withMemoryRebound(to: UInt64.self, capacity: wordCount) { destinationWords in
-                var index = 0
-                while index < wordCount {
-                    destinationWords[index]     = sourceWords[index]
-                    destinationWords[index + 1] = sourceWords[index + 1]
-                    index &+= 2
-                }
-            }
-        }
+        RawBytes.copy(
+            to   : UnsafeMutableRawPointer(destination),
+            from : UnsafeRawPointer(source),
+            count: MemoryLayout<Self>.size
+        )
     }
     
     /// Initializes a blank trap frame with all registers set to zero.

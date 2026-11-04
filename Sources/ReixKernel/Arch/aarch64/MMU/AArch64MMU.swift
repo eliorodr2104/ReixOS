@@ -5,6 +5,8 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 30/04/2026.
 //
 
+import ReixABI
+
 public struct AArch64MMU {
     
     private init() {  }
@@ -101,7 +103,24 @@ extension AArch64MMU {
     /// the cache type; no publication reads the CPU's identity again.
     static var cleanCacheNeedsInvalidate: Bool = false
 
-    /// Read CTR_EL0 and MIDR_EL1 before the first page of code is published.
+    /// Bytes one `dc zva` zeroes, as `loadCacheType` read DCZID_EL0.
+    ///
+    /// Zero means never use `dc zva`: before `loadCacheType`, when DZP forbids
+    /// it, and when the block is outside 16...2048 bytes.
+    static var zeroBlockBytes: Int = 0
+
+    @_silgen_name("read_dczid")
+    static func readZeroIdentification() -> UInt64
+
+    @_silgen_name("zero_blocks")
+    static func zeroBlocks(
+        _ base    : UnsafeMutableRawPointer,
+        count     : UInt64,
+        blockBytes: UInt64
+    )
+
+    /// Read CTR_EL0, MIDR_EL1 and DCZID_EL0 before the first page of code is
+    /// published.
     public static func loadCacheType() {
         cacheType = readCacheType()
 
@@ -111,6 +130,42 @@ extension AArch64MMU {
         // Match the model without variant/revision, then their combined range.
         cleanCacheNeedsInvalidate = midr & 0xFF0F_FFF0 == 0x410F_D030
                                  && midr & 0x00F0_000F <= 2
+
+        let dczid = readZeroIdentification()
+        let block = 4 << Int(dczid & 0xF)
+        zeroBlockBytes = dczid & 0x10 == 0 && block >= 16 && block <= 2048 ? block : 0
+    }
+
+    /// Zeroes `count` bytes at `base` with `dc zva` over the whole blocks inside
+    /// the range and `RawBytes.fill` on the two edges. Returns `false`, having
+    /// written nothing, when the range is under four blocks or `dc zva` is off.
+    ///
+    /// The MMU is tested on every call on purpose: the block size is loaded after
+    /// `enable_mmu`, but a core running Swift before its own MMU is on (SMP
+    /// bring-up) would find it already set, and `dc zva` on Device memory is an
+    /// alignment fault.
+    static func zeroCacheBlocks(_ base: UnsafeMutableRawPointer, count: Int) -> Bool {
+        let block = zeroBlockBytes
+        guard block != 0, count >= 4 &* block, isMMUEnabled() else { return false }
+
+        let mask  = UInt(block &- 1)
+        let start = UInt(bitPattern: base)
+        let end   = start &+ UInt(count)
+        let first = (start &+ mask) & ~mask
+        let last  = end & ~mask
+
+        RawBytes.fill(base, with: 0, count: Int(bitPattern: first &- start))
+        zeroBlocks(
+            base + Int(bitPattern: first &- start),
+            count     : UInt64((last &- first) / UInt(block)),
+            blockBytes: UInt64(block)
+        )
+        RawBytes.fill(
+            base + Int(bitPattern: last &- start),
+            with : 0,
+            count: Int(bitPattern: end &- last)
+        )
+        return true
     }
 
     /// Not IDC: a store reaches the instruction side only through a clean to

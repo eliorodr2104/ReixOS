@@ -20,6 +20,7 @@
 //
 
 #include <stdint.h>
+#include <string.h>
 #include <time.h>
 
 #include "include/KernelHostShims.h"
@@ -155,6 +156,16 @@ uint64_t read_main_id(void) {
     return main_id;
 }
 
+static uint64_t dczid;
+
+void host_set_dczid(uint64_t value) { dczid = value; }
+uint64_t read_dczid(void) { return dczid; }
+
+void zero_blocks(void *base, uint64_t count, uint64_t block) {
+    mmu_trace_record_range(MMU_OP_ZERO_BLOCKS, (uint64_t)base, count * block, block);
+    memset(base, 0, count * block);
+}
+
 void clean_dcache_pou(void *base, uint64_t size, uint64_t line) {
     mmu_trace_record_range(MMU_OP_DCACHE_CLEAN_POU, (uint64_t)base, size, line);
 }
@@ -168,7 +179,10 @@ void invalidate_icache_all(void) { mmu_trace_record(MMU_OP_ICACHE_ALL, 0); }
 void synchronize_instruction_stream(void) { mmu_trace_record(MMU_OP_INSTRUCTION_STREAM, 0); }
 uint64_t get_current_process(void) { return current_process; }
 void instruction_barrier(void) { mmu_trace_record(MMU_OP_INSTRUCTION_BARRIER, 0); }
-uint8_t is_mmu_enabled(void) { return 0; }
+static uint8_t mmu_enabled;
+
+void host_set_mmu_enabled(uint8_t value) { mmu_enabled = value; }
+uint8_t is_mmu_enabled(void) { return mmu_enabled; }
 void jump_to_user_mode(void *trapFrame, uint64_t rootTable, uint16_t asid) {
     (void)trapFrame; (void)rootTable; (void)asid;
 }

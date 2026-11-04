@@ -23,6 +23,7 @@ enum MMUTraceOp {
     MMU_OP_ICACHE_ALL             = 12,
     MMU_OP_INSTRUCTION_STREAM     = 13,
     MMU_OP_DCACHE_CLEAN_POC       = 14, // arg, size, line: the range
+    MMU_OP_ZERO_BLOCKS            = 15, // arg, size, line: the range, the block
 };
 void mmu_trace_reset(const uint64_t *probe);
 uint64_t mmu_trace_length(void);
@@ -38,6 +39,12 @@ void host_set_cache_type(uint64_t value);
 // MIDR_EL1 as `read_main_id` answers it. Zero until set.
 void host_set_main_id(uint64_t value);
 uint64_t host_main_id_reads(void);
+
+// DCZID_EL0 as `read_dczid` answers it. Zero until set.
+void host_set_dczid(uint64_t value);
+
+// What `is_mmu_enabled` answers: 0, the MMU off, until set.
+void host_set_mmu_enabled(uint8_t value);
 
 // The generic timer as a suite stages it: counter, tick compare value and
 // frequency. All three read zero until set, as they always have.

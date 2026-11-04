@@ -5,52 +5,70 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 28/06/2026.
 //
 
+import ReixABI
+
+#if hasFeature(Embedded)
+// Only the image exports the C names: a host build of RawBytes at -Onone calls
+// memcpy itself, so there the platform's stays and the suites call the bodies.
 @_cdecl("memcpy")
-@_optimize(none)
-public func memcpy(
+public func memcpy(_ dst: UnsafeMutableRawPointer?, _ src: UnsafeRawPointer?, _ n: UInt) -> UnsafeMutableRawPointer? {
+    kernelMemcpy(dst, src, n)
+}
+
+@_cdecl("memset")
+public func memset(_ s: UnsafeMutableRawPointer?, _ c: Int32, _ n: UInt) -> UnsafeMutableRawPointer? {
+    kernelMemset(s, c, n)
+}
+
+@_cdecl("memmove")
+public func memmove(_ dst: UnsafeMutableRawPointer?, _ src: UnsafeRawPointer?, _ n: UInt) -> UnsafeMutableRawPointer? {
+    kernelMemmove(dst, src, n)
+}
+#endif
+
+public func kernelMemcpy(
     _ dst: UnsafeMutableRawPointer?,
     _ src: UnsafeRawPointer?,
     _ n  : UInt
 ) -> UnsafeMutableRawPointer? {
-    guard let d = dst?.assumingMemoryBound(to: UInt8.self),
-          let s = src?.assumingMemoryBound(to: UInt8.self) else { return dst }
+    guard let dst, let src else { return dst }
 
-    var i: UInt = 0
-    while i < n { d[Int(i)] = s[Int(i)]; i &+= 1 }
+    RawBytes.copy(to: dst, from: src, count: Int(bitPattern: n))
     return dst
 }
 
-@_cdecl("memset")
-@_optimize(none)
-public func memset(
+/// Zero fills of four cache blocks or more use `dc zva` once the MMU is on,
+/// everything else uses `RawBytes.fill`.
+public func kernelMemset(
     _ s: UnsafeMutableRawPointer?,
     _ c: Int32,
     _ n: UInt
 ) -> UnsafeMutableRawPointer? {
-    guard let p = s?.assumingMemoryBound(to: UInt8.self) else { return s }
+    guard let s else { return s }
 
-    let byte = UInt8(truncatingIfNeeded: c)
-    var i: UInt = 0
-    while i < n { p[Int(i)] = byte; i &+= 1 }
+    let byte  = UInt8(truncatingIfNeeded: c)
+    let count = Int(bitPattern: n)
+    if byte == 0, Arch.MMU.zeroCacheBlocks(s, count: count) { return s }
+
+    RawBytes.fill(s, with: byte, count: count)
     return s
 }
 
-@_cdecl("memmove")
-@_optimize(none)
-public func memmove(
+/// Forward whenever the destination does not start inside the source.
+public func kernelMemmove(
     _ dst: UnsafeMutableRawPointer?,
     _ src: UnsafeRawPointer?,
     _ n  : UInt
 ) -> UnsafeMutableRawPointer? {
-    guard let d = dst?.assumingMemoryBound(to: UInt8.self),
-          let s = src?.assumingMemoryBound(to: UInt8.self) else { return dst }
+    guard let dst, let src else { return dst }
 
-    if UInt(bitPattern: d) < UInt(bitPattern: s) {
-        var i: UInt = 0
-        while i < n { d[Int(i)] = s[Int(i)]; i &+= 1 }
-    } else if UInt(bitPattern: d) > UInt(bitPattern: s) {
-        var i = n
-        while i > 0 { i &-= 1; d[Int(i)] = s[Int(i)] }
+    let distance = UInt(bitPattern: dst) &- UInt(bitPattern: src)
+    guard distance != 0 else { return dst }
+
+    if distance >= n {
+        RawBytes.copy(to: dst, from: src, count: Int(bitPattern: n))
+    } else {
+        RawBytes.copyBackward(to: dst, from: src, count: Int(bitPattern: n))
     }
     return dst
 }

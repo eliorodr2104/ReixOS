@@ -889,6 +889,27 @@ post_shell_closed() {
     return 0
 }
 
+# post=vector-primitives: memcpy, memset and memmove read out of every linked
+# ELF. Loop idiom recognition can turn their own loops back into calls to
+# themselves, which boots as a hang; scripts/check-vector-primitives.py says
+# what else it reads.
+post_vector_primitives() {
+    pvp_out=$2
+
+    if [ ! -f "$KERNEL_ELF" ]; then
+        printf 'no %s to read the primitives out of' "$KERNEL_ELF"
+        return 1
+    fi
+
+    if ! python3 scripts/check-vector-primitives.py "$OBJDUMP" "$KERNEL_ELF" "$OUT"/*.elf \
+            > "$pvp_out" 2>&1; then
+        printf 'vector primitives: %s' "$(tail -n 1 "$pvp_out")"
+        return 1
+    fi
+
+    return 0
+}
+
 # post=terminal-baseline: decode the final interaction trace and bind it to the
 # baseline lines Shell wrote before dumping. The report is host-only; clearing
 # FREESTANDING keeps it out of the bare-metal package graph.
@@ -1025,6 +1046,7 @@ run_post() {
             pte-prune)    post_pte_prune "$2" "$rp_out" || return 1 ;;
             tlb-scope)    post_tlb_scope "$2" "$rp_out" || return 1 ;;
             icache-batch) post_icache_batch "$2" "$rp_out" || return 1 ;;
+            vector-primitives) post_vector_primitives "$2" "$rp_out" || return 1 ;;
             queue-depth)  post_queue_depth "$2" "$rp_out" || return 1 ;;
             shell-closed) post_shell_closed "$2" "$rp_out" || return 1 ;;
             terminal-baseline)  post_terminal_baseline "$2" "$rp_out" || return 1 ;;
