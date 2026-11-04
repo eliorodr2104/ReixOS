@@ -36,8 +36,8 @@ struct ProfileControlAuthorizationTests {
 
     @Test("missing handle is denied")
     func missingHandle() {
-        let caps = CapsTable()
-        #expect(!ProfileAuthorization.allows(caps, handle: 7, category: .profileCounters))
+        var caps = CapsTable()
+        #expect(!ProfileAuthorization.allows(&caps, handle: 7, category: .profileCounters))
     }
 
     @Test("unrelated target is denied")
@@ -48,7 +48,7 @@ struct ProfileControlAuthorizationTests {
             badge: 0,
             rights: [.profile]
         ))!
-        #expect(!ProfileAuthorization.allows(caps, handle: handle, category: .profileCounters))
+        #expect(!ProfileAuthorization.allows(&caps, handle: handle, category: .profileCounters))
     }
 
     @Test("profile target without the matching category right is denied")
@@ -59,7 +59,7 @@ struct ProfileControlAuthorizationTests {
             badge: 0,
             rights: [.grant]
         ))!
-        #expect(!ProfileAuthorization.allows(caps, handle: handle, category: .profileCounters))
+        #expect(!ProfileAuthorization.allows(&caps, handle: handle, category: .profileCounters))
     }
 
     @Test("profile target authorizes only the category its rights carry")
@@ -74,9 +74,9 @@ struct ProfileControlAuthorizationTests {
                 rights: category
             ))!
 
-            #expect(ProfileAuthorization.allows(caps, handle: handle, category: category))
+            #expect(ProfileAuthorization.allows(&caps, handle: handle, category: category))
             for other in categories where other != category {
-                #expect(!ProfileAuthorization.allows(caps, handle: handle, category: other))
+                #expect(!ProfileAuthorization.allows(&caps, handle: handle, category: other))
             }
         }
     }
