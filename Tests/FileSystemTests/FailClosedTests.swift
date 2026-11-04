@@ -612,7 +612,7 @@ struct FailClosedTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-            .appendingPathComponent("Sources/Userland/FileSystemServer")
+            .appendingPathComponent("Sources/Userland/System/FileSystemServer")
 
         guard var files = try? FileManager.default.contentsOfDirectory(
             at: source, includingPropertiesForKeys: nil

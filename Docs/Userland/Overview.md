@@ -20,12 +20,13 @@ The SDK is not a separately scheduled server. `ReixABI` supplies shared contract
 | `ProcessServerCore` | `ReixABI` | Bounded ELF planning/copying, program profiles and resumable launch supervision. |
 | `SerialServerCore` / `InputServerCore` | `Reix`, `ReixABI` | Serial/input rings, sessions and server policy. |
 | `TerminalCore` | `Reix`, `ReixABI`, `Text` | Semantic screen model, VT renderer/decoder and terminal session. |
-| `ShellLanguage` | `ReixABI` | Parsing, values, semantic analysis, completion and editing logic. |
+| `ShellLanguage` | `ReixABI`, `Text` | Parsing, values, semantic analysis, catalog and completion. |
+| `LineEditor` | `ShellLanguage`, `ReixABI`, `Text` | Editing, key mapping, panels and editor presentation. |
 | Userland programs | `Reix`, plus their domain modules | Service loops and applications. |
 
 The freestanding build enables Embedded Swift and supplies assembly/runtime boundaries through the `reix` CLI in `Tools/reix`. See [Package.swift](../../Package.swift) for actual target dependencies.
 
-## SDK blocks
+## SDK and service support
 
 | Block | API / state | What callers need to understand |
 | --- | --- | --- |
@@ -36,6 +37,8 @@ The freestanding build enables Embedded Swift and supplies assembly/runtime boun
 | [Terminal surfaces](../../Sources/Userland/OS/Terminal/TerminalCore), [input](../../Sources/Userland/System/InputServerCore), [serial](../../Sources/Userland/System/SerialServerCore) | Shared rings and client state | Producer/consumer roles, notification and presentation ownership. |
 | [Profiling](../../Sources/SDK/Profile) and [time](../../Sources/SDK/Time) | Authority-scoped observation and clock wrappers | Units, authority and operation-specific results. |
 | Runtime, formatting and memory helpers | Freestanding support functions | Local implementation support, not additional kernel services. |
+
+Server and terminal implementations are separate modules beside their executables. The SDK supplies their syscall, client and runtime building blocks.
 
 The SDK's `memcpy`, `memset` and `memmove` use `MemoryPrimitives.RawBytes`, shared with the kernel. Its portable Swift SIMD paths keep accesses naturally aligned, including before the MMU is enabled. Only the kernel adds a `dc zva` zero-fill path; userland uses the shared fill. See [memory primitives](../Kernel/Memory.md#memory-primitives).
 

@@ -8,16 +8,16 @@
 
 | Component | What it does | Authority / state that matters |
 | --- | --- | --- |
-| [Init](../../Sources/Userland/Init) | Boots services, distributes capabilities and coordinates the session. | Initial device, spawn, clock, profiler and storage authority. |
-| [SerialServer](../../Sources/Userland/SerialServer) | Operates the UART byte transport and shared serial rings. | UART mapping, IRQ set, reader/writer sessions. |
-| [ConsoleServer](../../Sources/Userland/ConsoleServer) | Provides output transport through the serial writer. | Serial-writer capability and per-client output state. |
-| [InputServer](../../Sources/Userland/InputServer) | Routes input events and maintains focus/session ownership. | Source, consumer and focus roles. |
-| [VTAdapter](../../Sources/Userland/VTAdapter) | Connects semantic text surfaces to terminal byte output and serial input. | Console transport, serial reader and input-source capability. |
-| [NameServer](../../Sources/Userland/NameServer) | Publishes and resolves named endpoints. | Registry state and registration/lookup authority. |
-| [VirtioBus](../../Sources/Userland/VirtioBus) | Walks authorized virtio-MMIO transports and starts the block driver. | Bus authority; derived device and IRQ capabilities. |
-| [BlockServer](../../Sources/Userland/BlockServer) | Runs the virtio-block driver and serves queued sector I/O. | Device/IRQ/DMA authority, four request slots, volume owner. |
-| [FileSystemServer](../../Sources/Userland/FileSystemServer) | Mounts RxFS and serves object/container operations. | Disk endpoint, filesystem state, client sessions and scoped rights. |
-| [ProcessServer](../../Sources/Userland/ProcessServer) | Loads supported applications from the programs directory and supervises jobs. | Programs directory, task creation, selected environment grants, four pending launches and eight total launch/job reservations. |
+| [Init](../../Sources/Userland/System/Init) | Boots services, distributes capabilities and coordinates the session. | Initial device, spawn, clock, profiler and storage authority. |
+| [SerialServer](../../Sources/Userland/System/SerialServer) | Operates the UART byte transport and shared serial rings. | UART mapping, IRQ set, reader/writer sessions. |
+| [ConsoleServer](../../Sources/Userland/System/ConsoleServer) | Provides output transport through the serial writer. | Serial-writer capability and per-client output state. |
+| [InputServer](../../Sources/Userland/System/InputServer) | Routes input events and maintains focus/session ownership. | Source, consumer and focus roles. |
+| [VTAdapter](../../Sources/Userland/OS/Terminal/VTAdapter) | Connects semantic text surfaces to terminal byte output and serial input. | Console transport, serial reader and input-source capability. |
+| [NameServer](../../Sources/Userland/System/NameServer) | Publishes and resolves named endpoints. | Registry state and registration/lookup authority. |
+| [VirtioBus](../../Sources/Userland/Drivers/VirtioBus) | Walks authorized virtio-MMIO transports and starts the block driver. | Bus authority; derived device and IRQ capabilities. |
+| [BlockServer](../../Sources/Userland/Drivers/VirtioBlock) | Runs the virtio-block driver and serves queued sector I/O. | Device/IRQ/DMA authority, four request slots, volume owner. |
+| [FileSystemServer](../../Sources/Userland/System/FileSystemServer) | Mounts RxFS and serves object/container operations. | Disk endpoint, filesystem state, client sessions and scoped rights. |
+| [ProcessServer](../../Sources/Userland/System/ProcessServer) | Loads supported applications from the programs directory and supervises jobs. | Programs directory, task creation, selected environment grants, four pending launches and eight total launch/job reservations. |
 
 ## Terminal flow
 
@@ -51,14 +51,15 @@ Init gives FileSystemServer the disk endpoint and passes scoped filesystem capab
 
 | Component | Role |
 | --- | --- |
-| [Shell](../../Sources/Userland/Shell) | Interactive command execution, pipelines, sessions and rendering. |
-| [ShellLanguage](../../Sources/Userland/Shell/Language) | Shared parsing, typed values, analysis, catalog, completion and editing logic. |
-| [Top](../../Sources/Userland/Top) | Consumes process/system statistics and trace export for display. |
-| [StorageCheck](../../Sources/Userland/StorageCheck) | Dedicated storage exercise/diagnostic program. |
+| [Shell](../../Sources/Userland/OS/Terminal/Shell) | Interactive command execution, pipelines, sessions and rendering. |
+| [ShellLanguage](../../Sources/Userland/OS/Terminal/ShellLanguage) | Shared parsing, typed values, analysis, catalog and completion. |
+| [LineEditor](../../Sources/Userland/OS/Terminal/LineEditor) | Editor state, key mapping, panels and editor presentation. |
+| [Top](../../Sources/Userland/OS/Apps/Top) | Consumes process/system statistics and trace export for display. |
+| [StorageCheck](../../Tests/Guest/StorageCheck) | Dedicated storage exercise/diagnostic program. |
 | [ReixFS](../../Sources/Libraries/FS) | On-disk filesystem implementation used by FileSystemServer. |
 | [SerialServerCore](../../Sources/Userland/System/SerialServerCore) / [InputServerCore](../../Sources/Userland/System/InputServerCore) | Serial and input implementation beside the services that own it. |
 | [TerminalCore](../../Sources/Userland/OS/Terminal/TerminalCore) | Screen model, palette, VT conversion and terminal transport/session logic. |
-| [ProcessServerCore](../../Sources/Userland/ProcessServerCore) | ELF validation, page-sized copying, program profiles and the generic launch supervisor. |
+| [ProcessServerCore](../../Sources/Userland/System/ProcessServerCore) | ELF validation, page-sized copying, program profiles and the generic launch supervisor. |
 
 ProcessServer advances launch records under a single five-second deadline, keeps the file claim through the last copy and answers the original caller only after readiness. It sweeps abandoned launches and exited jobs even without a new request; the kernel remains responsible for process teardown. [Launch supervision](ProcessLaunch.md#resumable-launch-and-cleanup) describes the limits and cleanup policy.
 

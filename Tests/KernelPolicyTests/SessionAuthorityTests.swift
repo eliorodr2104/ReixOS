@@ -26,11 +26,11 @@ struct SessionAuthorityTests {
     func initOwnsTheCommit() throws {
         let root       = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let initSource = try String(
-            contentsOf: root.appending(path: "Sources/Userland/Init/Init.swift"),
+            contentsOf: root.appending(path: "Sources/Userland/System/Init/Init.swift"),
             encoding: .utf8
         )
         let shellSource = try String(
-            contentsOf: root.appending(path: "Sources/Userland/Shell/Modules/CoreModule.swift"),
+            contentsOf: root.appending(path: "Sources/Userland/OS/Terminal/Shell/Modules/CoreModule.swift"),
             encoding: .utf8
         )
 

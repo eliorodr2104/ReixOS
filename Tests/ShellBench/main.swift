@@ -5,6 +5,7 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 27/08/2026.
 //
 
+@testable import LineEditor
 import Foundation
 import ReixABI
 import ShellLanguage

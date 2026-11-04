@@ -5,6 +5,7 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 27/08/2026.
 //
 
+import LineEditor
 import TerminalCore
 import InputServerCore
 import Reix

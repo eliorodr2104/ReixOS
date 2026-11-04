@@ -6,6 +6,8 @@
 //
 
 /// The editor buffer an injected allocation failure applies to.
+import ShellLanguage
+
 public enum ShellEditorAllocationSite: UInt8, Equatable {
     case storage     = 0
     case undo        = 1

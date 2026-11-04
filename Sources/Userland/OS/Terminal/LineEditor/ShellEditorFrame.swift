@@ -5,6 +5,7 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 28/08/2026.
 //
 
+import ShellLanguage
 import ReixABI
 
 /// Metadata for one native TextSurface frame built from editor-owned storage.

@@ -302,6 +302,7 @@ public struct BuildPipeline: Sendable {
                     "--start-group",
                     buildDir.appending(path: "libReix.a").path,
                     buildDir.appending(path: "libReixABI.a").path,
+                    buildDir.appending(path: "libLineEditor.a").path,
                     buildDir.appending(path: "libSerialServerCore.a").path,
                     buildDir.appending(path: "libInputServerCore.a").path,
                     buildDir.appending(path: "libTerminalCore.a").path,
@@ -432,7 +433,7 @@ public struct BuildPipeline: Sendable {
         try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: stripped, withIntermediateDirectories: true)
 
-        var libraries = ["lib\(app)", "libReix", "libReixABI", "libHeap", "libText", "libMemoryPrimitives", "libVirtioBlockCore", "libSerialServerCore", "libInputServerCore", "libTerminalCore"]
+        var libraries = ["lib\(app)", "libReix", "libReixABI", "libHeap", "libText", "libMemoryPrimitives", "libVirtioBlockCore", "libSerialServerCore", "libInputServerCore", "libTerminalCore", "libLineEditor"]
         if app == "Shell"         { libraries.append("libShellLanguage") }
         if app == "ProcessServer" { libraries.append("libProcessServerCore") }
 
@@ -499,7 +500,7 @@ public struct BuildPipeline: Sendable {
     /// The `.a` files the links consume. The compile phase produces them, so a
     /// gap here means the module graph moved under the build, not a stale tree.
     func requireLibraries() throws {
-        let names = ["libKernel", "libReixABI", "libReix", "libShellLanguage", "libProcessServerCore", "libHeap", "libText", "libMemoryPrimitives", "libVirtioBlockCore", "libSerialServerCore", "libInputServerCore", "libTerminalCore"]
+        let names = ["libKernel", "libReixABI", "libReix", "libShellLanguage", "libProcessServerCore", "libHeap", "libText", "libMemoryPrimitives", "libVirtioBlockCore", "libSerialServerCore", "libInputServerCore", "libTerminalCore", "libLineEditor"]
             + Self.apps.map { "lib\($0)" }
 
         let missing = names

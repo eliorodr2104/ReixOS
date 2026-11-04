@@ -5,6 +5,7 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 28/08/2026.
 //
 
+@testable import LineEditor
 @testable import Text
 import Testing
 import ReixABI

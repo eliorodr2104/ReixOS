@@ -256,7 +256,7 @@ struct ProfileCapabilityFlowTests {
     @Test("Init keeps profile interaction authority inside its compile-time branch")
     func initProfileInteractionGrantPolicy() throws {
         let root   = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let source = try String(contentsOf: root.appending(path: "Sources/Userland/Init/Init.swift"))
+        let source = try String(contentsOf: root.appending(path: "Sources/Userland/System/Init/Init.swift"))
         for expected in ["arg: 0xFF", "arg: 0x1FF", "arg: 0x3F", "arg: 0x100"] { #expect(source.contains(expected)) }
         #expect(!source.contains("arg: 0x13F"))
         let afterDump       = try #require(source.components(separatedBy: "profileDump(authority: profiler)").dropFirst().first)
@@ -282,9 +282,9 @@ struct ProfileCapabilityFlowTests {
     @Test("Init reserves every possible Shell capability grant")
     func initShellGrantCapacityPolicy() throws {
         let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let source = try String(contentsOf: root.appending(path: "Sources/Userland/Init/Init.swift"), encoding: .utf8)
+        let source = try String(contentsOf: root.appending(path: "Sources/Userland/System/Init/Init.swift"), encoding: .utf8)
         let capacitySource = try String(
-            contentsOf: root.appending(path: "Sources/Userland/Init/ShellGrantCapacity.swift"),
+            contentsOf: root.appending(path: "Sources/Userland/System/Init/ShellGrantCapacity.swift"),
             encoding: .utf8
         )
         #expect(capacitySource.contains("static let normal          = 9"))

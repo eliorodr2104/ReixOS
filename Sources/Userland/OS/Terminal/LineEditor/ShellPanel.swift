@@ -5,6 +5,7 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 29/08/2026.
 //
 
+import ShellLanguage
 import ReixABI
 
 /// One line of a panel: something named, what shape it is, and whether it

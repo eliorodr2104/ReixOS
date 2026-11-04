@@ -85,23 +85,33 @@ let kernelNativeExclude: [String] = [
 ]
 
 let appDependencies: [String: [Target.Dependency]] = [
-    "BlockServer": ["Reix", "ReixABI", "VirtioBlockCore"],
-    "ConsoleServer": ["Reix", "SerialServerCore"],
-    "Init": ["Reix"],
-    "InputServer": ["InputServerCore", "Reix", "ReixABI"],
-    "NameServer": ["Reix"],
-    "SerialServer": ["Reix", "ReixABI", "SerialServerCore"],
-    "StorageCheck": ["Reix", "ReixABI"],
-    "Top": ["Reix"],
-    "VTAdapter": ["InputServerCore", "Reix", "ReixABI", "SerialServerCore", "TerminalCore"],
-    "VirtioBus": ["Reix", "ReixABI"],
+    "BlockServer": ["ReixABI", "VirtioBlockCore"],
+    "ConsoleServer": ["SerialServerCore"],
+    "InputServer": ["InputServerCore", "ReixABI"],
+    "SerialServer": ["ReixABI", "SerialServerCore"],
+    "StorageCheck": ["ReixABI"],
+    "VTAdapter": ["InputServerCore", "ReixABI", "SerialServerCore", "TerminalCore"],
+    "VirtioBus": ["ReixABI"],
+]
+
+let appPaths: [String: String] = [
+    "BlockServer": "Sources/Userland/Drivers/VirtioBlock",
+    "ConsoleServer": "Sources/Userland/System/ConsoleServer",
+    "Init": "Sources/Userland/System/Init",
+    "InputServer": "Sources/Userland/System/InputServer",
+    "NameServer": "Sources/Userland/System/NameServer",
+    "SerialServer": "Sources/Userland/System/SerialServer",
+    "StorageCheck": "Tests/Guest/StorageCheck",
+    "Top": "Sources/Userland/OS/Apps/Top",
+    "VTAdapter": "Sources/Userland/OS/Terminal/VTAdapter",
+    "VirtioBus": "Sources/Userland/Drivers/VirtioBus",
 ]
 
 func app(
     _ name    : String,
     _ settings: [SwiftSetting]
 ) -> Target {
-    .target(name: name, dependencies: ["Reix"] + appDependencies[name, default: []], path: "Sources/Userland/\(name)", swiftSettings: settings)
+    .target(name: name, dependencies: ["Reix"] + appDependencies[name, default: []], path: appPaths[name]!, swiftSettings: settings)
 }
 
 let package = Package(
@@ -110,6 +120,7 @@ let package = Package(
     // ignores it. macOS 26 makes InlineArray & co. available for indexing.
     platforms: [.macOS("26.0")],
     products: [
+        .library(name: "LineEditor", type: .static, targets: ["LineEditor"]),
         .library(name: "SerialServerCore", type: .static, targets: ["SerialServerCore"]),
         .library(name: "InputServerCore", type: .static, targets: ["InputServerCore"]),
         .library(name: "TerminalCore", type: .static, targets: ["TerminalCore"]),
@@ -138,6 +149,7 @@ let package = Package(
         .library(name: "ProcessServer", type: .static, targets: ["ProcessServer"]),
     ],
     targets: [
+        .target(name: "LineEditor", dependencies: ["ShellLanguage", "ReixABI", "Text"], path: "Sources/Userland/OS/Terminal/LineEditor", swiftSettings: bareMetal),
         .target(name: "SerialServerCore", dependencies: ["Reix", "ReixABI"], path: "Sources/Userland/System/SerialServerCore", swiftSettings: terminalProfile),
         .target(name: "InputServerCore", dependencies: ["Reix", "ReixABI"], path: "Sources/Userland/System/InputServerCore", swiftSettings: terminalProfile),
         .target(name: "TerminalCore", dependencies: ["Reix", "ReixABI", "Text"], path: "Sources/Userland/OS/Terminal/TerminalCore", swiftSettings: terminalProfile),
@@ -158,7 +170,7 @@ let package = Package(
         .target(
             name         : "ProcessServerCore",
             dependencies : ["ReixABI"],
-            path         : "Sources/Userland/ProcessServerCore",
+            path         : "Sources/Userland/System/ProcessServerCore",
             swiftSettings: terminalProfile
         ),
 
@@ -190,13 +202,13 @@ let package = Package(
         .target(
             name         : "ProcessServer",
             dependencies : ["Reix", "ProcessServerCore", "ReixABI"],
-            path         : "Sources/Userland/ProcessServer",
+            path         : "Sources/Userland/System/ProcessServer",
             swiftSettings: terminalProfile
         ),
         .target(
             name         : "FileSystemServer",
             dependencies : ["Reix", "ReixFS"],
-            path         : "Sources/Userland/FileSystemServer",
+            path         : "Sources/Userland/System/FileSystemServer",
             swiftSettings: bareMetal
         ),
 
@@ -207,7 +219,7 @@ let package = Package(
         .target(
             name         : "ShellLanguage",
             dependencies : ["ReixABI", "Text"],
-            path         : "Sources/Userland/Shell/Language",
+            path         : "Sources/Userland/OS/Terminal/ShellLanguage",
             swiftSettings: bareMetal
         ),
 
@@ -222,9 +234,8 @@ let package = Package(
         ),
         .target(
             name         : "Shell",
-            dependencies : ["Reix", "ShellLanguage", "Text", "InputServerCore", "ReixABI", "TerminalCore"],
-            path         : "Sources/Userland/Shell",
-            exclude      : ["Language"],
+            dependencies : ["Reix", "ShellLanguage", "Text", "InputServerCore", "ReixABI", "TerminalCore", "LineEditor"],
+            path         : "Sources/Userland/OS/Terminal/Shell",
             swiftSettings: terminalProfile
         ),
 
@@ -236,7 +247,7 @@ let package = Package(
         ),
         .executableTarget(
             name        : "ShellBench",
-            dependencies: ["ShellLanguage", "ReixABI", "TerminalTestSupport", "ShellBenchmarkSupport"],
+            dependencies: ["ShellLanguage", "ReixABI", "TerminalTestSupport", "ShellBenchmarkSupport", "LineEditor"],
             path        : "Tests/ShellBench"
         ),
 
@@ -280,13 +291,13 @@ let package = Package(
         // `putchar` collide with the kernel's inside one test bundle.
         .executableTarget(
             name: "ShellCatalogHarness",
-            dependencies: ["Shell", "ShellLanguage", "ReixABI", "KernelHostShims", "Reix", "TerminalCore"],
+            dependencies: ["Shell", "ShellLanguage", "ReixABI", "KernelHostShims", "Reix", "TerminalCore", "LineEditor"],
             path: "Tests/ShellCatalogHarness"
         ),
 
         .executableTarget(
             name: "VTDecoderHarness",
-            dependencies: ["Reix", "ReixABI", "ShellLanguage", "KernelHostShims", "TerminalCore"],
+            dependencies: ["Reix", "ReixABI", "ShellLanguage", "KernelHostShims", "TerminalCore", "LineEditor"],
             path: "Tests/VTDecoderHarness"
         ),
 
@@ -324,7 +335,7 @@ let package = Package(
         // pure logic: a line in, a parsed command or a placed error out.
         .testTarget(
             name        : "ShellTests",
-            dependencies: ["ShellLanguage", "Text", "ReixABI"],
+            dependencies: ["ShellLanguage", "Text", "ReixABI", "LineEditor"],
             path        : "Tests/ShellTests",
             resources   : [.copy("Fixtures")]
         ),

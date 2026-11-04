@@ -219,25 +219,25 @@ struct TerminalStructuredProtocolTests {
         let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let serial = try String(
             contentsOf: root.appending(
-                path: "Sources/Userland/SerialServer/SerialServer.swift"
+                path: "Sources/Userland/System/SerialServer/SerialServer.swift"
             ),
             encoding: .utf8
         )
         let console = try String(
             contentsOf: root.appending(
-                path: "Sources/Userland/ConsoleServer/ConsoleServer.swift"
+                path: "Sources/Userland/System/ConsoleServer/ConsoleServer.swift"
             ),
             encoding: .utf8
         )
         let adapter = try String(
             contentsOf: root.appending(
-                path: "Sources/Userland/VTAdapter/VTAdapter.swift"
+                path: "Sources/Userland/OS/Terminal/VTAdapter/VTAdapter.swift"
             ),
             encoding: .utf8
         )
         let initSource = try String(
             contentsOf: root.appending(
-                path: "Sources/Userland/Init/Init.swift"
+                path: "Sources/Userland/System/Init/Init.swift"
             ),
             encoding: .utf8
         )
@@ -288,7 +288,7 @@ struct TerminalStructuredProtocolTests {
         )
         let adapter = try String(
             contentsOf: root.appending(
-                path: "Sources/Userland/VTAdapter/VTAdapter.swift"
+                path: "Sources/Userland/OS/Terminal/VTAdapter/VTAdapter.swift"
             ),
             encoding: .utf8
         )
@@ -305,7 +305,7 @@ struct TerminalStructuredProtocolTests {
     func inputServerAuthorityPolicy() throws {
         let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let source = try String(
-            contentsOf: root.appending(path: "Sources/Userland/Init/Init.swift"),
+            contentsOf: root.appending(path: "Sources/Userland/System/Init/Init.swift"),
             encoding: .utf8
         )
         let launch = try #require(

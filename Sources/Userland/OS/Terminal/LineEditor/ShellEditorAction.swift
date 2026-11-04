@@ -5,6 +5,7 @@
 //  Created by Eliomar Alejandro Rodriguez Ferrer on 26/08/2026.
 //
 
+import ShellLanguage
 import ReixABI
 
 public enum ShellEditorAction: Equatable {
