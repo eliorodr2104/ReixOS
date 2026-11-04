@@ -28,7 +28,7 @@ The process traversal uses `UInt64.max` for both exhaustion and failure. System 
 
 ### `SystemStats`
 
-164 bytes, stride 168, alignment 8; members aligned in declaration order. [SystemStats](../../../Sources/ABI/Stats/SystemStats.swift#L42) defines the record and [ABILayoutTests.statsLayout](../../../Tests/ABILayoutTests/ABILayoutTests.swift#L225) checks its size, stride and every field offset. A group whose `availability` bit is clear reads zero and means "not measured".
+164 bytes, stride 168, alignment 8; members aligned in declaration order. [SystemStats](../../../Sources/ABI/Stats/SystemStats.swift#L42) defines the record and [ABILayoutTests.statsLayout](../../../Tests/ABI/ABILayoutTests.swift#L225) checks its size, stride and every field offset. A group whose `availability` bit is clear reads zero and means "not measured".
 
 | Offset | Fields | Type | Group / meaning |
 | --- | --- | --- | --- |

@@ -159,8 +159,8 @@ public struct BuildPipeline: Sendable {
 
     var activeKernelNative: [String] {
         Self.kernelNative
-            + (fpsimdDiagnostic ? ["Tests/GuestProbes/FPContextNested.S"] : [])
-            + (runtimeDiagnostic ? ["Tests/GuestProbes/KernelRuntimeProbe.c"] : [])
+            + (fpsimdDiagnostic ? ["Tests/Guest/Probes/FPContextNested.S"] : [])
+            + (runtimeDiagnostic ? ["Tests/Guest/Probes/KernelRuntimeProbe.c"] : [])
     }
 
     /// Object paths are a function of the source list and nothing else, which is

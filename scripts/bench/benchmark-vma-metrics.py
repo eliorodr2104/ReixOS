@@ -72,8 +72,8 @@ def main() -> int:
         json.dumps(manifest, indent=2, sort_keys=True) + "\n"
     )
 
-    benchmark_source = workspace / "Tests/Benchmarks/VMAMetricsBenchmark.swift"
-    injected = workspace / "Tests/KernelUnitTests/T07VMAMetricsBenchmark.swift"
+    benchmark_source = workspace / "Tests/Benchmarks/Kernel/Virtual/VMAMetricsBenchmark.swift"
+    injected = workspace / "Tests/Kernel/Unit/T07VMAMetricsBenchmark.swift"
     shutil.copy2(benchmark_source, injected)
     scratch = workspace / "build-host"
     command = [

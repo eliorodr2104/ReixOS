@@ -240,6 +240,10 @@ let package = Package(
         ),
 
     ] + (isFreestanding ? [] : [
+
+        .testTarget(name: "HeapTests", dependencies: ["Heap", "Kernel", "ReixABI", "KernelTestSupport"], path: "Tests/Libraries/Heap"),
+        .testTarget(name: "MemoryPrimitivesTests", dependencies: ["MemoryPrimitives", "ReixABI"], path: "Tests/Libraries/Memory"),
+        .testTarget(name: "VirtioBlockCoreTests", dependencies: ["VirtioBlockCore", "ReixABI"], path: "Tests/Userland/Drivers/VirtioBlockCore"),
         .executableTarget(
             name        : "ReixApp",
             dependencies: ["ReixFS", "ReixABI", "ProcessServerCore"],
@@ -248,43 +252,43 @@ let package = Package(
         .executableTarget(
             name        : "ShellBench",
             dependencies: ["ShellLanguage", "ReixABI", "TerminalTestSupport", "ShellBenchmarkSupport", "LineEditor"],
-            path        : "Tests/ShellBench"
+            path        : "Tests/Benchmarks/ShellBench"
         ),
 
         .target(
             name: "ShellBenchmarkSupport",
-            path: "Tests/ShellBenchmarkSupport"
+            path: "Tests/Infrastructure/Support/ShellBenchmark"
         ),
 
         .target(
             name             : "KernelHostShims",
-            path             : "Tests/KernelHostShims",
+            path             : "Tests/Infrastructure/Shims/Kernel",
             publicHeadersPath: "include"
         ),
         .target(
             name             : "ReixHeapHostShims",
-            path             : "Tests/ReixHeapHostShims",
+            path             : "Tests/Infrastructure/Shims/SDKHeap",
             publicHeadersPath: "include"
         ),
         .executableTarget(
             name        : "SbrkHeapHarness",
             dependencies: ["Reix", "ReixHeapHostShims"],
-            path        : "Tests/SbrkHeapHarness"
+            path        : "Tests/SDK/Heap/Harness"
         ),
         .executableTarget(
             name: "TerminalRingHarness",
             dependencies: ["Reix", "ReixABI", "KernelHostShims", "TerminalTestSupport", "TerminalCore"],
-            path: "Tests/TerminalRingHarness"
+            path: "Tests/Userland/OS/Terminal/TerminalRingHarness"
         ),
         .executableTarget(
             name: "InputRouterHarness",
             dependencies: ["Reix", "ReixABI", "KernelHostShims", "InputServerCore"],
-            path: "Tests/InputRouterHarness"
+            path: "Tests/Userland/System/InputServerCore/Harness"
         ),
         .executableTarget(
             name: "SerialRingHarness",
             dependencies: ["Reix", "ReixABI", "KernelHostShims", "SerialServerCore"],
-            path: "Tests/SerialRingHarness"
+            path: "Tests/Userland/System/SerialServerCore/Harness"
         ),
         // The shell's catalog and grammar, over the modules the shell is built
         // with. Not a suite in ShellTests: Reix's freestanding `malloc` and
@@ -292,13 +296,13 @@ let package = Package(
         .executableTarget(
             name: "ShellCatalogHarness",
             dependencies: ["Shell", "ShellLanguage", "ReixABI", "KernelHostShims", "Reix", "TerminalCore", "LineEditor"],
-            path: "Tests/ShellCatalogHarness"
+            path: "Tests/Userland/OS/Terminal/ShellCatalogHarness"
         ),
 
         .executableTarget(
             name: "VTDecoderHarness",
             dependencies: ["Reix", "ReixABI", "ShellLanguage", "KernelHostShims", "TerminalCore", "LineEditor"],
-            path: "Tests/VTDecoderHarness"
+            path: "Tests/Userland/OS/Terminal/VTDecoderHarness"
         ),
 
         // Fixtures shared by the host suites. Its own target because SwiftPM
@@ -308,7 +312,7 @@ let package = Package(
             // `@testable import Kernel` inside makes this debug-only: a host
             // `-c release` build fails ModuleNotTestable. `make release` is fine.
             dependencies: ["Kernel", "ReixABI", "KernelHostShims"],
-            path: "Tests/Support"
+            path: "Tests/Infrastructure/Support/Kernel"
         ),
 
         // Deterministic host-only peripherals and terminal model shared by
@@ -316,19 +320,19 @@ let package = Package(
         // a host terminal.
         .target(
             name: "TerminalTestSupport",
-            path: "Tests/TerminalTestSupport"
+            path: "Tests/Infrastructure/Support/Terminal"
         ),
 
         .testTarget(
             name        : "KernelPolicyTests",
             dependencies: ["Kernel", "ReixABI", "KernelHostShims", "KernelTestSupport"],
-            path        : "Tests/KernelPolicyTests"
+            path        : "Tests/Kernel/Policy"
         ),
 
         .testTarget(
             name        : "ProcessServerCoreTests",
             dependencies: ["ProcessServerCore", "ReixABI"],
-            path        : "Tests/ProcessServerCoreTests"
+            path        : "Tests/Userland/System/ProcessServerCore"
         ),
 
         // The shell's command language, which is the one piece of it that is
@@ -336,14 +340,15 @@ let package = Package(
         .testTarget(
             name        : "ShellTests",
             dependencies: ["ShellLanguage", "Text", "ReixABI", "LineEditor"],
-            path        : "Tests/ShellTests",
-            resources   : [.copy("Fixtures")]
+            path        : "Tests/Userland/OS/Terminal",
+            exclude     : ["Protocols", "TerminalRingHarness", "VTDecoderHarness", "ShellCatalogHarness"],
+            resources   : [.copy("ShellLanguage/Fixtures")]
         ),
 
         .testTarget(
             name        : "ShellBenchmarkTests",
             dependencies: ["ShellBenchmarkSupport"],
-            path        : "Tests/ShellBenchmarkTests"
+            path        : "Tests/Benchmarks/ShellBenchmarkTests"
         ),
 
         // The file system over a slab of host memory: format, allocate, name,
@@ -351,7 +356,7 @@ let package = Package(
         .testTarget(
             name        : "FileSystemTests",
             dependencies: ["ReixFS", "ReixABI"],
-            path        : "Tests/FileSystemTests",
+            path        : "Tests/Libraries/FS",
             swiftSettings: performanceTestSettings
         ),
 
@@ -360,7 +365,7 @@ let package = Package(
         .testTarget(
             name        : "PipeTests",
             dependencies: ["ReixABI"],
-            path        : "Tests/PipeTests"
+            path        : "Tests/SDK/Pipe"
         ),
 
         // The shell frame and the terminal's events, decoded and encoded on the
@@ -369,7 +374,7 @@ let package = Package(
         .testTarget(
             name        : "ShellProtocolTests",
             dependencies: ["ReixABI", "ShellLanguage", "TerminalTestSupport"],
-            path        : "Tests/ShellProtocolTests"
+            path        : "Tests/Userland/OS/Terminal/Protocols"
         ),
 
         // Layout locks only: sizes, strides and the all-zero patterns the wire
@@ -377,7 +382,7 @@ let package = Package(
         .testTarget(
             name        : "ABILayoutTests",
             dependencies: ["Kernel", "ReixABI", "KernelHostShims", "KernelTestSupport", "MemoryPrimitives", "VirtioBlockCore"],
-            path        : "Tests/ABILayoutTests"
+            path        : "Tests/ABI"
         ),
 
         // The memory subsystem in isolation: buddy allocator, slab core, physical
@@ -385,7 +390,7 @@ let package = Package(
         .testTarget(
             name        : "KernelUnitTests",
             dependencies: ["Kernel", "ReixABI", "KernelHostShims", "KernelTestSupport", "Heap", "MemoryPrimitives"],
-            path        : "Tests/KernelUnitTests"
+            path        : "Tests/Kernel/Unit"
         ),
     ]),
     swiftLanguageModes: [.v5]

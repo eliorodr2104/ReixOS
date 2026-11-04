@@ -95,8 +95,8 @@ def main() -> int:
         json.dumps(manifest, indent=2, sort_keys=True) + "\n"
     )
 
-    benchmark_source = workspace / "Tests/Benchmarks/KernelRuntimeBenchmark.swift"
-    injected = workspace / "Tests/KernelUnitTests/T05RuntimeBenchmark.swift"
+    benchmark_source = workspace / "Tests/Benchmarks/Kernel/Runtime/KernelRuntimeBenchmark.swift"
+    injected = workspace / "Tests/Kernel/Unit/T05RuntimeBenchmark.swift"
     shutil.copy2(benchmark_source, injected)
 
     command = [

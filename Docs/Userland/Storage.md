@@ -56,7 +56,7 @@ Init handles that question in `awaitContainer`. It prints that re-anchoring trus
 
 [ShellFindingsFrame](../../Sources/ABI/Shell/ShellFindingsFrame.swift#L8) carries 21 ordered fields. `scrubDepth` is 0 for blocks, 1 for all metadata and 2 for data as well; the final field is `damagedBlocks` (`ShellField` 23). The other fields retain completion, quota/name checks, map discrepancies, room discrepancies, repair state and `safeToServe`.
 
-The [disk format page](../Architecture/Storage.md) explains the byte/block layout and commit ordering. The scratch requirement is checked by [CensusTests.scratchIsEnough](../../Tests/FileSystemTests/CensusTests.swift#L270).
+The [disk format page](../Architecture/Storage.md) explains the byte/block layout and commit ordering. The scratch requirement is checked by [CensusTests.scratchIsEnough](../../Tests/Libraries/FS/CensusTests.swift#L270).
 
 ## Source entry points
 

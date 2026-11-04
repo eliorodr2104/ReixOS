@@ -44,7 +44,7 @@
 
 set -u
 
-BASELINE="${1:-Tests/Fixtures/build-baseline}"
+BASELINE="${1:-Tests/Infrastructure/Fixtures/build-baseline}"
 OUT="${OUT:-.reix}"
 MAX_RUN="${MAX_RUN:-16}"
 

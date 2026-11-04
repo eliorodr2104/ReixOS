@@ -231,9 +231,9 @@ smoke-4m: MEM         := 4M
 smoke-4m: INITRD_MODE := embedded
 smoke-4m: smoke
 
-# Host unit tests: Tests/KernelPolicyTests (syscall and policy paths),
-# Tests/KernelUnitTests (the memory subsystem over host arenas) and
-# Tests/ABILayoutTests (sizes and strides only), over the kernel modules compiled
+# Host unit tests: Tests/Kernel/Policy (syscall and policy paths),
+# Tests/Kernel/Unit (the memory subsystem over host arenas) and
+# Tests/ABI (sizes and strides only), over the kernel modules compiled
 # for arm64-apple-macosx. No QEMU and no bare-metal build is involved.
 #
 # `test` is the name to use; `host-test` and `vm-test` are the two halves, and

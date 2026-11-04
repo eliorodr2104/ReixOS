@@ -49,7 +49,7 @@ Arrows show increasing block order. Region sizes are not drawn to scale. [FSLayo
 | 1 GiB | 17 | 6709 | 10814 |
 | 2 GiB, measurement only | 27 | 13117 | 21326 |
 
-These are the measurements documented in `FSLayout`; [ScaleTests.mountMatrix](../../Tests/FileSystemTests/ScaleTests.swift#L205) measures the same recovery shapes. Its stored gate baselines are separate from this table. The measurement path can open the unsupported geometry; the public mount cannot.
+These are the measurements documented in `FSLayout`; [ScaleTests.mountMatrix](../../Tests/Libraries/FS/ScaleTests.swift#L205) measures the same recovery shapes. Its stored gate baselines are separate from this table. The measurement path can open the unsupported geometry; the public mount cannot.
 
 ## Records that define the format
 

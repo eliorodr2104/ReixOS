@@ -255,6 +255,6 @@ Live bytes and reserved bytes answer different questions: a partial slab page re
 
 | Function | Parameters | Returns | Meaning |
 | --- | --- | --- | --- |
-| [<code>BucketsHeap.kmalloc(_:errorMessage:)</code>](../../Sources/Kernel/Memory/Heap/BucketsHeap.swift#L50) | <code>_ size : UInt, errorMessage: StaticString = "Kmalloc Failed"</code> | <code>UnsafeMutableRawPointer</code> | Returns raw storage; panics when allocation fails. |
-| [<code>BucketsHeap.kmallocOrNil(_:)</code>](../../Sources/Kernel/Memory/Heap/BucketsHeap.swift#L72) | <code>_ size: UInt</code> | <code>UnsafeMutableRawPointer?</code> | Returns raw storage, or `nil` on failure. |
-| [<code>BucketsHeap.kfree(_:)</code>](../../Sources/Kernel/Memory/Heap/BucketsHeap.swift#L119) | <code>_ ptr: UnsafeMutableRawPointer</code> | <code>Void</code> | Releases the raw allocation. |
+| [<code>BucketsHeap.kmalloc(_:errorMessage:)</code>](../../Sources/Kernel/Memory/Heap/BucketsHeap.swift#L51) | <code>_ size : UInt, errorMessage: StaticString = "Kmalloc Failed"</code> | <code>UnsafeMutableRawPointer</code> | Returns raw storage; panics when allocation fails. |
+| [<code>BucketsHeap.kmallocOrNil(_:)</code>](../../Sources/Kernel/Memory/Heap/BucketsHeap.swift#L73) | <code>_ size: UInt</code> | <code>UnsafeMutableRawPointer?</code> | Returns raw storage, or `nil` on failure. |
+| [<code>BucketsHeap.kfree(_:)</code>](../../Sources/Kernel/Memory/Heap/BucketsHeap.swift#L120) | <code>_ ptr: UnsafeMutableRawPointer</code> | <code>Void</code> | Releases the raw allocation. |

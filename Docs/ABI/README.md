@@ -42,5 +42,5 @@ Changes to syscall ordering, status values, message labels or shared layouts req
 ## Source entry points
 
 - [Syscall numbers](../../Sources/ABI/Syscalls/SyscallNumber.swift), [capabilities](../../Sources/ABI/Capabilities), [task contracts](../../Sources/ABI/Task).
-- [IPC contracts](../../Sources/ABI/IPC), [statistics](../../Sources/ABI/ProcessStats), [profiler](../../Sources/ABI/Profiler), [time](../../Sources/ABI/Time).
-- [ABI layout tests](../../Tests/ABILayoutTests), [shared module](../../Sources/ABI).
+- [IPC contracts](../../Sources/ABI/IPC), [statistics](../../Sources/ABI/Stats), [profiler](../../Sources/ABI/Profiler), [time](../../Sources/ABI/Time).
+- [ABI layout tests](../../Tests/ABI), [shared module](../../Sources/ABI).

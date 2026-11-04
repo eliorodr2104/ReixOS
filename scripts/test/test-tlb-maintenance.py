@@ -2,7 +2,7 @@
 """Fault a stale translation in AArch64 QEMU, and prove the probe can tell.
 
 The active checkout is only snapshotted. Each external build links the EL0
-oracle in Tests/GuestProbes/TLBMaintenanceUser.S as init: it reads through a
+oracle in Tests/Guest/Probes/TLBMaintenanceUser.S as init: it reads through a
 translation right after a clone downgraded it and right after munmap removed
 it, without a syscall in between that could switch address spaces.
 
@@ -89,7 +89,7 @@ def run_logged(command: list[str], *, cwd: Path, environment: dict[str, str], lo
 
 
 def replace_init(workspace: Path, output: Path, clang: str, llvm_ar: str, build_path: str, mode: str) -> None:
-    source = workspace / "Tests/GuestProbes/TLBMaintenanceUser.S"
+    source = workspace / "Tests/Guest/Probes/TLBMaintenanceUser.S"
     object_file = output / f"tlb-{mode}.o"
     subprocess.run([clang, f"--target={TRIPLE}", "-c", str(source), "-o", str(object_file)], check=True)
 

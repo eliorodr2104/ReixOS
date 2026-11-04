@@ -71,6 +71,22 @@ free:
     def test_indirect_calls_are_rejected(self):
         self.assertIn("indirect call", self.check_image("    blr x3\n    ret"))
 
+    def test_branch_to_anonymous_indirect_call_is_rejected(self):
+        self.assertIn("indirect call", self.check_image(
+            "    b .Loutside", ".Loutside:\n    blr x3\n    ret\n"))
+
+    def test_branch_to_anonymous_primitive_call_is_rejected(self):
+        self.assertIn("memmove reaches memcpy", self.check_image(
+            "    b .Loutside", ".Loutside:\n    b free\n"))
+
+    def test_fallthrough_to_anonymous_indirect_call_is_rejected(self):
+        self.assertIn("indirect call", self.check_image(
+            "    nop", "    blr x3\n    ret\n"))
+
+    def test_unreachable_anonymous_zva_is_still_rejected_in_programs(self):
+        self.assertIn("a program holds dc zva", self.check_image(
+            "    ret", "    dc zva, x0\n    ret\n"))
+
 
 if __name__ == "__main__":
     unittest.main()

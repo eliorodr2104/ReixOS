@@ -167,7 +167,7 @@ def replace_user_apps(
     llvm_ar: str,
     build_path: str,
 ) -> None:
-    probe = workspace / "Tests/GuestProbes/FPContextUser.S"
+    probe = workspace / "Tests/Guest/Probes/FPContextUser.S"
     objects = {
         "Init": output / "fp-context-root.o",
         "StorageCheck": output / "fp-context-child.o",
@@ -209,7 +209,7 @@ def replace_benchmark_apps(
     llvm_ar: str,
     build_path: str,
 ) -> None:
-    probe = workspace / "Tests/GuestProbes/FPContextYieldPeer.S"
+    probe = workspace / "Tests/Guest/Probes/FPContextYieldPeer.S"
     objects = {
         "Init": output / "fp-peer-root.o",
         "StorageCheck": output / "fp-peer-child.o",
@@ -462,7 +462,7 @@ def main() -> int:
         / "Sources/Kernel/Arch/AArch64/Exceptions/ContextSaving.S"
     )
     original_context_saving = context_saving.read_text()
-    nested_probe = workspace / "Tests/GuestProbes/FPContextNested.S"
+    nested_probe = workspace / "Tests/Guest/Probes/FPContextNested.S"
     original_nested_probe = nested_probe.read_text()
     results: list[dict[str, object]] = []
 

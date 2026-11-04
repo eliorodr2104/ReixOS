@@ -389,7 +389,7 @@ def main() -> int:
         "Sources/Kernel/Foundation/Stubs.swift",
         "Sources/Kernel/Diagnostics/KernelRuntimeDiagnostic.swift",
         "Native/Kernel/KernelRuntimeABI.c",
-        "Tests/GuestProbes/KernelRuntimeProbe.c",
+        "Tests/Guest/Probes/KernelRuntimeProbe.c",
         "scripts/test/test-kernel-runtime.py",
     ]
     summary = {

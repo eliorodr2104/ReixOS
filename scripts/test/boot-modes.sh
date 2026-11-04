@@ -51,9 +51,8 @@ if [ -n "$DISK" ]; then
     disk_argument="DISK=$DISK"
 fi
 
-# The one line every mode owes, and the marker that ends each run. It is the
-# shell's greeting rather than a server's, because a server's is exactly what
-# two of the three modes are not allowed to print.
+# The one line every mode owes. Standard and diagnostic stop at this greeting;
+# verbose must also wait for init to acknowledge the shell's later Ready call.
 PROMPT='ReixOS shell. Type Shell.help() to see what this understands.'
 
 failures=0
@@ -103,8 +102,14 @@ for mode in standard verbose diagnostic; do
     fi
 
     log="$OUT/boot-mode-$mode.log"
+    success_marker="$PROMPT"
+    if [ "$mode" = verbose ]; then
+        # Shell prints its greeting before signalReady; init prints the final
+        # milestone after the launch reply. Do not terminate QEMU between them.
+        success_marker='session ready'
+    fi
     QEMU="$QEMU" QEMU_FLAGS="$QEMU_FLAGS" OUT="$OUT" LOG="$log" \
-        TIMEOUT="$TIMEOUT" SUCCESS_MARKER="$PROMPT" \
+        TIMEOUT="$TIMEOUT" SUCCESS_MARKER="$success_marker" \
         scripts/test/smoke.sh >/dev/null || {
             echo "FAIL [$mode] never reached the shell, see $log" >&2
             exit 2

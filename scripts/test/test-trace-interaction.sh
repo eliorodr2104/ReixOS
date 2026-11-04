@@ -2,9 +2,9 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
-fixture="$root/Tests/Fixtures/trace/interaction.log"
-terminal_fixture="$root/Tests/Fixtures/trace/terminal-baseline.log"
-terminal_manifest="$root/Tests/Fixtures/trace/terminal-baseline-manifest.json"
+fixture="$root/Tests/Infrastructure/Fixtures/trace/interaction.log"
+terminal_fixture="$root/Tests/Infrastructure/Fixtures/trace/terminal-baseline.log"
+terminal_manifest="$root/Tests/Infrastructure/Fixtures/trace/terminal-baseline-manifest.json"
 work=$(mktemp -d "${TMPDIR:-/tmp}/reix-trace-interaction.XXXXXX")
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 
@@ -29,7 +29,7 @@ grep -F 'interaction correlation=4 serial_delivery_to_decoded=unavailable' "$int
 # One chunk, several records: later records inherit the chunk's delivery mark,
 # a record before any delivery or from another process does not.
 chunked="$work/interaction-chunked.txt"
-"$root/reix" trace "$root/Tests/Fixtures/trace/interaction-chunked.log" --interaction > "$chunked"
+"$root/reix" trace "$root/Tests/Infrastructure/Fixtures/trace/interaction-chunked.log" --interaction > "$chunked"
 grep -Fx 'interaction groups=6 invalid=0' "$chunked"
 grep -F 'interaction correlation=9 serial_delivery_to_decoded=unavailable' "$chunked"
 grep -F 'interaction correlation=1 serial_delivery_to_decoded=10.00us' "$chunked" | grep -F 'total=20.00us'

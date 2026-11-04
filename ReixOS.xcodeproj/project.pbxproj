@@ -7,13 +7,17 @@
 	objects = {
 
 /* Begin PBXFileReference section */
-		04883B632FF058B300AC990E /* AsmSyscall.S */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.asm; path = AsmSyscall.S; sourceTree = "<group>"; };
 		1F33E1FE2FA7A92600D61F01 /* Build/user.ld */ = {isa = PBXFileReference; lastKnownFileType = text; path = Build/user.ld; sourceTree = "<group>"; };
 		1F52448C2F95364400E5E2C8 /* Build/linker.ld */ = {isa = PBXFileReference; lastKnownFileType = text; path = Build/linker.ld; sourceTree = "<group>"; };
 		1F52448D2F95369500E5E2C8 /* Makefile */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.make; path = Makefile; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		04883B662FF058B300AC990E /* Native */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Native;
+			sourceTree = "<group>";
+		};
 		1F5244872F95357500E5E2C8 /* Sources */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = Sources;
@@ -32,22 +36,6 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXGroup section */
-		04883B652FF058B300AC990E /* reix */ = {
-			isa = PBXGroup;
-			children = (
-				04883B632FF058B300AC990E /* AsmSyscall.S */,
-			);
-			path = reix;
-			sourceTree = "<group>";
-		};
-		04883B662FF058B300AC990E /* Native */ = {
-			isa = PBXGroup;
-			children = (
-				04883B652FF058B300AC990E /* reix */,
-			);
-			path = Native;
-			sourceTree = "<group>";
-		};
 		1F52447C2F95352500E5E2C8 = {
 			isa = PBXGroup;
 			children = (

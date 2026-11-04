@@ -35,6 +35,7 @@ ROOTS = ("memcpy", "memset", "memmove")
 HEADER = re.compile(r"^[0-9a-f]+ <(.+)>:$")
 BRANCH = re.compile(r"^(?:b|bl|b\.\w+|cbn?z|tbn?z)$")
 TARGET = re.compile(r"<([^>+]+)(?:\+0x[0-9a-f]+)?>")
+TARGET_ADDRESS = re.compile(r"(?:^|,\s*)(?:0x)?([0-9a-f]+)(?=\s*(?:<|$))")
 
 
 def function_bounds(objdump, elf):
@@ -65,12 +66,14 @@ def disassemble(objdump, elf):
         sys.exit(2)
 
     bounds = function_bounds(objdump, elf)
-    functions, current = {}, None
+    functions, starts, owners, instructions = {}, {}, {}, []
+    named, current = None, None
     for line in result.stdout.splitlines():
         header = HEADER.match(line)
         if header:
-            current = header.group(1)
+            named = current = header.group(1)
             functions.setdefault(current, [])
+            starts[current] = int(line.split(None, 1)[0], 16)
             continue
         if current is None or ":" not in line:
             continue
@@ -78,14 +81,35 @@ def disassemble(objdump, elf):
             address = int(line.split(":", 1)[0].strip(), 16)
         except ValueError:
             continue
-        extent = bounds.get(current)
+        extent = bounds.get(named)
         if extent and not extent[0] <= address < extent[1]:
-            # objdump can print an unnamed thunk between this function's end
-            # and the next named symbol. It is not part of this function.
-            continue
+            # Keep unnamed code separate, but retain it for branch traversal
+            # and the whole-image ZVA/DCZID rules.
+            if current == named:
+                current = f"__anonymous_0x{address:x}"
+                functions.setdefault(current, [])
+                starts[current] = address
         fields = line.split(":", 1)[1].split(None, 1)
         if fields:
-            functions[current].append((fields[0], fields[1] if len(fields) > 1 else ""))
+            owners[address] = current
+            instructions.append((address, current, fields[0], fields[1] if len(fields) > 1 else ""))
+
+    for index, (address, name, mnemonic, operands) in enumerate(instructions):
+        target = TARGET_ADDRESS.search(operands) if BRANCH.match(mnemonic) else None
+        if target and (destination := owners.get(int(target.group(1), 16))):
+            offset = int(target.group(1), 16) - starts[destination]
+            label = destination + (f"+0x{offset:x}" if offset else "")
+            # objdump labels unnamed code as an offset of the preceding
+            # function; the numeric destination determines its actual owner.
+            operands = re.sub(r"<[^>]+>", "<" + label + ">", operands)
+            if not TARGET.search(operands):
+                operands += " <" + label + ">"
+        functions[name].append((mnemonic, operands))
+        if index + 1 < len(instructions):
+            next_address, next_name, _, _ = instructions[index + 1]
+            if (next_name != name and next_address == address + 4
+                    and mnemonic not in ("b", "br", "ret", "eret", "drps")):
+                functions[name].append(("b", f"0x{next_address:x} <{next_name}>"))
     return functions
 
 

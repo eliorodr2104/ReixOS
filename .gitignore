@@ -87,4 +87,4 @@ fastlane/test_output
 Tools/reix/.build/
 
 # The structural gate baseline: the one kernel.bin the repo keeps on purpose.
-!Tests/Fixtures/build-baseline/kernel.bin
+!Tests/Infrastructure/Fixtures/build-baseline/kernel.bin

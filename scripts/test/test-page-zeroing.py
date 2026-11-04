@@ -164,7 +164,7 @@ def replace_init(
     build_path: str,
     mode: str,
 ) -> None:
-    source = workspace / "Tests/GuestProbes/PageZeroingUser.S"
+    source = workspace / "Tests/Guest/Probes/PageZeroingUser.S"
     object_file = output / f"page-zero-{mode}.o"
     subprocess.run(
         [clang, f"--target={TRIPLE}", "-c", str(source), "-o", str(object_file)],
@@ -339,7 +339,7 @@ def main() -> int:
 
     identity_paths = [
         "Sources/Kernel/Process/ProcessManager.swift",
-        "Tests/GuestProbes/PageZeroingUser.S",
+        "Tests/Guest/Probes/PageZeroingUser.S",
         "scripts/test/test-page-zeroing.py",
     ]
     summary = {
