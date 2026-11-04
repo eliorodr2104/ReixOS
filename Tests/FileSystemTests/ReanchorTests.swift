@@ -61,7 +61,7 @@ struct ReanchorTests {
     }
 
     private func regionRoot(_ device: MemoryDisk, _ plan: FSLayout.Plan) -> UInt32 {
-        var root = FSChecksum.offsetBasis
+        var root = FSChecksum.empty
         for home in plan.sumStart..<plan.dataStart {
             let sum = device.block(home).withUnsafeBytes {
                 FSChecksum.over($0.baseAddress!, count: Self.block)

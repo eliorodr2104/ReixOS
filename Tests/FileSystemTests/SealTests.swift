@@ -814,7 +814,7 @@ struct SealTests {
 
         edit(&seal)
 
-        var sum = FSChecksum.offsetBasis
+        var sum = FSChecksum.empty
         for block in 0..<Int(plan.sealBlocks) {
             let page = Array(seal[block * Int(FSLayout.blockSize)..<(block + 1) * Int(FSLayout.blockSize)])
             disk.put(page, block: plan.sealStart + UInt32(block))
