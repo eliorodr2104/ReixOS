@@ -28,7 +28,7 @@ verdict() {
     status=0
     TERMINAL_PROFILE=1 SCENARIOS="$root/Tests/Scenarios/scenarios.tsv" \
     ENGINE="$work/engine.sh" OUT="$work/out" PROFILE_FIXTURE="$work/run.log" \
-        sh "$root/scripts/scenarios.sh" profile-authority > "$work/result.txt" 2>&1 || status=$?
+        sh "$root/scripts/test/scenarios.sh" profile-authority > "$work/result.txt" 2>&1 || status=$?
     if [ "$status" -ne "$expected" ]; then
         printf '%s: expected exit %s, got %s\n' "$label" "$expected" "$status" >&2
         cat "$work/result.txt" >&2

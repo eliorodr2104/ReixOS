@@ -1,5 +1,5 @@
 // Host-only microbenchmark injected into KernelUnitTests by
-// scripts/benchmark-kernel-runtime.py. It compares the Swift runtime adapter
+// scripts/bench/benchmark-kernel-runtime.py. It compares the Swift runtime adapter
 // with the same working BucketsHeap lifecycle; the old no-op stubs are not a baseline.
 
 import Dispatch

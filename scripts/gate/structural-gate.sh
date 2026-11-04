@@ -34,7 +34,7 @@
 # change and answered against a baseline you re-pin on purpose.
 #
 # Usage:
-#     ./reix build && sh scripts/structural-gate.sh [baseline-directory]
+#     ./reix build && sh scripts/gate/structural-gate.sh [baseline-directory]
 #
 # Environment:
 #   OUT      build output directory  (default: .reix)

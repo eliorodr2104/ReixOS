@@ -23,7 +23,7 @@ decision rather than an omission.
 
 ## Where the real linker output is covered instead
 
-The QEMU scenario matrix (`make vm-test`, `scripts/scenarios.sh`) boots the
+The QEMU scenario matrix (`make vm-test`, `scripts/test/scenarios.sh`) boots the
 image the project's own link step produced, so the loader does meet genuine
 `ld` output on every run of the full `make test`, one level up, against the
 real archive, rather than in a host unit test.

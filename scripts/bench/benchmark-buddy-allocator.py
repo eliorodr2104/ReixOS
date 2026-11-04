@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the release-only VMA metric scaling probe in an external snapshot."""
+"""Run the release-only buddy allocator probe in an external snapshot."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ import sys
 import tempfile
 
 
-MARKER = "VMA_METRICS_BENCHMARK_JSON "
+MARKER = "BUDDY_BENCHMARK_JSON "
 
 
 def digest(path: Path) -> str:
@@ -35,15 +35,14 @@ def nearest_rank(values: list[int], fraction: float) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--iterations", type=int, default=200)
-    parser.add_argument("--samples", type=int, default=20)
+    parser.add_argument("--samples", type=int, default=10)
     args = parser.parse_args()
-    if args.iterations <= 0 or args.samples < 4:
-        raise RuntimeError("iterations must be positive and samples at least four")
+    if args.samples < 4:
+        raise RuntimeError("samples must be at least four")
 
-    source = Path(__file__).resolve().parent.parent
+    source = Path(__file__).resolve().parents[2]
     evidence = args.output.resolve() if args.output else Path(
-        tempfile.mkdtemp(prefix="reix-vma-metrics-")
+        tempfile.mkdtemp(prefix="reix-buddy-")
     )
     if args.output:
         if evidence.exists() and any(evidence.iterdir()):
@@ -72,14 +71,14 @@ def main() -> int:
         json.dumps(manifest, indent=2, sort_keys=True) + "\n"
     )
 
-    benchmark_source = workspace / "Tests/Benchmarks/VMAMetricsBenchmark.swift"
-    injected = workspace / "Tests/KernelUnitTests/T07VMAMetricsBenchmark.swift"
+    benchmark_source = workspace / "Tests/Benchmarks/BuddyAllocatorBenchmark.swift"
+    injected = workspace / "Tests/KernelUnitTests/InjectedBuddyAllocatorBenchmark.swift"
     shutil.copy2(benchmark_source, injected)
     scratch = workspace / "build-host"
     command = [
         swift, "test", "--package-path", str(workspace), "--disable-sandbox",
         "--scratch-path", str(scratch), "-c", "release", "--no-parallel",
-        "--filter", "VMAMetricsBenchmark",
+        "--filter", "BuddyAllocatorBenchmark",
     ]
     environment = {
         **os.environ,
@@ -88,8 +87,7 @@ def main() -> int:
         "REIX_PERFORMANCE_GATES": "",
         "CLANG_MODULE_CACHE_PATH": str(evidence / "clang-module-cache"),
         "SWIFTPM_MODULECACHE_OVERRIDE": str(evidence / "swift-module-cache"),
-        "REIX_VMA_BENCH_ITERATIONS": str(args.iterations),
-        "REIX_VMA_BENCH_SAMPLES": str(args.samples),
+        "REIX_BUDDY_BENCH_SAMPLES": str(args.samples),
     }
     log = evidence / "benchmark.log"
     with log.open("wb") as output:
@@ -108,14 +106,17 @@ def main() -> int:
     rows = []
     for row in raw["rows"]:
         elapsed = [int(value) for value in row["elapsed_ns"]]
-        iterations = int(row["iterations"])
+        ops = int(row["ops"])
         rows.append({
-            **row,
-            "p50_nanoseconds_per_snapshot": nearest_rank(elapsed, 0.50) / iterations,
-            "p95_nanoseconds_per_snapshot": nearest_rank(elapsed, 0.95) / iterations,
+            "workload": row["workload"],
+            "pages": row["pages"],
+            "ops": ops,
+            "p50_total_ns": nearest_rank(elapsed, 0.50),
+            "p50_ns_per_op": nearest_rank(elapsed, 0.50) / ops,
+            "p95_ns_per_op": nearest_rank(elapsed, 0.95) / ops,
         })
     summary = {
-        "scope": "host release build; one VMA-list traversal, no page-table access",
+        "scope": "host release build; BuddyAllocator over a host arena, no PPM",
         "target_claim": False,
         "sanitizer": "none",
         "command": command,
@@ -136,5 +137,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except (OSError, RuntimeError, subprocess.CalledProcessError, ValueError) as error:
-        print(f"vma-metrics-benchmark: {error}", file=sys.stderr)
+        print(f"buddy-benchmark: {error}", file=sys.stderr)
         raise SystemExit(2)

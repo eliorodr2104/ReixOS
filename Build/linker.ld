@@ -72,7 +72,7 @@ SECTIONS
 
     /* Sized on measurement, not on a guess: boot.S poisons this section and
        StackUsage reports the deepest byte ever written, which the trace dump
-       prints and scripts/scenarios.sh holds to a ceiling on every `make test`.
+       prints and scripts/test/scenarios.sh holds to a ceiling on every `make test`.
 
        The peak is ~12KB, reached by one path only: spawn plus ELF load. It
        was ~17KB until that chain was flattened, and what was removed was not

@@ -1,4 +1,4 @@
-// Host-only probe injected into KernelUnitTests by scripts/benchmark-vma-list.py.
+// Host-only probe injected into KernelUnitTests by scripts/bench/benchmark-vma-list.py.
 // The list is laid out the way a process holds it (image, brk, packed mmap
 // windows, stack) and every timed operation leaves it exactly as it found it.
 

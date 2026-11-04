@@ -75,7 +75,7 @@ def main() -> int:
     if arguments.iterations <= 0 or arguments.samples < 4 or arguments.samples % 4:
         raise RuntimeError("iterations must be positive and samples a multiple of four")
 
-    source = Path(__file__).resolve().parent.parent
+    source = Path(__file__).resolve().parents[2]
     evidence = (
         arguments.output.resolve()
         if arguments.output

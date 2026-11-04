@@ -9,7 +9,7 @@ import Foundation
 
 /// The machine is still spelled out in three other places, and only one of them
 /// can be checked from here: the Makefile's QEMU_FLAGS, which this reads off
-/// disk and compares. scripts/smoke.sh and the Xcode scheme are not read, and
+/// disk and compares. scripts/test/smoke.sh and the Xcode scheme are not read, and
 /// nothing below would notice them drifting.
 ///
 /// The rest of the line is a snapshot of what `make -n run` and `make -n run-4m`

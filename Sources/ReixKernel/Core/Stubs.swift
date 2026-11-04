@@ -3,7 +3,7 @@
 //  ReixOS
 //
 //  Swift backends for the kernel's freestanding C runtime boundary. The exact C
-//  symbols and signatures live in `Native/kernel/KernelRuntimeABI.c`: keeping names
+//  symbols and signatures live in `Native/Kernel/KernelRuntimeABI.c`: keeping names
 //  such as `malloc` out of Swift avoids the toolchain's reserved-symbol warning.
 //
 //  These allocation symbols support C callers and explicit Swift raw allocation.

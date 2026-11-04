@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 fixture="$root/Tests/Fixtures/trace/interaction.log"
 terminal_fixture="$root/Tests/Fixtures/trace/terminal-baseline.log"
 terminal_manifest="$root/Tests/Fixtures/trace/terminal-baseline-manifest.json"
@@ -51,7 +51,7 @@ PY
 terminal_interaction="$work/terminal-interaction.txt"
 terminal_json="$work/terminal-baseline.json"
 "$root/reix" trace "$terminal_fixture" --interaction > "$terminal_interaction"
-python3 "$root/scripts/terminal-baseline-report.py" \
+python3 "$root/scripts/util/terminal-baseline-report.py" \
     "$terminal_fixture" "$terminal_interaction" "$terminal_manifest" "$terminal_json"
 python3 - "$terminal_json" <<'PY'
 import json, math, sys
@@ -175,7 +175,7 @@ bad_input = dict(manifest); bad_input['input_sha256'] = '0' * 64
 (out / 'bad-input-manifest.json').write_text(json.dumps(bad_input) + '\n')
 PY
 
-python3 "$root/scripts/terminal-baseline-report.py" "$work/pmu-off.log" \
+python3 "$root/scripts/util/terminal-baseline-report.py" "$work/pmu-off.log" \
     "$terminal_interaction" "$work/pmu-off-manifest.json" "$work/pmu-off.json"
 python3 - "$work/pmu-off.json" <<'PY'
 import json, sys
@@ -184,7 +184,7 @@ assert d['system']['pmu']['status'] == 'unavailable'
 assert d['editor_workloads']['paste-8192']['duration_ticks']['status'] == 'measured'
 assert d['editor_workloads']['paste-8192']['cycles']['status'] == 'unavailable'
 PY
-python3 "$root/scripts/terminal-baseline-report.py" "$work/pmu-instruction-zero.log" \
+python3 "$root/scripts/util/terminal-baseline-report.py" "$work/pmu-instruction-zero.log" \
     "$terminal_interaction" "$terminal_manifest" "$work/pmu-instruction-zero.json"
 python3 - "$work/pmu-instruction-zero.json" <<'PY'
 import json, sys
@@ -194,7 +194,7 @@ assert instructions['status'] == 'measured' and instructions['value'] == 0
 PY
 
 reject() {
-    if python3 "$root/scripts/terminal-baseline-report.py" "$1" "$2" "$3" "$work/unexpected.json"; then
+    if python3 "$root/scripts/util/terminal-baseline-report.py" "$1" "$2" "$3" "$work/unexpected.json"; then
         echo "terminal baseline reporter accepted invalid fixture $1" >&2
         exit 1
     fi

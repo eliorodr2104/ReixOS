@@ -17,10 +17,10 @@ BOOT_MODE=diagnostic`), the only mode whose init dumps the trace ring. This
 script builds nothing and is not part of `make test`.
 
 Usage:
-    scripts/boot-timing.py [--runs 9] [--mem 4M] [--output result.json]
-    scripts/boot-timing.py --compare before.json after.json
+    scripts/bench/boot-timing.py [--runs 9] [--mem 4M] [--output result.json]
+    scripts/bench/boot-timing.py --compare before.json after.json
 
-Environment: QEMU, QEMU_FLAGS, OUT, DISK, as scripts/smoke.sh reads them.
+Environment: QEMU, QEMU_FLAGS, OUT, DISK, as scripts/test/smoke.sh reads them.
 """
 
 from __future__ import annotations
@@ -65,7 +65,7 @@ def boot_once(root: Path, log: Path, mem: str, initrd: str, timeout: int) -> Non
         "SUCCESS_MARKER": "[TRACE] end",
     }
     result = subprocess.run(
-        ["sh", "scripts/smoke.sh"], cwd=root, env=environment,
+        ["sh", "scripts/test/smoke.sh"], cwd=root, env=environment,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
     )
     if result.returncode != 0:
@@ -116,7 +116,7 @@ def summarise(samples: list[float]) -> dict:
 
 
 def measure(args: argparse.Namespace) -> int:
-    root = Path(__file__).resolve().parent.parent
+    root = Path(__file__).resolve().parents[2]
     evidence = Path(tempfile.mkdtemp(prefix="reix-boot-timing-"))
     initrd = args.initrd or ("embedded" if args.mem == "4M" else "qemu")
 

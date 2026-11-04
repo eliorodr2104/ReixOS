@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 work=$(mktemp -d "${TMPDIR:-/tmp}/reix-scenario-isolation.XXXXXX")
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 out="$work/out"
@@ -33,7 +33,7 @@ set +e
 SCENARIOS="$work/matrix.tsv" ENGINE="$work/engine.sh" OUT="$out" \
 QEMU_FLAGS="-machine virt,gic-version=2 -cpu cortex-a53,pmu=on -nographic -drive file=$out/disk.img,if=none,format=raw,id=reixdisk -device virtio-blk-device,drive=reixdisk" \
 SWIFT="$work/swift" QEMU="$work/qemu" DISK="$out/disk.img" \
-    sh "$root/scripts/scenarios.sh" stale > "$work/result.txt" 2>&1
+    sh "$root/scripts/test/scenarios.sh" stale > "$work/result.txt" 2>&1
 status=$?
 set -e
 

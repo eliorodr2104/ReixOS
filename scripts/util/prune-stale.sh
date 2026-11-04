@@ -26,7 +26,7 @@
 # objects are no more stale than any other.
 #
 # Usage:
-#     sh scripts/prune-stale.sh
+#     sh scripts/util/prune-stale.sh
 #
 # Environment:
 #   BUILD   build directory   (default: .build)

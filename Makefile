@@ -77,7 +77,7 @@ export BOOT_MODE
 # the kernel leaves profiling counters disabled and continues booting.
 #
 # QemuMachine.swift in Tools/reix is the canonical definition. Keep this string
-# in sync with it, with the QEMU_FLAGS default in scripts/smoke.sh and with the
+# in sync with it, with the QEMU_FLAGS default in scripts/test/smoke.sh and with the
 # Xcode scheme: four places boot this kernel and all four have to agree.
 QEMU        ?= qemu-system-aarch64
 QEMU_FLAGS  := -machine virt,gic-version=2 -cpu cortex-a53,pmu=on -nographic
@@ -140,17 +140,17 @@ build: image
 # archive keeps it as a member, so the linker is handed the same type twice and
 # reports `duplicate symbol` against a file that is not in the tree any more.
 prune-stale:
-	@sh scripts/prune-stale.sh
+	@sh scripts/util/prune-stale.sh
 
 # Prune, compile and link, all of it inside the `reix` CLI. It replaces both the
 # bare `swift build` and the command plugin, which no longer exists.
 image:
 	@SWIFT=$(SWIFT) REIX_BUILD_PATH=$(BUILD_PATH) ./reix build
-	@BOOT_MODE=$(BOOT_MODE) OUT=$(OUT) sh scripts/check-loader-hook.sh
+	@BOOT_MODE=$(BOOT_MODE) OUT=$(OUT) sh scripts/gate/check-loader-hook.sh
 
 release:
 	@SWIFT=$(SWIFT) REIX_BUILD_PATH=$(BUILD_PATH) ./reix build --release
-	@BOOT_MODE=$(BOOT_MODE) OUT=$(OUT) sh scripts/check-loader-hook.sh
+	@BOOT_MODE=$(BOOT_MODE) OUT=$(OUT) sh scripts/gate/check-loader-hook.sh
 
 # Boot in QEMU (Ctrl-A X to quit). The disk marker, the refusal to boot twice
 # over one image and the terminal restore all live in the CLI now, signals
@@ -180,7 +180,7 @@ run-release:
 smoke: BOOT_MODE := diagnostic
 smoke: programs
 	QEMU=$(QEMU) QEMU_FLAGS='$(QEMU_FLAGS) $(QEMU_DISK)' MEM='$(MEM)' \
-	    INITRD_MODE='$(INITRD_MODE)' OUT=$(OUT) scripts/smoke.sh
+	    INITRD_MODE='$(INITRD_MODE)' OUT=$(OUT) scripts/test/smoke.sh
 
 disk: $(DISK)
 
@@ -285,8 +285,8 @@ host-test: prune-stale
 	$(SWIFT) run VTDecoderHarness
 	$(SWIFT) run ShellCatalogHarness
 	$(SWIFT) run SbrkHeapHarness
-	SWIFT=$(SWIFT) sh scripts/test-trace-interaction.sh
-	sh scripts/test-scenario-artifact-isolation.sh
+	SWIFT=$(SWIFT) sh scripts/test/test-trace-interaction.sh
+	sh scripts/test/test-scenario-artifact-isolation.sh
 	sh Tests/Scenarios/profile-authority.sh
 
 # Timing thresholds run only in an optimized, unsanitized host build. The same
@@ -300,7 +300,7 @@ performance-test:
 	    --scratch-path $(OUT)/build-performance --filter FileSystemTests.OptimisationTests
 
 # The QEMU scenario matrix: every row in Tests/Scenarios/scenarios.tsv, booted
-# one at a time by scripts/scenarios.sh over the same scripts/smoke.sh that
+# one at a time by scripts/test/scenarios.sh over the same scripts/test/smoke.sh that
 # `make smoke` uses. Logs land in $(OUT)/scenario-<id>.log and the JUnit report
 # in $(OUT)/scenario-results.xml, next to the host suite's xUnit one.
 #
@@ -311,14 +311,14 @@ performance-test:
 vm-test: BOOT_MODE := diagnostic
 vm-test: programs
 	QEMU=$(QEMU) QEMU_FLAGS='$(QEMU_FLAGS) $(QEMU_DISK)' SWIFT=$(SWIFT) OUT=$(OUT) \
-	    scripts/scenarios.sh
+	    scripts/test/scenarios.sh
 
 # The three boot profiles, each built and booted to the same shell prompt, each
 # checked against what its own mode is allowed to print. Not part of `test`: it
 # is two extra cross builds, and vm-test already covers the diagnostic image.
 boot-modes:
 	QEMU=$(QEMU) QEMU_FLAGS='$(QEMU_FLAGS) $(QEMU_DISK)' OUT=$(OUT) MAKE='$(MAKE)' \
-	    DISK=$(DISK) scripts/boot-modes.sh
+	    DISK=$(DISK) scripts/test/boot-modes.sh
 
 terminal-baseline-4m: export TERMINAL_PROFILE := 1
 terminal-baseline-4m: BOOT_MODE  := diagnostic
@@ -327,7 +327,7 @@ terminal-baseline-4m: BUILD_PATH := .build-terminal-profile
 # The instrumented image additionally emits the metric snapshot.
 terminal-baseline-4m: programs
 	QEMU=$(QEMU) QEMU_FLAGS='$(QEMU_FLAGS) $(QEMU_DISK)' DISK=$(DISK) \
-	    SWIFT=$(SWIFT) OUT=$(OUT) scripts/scenarios.sh mixed-profile-4m
+	    SWIFT=$(SWIFT) OUT=$(OUT) scripts/test/scenarios.sh mixed-profile-4m
 
 clean-image:
 	rm -rf $(OUT)

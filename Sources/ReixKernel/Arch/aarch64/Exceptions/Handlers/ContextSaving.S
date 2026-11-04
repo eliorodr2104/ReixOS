@@ -31,7 +31,7 @@
 //
 // Only the low side is tested, because a runaway call chain is what walks SP
 // off the stack. Bounding it above as well would need the stack size as an
-// assembly-time constant, which means restating linker.ld here and being
+// assembly-time constant, which means restating Build/linker.ld here and being
 // silently wrong the day the two disagree.
 .macro check_kernel_stack overflow
     msr     contextidr_el1, x0

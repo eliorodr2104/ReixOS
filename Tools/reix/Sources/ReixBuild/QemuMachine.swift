@@ -7,7 +7,7 @@ import Foundation
 
 /// The machine this kernel boots on, defined once.
 ///
-/// It was defined four times: the Makefile's QEMU_FLAGS, scripts/smoke.sh, the
+/// It was defined four times: the Makefile's QEMU_FLAGS, scripts/test/smoke.sh, the
 /// plugin's run command and the Xcode scheme, with a comment in each asking the
 /// next reader to keep them in step. This is the copy that survives the plugin;
 /// the other three go when a later phase retires the scripts that carry them.

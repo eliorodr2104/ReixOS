@@ -1,5 +1,5 @@
 // Host-only probe injected into KernelUnitTests by
-// scripts/benchmark-buddy-allocator.py. Each workload leaves the allocator in
+// scripts/bench/benchmark-buddy-allocator.py. Each workload leaves the allocator in
 // the state it found it in, so every sample times the same work.
 
 import Dispatch

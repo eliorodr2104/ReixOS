@@ -40,7 +40,7 @@ def main() -> int:
     if args.samples < 4:
         raise RuntimeError("samples must be at least four")
 
-    source = Path(__file__).resolve().parent.parent
+    source = Path(__file__).resolve().parents[2]
     evidence = args.output.resolve() if args.output else Path(
         tempfile.mkdtemp(prefix="reix-slab-")
     )

@@ -6,7 +6,7 @@
 # Boots the matrix in Tests/Scenarios/scenarios.tsv and turns each serial log
 # into a verdict, instead of one hand-typed `make smoke` per configuration.
 #
-# The boot engine is scripts/smoke.sh, untouched: this script only composes its
+# The boot engine is scripts/test/smoke.sh, untouched: this script only composes its
 # environment, so a matrix row and `make smoke` start the guest exactly the same
 # way and there is one place that knows how to launch and reap QEMU. What is
 # added on top is the marker language (a chain that must appear in order, a set
@@ -23,8 +23,8 @@
 #   $OUT/scenario-results.xml     JUnit, alongside the host suite's xUnit report
 #
 # Usage:
-#     sh scripts/scenarios.sh          # the whole matrix
-#     sh scripts/scenarios.sh no-pmu   # one row, by id
+#     sh scripts/test/scenarios.sh          # the whole matrix
+#     sh scripts/test/scenarios.sh no-pmu   # one row, by id
 #
 # Environment:
 #   SCENARIOS   matrix file           (default: Tests/Scenarios/scenarios.tsv)
@@ -49,11 +49,11 @@ OUT="${OUT:-.reix}"
 SWIFT="${SWIFT:-swift}"
 OBJDUMP="${OBJDUMP:-llvm-objdump}"
 QEMU="${QEMU:-qemu-system-aarch64}"
-ENGINE="${ENGINE:-scripts/smoke.sh}"
-PACKAGE_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-# Keep in sync with QEMU_FLAGS in the Makefile and in scripts/smoke.sh. `make
+ENGINE="${ENGINE:-scripts/test/smoke.sh}"
+PACKAGE_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+# Keep in sync with QEMU_FLAGS in the Makefile and in scripts/test/smoke.sh. `make
 # vm-test` passes the Makefile's copy in, so this default only ever serves a
-# bare `sh scripts/scenarios.sh` from a developer's shell.
+# bare `sh scripts/test/scenarios.sh` from a developer's shell.
 QEMU_FLAGS="${QEMU_FLAGS:--machine virt,gic-version=2 -cpu cortex-a53,pmu=on -nographic}"
 DISK="${DISK:-$OUT/disk.img}"
 KERNEL="${KERNEL:-$OUT/kernel.bin}"
@@ -61,7 +61,7 @@ KERNEL_ELF="${KERNEL_ELF:-$OUT/kernel.elf}"
 INITRD="${INITRD:-$OUT/initrd.tar}"
 
 # Ceiling on the kernel stack high-water figure the trace dump reports, in
-# bytes. Deliberately far below the size `.stack` gets in linker.ld: the two
+# bytes. Deliberately far below the size `.stack` gets in Build/linker.ld: the two
 # numbers are a warning line and a hard wall, and the gap between them is the
 # room a regression has to be caught in. A row failing here means some path
 # started eating stack, which is a bug to find while the machine still boots,
@@ -891,7 +891,7 @@ post_shell_closed() {
 
 # post=vector-primitives: memcpy, memset and memmove read out of every linked
 # ELF. Loop idiom recognition can turn their own loops back into calls to
-# themselves, which boots as a hang; scripts/check-vector-primitives.py says
+# themselves, which boots as a hang; scripts/gate/check-vector-primitives.py says
 # what else it reads.
 post_vector_primitives() {
     pvp_out=$2
@@ -901,7 +901,7 @@ post_vector_primitives() {
         return 1
     fi
 
-    if ! python3 scripts/check-vector-primitives.py "$OBJDUMP" "$KERNEL_ELF" "$OUT"/*.elf \
+    if ! python3 scripts/gate/check-vector-primitives.py "$OBJDUMP" "$KERNEL_ELF" "$OUT"/*.elf \
             > "$pvp_out" 2>&1; then
         printf 'vector primitives: %s' "$(tail -n 1 "$pvp_out")"
         return 1
@@ -920,7 +920,7 @@ post_aggregate_copies() {
         return 1
     fi
 
-    if ! python3 scripts/check-aggregate-copies.py "$OBJDUMP" "$KERNEL_ELF" \
+    if ! python3 scripts/gate/check-aggregate-copies.py "$OBJDUMP" "$KERNEL_ELF" \
             > "$pac_out" 2>&1; then
         printf 'aggregate copies: %s' "$(tail -n 1 "$pac_out")"
         return 1
@@ -962,7 +962,7 @@ post_terminal_baseline() {
     ptb_qemu_version=$("$QEMU" --version 2>/dev/null | awk 'NR == 1 { print; exit }')
     [ -n "$ptb_qemu_version" ] || ptb_qemu_version=unavailable
 
-    if ! QEMU_VERSION="$ptb_qemu_version" python3 scripts/terminal-baseline-report.py \
+    if ! QEMU_VERSION="$ptb_qemu_version" python3 scripts/util/terminal-baseline-report.py \
             "$ptb_log" "$ptb_out" "$ptb_manifest" "$ptb_json"; then
         printf 'the terminal baseline reporter failed'
         return 1
@@ -1295,7 +1295,7 @@ do
             esac
             swift_version=$("$SWIFT" --version 2>/dev/null | sed -n '1p')
             qemu_version=$("$QEMU" --version 2>/dev/null | sed -n '1p')
-            python3 scripts/write-run-manifest.py \
+            python3 scripts/gen/write-run-manifest.py \
                 --output "$manifest" --build-mode "$build_mode" \
                 --memory "${row_mem:-128M}" --initrd "$initrd" --pmu "$pmu_mode" \
                 --storage "$storage" --workload-id "$id" --command "$row_input" \

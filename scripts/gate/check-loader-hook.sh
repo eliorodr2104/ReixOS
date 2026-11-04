@@ -5,7 +5,7 @@
 #
 # The diagnostic launch names belong only to the diagnostic image. Inspect both
 # the linked ELF and the stripped copy that is packed into the initrd.
-# Usage: BOOT_MODE=standard OUT=.reix sh scripts/check-loader-hook.sh
+# Usage: BOOT_MODE=standard OUT=.reix sh scripts/gate/check-loader-hook.sh
 
 set -eu
 

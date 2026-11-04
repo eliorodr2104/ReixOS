@@ -361,7 +361,7 @@ public struct VirtualMemoryManager: Loggable {
     /// invalidation at all. The kernel's global entries are not touched.
     ///
     /// `@inline(never)` so the sequence keeps a symbol for the `tlb-scope`
-    /// post-check in `scripts/scenarios.sh`.
+    /// post-check in `scripts/test/scenarios.sh`.
     @inline(never)
     public mutating func destroyAddressSpace(
         addressSpace: consuming AddressSpace,
@@ -585,7 +585,7 @@ public struct VirtualMemoryManager: Loggable {
     /// the root's: a walk-cache entry is tagged like the walk that made it.
     ///
     /// `@inline(never)` so the sequence keeps a symbol of its own: the
-    /// `pte-prune` post-check in `scripts/scenarios.sh` reads it back out of the
+    /// `pte-prune` post-check in `scripts/test/scenarios.sh` reads it back out of the
     /// linked image, `pte-bbm`'s sibling and for `pte-bbm`'s reason.
     @inline(never)
     private func unlinkTableAndFree(
@@ -976,7 +976,7 @@ public struct VirtualMemoryManager: Loggable {
     /// closes is what leaves two live translations for one address.
     ///
     /// `@inline(never)` so the sequence keeps a symbol of its own: the
-    /// `pte-bbm` post-check in `scripts/scenarios.sh` reads it back out of the
+    /// `pte-bbm` post-check in `scripts/test/scenarios.sh` reads it back out of the
     /// linked image, which is the only proof available for an ordering whose
     /// failure mode is silent on QEMU.
     @inline(never)

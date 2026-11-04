@@ -29,7 +29,7 @@ TRIPLE = "aarch64-none-none-elf"
 
 # The build front end is a host tool, not part of the snapshot under test, so
 # the checkout's own shim runs it with the workspace as its working directory.
-REIX = Path(__file__).resolve().parent.parent / "reix"
+REIX = Path(__file__).resolve().parents[2] / "reix"
 
 PASS_PREFIX = "[ RUNTIME ABI PASS ] hash=0x"
 PAGE_FAILURE = "runtime ABI diagnostic: heap pages not restored"
@@ -226,7 +226,7 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=30)
     arguments = parser.parse_args()
 
-    source = Path(__file__).resolve().parent.parent
+    source = Path(__file__).resolve().parents[2]
     evidence = (
         arguments.output.resolve()
         if arguments.output
@@ -388,9 +388,9 @@ def main() -> int:
     identity_paths = [
         "Sources/ReixKernel/Core/Stubs.swift",
         "Sources/ReixKernel/Diagnostics/KernelRuntimeDiagnostic.swift",
-        "Native/kernel/KernelRuntimeABI.c",
+        "Native/Kernel/KernelRuntimeABI.c",
         "Tests/GuestProbes/KernelRuntimeProbe.c",
-        "scripts/test-kernel-runtime.py",
+        "scripts/test/test-kernel-runtime.py",
     ]
     summary = {
         "passed": all(bool(result["accepted"]) for result in results),

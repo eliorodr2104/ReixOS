@@ -2,8 +2,8 @@
 # scenarios.tsv
 # ReixOS
 #
-# The QEMU boot matrix, as data. scripts/scenarios.sh reads this file and boots
-# one row at a time through scripts/smoke.sh, so a new machine configuration is
+# The QEMU boot matrix, as data. scripts/test/scenarios.sh reads this file and boots
+# one row at a time through scripts/test/smoke.sh, so a new machine configuration is
 # a new line here rather than a new script or a new Makefile target.
 #
 # Tab-separated, ten columns, `-` for a column that does not apply. Blank lines
@@ -34,7 +34,7 @@
 #              no command typed, a shell that stopped reading stopped on its own.
 #              The `typed:` rows are the exception, and they require it instead.
 #   post       extra check run after the markers hold (`-` = none). The names are
-#              the post_* functions in scripts/scenarios.sh.
+#              the post_* functions in scripts/test/scenarios.sh.
 #   expect     `pass`, `xfail:<reason>`, or `skip-if:<condition>`
 #
 # Every row boots the `diagnostic` image: `make vm-test` sets BOOT_MODE, and the

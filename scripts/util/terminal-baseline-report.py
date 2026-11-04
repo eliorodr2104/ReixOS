@@ -449,7 +449,7 @@ def latency_metric(samples, unit="microseconds"):
 
 
 def git_provenance():
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     try:
         revision = subprocess.check_output(
             ["git", "-C", root, "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL

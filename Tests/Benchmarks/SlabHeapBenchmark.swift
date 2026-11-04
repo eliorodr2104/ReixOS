@@ -1,4 +1,4 @@
-// Host-only probe injected into KernelUnitTests by scripts/benchmark-slab-heap.py.
+// Host-only probe injected into KernelUnitTests by scripts/bench/benchmark-slab-heap.py.
 // Every workload drains the heap back to zero reserved pages before it returns,
 // so every sample starts from the same state and times the same work.
 

@@ -95,7 +95,7 @@ public func kernelStackOverflowHandler(
 /// with no kernel work beneath it always pushes its frame at one fixed
 /// address. That address is learned from the first entry taken from EL0
 /// instead of being read from `stack_top`, which Swift cannot name and whose
-/// value would have to track changes to the stack layout in `linker.ld`.
+/// value would have to track changes to the stack layout in `Build/linker.ld`.
 ///
 /// A frame built on the exception stack can never become this anchor, so the
 /// second stack `check_kernel_stack` switches to leaves the comparison intact:

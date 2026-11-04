@@ -56,7 +56,7 @@ public enum UserSpaceLayout {
     /// the 48-bit TTBR0 ceiling.
     public static let userMax: VirtualAddress = TaskABI.userMax
 
-    /// Default base used by user ELF binaries when linked with `user.ld`.
+    /// Default base used by user ELF binaries when linked with `Build/user.ld`.
     /// Sits 4 MiB into L0 entry 1 (512 GiB), leaving the bottom of the user
     /// region as a guard and keeping the ELF image clear of `userMin`.
     public static let elfBaseTypical: VirtualAddress = TaskABI.programBase

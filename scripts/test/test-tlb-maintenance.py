@@ -30,7 +30,7 @@ import time
 
 
 TRIPLE = "aarch64-none-none-elf"
-REIX = Path(__file__).resolve().parent.parent / "reix"
+REIX = Path(__file__).resolve().parents[2] / "reix"
 
 COW_PASS = "[ TLB COW PASS ]"
 COW_FAIL = "[ TLB COW FAIL ]"
@@ -177,7 +177,7 @@ def main() -> int:
     parser.add_argument("--modes", nargs="*", default=list(MUTATIONS))
     arguments = parser.parse_args()
 
-    source = Path(__file__).resolve().parent.parent
+    source = Path(__file__).resolve().parents[2]
     if arguments.output is None:
         evidence = Path(tempfile.mkdtemp(prefix="reix-tlb-maintenance-"))
     else:

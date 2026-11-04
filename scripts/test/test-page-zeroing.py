@@ -29,7 +29,7 @@ TRIPLE = "aarch64-none-none-elf"
 
 # The build front end is a host tool, not part of the snapshot under test, so
 # the checkout's own shim runs it with the workspace as its working directory.
-REIX = Path(__file__).resolve().parent.parent / "reix"
+REIX = Path(__file__).resolve().parents[2] / "reix"
 
 MODES = ("candidate", "mutation")
 PASS_MARKER = "[ PAGE ZERO PASS ] bytes=4096"
@@ -266,7 +266,7 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=30)
     arguments = parser.parse_args()
 
-    source = Path(__file__).resolve().parent.parent
+    source = Path(__file__).resolve().parents[2]
     if arguments.output is None:
         evidence = Path(tempfile.mkdtemp(prefix="reix-page-zeroing-"))
     else:
@@ -340,7 +340,7 @@ def main() -> int:
     identity_paths = [
         "Sources/ReixKernel/Process/ProcessManager.swift",
         "Tests/GuestProbes/PageZeroingUser.S",
-        "scripts/test-page-zeroing.py",
+        "scripts/test/test-page-zeroing.py",
     ]
     summary = {
         "passed": all(bool(result["accepted"]) for result in results),

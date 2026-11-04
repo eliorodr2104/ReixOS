@@ -105,7 +105,7 @@ for mode in standard verbose diagnostic; do
     log="$OUT/boot-mode-$mode.log"
     QEMU="$QEMU" QEMU_FLAGS="$QEMU_FLAGS" OUT="$OUT" LOG="$log" \
         TIMEOUT="$TIMEOUT" SUCCESS_MARKER="$PROMPT" \
-        scripts/smoke.sh >/dev/null || {
+        scripts/test/smoke.sh >/dev/null || {
             echo "FAIL [$mode] never reached the shell, see $log" >&2
             exit 2
         }

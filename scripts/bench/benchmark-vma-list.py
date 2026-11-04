@@ -41,7 +41,7 @@ def main() -> int:
     if args.iterations <= 0 or args.samples < 4:
         raise RuntimeError("iterations must be positive and samples at least four")
 
-    source = Path(__file__).resolve().parent.parent
+    source = Path(__file__).resolve().parents[2]
     evidence = args.output.resolve() if args.output else Path(
         tempfile.mkdtemp(prefix="reix-vma-list-")
     )

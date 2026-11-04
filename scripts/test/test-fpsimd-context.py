@@ -38,7 +38,7 @@ TRIPLE = "aarch64-none-none-elf"
 
 # The build front end is a host tool, not part of the snapshot under test, so
 # the checkout's own shim runs it with the workspace as its working directory.
-REIX = Path(__file__).resolve().parent.parent / "reix"
+REIX = Path(__file__).resolve().parents[2] / "reix"
 
 MODES = ("normal", "restore", "canonical", "guard", "benchmark")
 
@@ -383,7 +383,7 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=30)
     arguments = parser.parse_args()
 
-    source = Path(__file__).resolve().parent.parent
+    source = Path(__file__).resolve().parents[2]
     if arguments.output is None:
         evidence = Path(tempfile.mkdtemp(prefix="reix-fpsimd-context-"))
     else:

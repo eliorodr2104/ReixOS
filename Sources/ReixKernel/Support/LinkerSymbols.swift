@@ -51,7 +51,7 @@ public var _evt_end: UInt8
 public var _kernel_total_end: UInt8
 
 
-/// Bounds of the kernel stack's guard page, from `linker.ld`.
+/// Bounds of the kernel stack's guard page, from `Build/linker.ld`.
 ///
 /// The page between `_kernel_end` and `__stack_bottom` that the linear map has
 /// to skip. Never dereference either symbol: the whole point is that the page

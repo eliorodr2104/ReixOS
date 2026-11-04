@@ -1,5 +1,5 @@
 // Host-only scaling probe injected into KernelUnitTests by
-// scripts/benchmark-vma-metrics.py. Setup, page-table population, and semantic
+// scripts/bench/benchmark-vma-metrics.py. Setup, page-table population, and semantic
 // checks stay outside the timed loop; the output retains every raw sample.
 
 import Dispatch

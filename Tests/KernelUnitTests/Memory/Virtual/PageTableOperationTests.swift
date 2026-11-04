@@ -27,7 +27,7 @@ import KernelHostShims
 ///
 /// What this cannot see is inside a shim: `flush_tlb_leaf_nosync` is one host
 /// function where the machine has three instructions. That half is checked on
-/// the linked image by the `pte-bbm` post-check in `scripts/scenarios.sh`.
+/// the linked image by the `pte-bbm` post-check in `scripts/test/scenarios.sh`.
 ///
 /// `.serialized`, and the run needs `--no-parallel`: the recorder is one global
 /// in the shim object, as `TraceExportBatchTests`' barrier counter already was.

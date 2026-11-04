@@ -425,7 +425,7 @@ func parsePlatformInfo(
     return DeviceTreeFault(.unterminatedStruct, at: p)
 }
 
-/// Bounds of the initrd linked into the kernel image, from `linker.ld`.
+/// Bounds of the initrd linked into the kernel image, from `Build/linker.ld`.
 ///
 /// Declared here rather than in `LinkerSymbols.swift` because this is the only
 /// place that reads them. They coincide when nothing was linked into `.initrd`.
