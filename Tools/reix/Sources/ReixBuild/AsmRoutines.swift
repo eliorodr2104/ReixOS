@@ -664,6 +664,43 @@ private func reixRoutines() -> [AsmRoutine] {
             mrs("x0", "pmxevcntr_el0")
             ret()
         },
+
+        // CRC32C of x2 bytes at x1, continuing the checksum in w0, with the
+        // standard's inversions in and out. See ReixFS `FSChecksum`.
+        fn("reix_crc32c") {
+            // CRC32 is optional in ARMv8.0, so the assembler wants it asked for.
+            raw(".arch_extension crc")
+            raw("    mvn  w0, w0")
+            raw("    cbz  x2, .L_crc32c_done")
+            // Bytes until x1 is 8-aligned: SCTLR_EL1.A makes an unaligned ldr fault.
+            label(".L_crc32c_head")
+            raw("    tst  x1, #7")
+            raw("    b.eq .L_crc32c_words")
+            raw("    ldrb w3, [x1], #1")
+            raw("    crc32cb w0, w0, w3")
+            raw("    subs x2, x2, #1")
+            raw("    b.ne .L_crc32c_head")
+            raw("    b    .L_crc32c_done")
+            label(".L_crc32c_words")
+            raw("    subs x2, x2, #8")
+            raw("    b.lo .L_crc32c_tail")
+            label(".L_crc32c_word")
+            raw("    ldr  x3, [x1], #8")
+            raw("    crc32cx w0, w0, x3")
+            raw("    subs x2, x2, #8")
+            raw("    b.hs .L_crc32c_word")
+            label(".L_crc32c_tail")
+            raw("    adds x2, x2, #8")
+            raw("    b.eq .L_crc32c_done")
+            label(".L_crc32c_byte")
+            raw("    ldrb w3, [x1], #1")
+            raw("    crc32cb w0, w0, w3")
+            raw("    subs x2, x2, #1")
+            raw("    b.ne .L_crc32c_byte")
+            label(".L_crc32c_done")
+            raw("    mvn  w0, w0")
+            ret()
+        },
     ]
 }
 

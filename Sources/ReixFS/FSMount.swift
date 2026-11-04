@@ -32,6 +32,8 @@ public enum FSMount {
     /// The superblock says `REIXFS` and then something other than what this
     /// build writes - an earlier build's version bytes, above all. Refused by
     /// name and untouched: not mounted, not called corrupt, never formatted.
+    /// Or its superblock adds up only under FNV-1a, the checksum every build
+    /// before CRC32C wrote.
     case unrecognised
 
     /// This format, on a disk larger than this build is declared to work on.

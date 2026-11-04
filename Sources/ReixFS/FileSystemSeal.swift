@@ -141,7 +141,7 @@ extension FileSystem {
     private struct SealPen {
         var block = 0
         var at    : Int
-        var sum   = FSChecksum.offsetBasis
+        var sum   = FSChecksum.empty
 
         init(at: Int) { self.at = at }
     }
@@ -321,7 +321,7 @@ extension FileSystem {
     /// of every block of it read so far.
     private struct SealCursor {
         var loaded = -1
-        var sum    = FSChecksum.offsetBasis
+        var sum    = FSChecksum.empty
         var failed = false
     }
 

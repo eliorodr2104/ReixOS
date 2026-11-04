@@ -780,7 +780,7 @@ public struct FileSystem<Device: BlockDevice> {
     /// about the table, and the table is part of what the root anchors. No
     /// memory of its own, because `sums` already holds each block's checksum.
     func sumRoot() -> (root: UInt32, staged: Bool) {
-        var root   = FSChecksum.offsetBasis
+        var root   = FSChecksum.empty
         var staged = false
 
         for home in plan.sumStart..<plan.dataStart {

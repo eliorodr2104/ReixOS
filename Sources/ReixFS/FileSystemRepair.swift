@@ -422,7 +422,7 @@ extension FileSystem {
     /// process knows it holds: a page no file uses is checked too.
     private mutating func scanData(_ findings: inout Findings) -> Bool {
 
-        var root = FSChecksum.offsetBasis
+        var root = FSChecksum.empty
 
         for home in plan.sumStart..<plan.dataStart {
             guard readRawBlock(home, into: metaBuffer) == .ok else { return false }
